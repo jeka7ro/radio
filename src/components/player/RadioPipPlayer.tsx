@@ -1,0 +1,540 @@
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  Play,
+  Pause,
+  Loader2,
+  SkipBack,
+  SkipForward,
+  Heart,
+  Volume2,
+  VolumeX,
+  X,
+  Radio,
+} from 'lucide-react';
+import { useRadioStore } from '../../store/useRadioStore';
+import { useTranslation } from '../../i18n/useTranslation';
+import { StationAvatar } from '../common/StationAvatar';
+import { getCountryFlagEmoji } from '../../services/geoLanguageService';
+import { buildStationLogoCandidates } from '../../services/stationLogoService';
+
+interface DocumentPictureInPicture {
+  requestWindow: (options?: {
+    width?: number;
+    height?: number;
+    disallowReturnToOpener?: boolean;
+  }) => Promise<Window>;
+  window: Window | null;
+}
+
+declare global {
+  interface Window {
+    documentPictureInPicture?: DocumentPictureInPicture;
+  }
+}
+
+let externalToggleRadioPip: (() => Promise<void>) | null = null;
+
+export async function toggleRadioPip(): Promise<void> {
+  if (externalToggleRadioPip) {
+    await externalToggleRadioPip();
+  }
+}
+
+function copyStylesToPipWindow(sourceDoc: Document, targetDoc: Document) {
+  // Sync dark mode class on root element
+  if (sourceDoc.documentElement.classList.contains('dark')) {
+    targetDoc.documentElement.classList.add('dark');
+  } else {
+    targetDoc.documentElement.classList.remove('dark');
+  }
+
+  // Copy all <link rel="stylesheet"> and <style> elements
+  const styleNodes = sourceDoc.querySelectorAll('link[rel="stylesheet"], style');
+  styleNodes.forEach((node) => {
+    targetDoc.head.appendChild(node.cloneNode(true));
+  });
+
+  targetDoc.body.style.margin = '0';
+  targetDoc.body.style.padding = '0';
+  targetDoc.body.style.overflow = 'hidden';
+  targetDoc.body.style.userSelect = 'none';
+}
+
+export const RadioPipPlayer: React.FC = () => {
+  const { t, format } = useTranslation();
+
+  const currentStation = useRadioStore((state) => state.currentStation);
+  const playerStatus = useRadioStore((state) => state.playerStatus);
+  const nowPlayingMeta = useRadioStore((state) => state.nowPlayingMeta);
+  const nowPlayingTitle = useRadioStore((state) => state.nowPlayingTitle);
+  const volume = useRadioStore((state) => state.volume);
+  const isMuted = useRadioStore((state) => state.isMuted);
+  const favorites = useRadioStore((state) => state.favorites);
+  const theme = useRadioStore((state) => state.theme);
+  const setRadioPipOpen = useRadioStore((state) => state.setRadioPipOpen);
+
+  const playStation = useRadioStore((state) => state.playStation);
+  const playNextAvailableStation = useRadioStore(
+    (state) => state.playNextAvailableStation
+  );
+  const playPreviousStation = useRadioStore(
+    (state) => state.playPreviousStation
+  );
+  const setVolume = useRadioStore((state) => state.setVolume);
+  const toggleMute = useRadioStore((state) => state.toggleMute);
+  const toggleFavorite = useRadioStore((state) => state.toggleFavorite);
+
+  const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
+  const pipWindowRef = useRef<Window | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const coverImageRef = useRef<HTMLImageElement | null>(null);
+  const lastLoadedCoverUrlRef = useRef<string>('');
+
+  // Keep dark mode class synced inside Document PiP window when theme changes
+  useEffect(() => {
+    const pipWin = pipWindowRef.current;
+    if (!pipWin || pipWin.closed) return;
+    if (document.documentElement.classList.contains('dark')) {
+      pipWin.document.documentElement.classList.add('dark');
+    } else {
+      pipWin.document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  // Update Document PiP window title when song/station changes
+  useEffect(() => {
+    const pipWin = pipWindowRef.current;
+    if (!pipWin || pipWin.closed || !currentStation) return;
+    pipWin.document.title = nowPlayingMeta?.title
+      ? `${nowPlayingMeta.title} — ${nowPlayingMeta.artist || currentStation.name}`
+      : `${currentStation.name} — AetherRadio`;
+  }, [currentStation, nowPlayingMeta]);
+
+  // Draw fallback Canvas for Video-PiP browsers (Safari / Firefox)
+  const drawCanvasFrame = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !currentStation) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Background gradient
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#18181b');
+    grad.addColorStop(0.5, '#1e1b4b');
+    grad.addColorStop(1, '#09090b');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Subtle accent border at top
+    ctx.fillStyle = '#7c3aed';
+    ctx.fillRect(0, 0, w, 6);
+
+    // Draw cover art or station placeholder box
+    const artSize = 180;
+    const artX = 36;
+    const artY = Math.round((h - artSize) / 2);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(artX, artY, artSize, artSize, 24);
+    ctx.clip();
+
+    if (
+      coverImageRef.current &&
+      coverImageRef.current.complete &&
+      coverImageRef.current.naturalWidth > 0
+    ) {
+      ctx.drawImage(coverImageRef.current, artX, artY, artSize, artSize);
+    } else {
+      ctx.fillStyle = '#4c1d95';
+      ctx.fillRect(artX, artY, artSize, artSize);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 54px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        currentStation.name.slice(0, 2).toUpperCase(),
+        artX + artSize / 2,
+        artY + artSize / 2
+      );
+    }
+    ctx.restore();
+
+    // Text column
+    const textX = artX + artSize + 30;
+    const maxTextW = w - textX - 32;
+
+    // Live badge
+    ctx.fillStyle = playerStatus === 'playing' ? '#10b981' : '#a1a1aa';
+    ctx.font = 'bold 18px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(
+      playerStatus === 'playing'
+        ? `● LIVE • ${currentStation.name}`
+        : `⏸ ${currentStation.name}`,
+      textX,
+      artY + 12,
+      maxTextW
+    );
+
+    // Primary Song Title or Station Name
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 30px system-ui, -apple-system, sans-serif';
+    const primaryTitle = nowPlayingMeta?.title || currentStation.name;
+    ctx.fillText(primaryTitle, textX, artY + 52, maxTextW);
+
+    // Artist Name or Subtitle
+    ctx.fillStyle = '#c4b5fd';
+    ctx.font = '600 23px system-ui, -apple-system, sans-serif';
+    const subtitle =
+      nowPlayingMeta?.artist ||
+      nowPlayingTitle ||
+      currentStation.country ||
+      'AetherRadio';
+    ctx.fillText(subtitle, textX, artY + 98, maxTextW);
+
+    // Album / Bitrate info
+    ctx.fillStyle = '#a1a1aa';
+    ctx.font = '500 18px system-ui, -apple-system, sans-serif';
+    const metaFooter = nowPlayingMeta?.album
+      ? nowPlayingMeta.album
+      : `${currentStation.codec || 'MP3'}${
+          currentStation.bitrate ? ` • ${currentStation.bitrate} kbps` : ''
+        }`;
+    ctx.fillText(metaFooter, textX, artY + 138, maxTextW);
+  }, [currentStation, nowPlayingMeta, nowPlayingTitle, playerStatus]);
+
+  // Load cover art or station logo for fallback Canvas
+  useEffect(() => {
+    if (!currentStation) return;
+    const candidates = buildStationLogoCandidates(
+      currentStation.name,
+      currentStation.favicon,
+      currentStation.homepage
+    );
+    const targetUrl = nowPlayingMeta?.coverUrl || candidates[0] || '';
+    if (!targetUrl) {
+      coverImageRef.current = null;
+      lastLoadedCoverUrlRef.current = '';
+      drawCanvasFrame();
+      return;
+    }
+    if (lastLoadedCoverUrlRef.current === targetUrl) {
+      drawCanvasFrame();
+      return;
+    }
+
+    lastLoadedCoverUrlRef.current = targetUrl;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      coverImageRef.current = img;
+      drawCanvasFrame();
+    };
+    img.onerror = () => {
+      coverImageRef.current = null;
+      drawCanvasFrame();
+    };
+    img.src = targetUrl.startsWith('http')
+      ? `/api/tv-proxy?url=${encodeURIComponent(targetUrl)}`
+      : targetUrl;
+  }, [currentStation, nowPlayingMeta, drawCanvasFrame]);
+
+  const closePip = useCallback(async () => {
+    if (pipWindowRef.current && !pipWindowRef.current.closed) {
+      pipWindowRef.current.close();
+    }
+    pipWindowRef.current = null;
+    setPipContainer(null);
+
+    if (document.pictureInPictureElement) {
+      try {
+        await document.exitPictureInPicture();
+      } catch {
+        // ignore
+      }
+    }
+    setRadioPipOpen(false);
+  }, [setRadioPipOpen]);
+
+  const handleTogglePip = useCallback(async () => {
+    if (!currentStation) return;
+
+    // 1. If already open, close it
+    if (
+      (pipWindowRef.current && !pipWindowRef.current.closed) ||
+      document.pictureInPictureElement
+    ) {
+      await closePip();
+      return;
+    }
+
+    // 2. Prefer Chrome/Edge Document Picture-in-Picture API (interactive React MiniPlayer)
+    if (
+      typeof window !== 'undefined' &&
+      window.documentPictureInPicture &&
+      typeof window.documentPictureInPicture.requestWindow === 'function'
+    ) {
+      try {
+        const pipWin = await window.documentPictureInPicture.requestWindow({
+          width: 380,
+          height: 215,
+        });
+        pipWindowRef.current = pipWin;
+        copyStylesToPipWindow(document, pipWin.document);
+        pipWin.document.title = `${currentStation.name} — AetherRadio`;
+
+        const container = pipWin.document.createElement('div');
+        container.id = 'aether-radio-pip-root';
+        container.className = 'w-screen h-screen overflow-hidden';
+        pipWin.document.body.appendChild(container);
+
+        pipWin.addEventListener('pagehide', () => {
+          pipWindowRef.current = null;
+          setPipContainer(null);
+          setRadioPipOpen(false);
+        });
+
+        setPipContainer(container);
+        setRadioPipOpen(true);
+        return;
+      } catch {
+        // Fall through to Canvas+Video PiP if Document PiP fails
+      }
+    }
+
+    // 3. Fallback: Canvas stream + HTML5 <video> Picture-in-Picture (Safari / Firefox)
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    try {
+      drawCanvasFrame();
+      const stream = canvas.captureStream(15);
+      video.srcObject = stream;
+      await video.play();
+      if (typeof video.requestPictureInPicture === 'function') {
+        await video.requestPictureInPicture();
+        setRadioPipOpen(true);
+      }
+    } catch {
+      // Ignore if PiP is not supported
+    }
+  }, [currentStation, closePip, drawCanvasFrame, setRadioPipOpen]);
+
+  useEffect(() => {
+    externalToggleRadioPip = handleTogglePip;
+    return () => {
+      externalToggleRadioPip = null;
+    };
+  }, [handleTogglePip]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onLeavePip = () => {
+      setRadioPipOpen(false);
+    };
+    video.addEventListener('leavepictureinpicture', onLeavePip);
+    return () => {
+      video.removeEventListener('leavepictureinpicture', onLeavePip);
+    };
+  }, [setRadioPipOpen]);
+
+  if (!currentStation) return null;
+
+  const isPlaying = playerStatus === 'playing';
+  const isLoading = playerStatus === 'loading';
+  const isFavorite = favorites.some(
+    (f) => f.stationuuid === currentStation.stationuuid
+  );
+  const effectiveVolumePercent = Math.round((isMuted ? 0 : volume) * 100);
+
+  return (
+    <>
+      {/* Hidden Canvas & Video for fallback Video-PiP on Safari/Firefox */}
+      <canvas
+        ref={canvasRef}
+        width={640}
+        height={360}
+        className="hidden"
+        aria-hidden="true"
+      />
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        className="hidden"
+        aria-hidden="true"
+      />
+
+      {/* Interactive Floating MiniPlayer rendered inside Document Picture-in-Picture */}
+      {pipContainer &&
+        createPortal(
+          <div className="w-full h-full flex flex-col justify-between p-3.5 bg-zinc-950 text-zinc-100 select-none">
+            {/* Top Strip: Station badge + Close PiP button */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-950/90 border border-brand-700/50 text-brand-300 text-[11px] font-semibold truncate">
+                  <Radio className="w-3 h-3 text-brand-400 flex-shrink-0" />
+                  <span>{getCountryFlagEmoji(currentStation.countrycode)}</span>
+                  <span className="truncate">{currentStation.name}</span>
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void closePip()}
+                title="Închide MiniPlayer PiP"
+                className="w-6 h-6 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors flex-shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Middle Row: Cover Art + Song Title + Artist Avatar & Name */}
+            <div className="flex items-center gap-3 my-1.5 min-w-0">
+              <div className="relative flex-shrink-0">
+                {nowPlayingMeta?.coverUrl ? (
+                  <div className="relative w-16 h-16 rounded-2xl overflow-hidden shadow-lg border border-zinc-700/80 bg-zinc-900">
+                    <img
+                      src={nowPlayingMeta.coverUrl}
+                      alt={nowPlayingMeta.title}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <StationAvatar
+                    name={currentStation.name}
+                    favicon={currentStation.favicon}
+                    homepage={currentStation.homepage}
+                    size="md"
+                    isPlaying={isPlaying}
+                  />
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-white truncate leading-snug">
+                  {nowPlayingMeta?.title || currentStation.name}
+                </p>
+
+                <div className="flex items-center gap-1.5 mt-1 min-w-0">
+                  {nowPlayingMeta?.artistAvatarUrl && (
+                    <img
+                      src={nowPlayingMeta.artistAvatarUrl}
+                      alt={nowPlayingMeta.artist}
+                      className="w-5 h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-400/60"
+                    />
+                  )}
+                  <p className="text-xs font-semibold text-brand-300 truncate">
+                    {nowPlayingMeta?.artist ||
+                      nowPlayingTitle ||
+                      (isPlaying ? t.player.playing : t.player.paused)}
+                  </p>
+                </div>
+
+                {nowPlayingMeta?.album && (
+                  <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                    {nowPlayingMeta.album}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Row: Transport Controls + Favorite + Volume */}
+            <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-zinc-800/80">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={playPreviousStation}
+                  aria-label={t.player.prevStation}
+                  className="w-9 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => playStation(currentStation)}
+                  aria-label={format(
+                    isPlaying ? t.player.pause : t.player.play,
+                    { name: currentStation.name }
+                  )}
+                  className="w-10 h-10 rounded-xl bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-md transition-colors"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : isPlaying ? (
+                    <Pause className="w-5 h-5 fill-current" />
+                  ) : (
+                    <Play className="w-5 h-5 fill-current ml-0.5" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={playNextAvailableStation}
+                  aria-label={t.player.nextStation}
+                  className="w-9 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => toggleFavorite(currentStation)}
+                  aria-pressed={isFavorite}
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                    isFavorite
+                      ? 'text-rose-400 bg-rose-950/50'
+                      : 'text-zinc-400 hover:bg-zinc-800'
+                  }`}
+                >
+                  <Heart
+                    className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`}
+                  />
+                </button>
+              </div>
+
+              {/* Compact Volume Control */}
+              <div className="flex items-center gap-1.5 w-28">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  className="w-8 h-8 rounded-lg hover:bg-zinc-800 text-zinc-300 flex items-center justify-center flex-shrink-0"
+                >
+                  {isMuted || volume === 0 ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={effectiveVolumePercent}
+                  style={
+                    {
+                      '--progress': `${effectiveVolumePercent}%`,
+                    } as React.CSSProperties
+                  }
+                  onChange={(e) => setVolume(Number(e.target.value) / 100)}
+                  className="w-full h-1.5 cursor-pointer"
+                />
+              </div>
+            </div>
+          </div>,
+          pipContainer
+        )}
+    </>
+  );
+};
+

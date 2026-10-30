@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-accent-light: #6d28d9;
+  --brand-accent-dark: #a78bfa;
+  --brand-color: var(--brand-accent-light);
+
+  /* MANDATORY: Fallback for browsers without light-dark support */
+  @media (prefers-color-scheme: dark) {
+    --brand-color: var(--brand-accent-dark);
+  }
+
+  /* OPTIONAL: use light-dark() for built-in UI colors */
+  @supports (color: light-dark(white, black)) {
+    --brand-color: light-dark(var(--brand-accent-light), var(--brand-accent-dark));
+  }
+
+  /* MANDATORY: Automatically adapt native UI to user system preferences */
+  color-scheme: light dark;
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+    --brand-color: var(--brand-accent-dark);
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+    --brand-color: var(--brand-accent-light);
+  }
+
+  accent-color: var(--brand-color);
+}
+
+body {
+  accent-color: var(--brand-color);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Visually hidden utility (accessible to screen readers, visible on focus for skip links) */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* High contrast focus indicators */
+:where(a:any-link, button, input, select):focus-visible {
+  outline: 3px solid var(--brand-color);
+  outline-offset: 3px;
+}
+
+/* Defer rendering for off-screen station cards below the initial fold */
+.station-card-deferred {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 116px;
+}
+
+/* Equalizer animation & skeleton pulse with case-by-case reduced-motion handling */
+@keyframes eqBounce {
+  0%, 100% {
+    transform: scaleY(0.45);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes skeletonFade {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.eq-bar {
+  transform-origin: bottom;
+  animation: eqBounce 0.85s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
+.eq-bar-2 {
+  animation-delay: 0.2s;
+}
+
+.eq-bar-3 {
+  animation-delay: 0.4s;
+}
+
+.skeleton-pulse {
+  animation: skeletonFade 1.6s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* Hide scrollbars on horizontal filter chip bars while preserving scrollability */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide duplicate native WebKit search clear button when custom clear button is rendered */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* Fallback for older browsers without accent-color support */
+@supports not (accent-color: var(--brand-color)) {
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 8px;
+    background: linear-gradient(
+      to right,
+      var(--brand-color, #6d28d9) var(--progress, 80%),
+      #cbd5e1 var(--progress, 80%)
+    );
+    border-radius: 4px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--brand-color, #6d28d9);
+    cursor: pointer;
+    margin-top: -4px;
+  }
+
+  input[type="range"]::-moz-range-track {
+    width: 100%;
+    height: 8px;
+    background: #cbd5e1;
+    border-radius: 4px;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--brand-color, #6d28d9);
+    cursor: pointer;
+  }
+
+  input[type="range"]::-moz-range-progress {
+    background-color: var(--brand-color, #6d28d9);
+    height: 8px;
+    border-radius: 4px;
+  }
+}
+

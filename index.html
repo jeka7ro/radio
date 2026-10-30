@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- MANDATORY: Declare support for both light and dark themes -->
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        const storedScheme = localStorage.getItem('color-scheme');
+        const meta = document.querySelector('meta[name="color-scheme"]');
+        if (meta && (storedScheme === 'light' || storedScheme === 'dark')) {
+          meta.content = storedScheme;
+        }
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const isDark = storedScheme === 'dark' || (!storedScheme && prefersDark);
+        document.documentElement.classList.toggle('dark', isDark);
+      } catch (e) {}
+    </script>
+    <meta name="theme-color" content="#6d28d9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+    <meta
+      name="description"
+      content="AetherRadio — Ascultă posturi de radio online din toată lumea, organizate pe țări, cu suport HLS, favorite și redare în fundal."
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AetherRadio" />
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>AetherRadio — Radio Online Global</title>
+  </head>
+  <body class="bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
