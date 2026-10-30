@@ -78,7 +78,7 @@ function extractCountryFromTvgId(
 
 // Dead or geo-blocked streams that redirect to block screens outside Russia
 const DEAD_OR_PLACEHOLDER_PATTERNS =
-  /nosignal\d*\.antenaplay\.ro|jarvisx1\.cfd|mofta1\.cfd|mangora1\.cfd|freeott\.top|rpprod\.hbbtv\.cdn\.cra\.cz|ucom\.am|strm\.yandex\.ru|15plusmg\.ru|31\.148\.48\.15|45\.153\.24\.78|89\.33\.29\.115|cdn\.ngenix\.net|serv30\.vintera\.tv\/restream\/1_old|vgtrkregion-reg\.cdnvideo\.ru\/vgtrk\/0\/russia24|t\.me\//i;
+  /nosignal\d*\.antenaplay\.ro|[a-z0-9-]+\.cfd\/|freeott\.top|rpprod\.hbbtv\.cdn\.cra\.cz|ucom\.am|strm\.yandex\.ru|15plusmg\.ru|31\.148\.48\.15|45\.153\.24\.78|89\.33\.29\.115|cdn\.ngenix\.net|serv30\.vintera\.tv\/restream\/1_old|vgtrkregion-reg\.cdnvideo\.ru\/vgtrk\/0\/russia24|t\.me\//i;
 
 // Verified high-speed HD CDNs that sort to the top in Quality mode
 const PREMIUM_STREAM_HOSTS =
@@ -133,6 +133,20 @@ https://hls01ns.antenaplay.ro/hls/tralala-hd/index.m3u8
 https://hls01ns.antenaplay.ro/hls/tralala-desene-animate-hd/index.m3u8
 #EXTINF:-1 tvg-id="Travel.Mix.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/travel-mix.jpg" group-title="Documentary",Travel Mix HD (1080p)
 https://hls02ns.antenaplay.ro/hls/travel-mix-hd/index.m3u8
+#EXTINF:-1 tvg-id="ViasatHistory.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/9e/Viasat_History_2026.svg" group-title="Documentary",Viasat History HD
+https://stream8.cinerama.uz/1046/index.m3u8
+#EXTINF:-1 tvg-id="ViasatExplore.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/7/71/Viasat_Explore_2026.svg" group-title="Documentary",Viasat Explore HD
+http://stream.mcquack.net/239/index.m3u8
+#EXTINF:-1 tvg-id="ViasatNature.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/2/24/Cropped-viasat-nature.png" group-title="Documentary",Viasat Nature HD
+https://stream3.cinerama.uz/1228/mono.m3u8
+#EXTINF:-1 tvg-id="NationalGeographic.ro" tvg-logo="https://iptvx.one/picons/nat-geo.png" group-title="Documentary",National Geographic HD (1080p)
+https://stream8.cinerama.uz/1041/index.m3u8
+#EXTINF:-1 tvg-id="NatGeoWild.ro" tvg-logo="https://iptvx.one/picons/nat-geo-wild.png" group-title="Documentary",National Geographic Wild HD (1080p)
+https://stream8.cinerama.uz/1042/index.m3u8
+#EXTINF:-1 tvg-id="DiscoveryChannel.ro" tvg-logo="https://ngrch.github.io/iptv/logos/discovery.png" group-title="Documentary",Discovery Channel HD (1080p)
+https://stream8.cinerama.uz/1039/index.m3u8
+#EXTINF:-1 tvg-id="AnimalPlanet.ro" tvg-logo="https://iptvx.one/picons/animal-planet.png" group-title="Documentary",Animal Planet HD (1080p)
+https://stream8.cinerama.uz/1043/index.m3u8
 #EXTINF:-1 tvg-id="Aleph.News.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/aleph-news.jpg" group-title="News",Aleph News HD (720p)
 https://stream-aleph.m.ro/Aleph/ngrp:Alephnewsmain.stream_all/playlist.m3u8
 #EXTINF:-1 tvg-id="Aleph.Business.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/aleph-news.jpg" group-title="Business",Aleph Business HD (1080p)
@@ -597,7 +611,7 @@ export async function fetchTvChannelsByCountry(
     return all.slice(0, 2500);
   }
 
-  const cacheKey = `tv_channels_${upperCode}`;
+  const cacheKey = `tv_channels_v2_${upperCode}`;
   if (!forceRefresh) {
     const cached = getCachedData<TvChannel[]>(cacheKey);
     if (cached) {

@@ -76,11 +76,64 @@ function resolveWorkingStreamUrl(rawUrl: string): string {
   if (/51\.158\.144\.33:2021\/zvezda/i.test(rawUrl)) {
     return 'https://tvchannelstream1.tvzvezda.ru/cdn/tvzvezda/playlist.m3u8';
   }
+  if (/\.cfd\/vhis\//i.test(rawUrl)) {
+    return 'https://stream8.cinerama.uz/1046/index.m3u8';
+  }
+  if (/\.cfd\/vexplr\//i.test(rawUrl)) {
+    return 'http://stream.mcquack.net/239/index.m3u8';
+  }
+  if (/\.cfd\/vnature\//i.test(rawUrl)) {
+    return 'https://stream3.cinerama.uz/1228/mono.m3u8';
+  }
 
   return rawUrl;
 }
 
 const KNOWN_CHANNEL_BACKUPS: Array<[RegExp, string[]]> = [
+  [
+    /Viasat History|viju\+? History/i,
+    [
+      'https://stream8.cinerama.uz/1046/index.m3u8',
+      'http://stream.mcquack.net/101/index.m3u8',
+      'http://flussonic.mkpnet.ru/tv-687ba838ca927b9a/video.m3u8',
+    ],
+  ],
+  [
+    /Viasat Explore|viju\+? Explore/i,
+    [
+      'http://stream.mcquack.net/239/index.m3u8',
+      'https://flussonic.mkpnet.ru/tv-7c57a4c3f9a896ea/video.m3u8',
+    ],
+  ],
+  [
+    /Viasat Nature|viju\+? Nature/i,
+    [
+      'https://stream3.cinerama.uz/1228/mono.m3u8',
+      'https://flussonic.mkpnet.ru/tv-7a85ea25208f5bf7/video.m3u8',
+    ],
+  ],
+  [
+    /National Geographic Wild|Nat Geo Wild/i,
+    ['https://stream8.cinerama.uz/1042/index.m3u8'],
+  ],
+  [
+    /^National Geographic|^Nat Geo/i,
+    [
+      'https://stream8.cinerama.uz/1041/index.m3u8',
+      'http://stream.mcquack.net/116/index.m3u8',
+    ],
+  ],
+  [
+    /^Discovery/i,
+    [
+      'https://stream8.cinerama.uz/1039/index.m3u8',
+      'http://stream.mcquack.net/177/index.m3u8',
+    ],
+  ],
+  [
+    /^Animal Planet/i,
+    ['https://stream8.cinerama.uz/1043/index.m3u8'],
+  ],
   [
     /^ТНТ\b|^TNT\b/i,
     [

@@ -1,0 +1,33 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/tv-proxy"
+  to = "/.netlify/functions/tv-proxy"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/tv-epg"
+  to = "/.netlify/functions/tv-epg"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/tv-epg-archive"
+  to = "/.netlify/functions/tv-epg-archive"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/radio-meta"
+  to = "/.netlify/functions/radio-meta"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
