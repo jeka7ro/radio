@@ -65,7 +65,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
 
     return (
       <article
-        className={`group relative flex items-center gap-3.5 p-3.5 rounded-2xl border transition-all duration-200 ${
+        className={`group relative flex items-center gap-2.5 sm:gap-3.5 p-2.5 sm:p-3.5 rounded-2xl border transition-all duration-200 ${
           isDeferred ? 'station-card-deferred' : ''
         } ${
           isCurrent
@@ -80,7 +80,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
           aria-label={format(isPlaying ? t.player.pause : t.player.play, {
             name: station.name,
           })}
-          className="flex-1 min-w-0 flex items-center gap-3.5 text-left rounded-xl focus-visible:outline-2"
+          className="flex-1 min-w-0 flex items-center gap-2.5 sm:gap-3.5 text-left rounded-xl focus-visible:outline-2"
         >
           <div className="relative flex-shrink-0">
             <StationAvatar
@@ -101,11 +101,11 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
               }`}
             >
               {isLoading ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin" />
               ) : isPlaying ? (
-                <Pause className="w-6 h-6 fill-current" />
+                <Pause className="w-5 h-5 sm:w-6 sm:h-6 fill-current" />
               ) : (
-                <Play className="w-6 h-6 fill-current ml-0.5" />
+                <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current ml-0.5" />
               )}
             </span>
           </div>
@@ -113,7 +113,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <h3
-                className={`text-base font-semibold truncate ${
+                className={`text-sm sm:text-base font-semibold truncate ${
                   isCurrent
                     ? 'text-brand-800 dark:text-brand-300'
                     : 'text-slate-900 dark:text-zinc-100'
@@ -125,7 +125,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
 
             {/* Live Now Playing Song + Artist Avatar (when this station is active) */}
             {isCurrent && nowPlayingMeta ? (
-              <div className="mt-1 flex items-center gap-2 px-2 py-1 rounded-lg bg-brand-100/80 dark:bg-brand-900/40 border border-brand-300/60 dark:border-brand-700/50">
+              <div className="mt-1 flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg bg-brand-100/80 dark:bg-brand-900/40 border border-brand-300/60 dark:border-brand-700/50">
                 {nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl ? (
                   <img
                     src={
@@ -134,11 +134,11 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
                       undefined
                     }
                     alt={nowPlayingMeta.artist || nowPlayingMeta.title}
-                    className="w-5 h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
+                    className="w-4 h-4 sm:w-5 sm:h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
                   />
                 ) : (
                   <Disc3
-                    className={`w-4 h-4 text-brand-600 dark:text-brand-400 flex-shrink-0 ${
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-600 dark:text-brand-400 flex-shrink-0 ${
                       isPlaying ? 'animate-spin' : ''
                     }`}
                   />
@@ -150,8 +150,8 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
                 </p>
               </div>
             ) : (
-              /* Genre / Tags row */
-              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              /* Desktop Genre / Tags row (merged into single metadata line on mobile to save vertical space) */
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5 mt-1">
                 {tags.length > 0 ? (
                   tags.map((tag) => (
                     <span
@@ -169,12 +169,12 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
               </div>
             )}
 
-            {/* Technical quality badges */}
-            <div className="flex items-center gap-2 mt-1.5 text-xs text-slate-600 dark:text-zinc-400">
+            {/* Technical quality + Genre badges (Single compact row on mobile) */}
+            <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1.5 text-[11px] sm:text-xs text-slate-600 dark:text-zinc-400 overflow-hidden">
               {station.countrycode && (
                 <span
                   title={station.country || station.countrycode}
-                  className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-zinc-300 truncate max-w-[130px]"
+                  className="inline-flex items-center gap-1 font-medium text-slate-700 dark:text-zinc-300 truncate max-w-[105px] sm:max-w-[130px] shrink-0"
                 >
                   <span aria-hidden="true">
                     {getCountryFlagEmoji(station.countrycode)}
@@ -188,31 +188,36 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
                   </span>
                 </span>
               )}
+              {tags[0] && (
+                <span className="sm:hidden inline-block px-1.5 py-0.2 rounded bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-medium truncate max-w-[85px]">
+                  {tags[0]}
+                </span>
+              )}
               {station.bitrate > 0 && (
-                <span className="font-medium">{station.bitrate} kbps</span>
+                <span className="font-medium shrink-0">{station.bitrate}k</span>
               )}
               {station.codec && (
-                <span className="uppercase">{station.codec}</span>
+                <span className="uppercase shrink-0">{station.codec}</span>
               )}
               {station.hls === 1 && (
-                <span className="px-1.5 py-0.2 rounded bg-brand-100 dark:bg-brand-950 text-brand-800 dark:text-brand-300 font-semibold">
+                <span className="px-1.5 py-0.2 rounded bg-brand-100 dark:bg-brand-950 text-brand-800 dark:text-brand-300 font-semibold shrink-0">
                   HLS
                 </span>
               )}
               {isHttp && (
                 <span
                   title={t.player.httpWarningTitle}
-                  className="inline-flex items-center gap-0.5 text-amber-700 dark:text-amber-400 font-medium"
+                  className="inline-flex items-center gap-0.5 text-amber-700 dark:text-amber-400 font-medium shrink-0"
                 >
-                  <ShieldAlert className="w-3.5 h-3.5" aria-hidden="true" />
-                  HTTP
+                  <ShieldAlert className="w-3 h-3 sm:w-3.5 sm:h-3.5" aria-hidden="true" />
+                  <span className="hidden xs:inline">HTTP</span>
                 </span>
               )}
             </div>
           </div>
         </button>
 
-        {/* Dedicated Favorite Heart button (44x44px minimum touch target) */}
+        {/* Dedicated Favorite Heart button */}
         <button
           type="button"
           onClick={handleFavoriteClick}
@@ -221,7 +226,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
             isFavorite ? t.favorites.removeFav : t.favorites.addFav,
             { name: station.name }
           )}
-          className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${
+          className={`w-9 h-9 sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center rounded-full shrink-0 transition-colors ${
             isFavorite
               ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-950/70'
               : 'text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800/70'
@@ -229,7 +234,7 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
         >
           <Heart
             aria-hidden="true"
-            className={`w-5 h-5 transition-transform duration-150 ${
+            className={`w-4 h-4 sm:w-5 sm:h-5 transition-transform duration-150 ${
               isFavorite ? 'fill-current scale-110' : ''
             }`}
           />

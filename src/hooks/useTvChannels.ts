@@ -19,7 +19,6 @@ export function useTvChannels(countryCode: string) {
   const favoriteTvChannels = useRadioStore((state) => state.favoriteTvChannels);
   const searchQuery = useRadioStore((state) => state.tvSearchQuery);
   const setSearchQuery = useRadioStore((state) => state.setTvSearchQuery);
-  const addRecentTvSearch = useRadioStore((state) => state.addRecentTvSearch);
 
   const [countryChannels, setCountryChannels] = useState<TvChannel[]>([]);
   const [globalChannels, setGlobalChannels] = useState<TvChannel[] | null>(null);
@@ -35,16 +34,6 @@ export function useTvChannels(countryCode: string) {
   const [onlyFavorites, setOnlyFavorites] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<TvSortOption>('quality');
   const [visibleCount, setVisibleCount] = useState<number>(PAGE_SIZE);
-
-  // Automatically record non-empty searches into recentTvSearches after a short pause
-  useEffect(() => {
-    const trimmed = searchQuery.trim();
-    if (trimmed.length < 2) return;
-    const timer = window.setTimeout(() => {
-      addRecentTvSearch(trimmed);
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery, addRecentTvSearch]);
 
   const loadCountryTv = useCallback(
     async (force = false) => {

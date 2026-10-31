@@ -21,9 +21,6 @@ export function useStations(countryCode: string) {
 
   const searchQuery = useRadioStore((state) => state.radioSearchQuery);
   const setSearchQuery = useRadioStore((state) => state.setRadioSearchQuery);
-  const addRecentRadioSearch = useRadioStore(
-    (state) => state.addRecentRadioSearch
-  );
   const [searchScope, setSearchScope] = useState<SearchScope>(
     countryCode.toUpperCase() === 'ALL' ? 'all' : 'country'
   );
@@ -32,16 +29,6 @@ export function useStations(countryCode: string) {
   const [visibleCount, setVisibleCount] = useState<number>(PAGE_SIZE);
 
   const setStationQueue = useRadioStore((state) => state.setStationQueue);
-
-  // Automatically record non-empty searches into recentRadioSearches after a short pause
-  useEffect(() => {
-    const trimmed = searchQuery.trim();
-    if (trimmed.length < 2) return;
-    const timer = window.setTimeout(() => {
-      addRecentRadioSearch(trimmed);
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery, addRecentRadioSearch]);
 
   const loadStations = useCallback(
     async (force = false) => {

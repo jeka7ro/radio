@@ -176,6 +176,10 @@ export const useRadioStore = create<RadioState>()(
       playStation: (station, queue) => {
         const current = get().currentStation;
         const currentStatus = get().playerStatus;
+        const activeSearch = get().radioSearchQuery.trim();
+        if (activeSearch.length >= 2) {
+          get().addRecentRadioSearch(activeSearch);
+        }
 
         if (queue && queue.length > 0) {
           set({ stationQueue: queue });
@@ -315,6 +319,10 @@ export const useRadioStore = create<RadioState>()(
       },
 
       playTvChannel: (channel, queue) => {
+        const activeSearch = get().tvSearchQuery.trim();
+        if (activeSearch.length >= 2) {
+          get().addRecentTvSearch(activeSearch);
+        }
         if (queue && queue.length > 0) {
           set({ tvQueue: queue });
         }
@@ -453,11 +461,27 @@ export const useRadioStore = create<RadioState>()(
         set((state) => {
           const trimmed = q.trim();
           if (trimmed.length < 2) return state;
-          const filtered = state.recentRadioSearches.filter(
-            (item) => item.toLowerCase() !== trimmed.toLowerCase()
-          );
+          const lower = trimmed.toLowerCase();
+          // Remove exact duplicates AND shorter partial prefixes (e.g. "Mon", "Monte" when "Monte carlo" is added)
+          const combined = [trimmed, ...state.recentRadioSearches];
+          const deduped: string[] = [];
+          for (const item of combined) {
+            const itemLower = item.trim().toLowerCase();
+            if (itemLower.length < 2) continue;
+            const isRedundant = deduped.some((kept) => {
+              const keptLower = kept.toLowerCase();
+              return (
+                keptLower === itemLower ||
+                keptLower.startsWith(itemLower) ||
+                (itemLower.startsWith(keptLower) && itemLower === lower)
+              );
+            });
+            if (!isRedundant) {
+              deduped.push(item.trim());
+            }
+          }
           return {
-            recentRadioSearches: [trimmed, ...filtered].slice(0, 12),
+            recentRadioSearches: deduped.slice(0, 8),
           };
         }),
 
@@ -474,11 +498,26 @@ export const useRadioStore = create<RadioState>()(
         set((state) => {
           const trimmed = q.trim();
           if (trimmed.length < 2) return state;
-          const filtered = state.recentTvSearches.filter(
-            (item) => item.toLowerCase() !== trimmed.toLowerCase()
-          );
+          const lower = trimmed.toLowerCase();
+          const combined = [trimmed, ...state.recentTvSearches];
+          const deduped: string[] = [];
+          for (const item of combined) {
+            const itemLower = item.trim().toLowerCase();
+            if (itemLower.length < 2) continue;
+            const isRedundant = deduped.some((kept) => {
+              const keptLower = kept.toLowerCase();
+              return (
+                keptLower === itemLower ||
+                keptLower.startsWith(itemLower) ||
+                (itemLower.startsWith(keptLower) && itemLower === lower)
+              );
+            });
+            if (!isRedundant) {
+              deduped.push(item.trim());
+            }
+          }
           return {
-            recentTvSearches: [trimmed, ...filtered].slice(0, 12),
+            recentTvSearches: deduped.slice(0, 8),
           };
         }),
 

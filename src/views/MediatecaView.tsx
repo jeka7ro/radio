@@ -699,33 +699,50 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
       {/* ACTIVE ON-DEMAND MOVIE / SERIES PLAYER PANEL */}
       {activeVodItem && (
-        <section className="rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl overflow-hidden">
+        <section className="rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl overflow-hidden">
           {/* Player Top Bar */}
-          <div className="px-4 sm:px-6 py-3.5 bg-zinc-900 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="px-2.5 py-1 rounded-full bg-amber-500 text-zinc-950 text-xs font-extrabold uppercase tracking-wider shrink-0">
-                {activeVodItem.type === 'series'
-                  ? `SERIAL • S${selectedSeason}:E${selectedEpisode}`
-                  : 'FILM ON-DEMAND'}
-              </span>
-              <h2 className="text-base sm:text-lg font-bold text-white truncate">
-                {activeVodItem.name}
-              </h2>
-              {(activeVodItem.releaseInfo || activeVodItem.year) && (
-                <span className="text-xs text-zinc-400 shrink-0">
-                  ({activeVodItem.releaseInfo || activeVodItem.year})
+          <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-zinc-900 border-b border-zinc-800 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 text-[10px] sm:text-xs font-extrabold uppercase tracking-wider shrink-0">
+                  {activeVodItem.type === 'series'
+                    ? `S${selectedSeason}:E${selectedEpisode}`
+                    : 'FILM'}
                 </span>
-              )}
-              {activeVodItem.imdbRating && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold shrink-0">
-                  <Star className="w-3.5 h-3.5 fill-current" />
-                  {activeVodItem.imdbRating}
-                </span>
-              )}
+                <h2 className="text-sm sm:text-lg font-bold text-white truncate">
+                  {activeVodItem.name}
+                </h2>
+                {activeVodItem.imdbRating && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold shrink-0">
+                    <Star className="w-3 h-3 fill-current" />
+                    {activeVodItem.imdbRating}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleFullscreenPlayer}
+                  className="min-h-[30px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span className="hidden xs:inline">Fullscreen</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveVodItem(null)}
+                  className="min-h-[30px] px-2.5 py-1 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Închide</span>
+                </button>
+              </div>
             </div>
 
-            {/* Server Switcher + Actions */}
-            <div className="flex flex-wrap items-center gap-1.5">
+            {/* Single-line Horizontal Server + Subtitle Switcher */}
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
               {VOD_SERVERS.map((srv) => {
                 const active = activeServer === srv.id;
                 return (
@@ -734,45 +751,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     type="button"
                     onClick={() => setActiveServer(srv.id)}
                     title={srv.badge}
-                    className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                    className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                       active
                         ? 'bg-brand-600 text-white shadow-xs'
                         : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                     }`}
                   >
-                    <Layers className="w-3.5 h-3.5 text-brand-400" />
+                    <Layers className="w-3 h-3 text-brand-400" />
                     <span>{srv.label}</span>
                   </button>
                 );
               })}
 
-              <button
-                type="button"
-                onClick={handleFullscreenPlayer}
-                className="min-h-[34px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5"
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span>Fullscreen</span>
-              </button>
+              <span className="text-zinc-700 select-none">|</span>
 
-              <button
-                type="button"
-                onClick={() => setActiveVodItem(null)}
-                className="min-h-[34px] px-3 py-1 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1"
-              >
-                <X className="w-4 h-4" />
-                <span>Închide Playerul</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Audio Track & Subtitle Language Bar */}
-          <div className="px-4 sm:px-6 py-2.5 bg-zinc-900/80 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-3">
-            {/* Subtitle Preferred Language Pills */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-1 mr-1">
-                💬 Subtitrare:
-              </span>
               {SUBTITLE_LANGUAGES.map((sub) => {
                 const active = preferredSubLang === sub.id;
                 return (
@@ -780,49 +772,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     key={sub.id}
                     type="button"
                     onClick={() => setPreferredSubLang(sub.id)}
-                    className={`min-h-[30px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                    className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                       active
                         ? 'bg-emerald-500 text-zinc-950 font-bold shadow-xs'
                         : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                     }`}
                   >
                     <span>{sub.flag}</span>
-                    <span>{sub.label}</span>
+                    <span>{sub.id.toUpperCase()}</span>
                   </button>
                 );
               })}
-            </div>
-
-            {/* Audio Track Quick Switcher */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-bold text-amber-400 inline-flex items-center gap-1 mr-1">
-                🎧 Pista Audio:
-              </span>
-              <button
-                type="button"
-                onClick={() => setActiveServer('autoembed')}
-                className={`min-h-[30px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                  activeServer === 'autoembed'
-                    ? 'bg-amber-500 text-zinc-950 font-bold'
-                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                }`}
-              >
-                <span>🔊 Multi-Audio (EN / RU / ES / FR)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveServer('multiembed')}
-                className={`min-h-[30px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                  activeServer === 'multiembed'
-                    ? 'bg-amber-500 text-zinc-950 font-bold'
-                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                }`}
-              >
-                <span>🎙️ VIP Multi-Server & Sub</span>
-              </button>
-              <span className="text-[11px] text-zinc-400 hidden xl:inline">
-                • În player: apasă pe iconița <b>CC</b> (dreapta-jos) pentru subtitrări sau <b>🎧 / ⚙️</b> pentru limba audio
-              </span>
             </div>
           </div>
 
@@ -1004,12 +964,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         activeTab === 'saved') && (
         <>
           {activeTab !== 'saved' && (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {/* Search Bar */}
               <div className="relative">
                 <Search
                   aria-hidden="true"
-                  className="w-5 h-5 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 />
                 <input
                   type="search"
@@ -1017,16 +977,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={
                     activeTab === 'series'
-                      ? 'Caută orice serial (ex: Breaking Bad, Game of Thrones, The Sopranos, Chernobyl, Stranger Things, Бригада)...'
-                      : 'Caută orice film (ex: Dune, Gladiator, Oppenheimer, Interstellar, John Wick, Avatar, Мастер и Маргарита)...'
+                      ? 'Caută seriale (ex: Breaking Bad, Game of Thrones, The Sopranos)...'
+                      : 'Caută filme (ex: Dune, Gladiator, Oppenheimer, Interstellar)...'
                   }
-                  className="w-full min-h-[44px] pl-11 pr-10 py-2 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
+                  className="w-full min-h-[38px] sm:min-h-[42px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1035,7 +995,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
               {/* Single-row Genre Filter Pills */}
               {!debouncedQuery && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
                   {GENRE_FILTERS.map((g) => {
                     const active = selectedGenre === g.id;
                     return (
@@ -1043,7 +1003,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         key={g.id}
                         type="button"
                         onClick={() => setSelectedGenre(g.id)}
-                        className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                        className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                           active
                             ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
                             : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
@@ -1059,9 +1019,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           )}
 
-          {/* Poster Grid */}
+          {/* Poster Grid (3 columns on mobile so 9-12 movies fit on screen at once) */}
           {isLoading && activeTab !== 'saved' ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
               {Array.from({ length: 18 }).map((_, idx) => (
                 <div
                   key={idx}
@@ -1070,8 +1030,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               ))}
             </div>
           ) : displayedItems.length === 0 ? (
-            <div className="p-10 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-center space-y-3">
-              <p className="text-base font-bold text-slate-800 dark:text-zinc-200">
+            <div className="p-8 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-center space-y-3">
+              <p className="text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-200">
                 {activeTab === 'saved'
                   ? 'Nu ai salvat încă niciun film sau serial în Lista Mea'
                   : 'Niciun film sau serial găsit pentru această căutare'}
@@ -1083,14 +1043,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   setSearchQuery('');
                   setSelectedGenre('top');
                 }}
-                className="min-h-[38px] px-5 py-2 rounded-full bg-brand-600 text-white text-xs font-semibold"
+                className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 text-white text-xs font-semibold"
               >
                 Explorează Filmele Populare
               </button>
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
                 {displayedItems.map((item) => {
                   const isSaved = savedItems.some((x) => x.id === item.id);
                   const isPlayingNow = activeVodItem?.id === item.id;
@@ -1105,7 +1065,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         setActiveVodItem(item);
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
-                      className={`group cursor-pointer rounded-2xl border overflow-hidden flex flex-col justify-between transition-all duration-200 ${
+                      className={`group cursor-pointer rounded-xl sm:rounded-2xl border overflow-hidden flex flex-col justify-between transition-all duration-200 ${
                         isPlayingNow
                           ? 'bg-brand-50 dark:bg-brand-950/40 border-brand-500 ring-2 ring-brand-500/40 shadow-md'
                           : 'bg-white dark:bg-zinc-900 border-slate-200/80 dark:border-zinc-800/90 hover:border-brand-400 hover:shadow-xl hover:-translate-y-0.5'
@@ -1125,15 +1085,15 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         />
 
                         {/* Top Badges */}
-                        <div className="absolute top-2 inset-x-2 flex items-center justify-between gap-1">
+                        <div className="absolute top-1.5 inset-x-1.5 flex items-center justify-between gap-1">
                           {item.imdbRating ? (
-                            <span className="px-2 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[11px] font-extrabold inline-flex items-center gap-1 shadow-xs">
-                              <Star className="w-3 h-3 fill-current" />
+                            <span className="px-1.5 py-0.2 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] sm:text-[11px] font-extrabold inline-flex items-center gap-0.5 shadow-xs">
+                              <Star className="w-2.5 h-2.5 sm:w-3 sm:h-3 fill-current" />
                               {item.imdbRating}
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-black/75 text-white text-[10px] font-bold uppercase">
-                              {item.type === 'series' ? 'SERIAL' : 'FILM HD'}
+                            <span className="px-1.5 py-0.2 rounded-full bg-black/75 text-white text-[9px] sm:text-[10px] font-bold uppercase">
+                              {item.type === 'series' ? 'SERIAL' : 'FILM'}
                             </span>
                           )}
 
@@ -1141,14 +1101,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                             type="button"
                             onClick={(e) => toggleSaveVodItem(item, e)}
                             aria-label="Salvează"
-                            className={`w-8 h-8 rounded-full flex items-center justify-center backdrop-blur-xs transition-colors ${
+                            className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center backdrop-blur-xs transition-colors ${
                               isSaved
                                 ? 'bg-rose-600 text-white'
                                 : 'bg-black/60 hover:bg-black/80 text-white'
                             }`}
                           >
                             <Heart
-                              className={`w-4 h-4 ${
+                              className={`w-3 h-3 sm:w-4 sm:h-4 ${
                                 isSaved ? 'fill-current' : ''
                               }`}
                             />
@@ -1156,42 +1116,32 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         </div>
 
                         {/* Play Overlay on Hover */}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center p-3 transition-opacity">
-                          <div className="w-12 h-12 rounded-full bg-brand-600 text-white flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform">
-                            <Play className="w-6 h-6 fill-current ml-0.5" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center p-2 transition-opacity">
+                          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-brand-600 text-white flex items-center justify-center shadow-lg">
+                            <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current ml-0.5" />
                           </div>
-                          <span className="mt-2 px-3 py-1 rounded-full bg-black/80 text-white text-xs font-bold">
-                            {item.type === 'series'
-                              ? 'Vezi Episoadele'
-                              : 'Redă Filmul'}
-                          </span>
                         </div>
                       </div>
 
                       {/* Card Info */}
-                      <div className="p-3 flex-1 flex flex-col justify-between gap-2">
+                      <div className="p-2 sm:p-3 flex-1 flex flex-col justify-between gap-1">
                         <div>
-                          <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100 line-clamp-1 group-hover:text-brand-600 dark:group-hover:text-brand-400">
+                          <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100 line-clamp-1 group-hover:text-brand-600 dark:group-hover:text-brand-400">
                             {item.name}
                           </h3>
-                          <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
-                            <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-semibold">
-                              {item.type === 'series' ? 'Serial' : 'Film'}
-                            </span>
+                          <div className="flex items-center gap-1 mt-0.5 text-[10px] sm:text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
+                            <span>{item.type === 'series' ? 'Serial' : 'Film'}</span>
                             {(item.releaseInfo || item.year) && (
                               <>
                                 <span>•</span>
-                                <span className="inline-flex items-center gap-0.5">
-                                  <Calendar className="w-3 h-3" />
-                                  {item.releaseInfo || item.year}
-                                </span>
+                                <span>{item.releaseInfo || item.year}</span>
                               </>
                             )}
                           </div>
                         </div>
 
                         {item.genres && item.genres.length > 0 && (
-                          <p className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">
+                          <p className="hidden sm:block text-[11px] text-slate-500 dark:text-zinc-400 truncate">
                             {item.genres.slice(0, 2).join(' • ')}
                           </p>
                         )}
