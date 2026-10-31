@@ -185,21 +185,21 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
   }, [hasMore, isLoading, loadMore]);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-3 sm:space-y-6">
       {/* Favorite TV Channels Strip */}
       {favoriteTvChannels.length > 0 && !onlyFavorites && (
-        <section aria-labelledby="favorite-tv-strip-heading" className="space-y-3">
+        <section aria-labelledby="favorite-tv-strip-heading" className="space-y-1.5 sm:space-y-2.5">
           <div className="flex items-center justify-between">
             <h2
               id="favorite-tv-strip-heading"
-              className="text-xl font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-2"
+              className="text-sm sm:text-lg font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5"
             >
               <Heart
-                className="w-5 h-5 text-rose-600 dark:text-rose-400 fill-current"
+                className="w-4 h-4 sm:w-5 sm:h-5 text-rose-600 dark:text-rose-400 fill-current"
                 aria-hidden="true"
               />
               <span>{t.tv.favoriteTvTitle}</span>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
                 {favoriteTvChannels.length}
               </span>
             </h2>
@@ -210,13 +210,13 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                 setOnlyFavorites(true);
                 setOnlyCustom(false);
               }}
-              className="min-h-[38px] px-3.5 py-1.5 rounded-full text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+              className="min-h-[30px] sm:min-h-[36px] px-2.5 py-1 rounded-full text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
             >
-              Vezi toate favoritele TV →
+              Vezi toate →
             </button>
           </div>
 
-          <div className="flex items-center gap-3 overflow-x-auto pb-2 pt-0.5 no-scrollbar">
+          <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-1 pt-0.5 no-scrollbar">
             {favoriteTvChannels.map((channel) => {
               const isCurrent = currentTvChannel?.id === channel.id;
               return (
@@ -232,29 +232,31 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                     )
                   }
                   aria-label={format(t.tv.watchChannel, { name: channel.name })}
-                  className={`group flex-shrink-0 w-40 p-3 rounded-2xl border text-left transition-all ${
+                  className={`group flex-shrink-0 flex sm:block items-center gap-2 w-40 p-2 sm:p-3 rounded-2xl border text-left transition-all ${
                     isCurrent
                       ? 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-500/70'
                       : 'bg-white dark:bg-zinc-900/80 border-rose-200/80 dark:border-rose-900/50 hover:border-rose-400'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center justify-between sm:mb-2 shrink-0">
                     <StationAvatar
                       name={channel.name}
                       favicon={channel.logo}
                       size="sm"
                       isPlaying={isCurrent}
                     />
-                    <span className="text-[11px] font-mono uppercase px-1.5 py-0.5 rounded bg-rose-100/80 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
+                    <span className="hidden sm:inline-block text-[11px] font-mono uppercase px-1.5 py-0.5 rounded bg-rose-100/80 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300">
                       {channel.countryCode || 'TV'}
                     </span>
                   </div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                    {channel.name}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 truncate mt-0.5">
-                    {channel.group ? channel.group.split(';')[0] : 'Live TV'}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                      {channel.name}
+                    </p>
+                    <p className="text-[11px] sm:text-xs text-slate-500 dark:text-zinc-400 truncate">
+                      {channel.group ? channel.group.split(';')[0] : 'Live TV'}
+                    </p>
+                  </div>
                 </button>
               );
             })}
@@ -264,18 +266,18 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
 
       {/* Recently Watched TV Strip */}
       {recentTvChannels.length > 0 && (
-        <section aria-labelledby="recent-tv-heading" className="space-y-3">
+        <section aria-labelledby="recent-tv-heading" className="space-y-1.5 sm:space-y-2.5">
           <div className="flex items-center justify-between">
             <h2
               id="recent-tv-heading"
-              className="text-xl font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-2"
+              className="text-sm sm:text-lg font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-1.5"
             >
               <Clock
-                className="w-5 h-5 text-brand-700 dark:text-brand-400"
+                className="w-4 h-4 sm:w-5 sm:h-5 text-brand-700 dark:text-brand-400"
                 aria-hidden="true"
               />
               <span>{t.tv.recentlyWatched}</span>
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-200/80 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
                 {recentTvChannels.length}
               </span>
             </h2>
@@ -284,14 +286,14 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
               type="button"
               onClick={clearRecentTvChannels}
               aria-label={t.home.clearRecent}
-              className="min-h-[44px] px-3.5 py-1.5 rounded-full text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-900 inline-flex items-center gap-1.5 transition-colors"
+              className="min-h-[30px] sm:min-h-[36px] px-2.5 py-1 rounded-full text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-900 inline-flex items-center gap-1 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{t.home.clearRecent}</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-3 overflow-x-auto pb-2 pt-0.5 no-scrollbar">
+          <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-1 pt-0.5 no-scrollbar">
             {recentTvChannels.map((channel) => {
               const isCurrent = currentTvChannel?.id === channel.id;
               return (
@@ -307,29 +309,31 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                     )
                   }
                   aria-label={format(t.tv.watchChannel, { name: channel.name })}
-                  className={`group flex-shrink-0 w-36 p-3 rounded-2xl border text-left transition-all ${
+                  className={`group flex-shrink-0 flex sm:block items-center gap-2 w-40 sm:w-36 p-2 sm:p-3 rounded-2xl border text-left transition-all ${
                     isCurrent
                       ? 'bg-brand-50/90 dark:bg-brand-950/40 border-brand-500/70'
                       : 'bg-white dark:bg-zinc-900/80 border-slate-200/80 dark:border-zinc-800/80 hover:border-brand-400/60'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center justify-between sm:mb-2 shrink-0">
                     <StationAvatar
                       name={channel.name}
                       favicon={channel.logo}
                       size="sm"
                       isPlaying={isCurrent}
                     />
-                    <span className="text-[11px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
+                    <span className="hidden sm:inline-block text-[11px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
                       {channel.countryCode || 'TV'}
                     </span>
                   </div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                    {channel.name}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-zinc-400 truncate mt-0.5">
-                    {channel.group ? channel.group.split(';')[0] : 'Live TV'}
-                  </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                      {channel.name}
+                    </p>
+                    <p className="text-[11px] sm:text-xs text-slate-500 dark:text-zinc-400 truncate">
+                      {channel.group ? channel.group.split(';')[0] : 'Live TV'}
+                    </p>
+                  </div>
                 </button>
               );
             })}
@@ -338,9 +342,9 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
       )}
 
       {/* Main TV Channels Section */}
-      <section aria-labelledby="tv-channels-heading" className="space-y-4">
+      <section aria-labelledby="tv-channels-heading" className="space-y-2.5 sm:space-y-4">
         {/* Hero / Country Title Bar — Responsive Layout */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white dark:bg-zinc-900/90 px-3.5 sm:px-4 py-3.5 rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 shadow-xs overflow-hidden">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2 bg-white dark:bg-zinc-900/90 px-3 sm:px-4 py-2.5 sm:py-3.5 rounded-2xl sm:rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 shadow-xs overflow-hidden">
           <div className="flex items-center gap-3 min-w-0">
             <span className="text-3xl leading-none select-none shrink-0" aria-hidden="true">
               {isGlobalSelected ? '🌍' : selectedCountry.flag}
@@ -736,7 +740,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
         )}
 
         {/* Search, Scope Toggle & Sort Controls */}
-        <div className="flex flex-col lg:flex-row gap-3">
+        <div className="flex flex-col lg:flex-row gap-2 sm:gap-3">
           <div className="relative flex-1">
             <label htmlFor={searchInputId} className="visually-hidden">
               {t.tv.searchPlaceholder}
@@ -756,49 +760,47 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                 }
               }}
               placeholder={t.tv.searchPlaceholder}
-              className="w-full min-h-[46px] pl-10 pr-10 py-2.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-sm text-slate-900 dark:text-zinc-100 placeholder:text-slate-500 dark:placeholder:text-zinc-400 shadow-2xs"
+              className="w-full min-h-[40px] sm:min-h-[44px] pl-10 pr-10 py-2 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-sm text-slate-900 dark:text-zinc-100 placeholder:text-slate-500 dark:placeholder:text-zinc-400 shadow-2xs"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
                 aria-label={t.header.clearSearch}
-                className="min-w-[40px] min-h-[40px] rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                className="min-w-[36px] min-h-[36px] rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-slate-500 hover:text-slate-800 dark:text-zinc-400 dark:hover:text-zinc-200"
               >
                 <X className="w-4 h-4" aria-hidden="true" />
               </button>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center justify-between sm:justify-start gap-2 overflow-x-auto no-scrollbar">
             {selectedCountry.iso_3166_1 !== 'ALL' && (
               <div
                 role="group"
                 aria-label={t.header.changeCountry}
-                className="inline-flex p-1 rounded-full bg-slate-200/80 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800"
+                className="inline-flex p-0.5 sm:p-1 rounded-full bg-slate-200/80 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shrink-0"
               >
                 <button
                   type="button"
                   onClick={() => setSearchScope('country')}
                   aria-pressed={searchScope === 'country'}
-                  className={`min-h-[38px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-all ${
+                  className={`min-h-[32px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap transition-all ${
                     searchScope === 'country'
                       ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
                       : 'text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   <span aria-hidden="true">{selectedCountry.flag}</span>
-                  <span>
-                    {format(t.home.searchScopeCountry, {
-                      country: selectedCountry.localizedName,
-                    })}
+                  <span className="truncate max-w-[110px] sm:max-w-none">
+                    {selectedCountry.localizedName}
                   </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setSearchScope('all')}
                   aria-pressed={searchScope === 'all'}
-                  className={`min-h-[38px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-all ${
+                  className={`min-h-[32px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap transition-all ${
                     searchScope === 'all'
                       ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
                       : 'text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white'
@@ -810,10 +812,10 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
               </div>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 shrink-0">
               <label
                 htmlFor={sortSelectId}
-                className="text-xs font-medium text-slate-600 dark:text-zinc-400 whitespace-nowrap flex items-center gap-1.5 pl-1"
+                className="hidden sm:flex text-xs font-medium text-slate-600 dark:text-zinc-400 whitespace-nowrap items-center gap-1 pl-1"
               >
                 <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{t.home.sortBy}</span>
@@ -822,7 +824,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                 id={sortSelectId}
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as TvSortOption)}
-                className="min-h-[46px] px-4 py-2 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-sm font-medium text-slate-900 dark:text-zinc-100 shadow-2xs cursor-pointer"
+                className="min-h-[34px] sm:min-h-[40px] px-3 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-xs sm:text-sm font-medium text-slate-900 dark:text-zinc-100 shadow-2xs cursor-pointer"
               >
                 <option value="quality">{t.tv.sortQuality}</option>
                 <option value="name">{t.tv.sortName}</option>

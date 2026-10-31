@@ -294,7 +294,9 @@ export const TvPlayerModal: React.FC = () => {
   const [reloadCount, setReloadCount] = useState(0);
   const [streamIndex, setStreamIndex] = useState(0);
   const [isOsdOverlayOpen, setIsOsdOverlayOpen] = useState(false);
-  const [isSidePanelOpen, setIsSidePanelOpen] = useState(true);
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
   const [sidePanelTab, setSidePanelTab] = useState<'channels' | 'archive'>(
     'channels'
   );
@@ -735,13 +737,13 @@ export const TvPlayerModal: React.FC = () => {
           closeTvPlayer();
         }
       }}
-      className="m-auto w-full sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md"
+      className="mx-auto mt-[max(0.5rem,env(safe-area-inset-top,0px))] mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md"
     >
-      <div className="flex flex-col max-h-[96dvh] sm:max-h-[94vh] overflow-hidden">
+      <div className="flex flex-col max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top,0px)))] sm:max-h-[94vh] overflow-hidden">
         {/* Top bar (Always pinned at top, shrink-0) */}
-        <div className="shrink-0 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 px-3 sm:px-6 py-2.5 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
+        <div className="shrink-0 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 px-3 sm:px-6 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
           <div className="flex items-center justify-between gap-2 min-w-0">
-            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <StationAvatar
                 name={currentTvChannel.name}
                 favicon={effectiveLogo}
@@ -749,16 +751,16 @@ export const TvPlayerModal: React.FC = () => {
                 isPlaying={videoStatus === 'playing'}
               />
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
                   <h2 className="text-sm sm:text-lg font-bold text-white truncate">
                     {currentTvChannel.name}
                   </h2>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] sm:text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                     {currentTvChannel.resolution || 'LIVE'}
                   </span>
                 </div>
-                <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate mt-0.5">
+                <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate">
                   {currentTvChannel.countryCode && (
                     <span className="shrink-0">
                       {getCountryFlagEmoji(currentTvChannel.countryCode)}{' '}
@@ -785,7 +787,7 @@ export const TvPlayerModal: React.FC = () => {
                   isFavorite ? t.favorites.removeFav : t.favorites.addFav,
                   { name: currentTvChannel.name }
                 )}
-                className={`min-w-[38px] min-h-[38px] flex items-center justify-center rounded-full transition-colors ${
+                className={`min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full transition-colors ${
                   isFavorite
                     ? 'text-rose-400 bg-rose-950/50 hover:bg-rose-950/80'
                     : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -793,7 +795,7 @@ export const TvPlayerModal: React.FC = () => {
               >
                 <Heart
                   aria-hidden="true"
-                  className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`}
+                  className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`}
                 />
               </button>
 
@@ -801,21 +803,21 @@ export const TvPlayerModal: React.FC = () => {
                 type="button"
                 onClick={closeTvPlayer}
                 aria-label={t.tv.closeTvPlayer}
-                className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-full text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700 transition-colors"
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700 transition-colors"
               >
                 <X className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 lg:pb-0">
-            {/* Button 1: Toggle Translucent Smart TV OSD directly OVER Video */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            {/* Button 1: Toggle Translucent Smart TV OSD directly OVER Video (Desktop / Tablet) */}
             <button
               type="button"
               onClick={() => setIsOsdOverlayOpen((v) => !v)}
               aria-pressed={isOsdOverlayOpen}
               title="Afișează OSD-ul transparent direct peste video (stil Smart IPTV)"
-              className={`min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+              className={`hidden sm:inline-flex min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold items-center gap-1.5 shrink-0 transition-colors border ${
                 isOsdOverlayOpen
                   ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
                   : 'bg-zinc-800 hover:bg-zinc-700 text-amber-300 border-zinc-700'
@@ -825,7 +827,7 @@ export const TvPlayerModal: React.FC = () => {
               <span>OSD pe Video</span>
             </button>
 
-            {/* Button 2: Toggle Right-Hand Side Panel (Canale OSD) */}
+            {/* Button 2: Toggle Channel List (Canale) */}
             <button
               type="button"
               onClick={() => {
@@ -841,8 +843,8 @@ export const TvPlayerModal: React.FC = () => {
                 }
               }}
               aria-pressed={showSideColumn && sidePanelTab === 'channels'}
-              title="Afișează / ascunde panoul lateral cu lista de canale"
-              className={`min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+              title="Afișează / ascunde lista de canale"
+              className={`min-h-[32px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
                 showSideColumn && sidePanelTab === 'channels'
                   ? 'bg-brand-600 text-white border-brand-500 font-bold'
                   : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
@@ -859,7 +861,7 @@ export const TvPlayerModal: React.FC = () => {
                 onClick={() => {
                   setIsOsdOverlayOpen(false);
                   if (isSidePanelOpen && sidePanelTab === 'archive') {
-                    setSidePanelTab('channels');
+                    setIsSidePanelOpen(false);
                   } else {
                     setIsSidePanelOpen(true);
                     setSidePanelTab('archive');
@@ -867,7 +869,7 @@ export const TvPlayerModal: React.FC = () => {
                 }}
                 aria-pressed={showSideColumn && sidePanelTab === 'archive'}
                 title="Arhivă TV pe ultimele 7 zile (Catch-up / Timeshift)"
-                className={`min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+                className={`min-h-[32px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
                   (showSideColumn && sidePanelTab === 'archive') ||
                   activeArchiveProg
                     ? 'bg-emerald-500 text-zinc-950 border-emerald-400 font-bold'
@@ -886,7 +888,7 @@ export const TvPlayerModal: React.FC = () => {
                   setStreamIndex((prev) => (prev + 1) % candidateStreams.length)
                 }
                 title="Schimbă sursa streamului (Backup)"
-                className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                className="min-h-[32px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
               >
                 <Layers className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
                 <span>
@@ -956,15 +958,15 @@ export const TvPlayerModal: React.FC = () => {
           </div>
         )}
 
-        {/* SMART 2-COLUMN BODY: Left = Full 16:9 Video + Controls + Live EPG | Right = Docked Smart IPTV OSD / 7-Day Archive */}
-        <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-12">
-          {/* LEFT COLUMN: 16:9 Video Player + Controls + EPG Now/Next */}
+        {/* SMART BODY: Flex-col on Mobile (so Left Column NEVER gets squished/clipped!) | 12-Col Grid on Desktop */}
+        <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden flex flex-col lg:grid lg:grid-cols-12">
+          {/* LEFT COLUMN: 16:9 Video Player + Controls + EPG Now/Next (shrink-0 on mobile so it is ALWAYS 100% visible!) */}
           <div
             className={`${
               showSideColumn
                 ? 'lg:col-span-7 xl:col-span-7'
                 : 'lg:col-span-12'
-            } flex flex-col min-h-0 lg:overflow-y-auto bg-zinc-950`}
+            } flex flex-col shrink-0 lg:shrink lg:min-h-0 lg:overflow-y-auto bg-zinc-950`}
           >
             {/* 16:9 Video Area (shrink-0 guarantees the video NEVER gets squished!) */}
             <div
@@ -993,29 +995,15 @@ export const TvPlayerModal: React.FC = () => {
                 )}
               </video>
 
-              {/* Quick Floating OSD Channel List Trigger (top-left of video) */}
+              {/* Quick Floating OSD Channel List Trigger (desktop / tablet hover) */}
               {!isOsdOverlayOpen && (
                 <button
                   type="button"
                   onClick={() => setIsOsdOverlayOpen(true)}
-                  className="absolute top-2.5 left-2.5 z-10 px-3 py-1.5 rounded-full bg-zinc-950/85 hover:bg-zinc-900/95 border border-slate-400/70 text-[11px] sm:text-xs font-bold text-amber-300 inline-flex items-center gap-1.5 shadow-lg opacity-90 hover:opacity-100 transition-opacity"
+                  className="hidden sm:inline-flex absolute top-2.5 left-2.5 z-10 px-3 py-1.5 rounded-full bg-zinc-950/85 hover:bg-zinc-900/95 border border-slate-400/70 text-xs font-bold text-amber-300 items-center gap-1.5 shadow-lg opacity-90 hover:opacity-100 transition-opacity"
                 >
                   <ListFilter className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>☰ Canale ({tvQueue.length || 1})</span>
-                </button>
-              )}
-
-              {/* Quick Floating Fullscreen Button (top-right of video — always visible on mobile & desktop!) */}
-              {!isOsdOverlayOpen && (
-                <button
-                  type="button"
-                  onClick={handleFullscreen}
-                  aria-label={t.tv.fullscreen}
-                  title={t.tv.fullscreen}
-                  className="absolute top-2.5 right-2.5 z-10 px-3 py-1.5 rounded-full bg-brand-600/95 hover:bg-brand-500 border border-brand-400/70 text-[11px] sm:text-xs font-bold text-white inline-flex items-center gap-1.5 shadow-lg transition-colors"
-                >
-                  <Maximize className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>{t.tv.fullscreen}</span>
                 </button>
               )}
 
@@ -1100,7 +1088,7 @@ export const TvPlayerModal: React.FC = () => {
             </div>
 
             {/* Controls Bar (Immediately below the 16:9 video, shrink-0) */}
-            <div className="shrink-0 flex flex-col gap-2 px-3 sm:px-4 py-2.5 bg-zinc-900 border-t border-b border-zinc-800">
+            <div className="shrink-0 flex flex-col gap-1.5 px-3 sm:px-4 py-2 bg-zinc-900 border-t border-b border-zinc-800">
               {/* Row 1: Primary Transport (Prev / Next / Retry) + PiP & FULLSCREEN (always on row 1!) */}
               <div className="flex items-center justify-between gap-1.5">
                 <div className="flex items-center gap-1.5">
@@ -1108,7 +1096,7 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={playPreviousTvChannel}
                     aria-label={t.player.prevStation}
-                    className="min-h-[38px] px-3 sm:px-3.5 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
                     <SkipBack className="w-4 h-4" aria-hidden="true" />
                     <span className="hidden sm:inline">{t.player.prevStation}</span>
@@ -1118,7 +1106,7 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={playNextTvChannel}
                     aria-label={t.player.nextStation}
-                    className="min-h-[38px] px-3 sm:px-3.5 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
                     <span className="hidden sm:inline">{t.player.nextStation}</span>
                     <SkipForward className="w-4 h-4" aria-hidden="true" />
@@ -1128,7 +1116,7 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={() => setReloadCount((c) => c + 1)}
                     aria-label={t.player.retryStream}
-                    className="min-h-[38px] px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
                     <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                     <span className="hidden sm:inline">{t.player.retryStream}</span>
@@ -1140,30 +1128,30 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={handlePip}
                     aria-label={t.tv.pip}
-                    className="min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="hidden sm:inline-flex min-h-[38px] px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium items-center gap-1.5 transition-colors"
                   >
                     <PictureInPicture2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span className="hidden sm:inline">PiP</span>
+                    <span>PiP</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleFullscreen}
                     aria-label={t.tv.fullscreen}
-                    className="min-h-[38px] px-3.5 sm:px-4 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-3.5 sm:px-4 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md transition-colors"
                   >
-                    <Maximize className="w-4 h-4" aria-hidden="true" />
+                    <Maximize className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                     <span>{t.tv.fullscreen}</span>
                   </button>
                 </div>
               </div>
 
-              {/* Row 2: Audio Track & Subtitle Selectors + .SRT Upload */}
-              <div className="flex flex-wrap items-center gap-1.5">
+              {/* Row 2: Compact Side-by-Side Audio & Subtitle Selectors */}
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
                 {/* ALWAYS-VISIBLE Audio Track Selector */}
                 <div
                   title="Selectează pista audio (dacă streamul transmite mai multe limbi audio)"
-                  className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 max-w-full"
+                  className="min-h-[32px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 min-w-0"
                 >
                   <Languages
                     className="w-3.5 h-3.5 text-amber-400 flex-shrink-0"
@@ -1178,7 +1166,7 @@ export const TvPlayerModal: React.FC = () => {
                     onChange={(e) =>
                       handleAudioTrackChange(Number(e.target.value))
                     }
-                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer max-w-[125px] sm:max-w-[150px] truncate"
+                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer w-full sm:w-auto sm:max-w-[150px] truncate"
                   >
                     {audioTracks.length > 0 ? (
                       audioTracks.map((trk, idx) => (
@@ -1193,7 +1181,7 @@ export const TvPlayerModal: React.FC = () => {
                       ))
                     ) : (
                       <option value={0} className="bg-zinc-900 text-zinc-100">
-                        Pista 1: Original (Stereo)
+                        Audio: Original
                       </option>
                     )}
                   </select>
@@ -1202,7 +1190,7 @@ export const TvPlayerModal: React.FC = () => {
                 {/* ALWAYS-VISIBLE Subtitle Track Selector + .SRT Upload */}
                 <div
                   title="Selectează subtitrarea din stream sau încarcă un fișier .SRT / .VTT"
-                  className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 max-w-full"
+                  className="min-h-[32px] sm:min-h-[36px] inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 min-w-0"
                 >
                   <Subtitles
                     className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0"
@@ -1217,10 +1205,10 @@ export const TvPlayerModal: React.FC = () => {
                     onChange={(e) =>
                       handleSubtitleTrackChange(Number(e.target.value))
                     }
-                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer max-w-[125px] sm:max-w-[165px] truncate"
+                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer w-full sm:w-auto sm:max-w-[165px] truncate"
                   >
                     <option value={-1} className="bg-zinc-900 text-zinc-100">
-                      Oprit (Fără sub.)
+                      Subtitrări: Oprit
                     </option>
                     {subtitleTracks.map((trk) => (
                       <option
@@ -1238,7 +1226,7 @@ export const TvPlayerModal: React.FC = () => {
                       </option>
                     )}
                     <option value={-99} className="bg-zinc-900 text-amber-300">
-                      📂 + Încarcă fișier .SRT / .VTT...
+                      📂 + Încarcă .SRT / .VTT...
                     </option>
                   </select>
                 </div>
@@ -1255,7 +1243,7 @@ export const TvPlayerModal: React.FC = () => {
                   type="button"
                   onClick={() => subFileInputRef.current?.click()}
                   title="Încarcă fișier subtitrare (.srt / .vtt) de pe dispozitiv"
-                  className="min-h-[36px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 border border-zinc-700 transition-colors"
+                  className="hidden sm:inline-flex min-h-[36px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold items-center gap-1.5 border border-zinc-700 transition-colors"
                 >
                   <Upload className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
                   <span>
@@ -1372,7 +1360,7 @@ export const TvPlayerModal: React.FC = () => {
 
           {/* RIGHT COLUMN: Side-by-Side Smart IPTV OSD Channel Switcher OR 7-Day TV Archive */}
           {showSideColumn && (
-            <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-gradient-to-b from-[#0f172a] to-[#090d16] flex flex-col min-h-0 overflow-hidden">
+            <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-gradient-to-b from-[#0f172a] to-[#090d16] flex flex-col shrink-0 lg:shrink min-h-[320px] max-h-[55vh] lg:min-h-0 lg:max-h-none overflow-hidden">
               {/* Side Panel Switcher Tabs (Canale OSD vs Arhivă TV) */}
               <div className="shrink-0 flex items-center justify-between gap-2 px-3 pt-2.5 pb-2 bg-zinc-900/90 border-b border-zinc-800">
                 <div className="flex items-center gap-1.5">

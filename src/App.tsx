@@ -63,8 +63,8 @@ export const App: React.FC = () => {
         <main
           id="main-content"
           tabIndex={-1}
-          className={`flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-6 overflow-x-hidden outline-none ${
-            currentStation ? 'pb-40 lg:pb-28' : 'pb-24 lg:pb-12'
+          className={`flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-2.5 sm:pt-5 overflow-x-hidden outline-none ${
+            currentStation ? 'pb-44 lg:pb-28' : 'pb-24 lg:pb-12'
           }`}
         >
           {activeTab === 'home' && (
@@ -93,11 +93,11 @@ export const App: React.FC = () => {
       {/* Live HLS TV Video Player Modal */}
       <TvPlayerModal />
 
-      {/* Persistent Global Audio Player (MiniPlayer + Mobile ExpandedPlayer) */}
-      <GlobalPlayer />
-
-      {/* Mobile Bottom Navigation */}
-      <BottomNav />
+      {/* Unified Fixed Bottom Dock: MiniPlayer sits directly ABOVE BottomNav so they NEVER overlap! */}
+      <div className="fixed bottom-0 inset-x-0 lg:left-64 z-40 flex flex-col">
+        <GlobalPlayer />
+        <BottomNav />
+      </div>
     </div>
   );
 };

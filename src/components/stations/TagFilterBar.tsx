@@ -20,13 +20,13 @@ export const TagFilterBar: React.FC<TagFilterBarProps> = ({
     <div
       role="group"
       aria-label={t.home.filterByGenre}
-      className="flex items-center gap-2 overflow-x-auto pb-2 pt-0.5 no-scrollbar"
+      className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 pt-0.5 no-scrollbar"
     >
       <button
         type="button"
         onClick={() => onSelectTag('')}
         aria-pressed={selectedTag === ''}
-        className={`min-h-[44px] px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+        className={`min-h-[34px] sm:min-h-[40px] px-3 sm:px-4 py-1 sm:py-1.5 rounded-full text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
           selectedTag === ''
             ? 'bg-brand-700 text-white dark:bg-brand-600 dark:text-white shadow-sm'
             : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800'
@@ -43,7 +43,7 @@ export const TagFilterBar: React.FC<TagFilterBarProps> = ({
             type="button"
             onClick={() => onSelectTag(isActive ? '' : tag)}
             aria-pressed={isActive}
-            className={`min-h-[44px] px-4 py-2 rounded-full text-sm font-medium capitalize whitespace-nowrap transition-colors ${
+            className={`min-h-[34px] sm:min-h-[40px] px-3 sm:px-4 py-1 sm:py-1.5 rounded-full text-xs sm:text-sm font-medium capitalize whitespace-nowrap transition-colors ${
               isActive
                 ? 'bg-brand-700 text-white dark:bg-brand-600 dark:text-white shadow-sm'
                 : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800'

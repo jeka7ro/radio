@@ -99,7 +99,7 @@ export const MiniPlayer: React.FC = () => {
     <div
       role="region"
       aria-label={t.player.nowPlaying}
-      className="fixed bottom-[calc(56px+env(safe-area-inset-bottom,0px))] lg:bottom-0 inset-x-0 lg:left-64 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-lg border-t border-slate-200/90 dark:border-zinc-800/90 shadow-lg"
+      className="w-full bg-white/98 dark:bg-zinc-900/98 backdrop-blur-lg border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.1)]"
     >
       {/* Error recovery strip when stream fails */}
       {isError && (

@@ -54,7 +54,7 @@ export const BottomNav: React.FC = () => {
   return (
     <nav
       aria-label={t.nav.mobileAria}
-      className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-zinc-800/80 px-1 pb-[env(safe-area-inset-bottom,0px)]"
+      className="lg:hidden w-full bg-white/98 dark:bg-zinc-900/98 backdrop-blur-md border-t border-slate-200/90 dark:border-zinc-800/90 px-1 pb-[env(safe-area-inset-bottom,0px)]"
     >
       <div className="grid grid-cols-6 gap-0.5 max-w-lg mx-auto">
         {navItems.map((item) => {
@@ -65,7 +65,7 @@ export const BottomNav: React.FC = () => {
               type="button"
               onClick={() => setActiveTab(item.id)}
               aria-current={isActive ? 'page' : undefined}
-              className={`relative h-[56px] flex flex-col items-center justify-center py-1 rounded-full text-[11px] sm:text-xs font-medium transition-colors min-w-0 ${
+              className={`relative h-[52px] flex flex-col items-center justify-center py-1 rounded-full text-[11px] sm:text-xs font-medium transition-colors min-w-0 ${
                 isActive
                   ? 'text-brand-700 dark:text-brand-400 font-semibold'
                   : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
