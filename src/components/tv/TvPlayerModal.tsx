@@ -605,6 +605,20 @@ export const TvPlayerModal: React.FC = () => {
       return;
     }
 
+    // On iOS / iPhone Safari, container.requestFullscreen is not supported on divs; use video.webkitEnterFullscreen() directly
+    const isIos =
+      typeof navigator !== 'undefined' &&
+      /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    if (isIos && typeof video.webkitEnterFullscreen === 'function') {
+      try {
+        video.webkitEnterFullscreen();
+        return;
+      } catch {
+        // fallback below
+      }
+    }
+
     if (container && typeof container.requestFullscreen === 'function') {
       container.requestFullscreen().catch(() => {
         if (typeof video.requestFullscreen === 'function') {
@@ -737,150 +751,46 @@ export const TvPlayerModal: React.FC = () => {
           closeTvPlayer();
         }
       }}
-      className="mx-auto mt-[max(0.5rem,env(safe-area-inset-top,0px))] mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md"
+      className="mx-auto mt-11 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md"
     >
-      <div className="flex flex-col max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top,0px)))] sm:max-h-[94vh] overflow-hidden">
-        {/* Top bar (Always pinned at top, shrink-0) */}
-        <div className="shrink-0 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 px-3 sm:px-6 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
-          <div className="flex items-center justify-between gap-2 min-w-0">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              <StationAvatar
-                name={currentTvChannel.name}
-                favicon={effectiveLogo}
-                size="sm"
-                isPlaying={videoStatus === 'playing'}
-              />
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  <h2 className="text-sm sm:text-lg font-bold text-white truncate">
-                    {currentTvChannel.name}
-                  </h2>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] sm:text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                    {currentTvChannel.resolution || 'LIVE'}
-                  </span>
-                </div>
-                <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate">
-                  {currentTvChannel.countryCode && (
-                    <span className="shrink-0">
-                      {getCountryFlagEmoji(currentTvChannel.countryCode)}{' '}
-                      {getLocalizedCountryName(
-                        currentTvChannel.countryCode,
-                        currentTvChannel.countryCode,
-                        language
-                      )}
-                    </span>
-                  )}
-                  <span>•</span>
-                  <span className="truncate">{displayGroup}</span>
-                </p>
+      <div className="flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden">
+        {/* Top bar — Single Clean Row (Channel Info on Left, Source/Fav/Close on Right) */}
+        <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-5 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <StationAvatar
+              name={currentTvChannel.name}
+              favicon={effectiveLogo}
+              size="sm"
+              isPlaying={videoStatus === 'playing'}
+            />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h2 className="text-sm sm:text-lg font-bold text-white truncate">
+                  {currentTvChannel.name}
+                </h2>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] sm:text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  {currentTvChannel.resolution || 'LIVE'}
+                </span>
               </div>
-            </div>
-
-            {/* Mobile Favorite + Close buttons (always pinned top-right on mobile) */}
-            <div className="flex lg:hidden items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
-                aria-pressed={isFavorite}
-                aria-label={format(
-                  isFavorite ? t.favorites.removeFav : t.favorites.addFav,
-                  { name: currentTvChannel.name }
+              <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate">
+                {currentTvChannel.countryCode && (
+                  <span className="shrink-0">
+                    {getCountryFlagEmoji(currentTvChannel.countryCode)}{' '}
+                    {getLocalizedCountryName(
+                      currentTvChannel.countryCode,
+                      currentTvChannel.countryCode,
+                      language
+                    )}
+                  </span>
                 )}
-                className={`min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full transition-colors ${
-                  isFavorite
-                    ? 'text-rose-400 bg-rose-950/50 hover:bg-rose-950/80'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-                }`}
-              >
-                <Heart
-                  aria-hidden="true"
-                  className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`}
-                />
-              </button>
-
-              <button
-                type="button"
-                onClick={closeTvPlayer}
-                aria-label={t.tv.closeTvPlayer}
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700 transition-colors"
-              >
-                <X className="w-5 h-5" aria-hidden="true" />
-              </button>
+                <span>•</span>
+                <span className="truncate">{displayGroup}</span>
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-            {/* Button 1: Toggle Translucent Smart TV OSD directly OVER Video (Desktop / Tablet) */}
-            <button
-              type="button"
-              onClick={() => setIsOsdOverlayOpen((v) => !v)}
-              aria-pressed={isOsdOverlayOpen}
-              title="Afișează OSD-ul transparent direct peste video (stil Smart IPTV)"
-              className={`hidden sm:inline-flex min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold items-center gap-1.5 shrink-0 transition-colors border ${
-                isOsdOverlayOpen
-                  ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-amber-300 border-zinc-700'
-              }`}
-            >
-              <ListFilter className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>OSD pe Video</span>
-            </button>
-
-            {/* Button 2: Toggle Channel List (Canale) */}
-            <button
-              type="button"
-              onClick={() => {
-                if (isOsdOverlayOpen) {
-                  setIsOsdOverlayOpen(false);
-                  setIsSidePanelOpen(true);
-                  setSidePanelTab('channels');
-                } else if (isSidePanelOpen && sidePanelTab === 'channels') {
-                  setIsSidePanelOpen(false);
-                } else {
-                  setIsSidePanelOpen(true);
-                  setSidePanelTab('channels');
-                }
-              }}
-              aria-pressed={showSideColumn && sidePanelTab === 'channels'}
-              title="Afișează / ascunde lista de canale"
-              className={`min-h-[32px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
-                showSideColumn && sidePanelTab === 'channels'
-                  ? 'bg-brand-600 text-white border-brand-500 font-bold'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
-              }`}
-            >
-              <Tv className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Canale ({tvQueue.length || 1})</span>
-            </button>
-
-            {/* Button 3: 7-Day TV Archive / Catch-up */}
-            {archiveDays.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setIsOsdOverlayOpen(false);
-                  if (isSidePanelOpen && sidePanelTab === 'archive') {
-                    setIsSidePanelOpen(false);
-                  } else {
-                    setIsSidePanelOpen(true);
-                    setSidePanelTab('archive');
-                  }
-                }}
-                aria-pressed={showSideColumn && sidePanelTab === 'archive'}
-                title="Arhivă TV pe ultimele 7 zile (Catch-up / Timeshift)"
-                className={`min-h-[32px] sm:min-h-[38px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
-                  (showSideColumn && sidePanelTab === 'archive') ||
-                  activeArchiveProg
-                    ? 'bg-emerald-500 text-zinc-950 border-emerald-400 font-bold'
-                    : 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border-zinc-700'
-                }`}
-              >
-                <History className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Arhivă {archiveDays.length} Zile</span>
-              </button>
-            )}
-
+          <div className="flex items-center gap-1.5 shrink-0">
             {candidateStreams.length > 1 && (
               <button
                 type="button"
@@ -888,7 +798,7 @@ export const TvPlayerModal: React.FC = () => {
                   setStreamIndex((prev) => (prev + 1) % candidateStreams.length)
                 }
                 title="Schimbă sursa streamului (Backup)"
-                className="min-h-[32px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                className="min-h-[34px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
               >
                 <Layers className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
                 <span>
@@ -905,7 +815,7 @@ export const TvPlayerModal: React.FC = () => {
                 isFavorite ? t.favorites.removeFav : t.favorites.addFav,
                 { name: currentTvChannel.name }
               )}
-              className={`hidden lg:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-full transition-colors ${
+              className={`min-w-[36px] min-h-[36px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-colors ${
                 isFavorite
                   ? 'text-rose-400 bg-rose-950/50 hover:bg-rose-950/80'
                   : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -913,7 +823,7 @@ export const TvPlayerModal: React.FC = () => {
             >
               <Heart
                 aria-hidden="true"
-                className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`}
+                className={`w-4 h-4 sm:w-5 sm:h-5 ${isFavorite ? 'fill-current' : ''}`}
               />
             </button>
 
@@ -921,9 +831,9 @@ export const TvPlayerModal: React.FC = () => {
               type="button"
               onClick={closeTvPlayer}
               aria-label={t.tv.closeTvPlayer}
-              className="hidden lg:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              className="min-w-[36px] min-h-[36px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700 transition-colors"
             >
-              <X className="w-6 h-6" aria-hidden="true" />
+              <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -968,7 +878,7 @@ export const TvPlayerModal: React.FC = () => {
                 : 'lg:col-span-12'
             } flex flex-col shrink-0 lg:shrink lg:min-h-0 lg:overflow-y-auto bg-zinc-950`}
           >
-            {/* 16:9 Video Area (shrink-0 guarantees the video NEVER gets squished!) */}
+            {/* 16:9 Video Area (100% unobstructed so native iOS/Android Fullscreen & Volume controls are NEVER blocked!) */}
             <div
               ref={videoContainerRef}
               className="group/video relative aspect-video w-full shrink-0 bg-black flex items-center justify-center overflow-hidden"
@@ -995,19 +905,7 @@ export const TvPlayerModal: React.FC = () => {
                 )}
               </video>
 
-              {/* Quick Floating OSD Channel List Trigger (desktop / tablet hover) */}
-              {!isOsdOverlayOpen && (
-                <button
-                  type="button"
-                  onClick={() => setIsOsdOverlayOpen(true)}
-                  className="hidden sm:inline-flex absolute top-2.5 left-2.5 z-10 px-3 py-1.5 rounded-full bg-zinc-950/85 hover:bg-zinc-900/95 border border-slate-400/70 text-xs font-bold text-amber-300 items-center gap-1.5 shadow-lg opacity-90 hover:opacity-100 transition-opacity"
-                >
-                  <ListFilter className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>☰ Canale ({tvQueue.length || 1})</span>
-                </button>
-              )}
-
-              {/* Floating Smart TV OSD Channel List Overlay (directly over the 16:9 video / fullscreen) */}
+              {/* Floating Smart TV OSD Channel List Overlay (when triggered) */}
               {isOsdOverlayOpen && (
                 <div
                   onClick={(e) => {
@@ -1015,7 +913,7 @@ export const TvPlayerModal: React.FC = () => {
                       setIsOsdOverlayOpen(false);
                     }
                   }}
-                  className="absolute inset-0 z-20 bg-black/25 flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+                  className="absolute inset-0 z-20 bg-black/40 flex items-center justify-center p-2 sm:p-4 overflow-hidden"
                 >
                   <div className="w-full max-w-4xl max-h-full flex flex-col justify-center">
                     <TvOsdChannelList
@@ -1087,28 +985,28 @@ export const TvPlayerModal: React.FC = () => {
               )}
             </div>
 
-            {/* Controls Bar (Immediately below the 16:9 video, shrink-0) */}
+            {/* Unified Controls Bar (Immediately below the 16:9 video, shrink-0) */}
             <div className="shrink-0 flex flex-col gap-1.5 px-3 sm:px-4 py-2 bg-zinc-900 border-t border-b border-zinc-800">
-              {/* Row 1: Primary Transport (Prev / Next / Retry) + PiP & FULLSCREEN (always on row 1!) */}
-              <div className="flex items-center justify-between gap-1.5">
-                <div className="flex items-center gap-1.5">
+              {/* Row 1: Prev / Next / Retry + Canale / Arhivă / FULLSCREEN */}
+              <div className="flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={playPreviousTvChannel}
                     aria-label={t.player.prevStation}
-                    className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
                     <SkipBack className="w-4 h-4" aria-hidden="true" />
-                    <span className="hidden sm:inline">{t.player.prevStation}</span>
+                    <span className="hidden md:inline">{t.player.prevStation}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={playNextTvChannel}
                     aria-label={t.player.nextStation}
-                    className="min-h-[34px] sm:min-h-[38px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
-                    <span className="hidden sm:inline">{t.player.nextStation}</span>
+                    <span className="hidden md:inline">{t.player.nextStation}</span>
                     <SkipForward className="w-4 h-4" aria-hidden="true" />
                   </button>
 
@@ -1116,14 +1014,67 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={() => setReloadCount((c) => c + 1)}
                     aria-label={t.player.retryStream}
+                    title={t.player.retryStream}
                     className="min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
                   >
                     <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span className="hidden sm:inline">{t.player.retryStream}</span>
+                    <span className="hidden md:inline">{t.player.retryStream}</span>
                   </button>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                  {/* Toggle Channel List */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isOsdOverlayOpen) {
+                        setIsOsdOverlayOpen(false);
+                        setIsSidePanelOpen(true);
+                        setSidePanelTab('channels');
+                      } else if (isSidePanelOpen && sidePanelTab === 'channels') {
+                        setIsSidePanelOpen(false);
+                      } else {
+                        setIsSidePanelOpen(true);
+                        setSidePanelTab('channels');
+                      }
+                    }}
+                    aria-pressed={showSideColumn && sidePanelTab === 'channels'}
+                    className={`min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+                      showSideColumn && sidePanelTab === 'channels'
+                        ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
+                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
+                    }`}
+                  >
+                    <Tv className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Canale ({tvQueue.length || 1})</span>
+                  </button>
+
+                  {/* Toggle 7-Day TV Archive */}
+                  {archiveDays.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsOsdOverlayOpen(false);
+                        if (isSidePanelOpen && sidePanelTab === 'archive') {
+                          setIsSidePanelOpen(false);
+                        } else {
+                          setIsSidePanelOpen(true);
+                          setSidePanelTab('archive');
+                        }
+                      }}
+                      aria-pressed={showSideColumn && sidePanelTab === 'archive'}
+                      className={`min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+                        (showSideColumn && sidePanelTab === 'archive') ||
+                        activeArchiveProg
+                          ? 'bg-emerald-500 text-zinc-950 border-emerald-400 font-bold'
+                          : 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border-zinc-700'
+                      }`}
+                    >
+                      <History className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Arhivă ({archiveDays.length}z)</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={handlePip}
@@ -1138,7 +1089,7 @@ export const TvPlayerModal: React.FC = () => {
                     type="button"
                     onClick={handleFullscreen}
                     aria-label={t.tv.fullscreen}
-                    className="min-h-[34px] sm:min-h-[38px] px-3.5 sm:px-4 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md transition-colors"
+                    className="min-h-[34px] sm:min-h-[38px] px-3 sm:px-4 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md transition-colors"
                   >
                     <Maximize className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                     <span>{t.tv.fullscreen}</span>
@@ -1358,30 +1309,30 @@ export const TvPlayerModal: React.FC = () => {
               )}
           </div>
 
-          {/* RIGHT COLUMN: Side-by-Side Smart IPTV OSD Channel Switcher OR 7-Day TV Archive */}
+          {/* RIGHT COLUMN: Side-by-Side Channel Switcher OR Multi-Day TV Archive */}
           {showSideColumn && (
-            <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-gradient-to-b from-[#0f172a] to-[#090d16] flex flex-col shrink-0 lg:shrink min-h-[320px] max-h-[55vh] lg:min-h-0 lg:max-h-none overflow-hidden">
-              {/* Side Panel Switcher Tabs (Canale OSD vs Arhivă TV) */}
-              <div className="shrink-0 flex items-center justify-between gap-2 px-3 pt-2.5 pb-2 bg-zinc-900/90 border-b border-zinc-800">
+            <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-[#0b111e] flex flex-col shrink-0 lg:shrink min-h-[280px] max-h-[52vh] lg:min-h-0 lg:max-h-none overflow-hidden">
+              {/* Desktop Side Panel Header (hidden on mobile since Controls Bar right above already has Canale & Arhivă toggles) */}
+              <div className="hidden lg:flex shrink-0 items-center justify-between gap-2 px-3 py-2 bg-zinc-900/90 border-b border-zinc-800">
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setSidePanelTab('channels')}
-                    className={`min-h-[34px] px-3.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                    className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
                       sidePanelTab === 'channels'
-                        ? 'bg-amber-500 text-zinc-950 shadow-xs'
+                        ? 'bg-brand-600 text-white shadow-xs'
                         : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                     }`}
                   >
-                    <ListFilter className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Canale OSD ({tvQueue.length || 1})</span>
+                    <Tv className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Canale ({tvQueue.length || 1})</span>
                   </button>
 
                   {archiveDays.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setSidePanelTab('archive')}
-                      className={`min-h-[34px] px-3.5 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                      className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
                         sidePanelTab === 'archive'
                           ? 'bg-emerald-500 text-zinc-950 shadow-xs'
                           : 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300'
@@ -1396,16 +1347,16 @@ export const TvPlayerModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsSidePanelOpen(false)}
-                  title="Ascunde panoul lateral (Mod Cinema 100%)"
-                  className="min-h-[30px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white text-[11px] font-semibold transition-colors"
+                  title="Ascunde panoul lateral"
+                  className="min-h-[28px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white text-[11px] font-semibold transition-colors"
                 >
                   Ascunde ✕
                 </button>
               </div>
 
-              {/* Tab 1: Smart IPTV OSD Channel List docked side-by-side */}
+              {/* Tab 1: Clean Channel List */}
               {sidePanelTab === 'channels' ? (
-                <div className="flex-1 min-h-0 p-2.5 sm:p-3 overflow-y-auto">
+                <div className="flex-1 min-h-0 p-2 sm:p-3 overflow-y-auto">
                   <TvOsdChannelList
                     currentChannel={currentTvChannel}
                     channels={tvQueue}
