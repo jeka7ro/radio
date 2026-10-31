@@ -198,3 +198,4 @@ export function getEpgFeedUrlsForCountry(countryCode) {
   const suffix = mapCode[upper] || `${upper}1`;
   return [`https://epgshare01.online/epgshare01/epg_ripper_${suffix}.xml.gz`];
 }
+

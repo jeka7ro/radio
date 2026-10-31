@@ -339,23 +339,23 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
 
       {/* Main TV Channels Section */}
       <section aria-labelledby="tv-channels-heading" className="space-y-4">
-        {/* Hero / Country Title Bar — Single-Row Layout */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white dark:bg-zinc-900/90 px-4 py-3.5 rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 shadow-xs">
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-3xl leading-none select-none" aria-hidden="true">
+        {/* Hero / Country Title Bar — Responsive Layout */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white dark:bg-zinc-900/90 px-3.5 sm:px-4 py-3.5 rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 shadow-xs overflow-hidden">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="text-3xl leading-none select-none shrink-0" aria-hidden="true">
               {isGlobalSelected ? '🌍' : selectedCountry.flag}
             </span>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1
                 id="tv-channels-heading"
                 tabIndex={-1}
-                className="text-lg sm:text-xl font-bold text-slate-900 dark:text-zinc-100 tracking-tight whitespace-nowrap"
+                className="text-base sm:text-xl font-bold text-slate-900 dark:text-zinc-100 tracking-tight truncate"
               >
                 {isGlobalSelected
                   ? t.tv.globalChannelsTitle
                   : `${t.tv.channelsIn} ${selectedCountry.localizedName}`}
               </h1>
-              <p className="text-xs text-slate-600 dark:text-zinc-400 whitespace-nowrap">
+              <p className="text-xs text-slate-600 dark:text-zinc-400 truncate">
                 {format(t.tv.channelsCount, {
                   count: filteredChannels.length,
                 })}
@@ -363,7 +363,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 max-w-full">
             {[
               { code: 'RO', flag: '🇷🇴', label: 'RO HD' },
               { code: 'MD', flag: '🇲🇩', label: 'MD HD' },

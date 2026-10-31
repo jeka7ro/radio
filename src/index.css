@@ -33,9 +33,29 @@
   accent-color: var(--brand-color);
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  position: relative;
+}
+
 body {
   accent-color: var(--brand-color);
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  touch-action: pan-y;
+}
+
+/* Prevent iOS Safari / Mobile browsers from auto-zooming when focusing inputs or selects */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* Visually hidden utility (accessible to screen readers, visible on focus for skip links) */

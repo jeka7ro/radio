@@ -44,7 +44,7 @@ export const App: React.FC = () => {
   }, [activeTab, selectedCountry.localizedName, currentStation, playerStatus, t]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100">
+    <div className="min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100">
       {/* Skip Link for Keyboard Accessibility */}
       <a
         href="#main-content"
@@ -57,14 +57,14 @@ export const App: React.FC = () => {
       <Sidebar selectedCountry={selectedCountry} />
 
       {/* Main Content Column */}
-      <div className="flex-1 flex flex-col lg:pl-64">
+      <div className="flex-1 min-w-0 w-full overflow-x-hidden flex flex-col lg:pl-64">
         <Header selectedCountry={selectedCountry} />
 
         <main
           id="main-content"
           tabIndex={-1}
-          className={`flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 outline-none ${
-            currentStation ? 'pb-44 lg:pb-28' : 'pb-24 lg:pb-12'
+          className={`flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-6 overflow-x-hidden outline-none ${
+            currentStation ? 'pb-40 lg:pb-28' : 'pb-24 lg:pb-12'
           }`}
         >
           {activeTab === 'home' && (

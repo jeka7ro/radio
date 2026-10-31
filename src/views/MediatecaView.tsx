@@ -595,25 +595,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   return (
     <div className="space-y-5">
-      {/* Single-Row Top Header Bar */}
-      <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs">
-        <div className="flex items-center justify-between gap-2.5 overflow-x-auto no-scrollbar">
-          <div className="flex items-center gap-2.5 shrink-0">
+      {/* Top Header Bar */}
+      <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs overflow-hidden">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-rose-600 text-white flex items-center justify-center shadow-sm shrink-0">
               <Clapperboard className="w-5 h-5" aria-hidden="true" />
             </div>
-            <div className="shrink-0">
-              <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-100 tracking-tight whitespace-nowrap">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-100 tracking-tight truncate">
                 Mediatecă — Filme & Seriale On-Demand
               </h1>
-              <p className="text-xs text-slate-600 dark:text-zinc-400 whitespace-nowrap">
+              <p className="text-xs text-slate-600 dark:text-zinc-400 truncate">
                 Catalog complet de filme și seriale online cu sezoane, episoade și subtitrări
               </p>
             </div>
           </div>
 
-          {/* Mode Switcher Pills on a single row */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          {/* Mode Switcher Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 max-w-full">
             <button
               type="button"
               onClick={() => {

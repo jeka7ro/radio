@@ -54,9 +54,9 @@ export const BottomNav: React.FC = () => {
   return (
     <nav
       aria-label={t.nav.mobileAria}
-      className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-zinc-800/80 px-2 pb-[env(safe-area-inset-bottom)]"
+      className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-t border-slate-200/80 dark:border-zinc-800/80 px-1 pb-[env(safe-area-inset-bottom,0px)]"
     >
-      <div className="grid grid-cols-6 gap-1 max-w-lg mx-auto">
+      <div className="grid grid-cols-6 gap-0.5 max-w-lg mx-auto">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -65,7 +65,7 @@ export const BottomNav: React.FC = () => {
               type="button"
               onClick={() => setActiveTab(item.id)}
               aria-current={isActive ? 'page' : undefined}
-              className={`relative min-h-[56px] flex flex-col items-center justify-center py-1.5 rounded-full text-xs font-medium transition-colors ${
+              className={`relative h-[56px] flex flex-col items-center justify-center py-1 rounded-full text-[11px] sm:text-xs font-medium transition-colors min-w-0 ${
                 isActive
                   ? 'text-brand-700 dark:text-brand-400 font-semibold'
                   : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
@@ -79,7 +79,7 @@ export const BottomNav: React.FC = () => {
                   </span>
                 )}
               </div>
-              <span className="mt-1 truncate max-w-full px-1">{item.label}</span>
+              <span className="mt-0.5 truncate max-w-full px-0.5">{item.label}</span>
             </button>
           );
         })}
