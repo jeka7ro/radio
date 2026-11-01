@@ -12,6 +12,7 @@ import {
   AlertCircle,
   RefreshCw,
   PictureInPicture2,
+  Maximize2,
   X,
 } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
@@ -145,6 +146,13 @@ export const MiniPlayer: React.FC = () => {
 
   const effectiveVolumePercent = Math.round((isMuted ? 0 : volume) * 100);
 
+  const handleOpenNormalPlayer = async () => {
+    if (isRadioPipOpen) {
+      await toggleRadioPip();
+    }
+    setExpandedPlayerOpen(true);
+  };
+
   return (
     <div
       role="region"
@@ -188,7 +196,7 @@ export const MiniPlayer: React.FC = () => {
         {/* Station & Live Track Info — Click to open Expanded Player */}
         <button
           type="button"
-          onClick={() => setExpandedPlayerOpen(true)}
+          onClick={() => void handleOpenNormalPlayer()}
           aria-label={`${t.player.expandPlayer}: ${currentStation.name}`}
           className="flex-1 min-w-0 flex items-center gap-2.5 sm:gap-3 text-left py-1 pr-1 rounded-xl hover:bg-slate-100/70 dark:hover:bg-zinc-800/50 transition-colors"
         >
@@ -231,7 +239,7 @@ export const MiniPlayer: React.FC = () => {
                   </span>
                   <ChevronUp
                     aria-hidden="true"
-                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 flex-shrink-0 lg:hidden"
+                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 flex-shrink-0"
                   />
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
@@ -263,7 +271,7 @@ export const MiniPlayer: React.FC = () => {
                   </p>
                   <ChevronUp
                     aria-hidden="true"
-                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 flex-shrink-0 lg:hidden"
+                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 flex-shrink-0"
                   />
                 </div>
                 <p
@@ -352,6 +360,16 @@ export const MiniPlayer: React.FC = () => {
             }`}
           >
             <PictureInPicture2 className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleOpenNormalPlayer()}
+            title="Deschide în playerul normal"
+            aria-label={t.player.expandPlayer}
+            className="w-9 h-9 sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full bg-brand-100/90 dark:bg-brand-950/70 text-brand-700 dark:text-brand-300 hover:bg-brand-200 dark:hover:bg-brand-900/80 transition-colors"
+          >
+            <Maximize2 className="w-4 h-4" aria-hidden="true" />
           </button>
 
           <button

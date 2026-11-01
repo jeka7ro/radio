@@ -11,12 +11,14 @@ import {
   VolumeX,
   X,
   Radio,
+  Maximize2,
 } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { StationAvatar } from '../common/StationAvatar';
 import { getCountryFlagEmoji } from '../../services/geoLanguageService';
 import { buildStationLogoCandidates } from '../../services/stationLogoService';
+import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
 
 interface DocumentPictureInPicture {
   requestWindow: (options?: {
@@ -73,6 +75,52 @@ export const RadioPipPlayer: React.FC = () => {
   const favorites = useRadioStore((state) => state.favorites);
   const theme = useRadioStore((state) => state.theme);
   const setRadioPipOpen = useRadioStore((state) => state.setRadioPipOpen);
+  const setExpandedPlayerOpen = useRadioStore(
+    (state) => state.setExpandedPlayerOpen
+  );
+
+  const displayTrack = React.useMemo(() => {
+    if (!currentStation) return null;
+    if (nowPlayingMeta) {
+      if (nowPlayingMeta.title.includes('~')) {
+        const parsed = parseRawStreamMetadata(
+          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
+          currentStation.name
+        );
+        if (parsed && parsed.title) {
+          return {
+            title: parsed.title,
+            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
+            album: parsed.album || nowPlayingMeta.album,
+            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+            artistAvatarUrl:
+              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+          };
+        }
+      }
+      return {
+        title: nowPlayingMeta.title,
+        artist: nowPlayingMeta.artist || currentStation.name,
+        album: nowPlayingMeta.album,
+        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+        artistAvatarUrl:
+          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+      };
+    }
+    if (nowPlayingTitle) {
+      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
+      if (parsed && parsed.title) {
+        return {
+          title: parsed.title,
+          artist: parsed.artist || currentStation.name,
+          album: parsed.album,
+          coverUrl: undefined,
+          artistAvatarUrl: undefined,
+        };
+      }
+    }
+    return null;
+  }, [currentStation, nowPlayingMeta, nowPlayingTitle]);
 
   const playStation = useRadioStore((state) => state.playStation);
   const playNextAvailableStation = useRadioStore(
@@ -186,15 +234,14 @@ export const RadioPipPlayer: React.FC = () => {
     // Primary Song Title or Station Name
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 30px system-ui, -apple-system, sans-serif';
-    const primaryTitle = nowPlayingMeta?.title || currentStation.name;
+    const primaryTitle = displayTrack?.title || currentStation.name;
     ctx.fillText(primaryTitle, textX, artY + 52, maxTextW);
 
     // Artist Name or Subtitle
     ctx.fillStyle = '#c4b5fd';
     ctx.font = '600 23px system-ui, -apple-system, sans-serif';
     const subtitle =
-      nowPlayingMeta?.artist ||
-      nowPlayingTitle ||
+      displayTrack?.artist ||
       currentStation.country ||
       'AetherRadio';
     ctx.fillText(subtitle, textX, artY + 98, maxTextW);
@@ -202,13 +249,13 @@ export const RadioPipPlayer: React.FC = () => {
     // Album / Bitrate info
     ctx.fillStyle = '#a1a1aa';
     ctx.font = '500 18px system-ui, -apple-system, sans-serif';
-    const metaFooter = nowPlayingMeta?.album
-      ? nowPlayingMeta.album
+    const metaFooter = displayTrack?.album
+      ? displayTrack.album
       : `${currentStation.codec || 'MP3'}${
           currentStation.bitrate ? ` • ${currentStation.bitrate} kbps` : ''
         }`;
     ctx.fillText(metaFooter, textX, artY + 138, maxTextW);
-  }, [currentStation, nowPlayingMeta, nowPlayingTitle, playerStatus]);
+  }, [currentStation, displayTrack, playerStatus]);
 
   // Load cover art or station logo for fallback Canvas
   useEffect(() => {
@@ -262,6 +309,14 @@ export const RadioPipPlayer: React.FC = () => {
     }
     setRadioPipOpen(false);
   }, [setRadioPipOpen]);
+
+  const restoreToNormalPlayer = useCallback(async () => {
+    await closePip();
+    if (typeof window !== 'undefined') {
+      window.focus();
+    }
+    setExpandedPlayerOpen(true);
+  }, [closePip, setExpandedPlayerOpen]);
 
   const handleTogglePip = useCallback(async () => {
     if (!currentStation) return;
@@ -378,7 +433,7 @@ export const RadioPipPlayer: React.FC = () => {
       {pipContainer &&
         createPortal(
           <div className="w-full h-full flex flex-col justify-between p-3.5 bg-zinc-950 text-zinc-100 select-none">
-            {/* Top Strip: Station badge + Close PiP button */}
+            {/* Top Strip: Station badge + Restore to Normal Player + Close PiP button */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-950/90 border border-brand-700/50 text-brand-300 text-[11px] font-semibold truncate">
@@ -388,24 +443,40 @@ export const RadioPipPlayer: React.FC = () => {
                 </span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => void closePip()}
-                title="Închide MiniPlayer PiP"
-                className="w-6 h-6 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors flex-shrink-0"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void restoreToNormalPlayer()}
+                  title="Înapoi în playerul normal"
+                  className="px-2.5 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-[11px] font-semibold inline-flex items-center gap-1 shadow-sm transition-colors"
+                >
+                  <Maximize2 className="w-3 h-3" />
+                  <span>Player normal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void closePip()}
+                  title="Închide fereastra flotantă"
+                  className="w-6 h-6 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors flex-shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
-            {/* Middle Row: Cover Art + Song Title + Artist Avatar & Name */}
-            <div className="flex items-center gap-3 my-1.5 min-w-0">
+            {/* Middle Row: Cover Art + Song Title + Artist Avatar & Name (Click to restore normal player) */}
+            <button
+              type="button"
+              onClick={() => void restoreToNormalPlayer()}
+              title="Apasă pentru a deschide în playerul normal"
+              className="flex items-center gap-3 my-1.5 min-w-0 text-left rounded-2xl p-1 -m-1 hover:bg-zinc-900/80 transition-colors"
+            >
               <div className="relative flex-shrink-0">
-                {nowPlayingMeta?.coverUrl ? (
+                {displayTrack?.coverUrl ? (
                   <div className="relative w-16 h-16 rounded-2xl overflow-hidden shadow-lg border border-zinc-700/80 bg-zinc-900">
                     <img
-                      src={nowPlayingMeta.coverUrl}
-                      alt={nowPlayingMeta.title}
+                      src={displayTrack.coverUrl}
+                      alt={displayTrack.title}
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -422,31 +493,30 @@ export const RadioPipPlayer: React.FC = () => {
 
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-bold text-white truncate leading-snug">
-                  {nowPlayingMeta?.title || currentStation.name}
+                  {displayTrack?.title || currentStation.name}
                 </p>
 
                 <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                  {nowPlayingMeta?.artistAvatarUrl && (
+                  {displayTrack?.artistAvatarUrl && (
                     <img
-                      src={nowPlayingMeta.artistAvatarUrl}
-                      alt={nowPlayingMeta.artist}
+                      src={displayTrack.artistAvatarUrl}
+                      alt={displayTrack.artist}
                       className="w-5 h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-400/60"
                     />
                   )}
                   <p className="text-xs font-semibold text-brand-300 truncate">
-                    {nowPlayingMeta?.artist ||
-                      nowPlayingTitle ||
+                    {displayTrack?.artist ||
                       (isPlaying ? t.player.playing : t.player.paused)}
                   </p>
                 </div>
 
-                {nowPlayingMeta?.album && (
+                {displayTrack?.album && (
                   <p className="text-[11px] text-zinc-400 truncate mt-0.5">
-                    {nowPlayingMeta.album}
+                    {displayTrack.album}
                   </p>
                 )}
               </div>
-            </div>
+            </button>
 
             {/* Bottom Row: Transport Controls + Favorite + Volume */}
             <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-zinc-800/80">
@@ -455,7 +525,7 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={playPreviousStation}
                   aria-label={t.player.prevStation}
-                  className="w-9 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
+                  className="w-9 h-9 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
                 >
                   <SkipBack className="w-4 h-4" />
                 </button>
@@ -467,7 +537,7 @@ export const RadioPipPlayer: React.FC = () => {
                     isPlaying ? t.player.pause : t.player.play,
                     { name: currentStation.name }
                   )}
-                  className="w-10 h-10 rounded-xl bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-md transition-colors"
+                  className="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-md transition-colors"
                 >
                   {isLoading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -482,7 +552,7 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={playNextAvailableStation}
                   aria-label={t.player.nextStation}
-                  className="w-9 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
+                  className="w-9 h-9 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
                 >
                   <SkipForward className="w-4 h-4" />
                 </button>
@@ -491,7 +561,7 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={() => toggleFavorite(currentStation)}
                   aria-pressed={isFavorite}
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                     isFavorite
                       ? 'text-rose-400 bg-rose-950/50'
                       : 'text-zinc-400 hover:bg-zinc-800'
@@ -508,7 +578,7 @@ export const RadioPipPlayer: React.FC = () => {
                 <button
                   type="button"
                   onClick={toggleMute}
-                  className="w-8 h-8 rounded-lg hover:bg-zinc-800 text-zinc-300 flex items-center justify-center flex-shrink-0"
+                  className="w-8 h-8 rounded-full hover:bg-zinc-800 text-zinc-300 flex items-center justify-center flex-shrink-0"
                 >
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-4 h-4" />
