@@ -5,8 +5,28 @@ export interface ParsedTrackFields {
 }
 
 const ISRC_REGEX = /\b[A-Z]{2}[A-Z0-9]{3}\d{7}\b/gi;
-const ISO_TIMESTAMP_REGEX = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g;
-const ID3_GARBAGE_REGEX = /\b(?:ID3|TIT2|TPE1|TPE2|TALB|TXXX|TRCK|TYER|TDRC|TCON|TCOP|TSSE|PRIV|APIC|WXXX|COMM|USLT|StreamTitle)\b/g;
+const ISO_TIMESTAMP_REGEX =
+  /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g;
+const ID3_GARBAGE_REGEX =
+  /\b(?:ID3|TIT2|TPE1|TPE2|TALB|TXXX|TRCK|TYER|TDRC|TCON|TCOP|TSSE|PRIV|APIC|WXXX|COMM|USLT|StreamTitle)\b/g;
+
+function isStationOrJingleField(val: string, stationName = ''): boolean {
+  const s = val.trim().toLowerCase();
+  if (!s) return true;
+  if (
+    /^(?:rmc|rmc hits|rmc 80|rmc 90|radio monte carlo.*|virgin radio.*|radio 105.*|r101.*|autopromo.*|promo.*|spot.*|jingle.*|liner.*|sigla.*|notiziario.*|meteo.*|oroscopo.*|traffico.*|commercial.*|publicitate.*|reclama.*)$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normVal = s.replace(/[^a-z0-9]/g, '');
+  if (normStation && normVal && normVal === normStation) {
+    return true;
+  }
+  return false;
+}
 
 /**
  * Parses raw ICY / Shoutcast / Icecast / Mediaset (~) / Adswizz / ID3 metadata
@@ -37,8 +57,10 @@ export function parseRawStreamMetadata(
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const t = String(parsed.title || parsed.song || parsed.track || '').trim();
-      const a = String(parsed.artist || parsed.performer || '').trim();
-      if (t) {
+      const a = String(parsed.artist || parsed.performer || '')
+        .replace(/\s*;\s*/g, ', ')
+        .trim();
+      if (t && !isStationOrJingleField(t, stationName)) {
         return { artist: a, title: t };
       }
     } catch {
@@ -54,16 +76,18 @@ export function parseRawStreamMetadata(
     const artistMatch = raw.match(/\bartist\s*=\s*["']([^"']+)["']/i);
     if (titleMatch || artistMatch) {
       const extractedTitle = (titleMatch?.[1] || '').trim();
-      const extractedArtist = (artistMatch?.[1] || '').trim();
-      if (extractedTitle) {
+      const extractedArtist = (artistMatch?.[1] || '')
+        .replace(/\s*;\s*/g, ', ')
+        .trim();
+      if (extractedTitle && !isStationOrJingleField(extractedTitle, stationName)) {
         return { artist: extractedArtist, title: extractedTitle };
       }
     }
   }
 
   // 3. Handle Mediaset / RMC / Virgin Radio / Radio 105 tilde-delimited format:
-  // "Long As I Live~Toni Braxton~~2018~USUM71800544~276~2026-10-31T08:48:00"
-  // Format: Title ~ Artist ~ Album ~ Year ~ ISRC ~ Duration ~ Timestamp
+  // "Still~Karol G; Bruno Mars~~2026~USUG12607936~216~2026-11-01T09:05:09..."
+  // Format: Title ~ Artist ~ Album ~ Year ~ ISRC ~ Duration ~ Timestamp ~ ...
   if (raw.includes('~')) {
     const tildeParts = raw.split('~').map((part) =>
       part
@@ -74,38 +98,41 @@ export function parseRawStreamMetadata(
 
     const isTechnicalToken = (val: string): boolean => {
       if (!val) return true;
-      if (/^\d+$/.test(val)) return true; // year or duration in seconds
+      if (/^\d+(?:\.\d+)?$/.test(val)) return true; // year, duration, loudness
       if (/^\d{4}-\d{2}/.test(val)) return true; // partial ISO date
       if (/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/i.test(val)) return true; // ISRC
-      if (/^(?:MUS|HIT|JNG|COM| ADV|SPOT|LIN|SIG|ids|NWS)$/i.test(val)) return true;
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(val)) return true; // UUID
+      if (/^(?:MUS|HIT|JNG|COM|ADV|SPOT|LIN|SIG|IDS|NWS)$/i.test(val)) return true;
       return false;
     };
 
-    const candidateTitle = !isTechnicalToken(tildeParts[0] || '') ? tildeParts[0] : '';
-    const candidateArtist = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
-    const candidateAlbum =
-      tildeParts[2] && !isTechnicalToken(tildeParts[2]) && tildeParts[2].length > 1
+    const rawTitleField = !isTechnicalToken(tildeParts[0] || '') ? tildeParts[0] : '';
+    const rawArtistField = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
+    const rawAlbumField =
+      tildeParts[2] &&
+      !isTechnicalToken(tildeParts[2]) &&
+      !isStationOrJingleField(tildeParts[2], stationName) &&
+      tildeParts[2].length > 1
         ? tildeParts[2]
         : undefined;
 
+    const candidateTitle = isStationOrJingleField(rawTitleField, stationName)
+      ? ''
+      : rawTitleField;
+    const candidateArtist = isStationOrJingleField(rawArtistField, stationName)
+      ? ''
+      : rawArtistField.replace(/\s*;\s*/g, ', ');
+
     if (candidateTitle && candidateArtist) {
-      // Check if both fields are just the station name
-      const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normTitle = candidateTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normArtist = candidateArtist.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (normStation && normTitle === normStation && normArtist === normStation) {
-        return null;
-      }
       return {
         artist: candidateArtist,
         title: candidateTitle,
-        album: candidateAlbum,
+        album: rawAlbumField,
       };
     }
 
-    if (candidateTitle || candidateArtist) {
-      const single = candidateTitle || candidateArtist;
-      return parseRawStreamMetadata(single, stationName);
+    if (candidateTitle) {
+      return { artist: '', title: candidateTitle, album: rawAlbumField };
     }
     return null;
   }
@@ -123,7 +150,9 @@ export function parseRawStreamMetadata(
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!cleaned || cleaned.length < 2) return null;
+  if (!cleaned || cleaned.length < 2 || isStationOrJingleField(cleaned, stationName)) {
+    return null;
+  }
 
   // Normalize pipe "|" or slash " / " separators to " - " if no standard dash separator exists
   if (!/\s+[-–—]\s+/.test(cleaned)) {
@@ -151,8 +180,11 @@ export function parseRawStreamMetadata(
     .filter(Boolean);
 
   if (parts.length >= 2) {
-    const artist = parts[0];
+    const artist = parts[0].replace(/\s*;\s*/g, ', ');
     const title = parts.slice(1).join(' - ');
+    if (isStationOrJingleField(title, stationName) && isStationOrJingleField(artist, stationName)) {
+      return null;
+    }
     return { artist, title };
   }
 
@@ -183,4 +215,3 @@ export function extractTextFromHlsId3Sample(data: Uint8Array): string | null {
     return null;
   }
 }
-

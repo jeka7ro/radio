@@ -287,9 +287,9 @@ export function useAudioPlayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStation, streamReloadToken]);
 
-  // Poll live ICY / Icecast metadata & Deezer/iTunes cover + artist avatar while playing
+  // Poll live ICY / Icecast metadata & Deezer/iTunes cover + artist avatar while station is active
   useEffect(() => {
-    if (!currentStation || (playerStatus !== 'playing' && playerStatus !== 'loading')) {
+    if (!currentStation) {
       return;
     }
 
@@ -303,7 +303,7 @@ export function useAudioPlayer() {
         const res = await fetch(
           `/api/radio-meta?url=${encodeURIComponent(
             streamUrl
-          )}&name=${encodeURIComponent(currentStation.name)}`
+          )}&name=${encodeURIComponent(currentStation.name)}&_t=${Date.now()}`
         );
         if (!res.ok || cancelled) return;
         const data = await res.json();
@@ -322,50 +322,23 @@ export function useAudioPlayer() {
     };
 
     void fetchMetadata();
-    const intervalId = window.setInterval(fetchMetadata, 12000);
+    const intervalId = window.setInterval(fetchMetadata, 10000);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchMetadata();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, [currentStation, playerStatus, setNowPlayingMeta, setNowPlayingTitle]);
-
-  // Auto-upgrade any unparsed tilde (~) or missing-artwork metadata in store
-  useEffect(() => {
-    if (!currentStation || !nowPlayingMeta) return;
-    const rawCandidate = nowPlayingMeta.rawTitle || nowPlayingMeta.title || '';
-    if (
-      nowPlayingMeta.title.includes('~') ||
-      (!nowPlayingMeta.coverUrl && rawCandidate.includes('~'))
-    ) {
-      const cleaned = parseRawStreamMetadata(rawCandidate, currentStation.name);
-      if (cleaned && cleaned.title && cleaned.title !== nowPlayingMeta.title) {
-        setNowPlayingMeta({
-          ...nowPlayingMeta,
-          artist: cleaned.artist || nowPlayingMeta.artist,
-          title: cleaned.title,
-          album: cleaned.album || nowPlayingMeta.album,
-        });
-      }
-      void fetch(
-        `/api/radio-meta?rawTitle=${encodeURIComponent(
-          rawCandidate
-        )}&name=${encodeURIComponent(currentStation.name)}`
-      )
-        .then((r) => (r.ok ? r.json() : null))
-        .then((json) => {
-          if (json?.track) {
-            setNowPlayingMeta(json.track);
-            setNowPlayingTitle(
-              json.track.artist
-                ? `${json.track.artist} — ${json.track.title}`
-                : json.track.title
-            );
-          }
-        })
-        .catch(() => {});
-    }
-  }, [currentStation, nowPlayingMeta, setNowPlayingMeta, setNowPlayingTitle]);
 
   // Configure Media Session API for lock-screen and headset controls
   useEffect(() => {

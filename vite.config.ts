@@ -364,6 +364,67 @@ const ISO_DATE_REGEX =
 const ID3_FRAME_REGEX =
   /\b(?:ID3|TIT2|TPE1|TPE2|TALB|TXXX|TRCK|TYER|TDRC|TCON|TCOP|TSSE|PRIV|APIC|WXXX|COMM|USLT|StreamTitle)\b/g;
 
+function isStationOrJingleFieldServer(val: string, stationName = ''): boolean {
+  const s = (val || '').trim().toLowerCase();
+  if (!s) return true;
+  if (
+    /^(?:rmc|rmc hits|rmc 80|rmc 90|radio monte carlo.*|virgin radio.*|radio 105.*|r101.*|autopromo.*|promo.*|spot.*|jingle.*|liner.*|sigla.*|notiziario.*|meteo.*|oroscopo.*|traffico.*|commercial.*|publicitate.*|reclama.*)$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normVal = s.replace(/[^a-z0-9]/g, '');
+  if (normStation && normVal && normVal === normStation) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeForMatch(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, '')
+    .replace(/\b(?:feat|ft|with|vs)\.?\b.*$/i, '')
+    .replace(/[^a-z0-9а-яё]/gi, '');
+}
+
+function doesCatalogItemMatch(
+  candidateArtist: string,
+  candidateTitle: string,
+  targetArtist: string,
+  targetTitle: string
+): boolean {
+  const cTitle = normalizeForMatch(candidateTitle);
+  const tTitle = normalizeForMatch(targetTitle);
+  if (!cTitle || !tTitle) return false;
+
+  const titleMatches =
+    cTitle === tTitle ||
+    (tTitle.length >= 10 && cTitle.includes(tTitle)) ||
+    (cTitle.length >= 10 && tTitle.includes(cTitle));
+  if (!titleMatches) return false;
+
+  if (targetArtist) {
+    const cArtist = normalizeForMatch(candidateArtist);
+    const tPrimary = normalizeForMatch(
+      targetArtist.split(/[,&/;]|feat\.?|ft\.?|vs\.?|with/i)[0] || ''
+    );
+    if (
+      tPrimary &&
+      cArtist &&
+      !cArtist.includes(tPrimary) &&
+      !tPrimary.includes(cArtist)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function parseRawStreamMetadataServer(
   rawInput: string,
   stationName = ''
@@ -383,8 +444,12 @@ function parseRawStreamMetadataServer(
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const t = String(parsed.title || parsed.song || parsed.track || '').trim();
-      const a = String(parsed.artist || parsed.performer || '').trim();
-      if (t) return { artist: a, title: t };
+      const a = String(parsed.artist || parsed.performer || '')
+        .replace(/\s*;\s*/g, ', ')
+        .trim();
+      if (t && !isStationOrJingleFieldServer(t, stationName)) {
+        return { artist: a, title: t };
+      }
     } catch {
       // fall through
     }
@@ -398,16 +463,20 @@ function parseRawStreamMetadataServer(
     const artistMatch = raw.match(/\bartist\s*=\s*["']([^"']+)["']/i);
     if (titleMatch || artistMatch) {
       const extractedTitle = (titleMatch?.[1] || '').trim();
-      const extractedArtist = (artistMatch?.[1] || '').trim();
-      if (extractedTitle) {
+      const extractedArtist = (artistMatch?.[1] || '')
+        .replace(/\s*;\s*/g, ', ')
+        .trim();
+      if (
+        extractedTitle &&
+        !isStationOrJingleFieldServer(extractedTitle, stationName)
+      ) {
         return { artist: extractedArtist, title: extractedTitle };
       }
     }
   }
 
   // 3. Mediaset / RMC / Virgin Radio / Radio 105 tilde-delimited format:
-  // "Long As I Live~Toni Braxton~~2018~USUM71800544~276~2026-10-31T08:48:00"
-  // Format: Title ~ Artist ~ Album ~ Year ~ ISRC ~ Duration ~ Timestamp
+  // "Still~Karol G; Bruno Mars~~2026~USUG12607936~216~2026-11-01T09:05:09..."
   if (raw.includes('~')) {
     const tildeParts = raw.split('~').map((part) =>
       part
@@ -418,37 +487,41 @@ function parseRawStreamMetadataServer(
 
     const isTechnicalToken = (val: string): boolean => {
       if (!val) return true;
-      if (/^\d+$/.test(val)) return true;
+      if (/^\d+(?:\.\d+)?$/.test(val)) return true;
       if (/^\d{4}-\d{2}/.test(val)) return true;
       if (/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/i.test(val)) return true;
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(val)) return true;
       if (/^(?:MUS|HIT|JNG|COM|ADV|SPOT|LIN|SIG|IDS|NWS)$/i.test(val)) return true;
       return false;
     };
 
-    const candidateTitle = !isTechnicalToken(tildeParts[0] || '') ? tildeParts[0] : '';
-    const candidateArtist = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
-    const candidateAlbum =
-      tildeParts[2] && !isTechnicalToken(tildeParts[2]) && tildeParts[2].length > 1
+    const rawTitleField = !isTechnicalToken(tildeParts[0] || '') ? tildeParts[0] : '';
+    const rawArtistField = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
+    const rawAlbumField =
+      tildeParts[2] &&
+      !isTechnicalToken(tildeParts[2]) &&
+      !isStationOrJingleFieldServer(tildeParts[2], stationName) &&
+      tildeParts[2].length > 1
         ? tildeParts[2]
         : undefined;
 
+    const candidateTitle = isStationOrJingleFieldServer(rawTitleField, stationName)
+      ? ''
+      : rawTitleField;
+    const candidateArtist = isStationOrJingleFieldServer(rawArtistField, stationName)
+      ? ''
+      : rawArtistField.replace(/\s*;\s*/g, ', ');
+
     if (candidateTitle && candidateArtist) {
-      const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normTitle = candidateTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normArtist = candidateArtist.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (normStation && normTitle === normStation && normArtist === normStation) {
-        return null;
-      }
       return {
         artist: candidateArtist,
         title: candidateTitle,
-        album: candidateAlbum,
+        album: rawAlbumField,
       };
     }
 
-    if (candidateTitle || candidateArtist) {
-      const single = candidateTitle || candidateArtist;
-      return parseRawStreamMetadataServer(single, stationName);
+    if (candidateTitle) {
+      return { artist: '', title: candidateTitle, album: rawAlbumField };
     }
     return null;
   }
@@ -466,7 +539,13 @@ function parseRawStreamMetadataServer(
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!cleaned || cleaned.length < 2) return null;
+  if (
+    !cleaned ||
+    cleaned.length < 2 ||
+    isStationOrJingleFieldServer(cleaned, stationName)
+  ) {
+    return null;
+  }
 
   if (!/\s+[-–—]\s+/.test(cleaned)) {
     if (/\s+\|\s+/.test(cleaned)) {
@@ -492,10 +571,15 @@ function parseRawStreamMetadataServer(
     .filter(Boolean);
 
   if (parts.length >= 2) {
-    return {
-      artist: parts[0],
-      title: parts.slice(1).join(' - '),
-    };
+    const artist = parts[0].replace(/\s*;\s*/g, ', ');
+    const title = parts.slice(1).join(' - ');
+    if (
+      isStationOrJingleFieldServer(title, stationName) &&
+      isStationOrJingleFieldServer(artist, stationName)
+    ) {
+      return null;
+    }
+    return { artist, title };
   }
 
   return { artist: '', title: cleaned };
@@ -545,12 +629,19 @@ async function resolveRichTrackMetadata(
     return null;
   }
 
-  const cacheKey = `${parsedFields.artist}:::${parsedFields.title}`.toLowerCase();
+  const cacheKey = `v3:::${parsedFields.artist}:::${parsedFields.title}`.toLowerCase();
   const cached = trackRichMetaCache.get(cacheKey);
   if (cached && Date.now() - cached.updatedAt < 30 * 60 * 1000) {
-    return cached;
+    return {
+      ...cached,
+      rawTitle: rawStreamTitle,
+    };
   }
 
+  // Always preserve the radio stream's real artist and title when both are provided!
+  const hasAuthoritativeArtistAndTitle = Boolean(
+    parsedFields.artist && parsedFields.title
+  );
   let artist = parsedFields.artist;
   let title = parsedFields.title;
   let album = parsedFields.album || '';
@@ -580,13 +671,14 @@ async function resolveRichTrackMetadata(
     )
   );
 
-  // 1. Query Deezer Search API (provides 1000x1000 / 500x500 Song Cover AND Artist Avatar)
+  // 1. Query Deezer Search API (verify track title & artist match before using album cover)
   for (const q of queries) {
+    if (coverUrl) break;
     try {
       const ctrl = new AbortController();
       const tId = setTimeout(() => ctrl.abort(), 3200);
       const r = await fetch(
-        `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=3`,
+        `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=5`,
         { signal: ctrl.signal }
       );
       clearTimeout(tId);
@@ -608,20 +700,29 @@ async function resolveRichTrackMetadata(
             };
           }>;
         };
-        const item = j?.data?.[0];
-        if (item) {
-          artist = item.artist?.name || artist;
-          title = item.title || title;
-          album = item.album?.title || album;
+        const matchedItem = (j?.data || []).find((cand) =>
+          doesCatalogItemMatch(
+            cand.artist?.name || '',
+            cand.title || '',
+            primaryArtist || artist,
+            cleanSongTitle || title
+          )
+        );
+        if (matchedItem) {
+          if (!hasAuthoritativeArtistAndTitle) {
+            artist = matchedItem.artist?.name || artist;
+            title = matchedItem.title || title;
+          }
+          album = album || matchedItem.album?.title || '';
           coverUrl =
-            item.album?.cover_xl ||
-            item.album?.cover_big ||
-            item.album?.cover_medium ||
+            matchedItem.album?.cover_xl ||
+            matchedItem.album?.cover_big ||
+            matchedItem.album?.cover_medium ||
             '';
           artistAvatarUrl =
-            item.artist?.picture_xl ||
-            item.artist?.picture_big ||
-            item.artist?.picture_medium ||
+            matchedItem.artist?.picture_xl ||
+            matchedItem.artist?.picture_big ||
+            matchedItem.artist?.picture_medium ||
             '';
           break;
         }
@@ -631,7 +732,7 @@ async function resolveRichTrackMetadata(
     }
   }
 
-  // 2. Fallback to iTunes Search API (US global catalog + regional RU/RO) if coverUrl wasn't found on Deezer
+  // 2. Fallback to iTunes Search API (verify track match before using cover)
   if (!coverUrl) {
     const itunesQuery =
       (primaryArtist && cleanSongTitle
@@ -653,7 +754,7 @@ async function resolveRichTrackMetadata(
           const r = await fetch(
             `https://itunes.apple.com/search?term=${encodeURIComponent(
               itunesQuery
-            )}&country=${countryParam}&entity=song&limit=3`,
+            )}&country=${countryParam}&entity=song&limit=5`,
             { signal: ctrl.signal }
           );
           clearTimeout(tId);
@@ -666,13 +767,22 @@ async function resolveRichTrackMetadata(
                 artworkUrl100?: string;
               }>;
             };
-            const item = j?.results?.[0];
-            if (item) {
-              artist = item.artistName || artist;
-              title = item.trackName || title;
-              album = item.collectionName || album;
-              if (item.artworkUrl100) {
-                coverUrl = item.artworkUrl100.replace(
+            const matchedItem = (j?.results || []).find((cand) =>
+              doesCatalogItemMatch(
+                cand.artistName || '',
+                cand.trackName || '',
+                primaryArtist || artist,
+                cleanSongTitle || title
+              )
+            );
+            if (matchedItem) {
+              if (!hasAuthoritativeArtistAndTitle) {
+                artist = matchedItem.artistName || artist;
+                title = matchedItem.trackName || title;
+              }
+              album = album || matchedItem.collectionName || '';
+              if (matchedItem.artworkUrl100) {
+                coverUrl = matchedItem.artworkUrl100.replace(
                   /\d+x\d+bb/,
                   '600x600bb'
                 );
@@ -686,7 +796,7 @@ async function resolveRichTrackMetadata(
     }
   }
 
-  // 3. If artistAvatarUrl is still missing and we have an artist name, look up the artist portrait on Deezer
+  // 3. Look up Artist Portrait on Deezer Artist API (always verified by artist name)
   if (!artistAvatarUrl && (primaryArtist || artist)) {
     try {
       const ctrl = new AbortController();
@@ -694,48 +804,28 @@ async function resolveRichTrackMetadata(
       const r = await fetch(
         `https://api.deezer.com/search/artist?q=${encodeURIComponent(
           primaryArtist || artist
-        )}&limit=1`,
+        )}&limit=3`,
         { signal: ctrl.signal }
       );
       clearTimeout(tId);
       if (r.ok) {
         const j = (await r.json()) as {
           data?: Array<{
+            name?: string;
             picture_xl?: string;
             picture_big?: string;
             picture_medium?: string;
           }>;
         };
-        const art = j?.data?.[0];
+        const targetNorm = normalizeForMatch(primaryArtist || artist);
+        const art =
+          (j?.data || []).find((a) => {
+            const cNorm = normalizeForMatch(a.name || '');
+            return cNorm && targetNorm && (cNorm.includes(targetNorm) || targetNorm.includes(cNorm));
+          }) || j?.data?.[0];
         if (art) {
           artistAvatarUrl =
             art.picture_xl || art.picture_big || art.picture_medium || '';
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 4. Final fallback: if both coverUrl and artistAvatarUrl are still empty, fetch artist's top track artwork from iTunes
-  if (!coverUrl && !artistAvatarUrl && (primaryArtist || artist)) {
-    try {
-      const ctrl = new AbortController();
-      const tId = setTimeout(() => ctrl.abort(), 2500);
-      const r = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(
-          primaryArtist || artist
-        )}&country=US&entity=song&limit=1`,
-        { signal: ctrl.signal }
-      );
-      clearTimeout(tId);
-      if (r.ok) {
-        const j = (await r.json()) as {
-          results?: Array<{ artworkUrl100?: string }>;
-        };
-        const artUrl = j?.results?.[0]?.artworkUrl100;
-        if (artUrl) {
-          coverUrl = artUrl.replace(/\d+x\d+bb/, '600x600bb');
         }
       }
     } catch {
