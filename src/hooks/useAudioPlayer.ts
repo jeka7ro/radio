@@ -7,6 +7,10 @@ import {
   registerStationClick,
   toHttpsStreamUrl,
 } from '../services/radioBrowserApi';
+import {
+  extractTextFromHlsId3Sample,
+  parseRawStreamMetadata,
+} from '../utils/cleanTrackMetadata';
 
 export const MAX_AUTO_RETRIES = 2;
 
@@ -201,16 +205,22 @@ export function useAudioPlayer() {
               if (isCancelled || !data?.samples) return;
               try {
                 for (const sample of data.samples) {
-                  const text = new TextDecoder('utf-8')
-                    .decode(sample.data)
-                    .replace(/[^\x20-\x7E\u00A0-\u024F\u0400-\u04FF]/g, ' ')
-                    .trim();
-                  if (text && text.length > 3) {
-                    const sliced = text.slice(0, 120);
-                    setNowPlayingTitle(sliced);
+                  const extracted = extractTextFromHlsId3Sample(sample.data);
+                  if (extracted) {
+                    const parsedLocal = parseRawStreamMetadata(
+                      extracted,
+                      currentStation.name
+                    );
+                    if (parsedLocal && parsedLocal.title) {
+                      setNowPlayingTitle(
+                        parsedLocal.artist
+                          ? `${parsedLocal.artist} — ${parsedLocal.title}`
+                          : parsedLocal.title
+                      );
+                    }
                     void fetch(
                       `/api/radio-meta?rawTitle=${encodeURIComponent(
-                        sliced
+                        extracted
                       )}&name=${encodeURIComponent(currentStation.name)}`
                     )
                       .then((r) => (r.ok ? r.json() : null))
@@ -312,13 +322,50 @@ export function useAudioPlayer() {
     };
 
     void fetchMetadata();
-    const intervalId = window.setInterval(fetchMetadata, 18000);
+    const intervalId = window.setInterval(fetchMetadata, 12000);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
   }, [currentStation, playerStatus, setNowPlayingMeta, setNowPlayingTitle]);
+
+  // Auto-upgrade any unparsed tilde (~) or missing-artwork metadata in store
+  useEffect(() => {
+    if (!currentStation || !nowPlayingMeta) return;
+    const rawCandidate = nowPlayingMeta.rawTitle || nowPlayingMeta.title || '';
+    if (
+      nowPlayingMeta.title.includes('~') ||
+      (!nowPlayingMeta.coverUrl && rawCandidate.includes('~'))
+    ) {
+      const cleaned = parseRawStreamMetadata(rawCandidate, currentStation.name);
+      if (cleaned && cleaned.title && cleaned.title !== nowPlayingMeta.title) {
+        setNowPlayingMeta({
+          ...nowPlayingMeta,
+          artist: cleaned.artist || nowPlayingMeta.artist,
+          title: cleaned.title,
+          album: cleaned.album || nowPlayingMeta.album,
+        });
+      }
+      void fetch(
+        `/api/radio-meta?rawTitle=${encodeURIComponent(
+          rawCandidate
+        )}&name=${encodeURIComponent(currentStation.name)}`
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (json?.track) {
+            setNowPlayingMeta(json.track);
+            setNowPlayingTitle(
+              json.track.artist
+                ? `${json.track.artist} — ${json.track.title}`
+                : json.track.title
+            );
+          }
+        })
+        .catch(() => {});
+    }
+  }, [currentStation, nowPlayingMeta, setNowPlayingMeta, setNowPlayingTitle]);
 
   // Configure Media Session API for lock-screen and headset controls
   useEffect(() => {

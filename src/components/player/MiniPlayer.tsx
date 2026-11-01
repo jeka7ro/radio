@@ -19,6 +19,7 @@ import { useTranslation } from '../../i18n/useTranslation';
 import { StationAvatar } from '../common/StationAvatar';
 import { MAX_AUTO_RETRIES } from '../../hooks/useAudioPlayer';
 import { toggleRadioPip } from './RadioPipPlayer';
+import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
 
 export const MiniPlayer: React.FC = () => {
   const { t, format } = useTranslation();
@@ -68,6 +69,51 @@ export const MiniPlayer: React.FC = () => {
     (f) => f.stationuuid === currentStation.stationuuid
   );
 
+  // Ensure track title & artist are always cleanly formatted (never raw ~ or ISRC strings)
+  const displayTrack = React.useMemo(() => {
+    if (nowPlayingMeta) {
+      if (nowPlayingMeta.title.includes('~')) {
+        const parsed = parseRawStreamMetadata(
+          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
+          currentStation.name
+        );
+        if (parsed && parsed.title) {
+          return {
+            title: parsed.title,
+            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
+            album: parsed.album || nowPlayingMeta.album,
+            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+            artistAvatarUrl:
+              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+          };
+        }
+      }
+      return {
+        title: nowPlayingMeta.title,
+        artist: nowPlayingMeta.artist || currentStation.name,
+        album: nowPlayingMeta.album,
+        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+        artistAvatarUrl:
+          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+      };
+    }
+
+    if (nowPlayingTitle) {
+      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
+      if (parsed && parsed.title) {
+        return {
+          title: parsed.title,
+          artist: parsed.artist || currentStation.name,
+          album: parsed.album,
+          coverUrl: undefined,
+          artistAvatarUrl: undefined,
+        };
+      }
+    }
+
+    return null;
+  }, [nowPlayingMeta, nowPlayingTitle, currentStation.name]);
+
   const statusSubtitle = () => {
     if (isError) return t.player.error;
     if (isLoading) {
@@ -79,7 +125,11 @@ export const MiniPlayer: React.FC = () => {
         : t.player.loading;
     }
     if (playerStatus === 'paused') return t.player.paused;
-    if (nowPlayingTitle) return nowPlayingTitle;
+    if (displayTrack) {
+      return displayTrack.artist
+        ? `${displayTrack.artist} — ${displayTrack.title}`
+        : displayTrack.title;
+    }
     const tagList = currentStation.tags
       ? currentStation.tags
           .split(',')
@@ -143,18 +193,18 @@ export const MiniPlayer: React.FC = () => {
           className="flex-1 min-w-0 flex items-center gap-2.5 sm:gap-3 text-left py-1 pr-1 rounded-xl hover:bg-slate-100/70 dark:hover:bg-zinc-800/50 transition-colors"
         >
           <div className="relative flex-shrink-0">
-            {nowPlayingMeta?.coverUrl ? (
-              <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-xl overflow-hidden shadow-md border border-slate-200/80 dark:border-zinc-700/80 bg-zinc-900">
+            {displayTrack?.coverUrl ? (
+              <div className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl overflow-hidden shadow-md border border-slate-200/80 dark:border-zinc-700/80 bg-zinc-900">
                 <img
-                  src={nowPlayingMeta.coverUrl}
-                  alt={nowPlayingMeta.title}
+                  src={displayTrack.coverUrl}
+                  alt={displayTrack.title}
                   className="w-full h-full object-cover"
                 />
                 {isPlaying && (
-                  <div className="absolute inset-0 bg-black/30 flex items-center justify-center gap-0.5">
-                    <span className="eq-bar w-0.5 bg-white rounded-full h-2.5" />
-                    <span className="eq-bar eq-bar-2 w-0.5 bg-white rounded-full h-4" />
-                    <span className="eq-bar eq-bar-3 w-0.5 bg-white rounded-full h-3" />
+                  <div className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/70 backdrop-blur-xs flex items-end justify-center gap-0.5 shadow-xs">
+                    <span className="eq-bar w-0.5 bg-emerald-400 rounded-full h-2" />
+                    <span className="eq-bar eq-bar-2 w-0.5 bg-emerald-400 rounded-full h-3" />
+                    <span className="eq-bar eq-bar-3 w-0.5 bg-emerald-400 rounded-full h-2.5" />
                   </div>
                 )}
               </div>
@@ -170,13 +220,13 @@ export const MiniPlayer: React.FC = () => {
           </div>
 
           <div className="min-w-0 flex-1">
-            {nowPlayingMeta && !isError && !isLoading ? (
+            {displayTrack && !isError && !isLoading ? (
               <>
                 <div className="flex items-center gap-1.5">
                   <p className="text-xs sm:text-base font-bold text-slate-900 dark:text-zinc-100 truncate">
-                    {nowPlayingMeta.title}
+                    {displayTrack.title}
                   </p>
-                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-brand-100 dark:bg-brand-950/80 text-brand-800 dark:text-brand-300 truncate max-w-[160px]">
+                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-brand-100 dark:bg-brand-950/80 text-brand-800 dark:text-brand-300 truncate max-w-[160px] shrink-0">
                     {currentStation.name}
                   </span>
                   <ChevronUp
@@ -185,16 +235,23 @@ export const MiniPlayer: React.FC = () => {
                   />
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-                  {nowPlayingMeta.artistAvatarUrl && (
+                  {displayTrack.artistAvatarUrl && (
                     <img
-                      src={nowPlayingMeta.artistAvatarUrl}
-                      alt={nowPlayingMeta.artist}
-                      className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
+                      src={displayTrack.artistAvatarUrl}
+                      alt={displayTrack.artist}
+                      className="w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
                     />
                   )}
-                  <p className="text-[11px] sm:text-xs font-medium text-brand-700 dark:text-brand-400 truncate">
-                    {nowPlayingMeta.artist || currentStation.name}
-                    {nowPlayingMeta.album ? ` • ${nowPlayingMeta.album}` : ''}
+                  <p className="text-[11px] sm:text-xs font-semibold text-brand-700 dark:text-brand-400 truncate">
+                    {displayTrack.artist}
+                    {displayTrack.album ? (
+                      <span className="font-normal text-slate-500 dark:text-zinc-400">
+                        {` • ${displayTrack.album}`}
+                      </span>
+                    ) : null}
+                    <span className="sm:hidden font-normal text-slate-500 dark:text-zinc-400">
+                      {` • ${currentStation.name}`}
+                    </span>
                   </p>
                 </div>
               </>

@@ -23,6 +23,7 @@ import { isInsecureHttpStream } from '../../services/radioBrowserApi';
 import { getCountryFlagEmoji } from '../../services/geoLanguageService';
 import { MAX_AUTO_RETRIES } from '../../hooks/useAudioPlayer';
 import { toggleRadioPip } from './RadioPipPlayer';
+import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
 
 export const ExpandedPlayer: React.FC = () => {
   const { t, format } = useTranslation();
@@ -123,6 +124,50 @@ export const ExpandedPlayer: React.FC = () => {
         .slice(0, 6)
     : [];
 
+  const displayTrack = React.useMemo(() => {
+    if (nowPlayingMeta) {
+      if (nowPlayingMeta.title.includes('~')) {
+        const parsed = parseRawStreamMetadata(
+          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
+          currentStation.name
+        );
+        if (parsed && parsed.title) {
+          return {
+            title: parsed.title,
+            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
+            album: parsed.album || nowPlayingMeta.album,
+            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+            artistAvatarUrl:
+              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+          };
+        }
+      }
+      return {
+        title: nowPlayingMeta.title,
+        artist: nowPlayingMeta.artist || currentStation.name,
+        album: nowPlayingMeta.album,
+        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+        artistAvatarUrl:
+          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+      };
+    }
+
+    if (nowPlayingTitle) {
+      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
+      if (parsed && parsed.title) {
+        return {
+          title: parsed.title,
+          artist: parsed.artist || currentStation.name,
+          album: parsed.album,
+          coverUrl: undefined,
+          artistAvatarUrl: undefined,
+        };
+      }
+    }
+
+    return null;
+  }, [nowPlayingMeta, nowPlayingTitle, currentStation.name]);
+
   return (
     <dialog
       ref={dialogRef}
@@ -192,11 +237,11 @@ export const ExpandedPlayer: React.FC = () => {
 
         {/* Artwork (Song Cover Art when playing a known song, or Station Logo) */}
         <div className="flex justify-center my-3">
-          {nowPlayingMeta?.coverUrl ? (
+          {displayTrack?.coverUrl ? (
             <div className="relative w-48 h-48 sm:w-56 sm:h-56">
               <img
-                src={nowPlayingMeta.coverUrl}
-                alt={nowPlayingMeta.title}
+                src={displayTrack.coverUrl}
+                alt={displayTrack.title}
                 className="w-full h-full rounded-3xl object-cover shadow-2xl border border-slate-200/80 dark:border-zinc-700/80"
               />
               <div className="absolute -bottom-2 -right-2 rounded-2xl p-1 bg-white dark:bg-zinc-900 shadow-lg border border-slate-200 dark:border-zinc-800">
@@ -227,13 +272,13 @@ export const ExpandedPlayer: React.FC = () => {
             id={titleId}
             className="text-2xl font-bold text-slate-900 dark:text-zinc-100 leading-tight"
           >
-            {nowPlayingMeta?.title || currentStation.name}
+            {displayTrack?.title || currentStation.name}
           </h2>
 
           <p className="text-sm text-slate-600 dark:text-zinc-400 flex items-center justify-center gap-1.5">
             <span>{getCountryFlagEmoji(currentStation.countrycode)}</span>
             <span>
-              {nowPlayingMeta
+              {displayTrack
                 ? `${currentStation.name} • ${
                     currentStation.country || currentStation.countrycode
                   }`
@@ -241,18 +286,18 @@ export const ExpandedPlayer: React.FC = () => {
             </span>
           </p>
 
-          {nowPlayingMeta ? (
+          {displayTrack ? (
             <div className="pt-2">
               <div className="mx-auto max-w-md p-3 rounded-2xl bg-slate-100/90 dark:bg-zinc-800/80 border border-slate-200/80 dark:border-zinc-700/70 flex items-center gap-3 text-left">
-                {nowPlayingMeta.artistAvatarUrl ? (
+                {displayTrack.artistAvatarUrl ? (
                   <img
-                    src={nowPlayingMeta.artistAvatarUrl}
-                    alt={nowPlayingMeta.artist}
+                    src={displayTrack.artistAvatarUrl}
+                    alt={displayTrack.artist}
                     className="w-12 h-12 rounded-full object-cover flex-shrink-0 ring-2 ring-brand-500/60 shadow-sm"
                   />
                 ) : (
                   <div className="w-12 h-12 rounded-full bg-brand-700 text-white font-bold flex items-center justify-center flex-shrink-0 text-sm">
-                    {(nowPlayingMeta.artist || nowPlayingMeta.title)
+                    {(displayTrack.artist || displayTrack.title)
                       .slice(0, 2)
                       .toUpperCase()}
                   </div>
@@ -263,17 +308,17 @@ export const ExpandedPlayer: React.FC = () => {
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                       Acum pe post
                     </span>
-                    {nowPlayingMeta.album && (
+                    {displayTrack.album && (
                       <span className="text-xs text-slate-500 dark:text-zinc-400 truncate">
-                        • {nowPlayingMeta.album}
+                        • {displayTrack.album}
                       </span>
                     )}
                   </div>
                   <p className="text-sm font-bold text-slate-900 dark:text-zinc-100 truncate mt-0.5">
-                    {nowPlayingMeta.artist || currentStation.name}
+                    {displayTrack.artist || currentStation.name}
                   </p>
                   <p className="text-xs text-slate-600 dark:text-zinc-300 truncate">
-                    {nowPlayingMeta.title}
+                    {displayTrack.title}
                   </p>
                 </div>
               </div>

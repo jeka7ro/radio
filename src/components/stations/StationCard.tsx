@@ -9,6 +9,7 @@ import {
   getCountryFlagEmoji,
   getLocalizedCountryName,
 } from '../../services/geoLanguageService';
+import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
 
 interface StationCardProps {
   station: Station;
@@ -53,6 +54,32 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
 
     const streamUrl = station.url_resolved || station.url;
     const isHttp = isInsecureHttpStream(streamUrl);
+
+    const displayTrack = React.useMemo(() => {
+      if (!isCurrent || !nowPlayingMeta) return null;
+      if (nowPlayingMeta.title.includes('~')) {
+        const parsed = parseRawStreamMetadata(
+          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
+          station.name
+        );
+        if (parsed && parsed.title) {
+          return {
+            title: parsed.title,
+            artist: parsed.artist || nowPlayingMeta.artist,
+            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+            artistAvatarUrl:
+              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+          };
+        }
+      }
+      return {
+        title: nowPlayingMeta.title,
+        artist: nowPlayingMeta.artist,
+        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+        artistAvatarUrl:
+          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+      };
+    }, [isCurrent, nowPlayingMeta, station.name]);
 
     const handlePlayClick = () => {
       playStation(station, queue);
@@ -124,16 +151,16 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
             </div>
 
             {/* Live Now Playing Song + Artist Avatar (when this station is active) */}
-            {isCurrent && nowPlayingMeta ? (
+            {isCurrent && displayTrack ? (
               <div className="mt-1 flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded-lg bg-brand-100/80 dark:bg-brand-900/40 border border-brand-300/60 dark:border-brand-700/50">
-                {nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl ? (
+                {displayTrack.coverUrl || displayTrack.artistAvatarUrl ? (
                   <img
                     src={
-                      nowPlayingMeta.artistAvatarUrl ||
-                      nowPlayingMeta.coverUrl ||
+                      displayTrack.coverUrl ||
+                      displayTrack.artistAvatarUrl ||
                       undefined
                     }
-                    alt={nowPlayingMeta.artist || nowPlayingMeta.title}
+                    alt={displayTrack.artist || displayTrack.title}
                     className="w-4 h-4 sm:w-5 sm:h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
                   />
                 ) : (
@@ -144,9 +171,9 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
                   />
                 )}
                 <p className="text-xs font-semibold text-brand-900 dark:text-brand-200 truncate">
-                  {nowPlayingMeta.artist
-                    ? `${nowPlayingMeta.artist} — ${nowPlayingMeta.title}`
-                    : nowPlayingMeta.title}
+                  {displayTrack.artist
+                    ? `${displayTrack.artist} — ${displayTrack.title}`
+                    : displayTrack.title}
                 </p>
               </div>
             ) : (

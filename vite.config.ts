@@ -358,11 +358,154 @@ async function readIcecastStatusTitle(streamUrl: string): Promise<string | null>
   }
 }
 
+const ISRC_CODE_REGEX = /\b[A-Z]{2}[A-Z0-9]{3}\d{7}\b/gi;
+const ISO_DATE_REGEX =
+  /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g;
+const ID3_FRAME_REGEX =
+  /\b(?:ID3|TIT2|TPE1|TPE2|TALB|TXXX|TRCK|TYER|TDRC|TCON|TCOP|TSSE|PRIV|APIC|WXXX|COMM|USLT|StreamTitle)\b/g;
+
+function parseRawStreamMetadataServer(
+  rawInput: string,
+  stationName = ''
+): { artist: string; title: string; album?: string } | null {
+  let raw = (rawInput || '')
+    .replace(/\0+/g, ' ')
+    .replace(ID3_FRAME_REGEX, ' ')
+    .replace(/StreamUrl='[^']*';?/gi, ' ')
+    .replace(/StreamTitle='([^']*)';?/gi, '$1')
+    .trim();
+
+  if (!raw || raw.length < 2) return null;
+  if (/com\.apple\.streaming\.transportStreamTimestamp/i.test(raw)) return null;
+
+  // 1. JSON payload
+  if (raw.startsWith('{') && raw.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const t = String(parsed.title || parsed.song || parsed.track || '').trim();
+      const a = String(parsed.artist || parsed.performer || '').trim();
+      if (t) return { artist: a, title: t };
+    } catch {
+      // fall through
+    }
+  }
+
+  // 2. Adswizz / Triton key="value" metadata
+  if (/\b(?:title|artist|text)\s*=\s*["']/i.test(raw)) {
+    const titleMatch =
+      raw.match(/\btitle\s*=\s*["']([^"']+)["']/i) ||
+      raw.match(/\btext\s*=\s*["']([^"']+)["']/i);
+    const artistMatch = raw.match(/\bartist\s*=\s*["']([^"']+)["']/i);
+    if (titleMatch || artistMatch) {
+      const extractedTitle = (titleMatch?.[1] || '').trim();
+      const extractedArtist = (artistMatch?.[1] || '').trim();
+      if (extractedTitle) {
+        return { artist: extractedArtist, title: extractedTitle };
+      }
+    }
+  }
+
+  // 3. Mediaset / RMC / Virgin Radio / Radio 105 tilde-delimited format:
+  // "Long As I Live~Toni Braxton~~2018~USUM71800544~276~2026-10-31T08:48:00"
+  // Format: Title ~ Artist ~ Album ~ Year ~ ISRC ~ Duration ~ Timestamp
+  if (raw.includes('~')) {
+    const tildeParts = raw.split('~').map((part) =>
+      part
+        .replace(ISO_DATE_REGEX, '')
+        .replace(ISRC_CODE_REGEX, '')
+        .trim()
+    );
+
+    const isTechnicalToken = (val: string): boolean => {
+      if (!val) return true;
+      if (/^\d+$/.test(val)) return true;
+      if (/^\d{4}-\d{2}/.test(val)) return true;
+      if (/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/i.test(val)) return true;
+      if (/^(?:MUS|HIT|JNG|COM|ADV|SPOT|LIN|SIG|IDS|NWS)$/i.test(val)) return true;
+      return false;
+    };
+
+    const candidateTitle = !isTechnicalToken(tildeParts[0] || '') ? tildeParts[0] : '';
+    const candidateArtist = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
+    const candidateAlbum =
+      tildeParts[2] && !isTechnicalToken(tildeParts[2]) && tildeParts[2].length > 1
+        ? tildeParts[2]
+        : undefined;
+
+    if (candidateTitle && candidateArtist) {
+      const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normTitle = candidateTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normArtist = candidateArtist.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normStation && normTitle === normStation && normArtist === normStation) {
+        return null;
+      }
+      return {
+        artist: candidateArtist,
+        title: candidateTitle,
+        album: candidateAlbum,
+      };
+    }
+
+    if (candidateTitle || candidateArtist) {
+      const single = candidateTitle || candidateArtist;
+      return parseRawStreamMetadataServer(single, stationName);
+    }
+    return null;
+  }
+
+  // 4. Standard string cleanup
+  let cleaned = raw
+    .replace(ISO_DATE_REGEX, ' ')
+    .replace(ISRC_CODE_REGEX, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(
+      /\(\s*(?:live|bonus|remix|radio edit|edit|extended|version|ost|from|official|video|audio|hd|hq|\d{4})[^)]*\)/gi,
+      ' '
+    )
+    .replace(/\s+[-|]\s+\d{1,2}:\d{2}\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned || cleaned.length < 2) return null;
+
+  if (!/\s+[-–—]\s+/.test(cleaned)) {
+    if (/\s+\|\s+/.test(cleaned)) {
+      cleaned = cleaned.replace(/\s+\|\s+/g, ' - ');
+    } else if (/\s+\/\s+/.test(cleaned)) {
+      cleaned = cleaned.replace(/\s+\/\s+/g, ' - ');
+    }
+  }
+
+  const rawParts = cleaned.split(/\s+[-–—]\s+/);
+  if (
+    rawParts.length >= 3 &&
+    /fm|radio|rmc|virgin|zu|kiss|magic|rock|pro|digi|europa|dfm|retro|hit/i.test(
+      rawParts[0]
+    )
+  ) {
+    cleaned = rawParts.slice(1).join(' - ');
+  }
+
+  const parts = cleaned
+    .split(/\s+[-–—]\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    return {
+      artist: parts[0],
+      title: parts.slice(1).join(' - '),
+    };
+  }
+
+  return { artist: '', title: cleaned };
+}
+
 function isGenericStationSlogan(raw: string, stationName: string): boolean {
   const s = raw.trim().toLowerCase();
-  if (!s || s.length < 4) return true;
+  if (!s || s.length < 3) return true;
   if (
-    /^(unknown|stream|offline|live|on air|reclama|publicitate|commercial|jingle|реклама|новости)$/i.test(
+    /^(unknown|stream|offline|live|on air|reclama|publicitate|commercial|jingle|spot|реклама|новости)$/i.test(
       s
     )
   ) {
@@ -387,63 +530,63 @@ function isGenericStationSlogan(raw: string, stationName: string): boolean {
 }
 
 async function resolveRichTrackMetadata(
-  rawStreamTitle: string
-): Promise<RichTrackInfo> {
-  const cached = trackRichMetaCache.get(rawStreamTitle);
+  rawStreamTitle: string,
+  stationName = ''
+): Promise<RichTrackInfo | null> {
+  const parsedFields = parseRawStreamMetadataServer(rawStreamTitle, stationName);
+  if (!parsedFields || (!parsedFields.title && !parsedFields.artist)) {
+    return null;
+  }
+
+  if (
+    isGenericStationSlogan(parsedFields.title, stationName) &&
+    (!parsedFields.artist || isGenericStationSlogan(parsedFields.artist, stationName))
+  ) {
+    return null;
+  }
+
+  const cacheKey = `${parsedFields.artist}:::${parsedFields.title}`.toLowerCase();
+  const cached = trackRichMetaCache.get(cacheKey);
   if (cached && Date.now() - cached.updatedAt < 30 * 60 * 1000) {
     return cached;
   }
 
-  let cleaned = rawStreamTitle
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(
-      /\(\s*(live|bonus|remix|radio edit|edit|extended|version|ost|from)[^)]*\)/gi,
-      ' '
-    )
-    .replace(/\s+-\s+\d{1,2}:\d{2}\s*$/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Strip 3-part station prefix like "KissFM - Sak Noel - Trumpets" -> "Sak Noel - Trumpets"
-  const rawParts = cleaned.split(/\s+[-–—]\s+/);
-  if (
-    rawParts.length >= 3 &&
-    /fm|radio|zu|kiss|magic|rock|pro|digi|europa|dfm|retro/i.test(rawParts[0])
-  ) {
-    cleaned = rawParts.slice(1).join(' - ');
-  }
-
-  const parts = cleaned.split(/\s+[-–—]\s+/);
-  let artist = parts.length >= 2 ? parts[0].trim() : '';
-  let title = parts.length >= 2 ? parts.slice(1).join(' - ').trim() : cleaned;
-
-  let album = '';
+  let artist = parsedFields.artist;
+  let title = parsedFields.title;
+  let album = parsedFields.album || '';
   let coverUrl = '';
   let artistAvatarUrl = '';
 
   const primaryArtist = artist
-    ? artist.split(/[,&]|feat\.?|ft\.?/i)[0].trim()
+    ? artist.split(/[,&/;]|feat\.?|ft\.?|vs\.?|with/i)[0].trim()
     : '';
-  const cleanSongTitle = title.replace(/\([^)]*\)/g, '').trim();
+  const cleanSongTitle = title
+    .replace(/\([^)]*\)/g, '')
+    .replace(/feat\.?.*$/i, '')
+    .trim();
 
   const queries = Array.from(
     new Set(
       [
-        artist && title ? `${artist} ${title}` : cleaned,
+        primaryArtist && cleanSongTitle
+          ? `artist:"${primaryArtist}" track:"${cleanSongTitle}"`
+          : '',
+        artist && title ? `${artist} ${title}` : '',
         primaryArtist && cleanSongTitle
           ? `${primaryArtist} ${cleanSongTitle}`
           : '',
+        !artist && cleanSongTitle ? cleanSongTitle : '',
       ].filter(Boolean)
     )
   );
 
-  // 1. Query Deezer Search API (provides both 500x500 Song Cover AND 500x500 Artist Avatar)
+  // 1. Query Deezer Search API (provides 1000x1000 / 500x500 Song Cover AND Artist Avatar)
   for (const q of queries) {
     try {
       const ctrl = new AbortController();
-      const tId = setTimeout(() => ctrl.abort(), 3000);
+      const tId = setTimeout(() => ctrl.abort(), 3200);
       const r = await fetch(
-        `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=1`,
+        `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=3`,
         { signal: ctrl.signal }
       );
       clearTimeout(tId);
@@ -453,11 +596,13 @@ async function resolveRichTrackMetadata(
             title?: string;
             artist?: {
               name?: string;
+              picture_xl?: string;
               picture_big?: string;
               picture_medium?: string;
             };
             album?: {
               title?: string;
+              cover_xl?: string;
               cover_big?: string;
               cover_medium?: string;
             };
@@ -467,10 +612,17 @@ async function resolveRichTrackMetadata(
         if (item) {
           artist = item.artist?.name || artist;
           title = item.title || title;
-          album = item.album?.title || '';
-          coverUrl = item.album?.cover_big || item.album?.cover_medium || '';
+          album = item.album?.title || album;
+          coverUrl =
+            item.album?.cover_xl ||
+            item.album?.cover_big ||
+            item.album?.cover_medium ||
+            '';
           artistAvatarUrl =
-            item.artist?.picture_big || item.artist?.picture_medium || '';
+            item.artist?.picture_xl ||
+            item.artist?.picture_big ||
+            item.artist?.picture_medium ||
+            '';
           break;
         }
       }
@@ -479,40 +631,58 @@ async function resolveRichTrackMetadata(
     }
   }
 
-  // 2. Fallback to iTunes Search API (RU / RO) if coverUrl wasn't found on Deezer
-  if (!coverUrl && queries[0]) {
-    const countryParam = /[а-яА-ЯёЁ]/.test(queries[0]) ? 'RU' : 'RO';
-    try {
-      const ctrl = new AbortController();
-      const tId = setTimeout(() => ctrl.abort(), 3000);
-      const r = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(
-          queries[0]
-        )}&country=${countryParam}&entity=song&limit=1`,
-        { signal: ctrl.signal }
-      );
-      clearTimeout(tId);
-      if (r.ok) {
-        const j = (await r.json()) as {
-          results?: Array<{
-            artistName?: string;
-            trackName?: string;
-            collectionName?: string;
-            artworkUrl100?: string;
-          }>;
-        };
-        const item = j?.results?.[0];
-        if (item) {
-          artist = item.artistName || artist;
-          title = item.trackName || title;
-          album = item.collectionName || album;
-          if (item.artworkUrl100) {
-            coverUrl = item.artworkUrl100.replace('100x100bb', '600x600bb');
+  // 2. Fallback to iTunes Search API (US global catalog + regional RU/RO) if coverUrl wasn't found on Deezer
+  if (!coverUrl) {
+    const itunesQuery =
+      (primaryArtist && cleanSongTitle
+        ? `${primaryArtist} ${cleanSongTitle}`
+        : '') ||
+      (artist && title ? `${artist} ${title}` : '') ||
+      cleanSongTitle;
+
+    if (itunesQuery) {
+      const countries = /[а-яА-ЯёЁ]/.test(itunesQuery)
+        ? ['RU', 'US']
+        : ['US', 'RO'];
+
+      for (const countryParam of countries) {
+        if (coverUrl) break;
+        try {
+          const ctrl = new AbortController();
+          const tId = setTimeout(() => ctrl.abort(), 3200);
+          const r = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(
+              itunesQuery
+            )}&country=${countryParam}&entity=song&limit=3`,
+            { signal: ctrl.signal }
+          );
+          clearTimeout(tId);
+          if (r.ok) {
+            const j = (await r.json()) as {
+              results?: Array<{
+                artistName?: string;
+                trackName?: string;
+                collectionName?: string;
+                artworkUrl100?: string;
+              }>;
+            };
+            const item = j?.results?.[0];
+            if (item) {
+              artist = item.artistName || artist;
+              title = item.trackName || title;
+              album = item.collectionName || album;
+              if (item.artworkUrl100) {
+                coverUrl = item.artworkUrl100.replace(
+                  /\d+x\d+bb/,
+                  '600x600bb'
+                );
+              }
+            }
           }
+        } catch {
+          // ignore
         }
       }
-    } catch {
-      // ignore
     }
   }
 
@@ -530,11 +700,16 @@ async function resolveRichTrackMetadata(
       clearTimeout(tId);
       if (r.ok) {
         const j = (await r.json()) as {
-          data?: Array<{ picture_big?: string; picture_medium?: string }>;
+          data?: Array<{
+            picture_xl?: string;
+            picture_big?: string;
+            picture_medium?: string;
+          }>;
         };
         const art = j?.data?.[0];
         if (art) {
-          artistAvatarUrl = art.picture_big || art.picture_medium || '';
+          artistAvatarUrl =
+            art.picture_xl || art.picture_big || art.picture_medium || '';
         }
       }
     } catch {
@@ -542,17 +717,20 @@ async function resolveRichTrackMetadata(
     }
   }
 
+  const finalCoverUrl = coverUrl || artistAvatarUrl || undefined;
+  const finalArtistAvatarUrl = artistAvatarUrl || coverUrl || undefined;
+
   const result: RichTrackInfo = {
     rawTitle: rawStreamTitle,
     artist: artist || '',
     title: title || rawStreamTitle,
     album: album || undefined,
-    coverUrl: coverUrl || undefined,
-    artistAvatarUrl: artistAvatarUrl || undefined,
+    coverUrl: finalCoverUrl,
+    artistAvatarUrl: finalArtistAvatarUrl,
     updatedAt: Date.now(),
   };
 
-  trackRichMetaCache.set(rawStreamTitle, result);
+  trackRichMetaCache.set(cacheKey, result);
   return result;
 }
 
@@ -589,7 +767,7 @@ function tvStreamProxyPlugin(): Plugin {
             return;
           }
 
-          const rich = await resolveRichTrackMetadata(rawTitle);
+          const rich = await resolveRichTrackMetadata(rawTitle, stationName);
           res.writeHead(200, {
             'Access-Control-Allow-Origin': '*',
             'Content-Type': 'application/json; charset=utf-8',
