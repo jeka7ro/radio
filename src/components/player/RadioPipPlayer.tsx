@@ -18,7 +18,7 @@ import { useTranslation } from '../../i18n/useTranslation';
 import { StationAvatar } from '../common/StationAvatar';
 import { getCountryFlagEmoji } from '../../services/geoLanguageService';
 import { buildStationLogoCandidates } from '../../services/stationLogoService';
-import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
+import { resolveDisplayTrack } from '../../utils/cleanTrackMetadata';
 
 interface DocumentPictureInPicture {
   requestWindow: (options?: {
@@ -79,48 +79,9 @@ export const RadioPipPlayer: React.FC = () => {
     (state) => state.setExpandedPlayerOpen
   );
 
-  const displayTrack = React.useMemo(() => {
-    if (!currentStation) return null;
-    if (nowPlayingMeta) {
-      if (nowPlayingMeta.title.includes('~')) {
-        const parsed = parseRawStreamMetadata(
-          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
-          currentStation.name
-        );
-        if (parsed && parsed.title) {
-          return {
-            title: parsed.title,
-            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
-            album: parsed.album || nowPlayingMeta.album,
-            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-            artistAvatarUrl:
-              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-          };
-        }
-      }
-      return {
-        title: nowPlayingMeta.title,
-        artist: nowPlayingMeta.artist || currentStation.name,
-        album: nowPlayingMeta.album,
-        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-        artistAvatarUrl:
-          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-      };
-    }
-    if (nowPlayingTitle) {
-      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
-      if (parsed && parsed.title) {
-        return {
-          title: parsed.title,
-          artist: parsed.artist || currentStation.name,
-          album: parsed.album,
-          coverUrl: undefined,
-          artistAvatarUrl: undefined,
-        };
-      }
-    }
-    return null;
-  }, [currentStation, nowPlayingMeta, nowPlayingTitle]);
+  const displayTrack = currentStation
+    ? resolveDisplayTrack(nowPlayingMeta, nowPlayingTitle, currentStation.name)
+    : null;
 
   const playStation = useRadioStore((state) => state.playStation);
   const playNextAvailableStation = useRadioStore(

@@ -23,7 +23,7 @@ import { isInsecureHttpStream } from '../../services/radioBrowserApi';
 import { getCountryFlagEmoji } from '../../services/geoLanguageService';
 import { MAX_AUTO_RETRIES } from '../../hooks/useAudioPlayer';
 import { toggleRadioPip } from './RadioPipPlayer';
-import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
+import { resolveDisplayTrack } from '../../utils/cleanTrackMetadata';
 
 export const ExpandedPlayer: React.FC = () => {
   const { t, format } = useTranslation();
@@ -124,49 +124,11 @@ export const ExpandedPlayer: React.FC = () => {
         .slice(0, 6)
     : [];
 
-  const displayTrack = React.useMemo(() => {
-    if (nowPlayingMeta) {
-      if (nowPlayingMeta.title.includes('~')) {
-        const parsed = parseRawStreamMetadata(
-          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
-          currentStation.name
-        );
-        if (parsed && parsed.title) {
-          return {
-            title: parsed.title,
-            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
-            album: parsed.album || nowPlayingMeta.album,
-            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-            artistAvatarUrl:
-              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-          };
-        }
-      }
-      return {
-        title: nowPlayingMeta.title,
-        artist: nowPlayingMeta.artist || currentStation.name,
-        album: nowPlayingMeta.album,
-        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-        artistAvatarUrl:
-          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-      };
-    }
-
-    if (nowPlayingTitle) {
-      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
-      if (parsed && parsed.title) {
-        return {
-          title: parsed.title,
-          artist: parsed.artist || currentStation.name,
-          album: parsed.album,
-          coverUrl: undefined,
-          artistAvatarUrl: undefined,
-        };
-      }
-    }
-
-    return null;
-  }, [nowPlayingMeta, nowPlayingTitle, currentStation.name]);
+  const displayTrack = resolveDisplayTrack(
+    nowPlayingMeta,
+    nowPlayingTitle,
+    currentStation.name
+  );
 
   return (
     <dialog

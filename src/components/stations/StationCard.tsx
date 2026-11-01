@@ -9,7 +9,7 @@ import {
   getCountryFlagEmoji,
   getLocalizedCountryName,
 } from '../../services/geoLanguageService';
-import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
+import { resolveDisplayTrack } from '../../utils/cleanTrackMetadata';
 
 interface StationCardProps {
   station: Station;
@@ -55,31 +55,10 @@ export const StationCard: React.FC<StationCardProps> = React.memo(
     const streamUrl = station.url_resolved || station.url;
     const isHttp = isInsecureHttpStream(streamUrl);
 
-    const displayTrack = React.useMemo(() => {
-      if (!isCurrent || !nowPlayingMeta) return null;
-      if (nowPlayingMeta.title.includes('~')) {
-        const parsed = parseRawStreamMetadata(
-          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
-          station.name
-        );
-        if (parsed && parsed.title) {
-          return {
-            title: parsed.title,
-            artist: parsed.artist || nowPlayingMeta.artist,
-            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-            artistAvatarUrl:
-              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-          };
-        }
-      }
-      return {
-        title: nowPlayingMeta.title,
-        artist: nowPlayingMeta.artist,
-        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-        artistAvatarUrl:
-          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-      };
-    }, [isCurrent, nowPlayingMeta, station.name]);
+    const displayTrack =
+      isCurrent && nowPlayingMeta
+        ? resolveDisplayTrack(nowPlayingMeta, null, station.name)
+        : null;
 
     const handlePlayClick = () => {
       playStation(station, queue);

@@ -4,6 +4,14 @@ export interface ParsedTrackFields {
   album?: string;
 }
 
+export interface CleanDisplayTrack {
+  title: string;
+  artist: string;
+  album?: string;
+  coverUrl?: string;
+  artistAvatarUrl?: string;
+}
+
 const ISRC_REGEX = /\b[A-Z]{2}[A-Z0-9]{3}\d{7}\b/gi;
 const ISO_TIMESTAMP_REGEX =
   /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/g;
@@ -215,3 +223,62 @@ export function extractTextFromHlsId3Sample(data: Uint8Array): string | null {
     return null;
   }
 }
+
+/**
+ * Pure helper (no React hooks) to compute clean display track metadata for UI components.
+ */
+export function resolveDisplayTrack(
+  nowPlayingMeta: {
+    rawTitle?: string;
+    title: string;
+    artist: string;
+    album?: string;
+    coverUrl?: string;
+    artistAvatarUrl?: string;
+  } | null | undefined,
+  nowPlayingTitle: string | null | undefined,
+  stationName = ''
+): CleanDisplayTrack | null {
+  if (nowPlayingMeta) {
+    if (nowPlayingMeta.title.includes('~')) {
+      const parsed = parseRawStreamMetadata(
+        nowPlayingMeta.rawTitle || nowPlayingMeta.title,
+        stationName
+      );
+      if (parsed && parsed.title) {
+        return {
+          title: parsed.title,
+          artist: parsed.artist || nowPlayingMeta.artist || stationName,
+          album: parsed.album || nowPlayingMeta.album,
+          coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+          artistAvatarUrl:
+            nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+        };
+      }
+    }
+    return {
+      title: nowPlayingMeta.title,
+      artist: nowPlayingMeta.artist || stationName,
+      album: nowPlayingMeta.album,
+      coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
+      artistAvatarUrl:
+        nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
+    };
+  }
+
+  if (nowPlayingTitle) {
+    const parsed = parseRawStreamMetadata(nowPlayingTitle, stationName);
+    if (parsed && parsed.title) {
+      return {
+        title: parsed.title,
+        artist: parsed.artist || stationName,
+        album: parsed.album,
+        coverUrl: undefined,
+        artistAvatarUrl: undefined,
+      };
+    }
+  }
+
+  return null;
+}
+

@@ -20,7 +20,7 @@ import { useTranslation } from '../../i18n/useTranslation';
 import { StationAvatar } from '../common/StationAvatar';
 import { MAX_AUTO_RETRIES } from '../../hooks/useAudioPlayer';
 import { toggleRadioPip } from './RadioPipPlayer';
-import { parseRawStreamMetadata } from '../../utils/cleanTrackMetadata';
+import { resolveDisplayTrack } from '../../utils/cleanTrackMetadata';
 
 export const MiniPlayer: React.FC = () => {
   const { t, format } = useTranslation();
@@ -70,50 +70,12 @@ export const MiniPlayer: React.FC = () => {
     (f) => f.stationuuid === currentStation.stationuuid
   );
 
-  // Ensure track title & artist are always cleanly formatted (never raw ~ or ISRC strings)
-  const displayTrack = React.useMemo(() => {
-    if (nowPlayingMeta) {
-      if (nowPlayingMeta.title.includes('~')) {
-        const parsed = parseRawStreamMetadata(
-          nowPlayingMeta.rawTitle || nowPlayingMeta.title,
-          currentStation.name
-        );
-        if (parsed && parsed.title) {
-          return {
-            title: parsed.title,
-            artist: parsed.artist || nowPlayingMeta.artist || currentStation.name,
-            album: parsed.album || nowPlayingMeta.album,
-            coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-            artistAvatarUrl:
-              nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-          };
-        }
-      }
-      return {
-        title: nowPlayingMeta.title,
-        artist: nowPlayingMeta.artist || currentStation.name,
-        album: nowPlayingMeta.album,
-        coverUrl: nowPlayingMeta.coverUrl || nowPlayingMeta.artistAvatarUrl,
-        artistAvatarUrl:
-          nowPlayingMeta.artistAvatarUrl || nowPlayingMeta.coverUrl,
-      };
-    }
-
-    if (nowPlayingTitle) {
-      const parsed = parseRawStreamMetadata(nowPlayingTitle, currentStation.name);
-      if (parsed && parsed.title) {
-        return {
-          title: parsed.title,
-          artist: parsed.artist || currentStation.name,
-          album: parsed.album,
-          coverUrl: undefined,
-          artistAvatarUrl: undefined,
-        };
-      }
-    }
-
-    return null;
-  }, [nowPlayingMeta, nowPlayingTitle, currentStation.name]);
+  // Pure function (no hook after early return)
+  const displayTrack = resolveDisplayTrack(
+    nowPlayingMeta,
+    nowPlayingTitle,
+    currentStation.name
+  );
 
   const statusSubtitle = () => {
     if (isError) return t.player.error;
