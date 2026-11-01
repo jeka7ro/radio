@@ -717,6 +717,32 @@ async function resolveRichTrackMetadata(
     }
   }
 
+  // 4. Final fallback: if both coverUrl and artistAvatarUrl are still empty, fetch artist's top track artwork from iTunes
+  if (!coverUrl && !artistAvatarUrl && (primaryArtist || artist)) {
+    try {
+      const ctrl = new AbortController();
+      const tId = setTimeout(() => ctrl.abort(), 2500);
+      const r = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(
+          primaryArtist || artist
+        )}&country=US&entity=song&limit=1`,
+        { signal: ctrl.signal }
+      );
+      clearTimeout(tId);
+      if (r.ok) {
+        const j = (await r.json()) as {
+          results?: Array<{ artworkUrl100?: string }>;
+        };
+        const artUrl = j?.results?.[0]?.artworkUrl100;
+        if (artUrl) {
+          coverUrl = artUrl.replace(/\d+x\d+bb/, '600x600bb');
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const finalCoverUrl = coverUrl || artistAvatarUrl || undefined;
   const finalArtistAvatarUrl = artistAvatarUrl || coverUrl || undefined;
 

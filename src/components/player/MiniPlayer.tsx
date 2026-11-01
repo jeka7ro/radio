@@ -149,7 +149,7 @@ export const MiniPlayer: React.FC = () => {
     <div
       role="region"
       aria-label={t.player.nowPlaying}
-      className="w-full bg-white/98 dark:bg-zinc-900/98 backdrop-blur-lg border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.1)]"
+      className="w-full bg-white dark:bg-zinc-900 border-t-2 border-brand-500/30 dark:border-brand-500/40 shadow-[0_-8px_30px_rgba(0,0,0,0.15)] dark:shadow-[0_-8px_30px_rgba(0,0,0,0.55)]"
     >
       {/* Error recovery strip when stream fails */}
       {isError && (
@@ -194,14 +194,14 @@ export const MiniPlayer: React.FC = () => {
         >
           <div className="relative flex-shrink-0">
             {displayTrack?.coverUrl ? (
-              <div className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl overflow-hidden shadow-md border border-slate-200/80 dark:border-zinc-700/80 bg-zinc-900">
+              <div className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl overflow-hidden shadow-md border border-slate-200 dark:border-zinc-700 bg-zinc-900">
                 <img
                   src={displayTrack.coverUrl}
                   alt={displayTrack.title}
                   className="w-full h-full object-cover"
                 />
                 {isPlaying && (
-                  <div className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/70 backdrop-blur-xs flex items-end justify-center gap-0.5 shadow-xs">
+                  <div className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/75 backdrop-blur-sm flex items-end justify-center gap-0.5 shadow-sm">
                     <span className="eq-bar w-0.5 bg-emerald-400 rounded-full h-2" />
                     <span className="eq-bar eq-bar-2 w-0.5 bg-emerald-400 rounded-full h-3" />
                     <span className="eq-bar eq-bar-3 w-0.5 bg-emerald-400 rounded-full h-2.5" />
@@ -222,11 +222,11 @@ export const MiniPlayer: React.FC = () => {
           <div className="min-w-0 flex-1">
             {displayTrack && !isError && !isLoading ? (
               <>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <p className="text-xs sm:text-base font-bold text-slate-900 dark:text-zinc-100 truncate">
                     {displayTrack.title}
                   </p>
-                  <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-brand-100 dark:bg-brand-950/80 text-brand-800 dark:text-brand-300 truncate max-w-[160px] shrink-0">
+                  <span className="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-brand-100 dark:bg-brand-950 text-brand-800 dark:text-brand-300 border border-brand-200/80 dark:border-brand-800/70 truncate max-w-[170px] shrink-0">
                     {currentStation.name}
                   </span>
                   <ChevronUp
@@ -239,7 +239,7 @@ export const MiniPlayer: React.FC = () => {
                     <img
                       src={displayTrack.artistAvatarUrl}
                       alt={displayTrack.artist}
-                      className="w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/50"
+                      className="w-4 h-4 sm:w-[18px] sm:h-[18px] rounded-full object-cover flex-shrink-0 ring-1 ring-brand-500/60"
                     />
                   )}
                   <p className="text-[11px] sm:text-xs font-semibold text-brand-700 dark:text-brand-400 truncate">
@@ -288,9 +288,9 @@ export const MiniPlayer: React.FC = () => {
             type="button"
             onClick={playPreviousStation}
             aria-label={t.player.prevStation}
-            className="hidden sm:flex min-w-[44px] min-h-[44px] items-center justify-center rounded-full text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+            className="hidden sm:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"
           >
-            <SkipBack className="w-5 h-5" aria-hidden="true" />
+            <SkipBack className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
           </button>
 
           <button
@@ -314,7 +314,7 @@ export const MiniPlayer: React.FC = () => {
             type="button"
             onClick={playNextAvailableStation}
             aria-label={t.player.nextStation}
-            className="w-9 h-9 sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center rounded-full text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+            className="w-9 h-9 sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"
           >
             <SkipForward className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
           </button>
@@ -327,10 +327,10 @@ export const MiniPlayer: React.FC = () => {
               isFavorite ? t.favorites.removeFav : t.favorites.addFav,
               { name: currentStation.name }
             )}
-            className={`w-9 h-9 sm:min-w-[44px] sm:min-h-[44px] flex items-center justify-center rounded-full transition-colors ${
+            className={`w-9 h-9 sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-colors ${
               isFavorite
-                ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40'
-                : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                ? 'text-rose-600 dark:text-rose-400 bg-rose-100/90 dark:bg-rose-950/60'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
             }`}
           >
             <Heart
@@ -345,13 +345,13 @@ export const MiniPlayer: React.FC = () => {
             aria-pressed={isRadioPipOpen}
             title="MiniPlayer Picture-in-Picture (fereastră flotantă)"
             aria-label="MiniPlayer Picture-in-Picture"
-            className={`hidden sm:flex min-w-[44px] min-h-[44px] items-center justify-center rounded-full transition-colors ${
+            className={`hidden sm:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-full transition-colors ${
               isRadioPipOpen
-                ? 'text-brand-700 dark:text-brand-300 bg-brand-100 dark:bg-brand-950/70 ring-1 ring-brand-500/40'
-                : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+                ? 'text-brand-700 dark:text-brand-300 bg-brand-100 dark:bg-brand-950/80 ring-1 ring-brand-500/40'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
             }`}
           >
-            <PictureInPicture2 className="w-5 h-5" aria-hidden="true" />
+            <PictureInPicture2 className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
           </button>
 
           <button
@@ -359,7 +359,7 @@ export const MiniPlayer: React.FC = () => {
             onClick={stopRadio}
             title="Închide playerul radio"
             aria-label="Închide playerul radio"
-            className="w-8 h-8 sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-slate-500 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+            className="w-8 h-8 sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
           >
             <X className="w-4 h-4" aria-hidden="true" />
           </button>
@@ -371,7 +371,7 @@ export const MiniPlayer: React.FC = () => {
             type="button"
             onClick={toggleMute}
             aria-label={isMuted ? t.player.unmute : t.player.mute}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"
           >
             {isMuted || volume === 0 ? (
               <VolumeX className="w-5 h-5" aria-hidden="true" />

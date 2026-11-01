@@ -54,7 +54,7 @@ export const BottomNav: React.FC = () => {
   return (
     <nav
       aria-label={t.nav.mobileAria}
-      className="lg:hidden w-full bg-white/98 dark:bg-zinc-900/98 backdrop-blur-md border-t border-slate-200/90 dark:border-zinc-800/90 px-1 pb-[env(safe-area-inset-bottom,0px)]"
+      className="lg:hidden w-full bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] px-1 pb-[env(safe-area-inset-bottom,0px)]"
     >
       <div className="grid grid-cols-6 gap-0.5 max-w-lg mx-auto">
         {navItems.map((item) => {
@@ -74,7 +74,7 @@ export const BottomNav: React.FC = () => {
               <div className="relative">
                 {item.icon}
                 {item.badge !== undefined && (
-                  <span className="absolute -top-1.5 -right-3 px-1.5 py-0.2 min-w-[18px] text-[10px] font-bold rounded-full bg-brand-700 text-white text-center">
+                  <span className="absolute -top-1.5 -right-3 px-1.5 py-0.5 min-w-[18px] text-[10px] font-bold rounded-full bg-brand-700 text-white text-center leading-none">
                     {item.badge}
                   </span>
                 )}

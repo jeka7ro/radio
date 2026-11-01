@@ -7,6 +7,22 @@ export default {
   ],
   theme: {
     extend: {
+      screens: {
+        xs: '380px',
+      },
+      opacity: {
+        98: '0.98',
+      },
+      backdropBlur: {
+        xs: '2px',
+      },
+      boxShadow: {
+        xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+      },
+      spacing: {
+        '0.2': '1px',
+        '4.5': '1.125rem',
+      },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
       },
