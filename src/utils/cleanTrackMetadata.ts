@@ -50,7 +50,7 @@ export function parseRawStreamMetadata(
     .replace(/\0+/g, ' ')
     .replace(ID3_GARBAGE_REGEX, ' ')
     .replace(/StreamUrl='[^']*';?/gi, ' ')
-    .replace(/StreamTitle='([^']*)';?/gi, '$1')
+    .replace(/StreamTitle='(.*?)'\s*;?/gi, '$1')
     .trim();
 
   if (!raw || raw.length < 2) return null;

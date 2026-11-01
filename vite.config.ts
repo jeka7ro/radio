@@ -266,24 +266,28 @@ async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
     const reader = res.body.getReader();
     const chunks: Buffer[] = [];
     let total = 0;
+    const maxBlocksToCheck = metaint <= 32768 ? 3 : 1;
+    const maxBytes = metaint * maxBlocksToCheck + 4096;
 
-    while (total < metaint + 4096) {
+    while (total < maxBytes) {
       const { done, value } = await reader.read();
       if (done || !value) break;
       chunks.push(Buffer.from(value));
       total += value.byteLength;
 
-      if (total >= metaint + 1) {
-        const buf = Buffer.concat(chunks, total);
-        const lenByte = buf[metaint];
+      const buf = Buffer.concat(chunks, total);
+      let pos = metaint;
+      let blocksChecked = 0;
+
+      while (blocksChecked < maxBlocksToCheck && pos < buf.length) {
+        const lenByte = buf[pos];
         const metaLen = lenByte * 16;
-        if (metaLen === 0) {
-          controller.abort();
-          clearTimeout(timeoutId);
-          return '';
+        if (pos + 1 + metaLen > buf.length) {
+          // Need more bytes from stream for this metadata block
+          break;
         }
-        if (total >= metaint + 1 + metaLen) {
-          const metaBuf = buf.subarray(metaint + 1, metaint + 1 + metaLen);
+        if (metaLen > 0) {
+          const metaBuf = buf.subarray(pos + 1, pos + 1 + metaLen);
           controller.abort();
           clearTimeout(timeoutId);
           let str = metaBuf.toString('utf8').replace(/\0+$/g, '');
@@ -292,9 +296,19 @@ async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
               .decode(metaBuf)
               .replace(/\0+$/g, '');
           }
-          const m = str.match(/StreamTitle='([^']*)'/i);
+          const m =
+            str.match(/StreamTitle='(.*?)'\s*;/i) ||
+            str.match(/StreamTitle='(.*)'/i);
           return m ? m[1].trim() : '';
         }
+        blocksChecked += 1;
+        pos += 1 + metaLen + metaint;
+      }
+
+      if (blocksChecked >= maxBlocksToCheck) {
+        controller.abort();
+        clearTimeout(timeoutId);
+        return '';
       }
     }
 
@@ -433,7 +447,7 @@ function parseRawStreamMetadataServer(
     .replace(/\0+/g, ' ')
     .replace(ID3_FRAME_REGEX, ' ')
     .replace(/StreamUrl='[^']*';?/gi, ' ')
-    .replace(/StreamTitle='([^']*)';?/gi, '$1')
+    .replace(/StreamTitle='(.*?)'\s*;?/gi, '$1')
     .trim();
 
   if (!raw || raw.length < 2) return null;
@@ -587,7 +601,7 @@ function parseRawStreamMetadataServer(
 
 function isGenericStationSlogan(raw: string, stationName: string): boolean {
   const s = raw.trim().toLowerCase();
-  if (!s || s.length < 3) return true;
+  if (!s || s.length < 2) return true;
   if (
     /^(unknown|stream|offline|live|on air|reclama|publicitate|commercial|jingle|spot|реклама|новости)$/i.test(
       s

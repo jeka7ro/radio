@@ -75,7 +75,9 @@ async function readIcyStreamTitle(streamUrl) {
               .replace(/\0+$/g, '');
           }
 
-          const match = metaText.match(/StreamTitle='([^']*?)'\s*;/i);
+          const match =
+            metaText.match(/StreamTitle='(.*?)'\s*;/i) ||
+            metaText.match(/StreamTitle='(.*)'/i);
           return match ? match[1].trim() : '';
         }
       }
@@ -187,7 +189,7 @@ function parseRawStreamMetadataServer(rawInput, stationName = '') {
     .replace(/\0+/g, ' ')
     .replace(ID3_FRAME_REGEX, ' ')
     .replace(/StreamUrl='[^']*';?/gi, ' ')
-    .replace(/StreamTitle='([^']*)';?/gi, '$1')
+    .replace(/StreamTitle='(.*?)'\s*;?/gi, '$1')
     .trim();
 
   if (!raw || raw.length < 2) return null;

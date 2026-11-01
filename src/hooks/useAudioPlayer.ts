@@ -297,8 +297,9 @@ export function useAudioPlayer() {
     if (!streamUrl) return;
 
     let cancelled = false;
+    let quickRetryTimer: number | null = null;
 
-    const fetchMetadata = async () => {
+    const fetchMetadata = async (isQuickRetry = false) => {
       try {
         const res = await fetch(
           `/api/radio-meta?url=${encodeURIComponent(
@@ -315,6 +316,10 @@ export function useAudioPlayer() {
               ? `${data.track.artist} — ${data.track.title}`
               : data.track.title
           );
+        } else if (!isQuickRetry && !useRadioStore.getState().nowPlayingMeta) {
+          quickRetryTimer = window.setTimeout(() => {
+            if (!cancelled) void fetchMetadata(true);
+          }, 2500);
         }
       } catch {
         // Ignore transient metadata polling errors
@@ -322,7 +327,7 @@ export function useAudioPlayer() {
     };
 
     void fetchMetadata();
-    const intervalId = window.setInterval(fetchMetadata, 10000);
+    const intervalId = window.setInterval(() => void fetchMetadata(), 10000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -334,6 +339,9 @@ export function useAudioPlayer() {
 
     return () => {
       cancelled = true;
+      if (quickRetryTimer) {
+        window.clearTimeout(quickRetryTimer);
+      }
       window.clearInterval(intervalId);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
