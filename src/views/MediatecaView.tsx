@@ -22,6 +22,12 @@ import {
   RotateCcw,
   ShieldCheck,
   History,
+  Flame,
+  Zap,
+  Rocket,
+  Compass,
+  Smile,
+  Globe,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
@@ -136,20 +142,24 @@ const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   },
 ];
 
-const GENRE_FILTERS: Array<{ id: string; label: string; emoji: string }> = [
-  { id: 'top', label: 'Populare Acum', emoji: '🔥' },
-  { id: 'imdbRating', label: 'Top IMDb', emoji: '⭐' },
-  { id: 'Action', label: 'Acțiune', emoji: '💥' },
-  { id: 'Sci-Fi', label: 'Sci-Fi', emoji: '🚀' },
-  { id: 'Thriller', label: 'Thriller', emoji: '🔪' },
-  { id: 'Comedy', label: 'Comedie', emoji: '😂' },
-  { id: 'Drama', label: 'Dramă', emoji: '🎭' },
-  { id: 'Crime', label: 'Crimă & Mister', emoji: '🕵️' },
-  { id: 'Adventure', label: 'Aventură', emoji: '🧭' },
-  { id: 'Horror', label: 'Horror', emoji: '👻' },
-  { id: 'Animation', label: 'Animație & Familie', emoji: '🧸' },
-  { id: 'Romance', label: 'Romantic', emoji: '💑' },
-  { id: 'Documentary', label: 'Documentare', emoji: '🌍' },
+const GENRE_FILTERS: Array<{
+  id: string;
+  label: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { id: 'top', label: 'Populare Acum', Icon: Flame },
+  { id: 'imdbRating', label: 'Top IMDb', Icon: Star },
+  { id: 'Action', label: 'Acțiune', Icon: Zap },
+  { id: 'Sci-Fi', label: 'Sci-Fi', Icon: Rocket },
+  { id: 'Thriller', label: 'Thriller', Icon: Film },
+  { id: 'Comedy', label: 'Comedie', Icon: Smile },
+  { id: 'Drama', label: 'Dramă', Icon: Clapperboard },
+  { id: 'Crime', label: 'Crimă & Mister', Icon: Sparkles },
+  { id: 'Adventure', label: 'Aventură', Icon: Compass },
+  { id: 'Horror', label: 'Horror', Icon: Film },
+  { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
+  { id: 'Romance', label: 'Romantic', Icon: Heart },
+  { id: 'Documentary', label: 'Documentare', Icon: Globe },
 ];
 
 const LAMPA_PLUGINS = [
@@ -1083,7 +1093,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }`}
             >
               <Film className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>🎬 Filme Online</span>
+              <span>Filme Online</span>
             </button>
 
             <button
@@ -1099,7 +1109,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }`}
             >
               <Tv className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>📺 Seriale (Sezoane & Episoade)</span>
+              <span>Seriale</span>
             </button>
 
             <button
@@ -1131,7 +1141,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }`}
             >
               <Popcorn className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>🍿 Lampa Smart TV</span>
+              <span>Lampa Smart TV</span>
             </button>
 
             <button
@@ -1666,18 +1676,19 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
                   {GENRE_FILTERS.map((g) => {
                     const active = selectedGenre === g.id;
+                    const GenreIcon = g.Icon;
                     return (
                       <button
                         key={g.id}
                         type="button"
                         onClick={() => setSelectedGenre(g.id)}
-                        className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
+                        className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                           active
                             ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
                             : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
                         }`}
                       >
-                        <span aria-hidden="true">{g.emoji}</span>
+                        <GenreIcon className="w-3.5 h-3.5 shrink-0" />
                         <span>{g.label}</span>
                       </button>
                     );

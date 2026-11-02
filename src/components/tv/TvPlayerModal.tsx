@@ -1355,16 +1355,17 @@ export const TvPlayerModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsSidePanelOpen(false)}
+                  aria-label="Ascunde panoul lateral"
                   title="Ascunde panoul lateral"
-                  className="min-h-[28px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white text-[11px] font-semibold transition-colors"
+                  className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white inline-flex items-center justify-center transition-colors"
                 >
-                  Ascunde ✕
+                  <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
 
               {/* Tab 1: Clean Channel List */}
               {sidePanelTab === 'channels' ? (
-                <div className="flex-1 min-h-0 p-2 sm:p-3 overflow-y-auto">
+                <div className="flex-1 min-h-0 p-2 sm:p-2.5 flex flex-col overflow-hidden">
                   <TvOsdChannelList
                     currentChannel={currentTvChannel}
                     channels={tvQueue}
