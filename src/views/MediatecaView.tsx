@@ -826,6 +826,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [lampaServer, setLampaServer] = useState<string>(
     'https://yumata.github.io/lampa/'
   );
+  const [isLampaPluginsOpen, setIsLampaPluginsOpen] = useState<boolean>(false);
   const [copiedPluginUrl, setCopiedPluginUrl] = useState<string | null>(null);
   const lampaContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -3048,137 +3049,164 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
       {/* LAMPA SMART TV WEB PLAYER + PLUGINS */}
       {activeTab === 'lampa' && (
-        <div className="space-y-5">
-          <div className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+        <div className="space-y-3">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">
                 Server Lampa:
               </span>
               <button
                 type="button"
                 onClick={() => setLampaServer('https://yumata.github.io/lampa/')}
-                className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
                   lampaServer.includes('yumata')
                     ? 'bg-amber-600 text-white'
                     : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
                 }`}
               >
-                Lampa Official (GitHub HTTPS)
+                Lampa Official (HTTPS)
               </button>
               <button
                 type="button"
                 onClick={() => setLampaServer('http://lampa.mx/')}
-                className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
                   lampaServer.includes('lampa.mx')
                     ? 'bg-amber-600 text-white'
                     : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
                 }`}
               >
-                Lampa.mx (Mirror Direct)
+                Lampa.mx
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setIsLampaPluginsOpen(true)}
+                className="min-h-[34px] px-3.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/70 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Plugin-uri ({LAMPA_PLUGINS.length})</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleFullscreenLampa}
-                className="min-h-[38px] px-4 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                className="min-h-[34px] px-3.5 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
-                <span>Ecran Complet (Fullscreen)</span>
+                <span>Fullscreen</span>
               </button>
+
               <a
                 href={lampaServer}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="min-h-[38px] px-4 py-1.5 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                className="min-h-[34px] px-3.5 py-1 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>Deschide în filă nouă</span>
+                <span>Filă nouă</span>
               </a>
             </div>
           </div>
 
           <div
             ref={lampaContainerRef}
-            className="relative w-full aspect-video min-h-[540px] rounded-2xl overflow-hidden bg-black border-2 border-zinc-800 shadow-xl"
+            className="relative w-full h-[calc(100dvh-210px)] min-h-[640px] rounded-2xl overflow-hidden bg-black border-2 border-zinc-800 shadow-xl"
           >
             <iframe
               key={lampaServer}
               src={lampaServer}
               title="Lampa Smart TV VOD Catalog"
               className="w-full h-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
               allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               allowFullScreen
             />
           </div>
 
-          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 space-y-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100">
-                Plugin-uri Lampa Verificate (Filme & Seriale în limbi diferite + Subtitrări)
-              </h3>
-              <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1">
-                Cum se activează în Lampa de mai sus: mergi în{' '}
-                <strong>Настройки (dreapta-sus) → Расширения (Extensions) → Добавить плагин (Add Plugin)</strong>{' '}
-                și lipește oricare dintre linkurile de mai jos:
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {LAMPA_PLUGINS.map((plugin) => {
-                const isCopied = copiedPluginUrl === plugin.url;
-                return (
-                  <div
-                    key={plugin.url}
-                    className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800 flex flex-col justify-between gap-2.5"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-slate-900 dark:text-zinc-100">
-                          {plugin.name}
-                        </span>
-                        <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
-                          {plugin.badge}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1">
-                        {plugin.desc}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/60 dark:border-zinc-800">
-                      <code className="text-[11px] font-mono text-brand-700 dark:text-brand-300 truncate">
-                        {plugin.url}
-                      </code>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyPlugin(plugin.url)}
-                        className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors ${
-                          isCopied
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-brand-600 hover:bg-brand-500 text-white'
-                        }`}
-                      >
-                        {isCopied ? (
-                          <>
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Copiat!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copiază URL</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
+          {/* Separate Modal for Lampa Plugins (so they don't clutter the Lampa view) */}
+          {isLampaPluginsOpen && (
+            <div
+              className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+              onClick={() => setIsLampaPluginsOpen(false)}
+            >
+              <div
+                className="w-full max-w-2xl max-h-[85vh] rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 shadow-2xl flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-4 py-3 bg-slate-50 dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-zinc-100">
+                      Plugin-uri Lampa Verificate (Filme & Seriale + Subtitrări)
+                    </h3>
+                    <p className="text-[11px] text-slate-600 dark:text-zinc-400">
+                      În Lampa: Настройки → Расширения (Extensions) → Добавить плагин (Add Plugin)
+                    </p>
                   </div>
-                );
-              })}
+                  <button
+                    type="button"
+                    onClick={() => setIsLampaPluginsOpen(false)}
+                    className="w-8 h-8 rounded-full bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 flex items-center justify-center shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-4 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {LAMPA_PLUGINS.map((plugin) => {
+                    const isCopied = copiedPluginUrl === plugin.url;
+                    return (
+                      <div
+                        key={plugin.url}
+                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800 flex flex-col justify-between gap-2.5"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-bold text-slate-900 dark:text-zinc-100">
+                              {plugin.name}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                              {plugin.badge}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1">
+                            {plugin.desc}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/60 dark:border-zinc-800">
+                          <code className="text-[11px] font-mono text-brand-700 dark:text-brand-300 truncate">
+                            {plugin.url}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPlugin(plugin.url)}
+                            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors ${
+                              isCopied
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-brand-600 hover:bg-brand-500 text-white'
+                            }`}
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Copiat!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copiază URL</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 

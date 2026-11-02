@@ -269,3 +269,4 @@ export async function saveSubtitleFileToDevice(
   document.body.removeChild(a);
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
 }
+
