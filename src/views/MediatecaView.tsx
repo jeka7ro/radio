@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Film,
   Tv,
@@ -7,7 +7,6 @@ import {
   Play,
   Heart,
   Star,
-  Calendar,
   Clock,
   Maximize2,
   ExternalLink,
@@ -20,6 +19,9 @@ import {
   Sparkles,
   Layers,
   ChevronRight,
+  RotateCcw,
+  ShieldCheck,
+  History,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
@@ -34,6 +36,7 @@ type MediatecaTab = 'movies' | 'series' | 'saved' | 'lampa' | 'custom';
 
 interface CinemetaItem {
   id: string; // IMDb ID e.g. tt15239678
+  moviedb_id?: number | string; // TMDB ID e.g. 693134
   type: 'movie' | 'series';
   name: string;
   releaseInfo?: string;
@@ -66,13 +69,31 @@ interface DetailedMeta extends CinemetaItem {
 }
 
 type VodServerId =
-  | 'vidsrc_me'
-  | 'multiembed'
-  | 'autoembed'
-  | 'vidsrc_to'
-  | 'twoembed';
+  | 'vidspark'
+  | 'vidzee'
+  | 'nontongo'
+  | 'vidsrc_pm'
+  | 'frembed';
 
 type SubtitleLangId = 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de';
+
+interface EpisodeProgress {
+  currentTime: number;
+  duration: number;
+  updatedAt: number;
+}
+
+interface VodWatchProgressEntry {
+  item: CinemetaItem;
+  season: number;
+  episode: number;
+  currentTime: number;
+  duration: number;
+  server: VodServerId;
+  subLang: SubtitleLangId;
+  updatedAt: number;
+  episodeProgressMap?: Record<string, EpisodeProgress>;
+}
 
 const SUBTITLE_LANGUAGES: Array<{
   id: SubtitleLangId;
@@ -89,29 +110,29 @@ const SUBTITLE_LANGUAGES: Array<{
 
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
-    id: 'vidsrc_me',
-    label: 'Server 1: VidSrc HD',
-    badge: 'Subtitrări RO/RU/EN Automate',
+    id: 'vidspark',
+    label: 'Server 1: VidSpark Direct HD',
+    badge: 'Fără Reclame • Reluare Automată + Subtitrări RO/RU/EN',
   },
   {
-    id: 'multiembed',
-    label: 'Server 2: MultiEmbed VIP',
-    badge: 'Multi-Audio & Sub RO/RU/EN',
+    id: 'vidzee',
+    label: 'Server 2: VidZee Multi-Server',
+    badge: 'Fără Pop-up • Reluare Automată + Multi-Sub',
   },
   {
-    id: 'autoembed',
-    label: 'Server 3: AutoEmbed Multi-Audio',
-    badge: 'Piste Audio Multiple + Subtitrări',
+    id: 'nontongo',
+    label: 'Server 3: NontonGo VIP & 4K',
+    badge: 'Fără Pop-up • 3 Surse HD/VIP + Subtitrări',
   },
   {
-    id: 'vidsrc_to',
+    id: 'vidsrc_pm',
     label: 'Server 4: VidSrc Pro',
-    badge: '1080p Rapid + Multi-Sub',
+    badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
   },
   {
-    id: 'twoembed',
-    label: 'Server 5: 2Embed Cinema',
-    badge: 'Backup Global',
+    id: 'frembed',
+    label: 'Server 5: CloudStream Backup',
+    badge: 'Fără Pop-up • Backup Global',
   },
 ];
 
@@ -159,6 +180,7 @@ const LAMPA_PLUGINS = [
 ];
 
 const SAVED_VOD_STORAGE_KEY = 'aether_saved_vod_items_v1';
+const WATCH_PROGRESS_STORAGE_KEY = 'aether_vod_watch_progress_v1';
 
 function loadSavedVodItems(): CinemetaItem[] {
   try {
@@ -171,37 +193,127 @@ function loadSavedVodItems(): CinemetaItem[] {
   }
 }
 
+const VALID_SERVERS = new Set<VodServerId>([
+  'vidspark',
+  'vidzee',
+  'nontongo',
+  'vidsrc_pm',
+  'frembed',
+]);
+
+function normalizeServerId(raw: unknown): VodServerId {
+  if (typeof raw === 'string' && VALID_SERVERS.has(raw as VodServerId)) {
+    return raw as VodServerId;
+  }
+  return 'vidspark';
+}
+
+function loadWatchProgressMap(): Record<string, VodWatchProgressEntry> {
+  try {
+    const raw = localStorage.getItem(WATCH_PROGRESS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const normalized: Record<string, VodWatchProgressEntry> = {};
+    for (const [key, val] of Object.entries(
+      parsed as Record<string, VodWatchProgressEntry>
+    )) {
+      if (val && val.item && val.item.id) {
+        normalized[key] = {
+          ...val,
+          server: normalizeServerId(val.server),
+        };
+      }
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function saveWatchProgressMap(map: Record<string, VodWatchProgressEntry>): void {
+  try {
+    localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function formatWatchSeconds(totalSeconds: number): string {
+  const sec = Math.max(0, Math.floor(totalSeconds || 0));
+  const hrs = Math.floor(sec / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  const rem = sec % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  }
+  return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
 function buildVodEmbedUrl(
   server: VodServerId,
   item: CinemetaItem,
   season: number,
   episode: number,
-  subLang: SubtitleLangId
+  subLang: SubtitleLangId,
+  startSeconds: number
 ): string {
   const imdbId = item.id;
+  const tmdbOrImdbId = item.moviedb_id ? String(item.moviedb_id) : imdbId;
   const isSeries = item.type === 'series';
+  const start = Math.max(0, Math.floor(startSeconds || 0));
 
   switch (server) {
-    case 'vidsrc_me':
+    case 'vidspark': {
+      const params = new URLSearchParams();
+      params.set('autoplay', 'true');
+      params.set('lang', subLang);
+      if (start > 5) {
+        params.set('startAt', String(start));
+        params.set('t', String(start));
+      }
       return isSeries
-        ? `https://vidsrc.me/embed/tv?imdb=${imdbId}&sea=${season}&epi=${episode}&ds_lang=${subLang}`
-        : `https://vidsrc.me/embed/movie?imdb=${imdbId}&ds_lang=${subLang}`;
-    case 'multiembed':
+        ? `https://vidspark.to/tv/${imdbId}/${season}/${episode}?${params.toString()}`
+        : `https://vidspark.to/movie/${imdbId}?${params.toString()}`;
+    }
+    case 'vidzee': {
+      const params = new URLSearchParams();
+      if (start > 5) {
+        params.set('startAt', String(start));
+      }
+      const qs = params.toString();
+      const suffix = qs ? `?${qs}` : '';
       return isSeries
-        ? `https://multiembed.mov/?video_id=${imdbId}&s=${season}&e=${episode}`
-        : `https://multiembed.mov/?video_id=${imdbId}`;
-    case 'autoembed':
+        ? `https://player.vidzee.wtf/embed/tv/${tmdbOrImdbId}/${season}/${episode}${suffix}`
+        : `https://player.vidzee.wtf/embed/movie/${tmdbOrImdbId}${suffix}`;
+    }
+    case 'nontongo': {
+      const params = new URLSearchParams();
+      params.set('autoplay', '1');
+      if (start > 5) {
+        params.set('start', String(start));
+        params.set('t', String(start));
+      }
       return isSeries
-        ? `https://player.autoembed.cc/embed/tv/${imdbId}/${season}/${episode}`
-        : `https://player.autoembed.cc/embed/movie/${imdbId}`;
-    case 'vidsrc_to':
+        ? `https://nontongo.win/embed/tv/${imdbId}/${season}/${episode}?${params.toString()}`
+        : `https://nontongo.win/embed/movie/${imdbId}?${params.toString()}`;
+    }
+    case 'vidsrc_pm': {
+      const params = new URLSearchParams();
+      params.set('autoplay', 'true');
+      params.set('ds_lang', subLang);
+      if (start > 5) {
+        params.set('startAt', String(start));
+        params.set('t', String(start));
+      }
       return isSeries
-        ? `https://vidsrc.to/embed/tv/${imdbId}/${season}/${episode}`
-        : `https://vidsrc.to/embed/movie/${imdbId}`;
-    case 'twoembed':
+        ? `https://vidsrc.pm/embed/tv/${imdbId}/${season}/${episode}?${params.toString()}`
+        : `https://vidsrc.pm/embed/movie/${imdbId}?${params.toString()}`;
+    }
+    case 'frembed':
       return isSeries
-        ? `https://www.2embed.cc/embedtv/${imdbId}&s=${season}&e=${episode}`
-        : `https://www.2embed.cc/embed/${imdbId}`;
+        ? `https://frembed.live/api/serie.php?id=${imdbId}&sa=${season}&epi=${episode}`
+        : `https://frembed.live/api/film.php?id=${imdbId}`;
   }
 }
 
@@ -253,16 +365,31 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     loadSavedVodItems()
   );
 
+  // Watch progress state ("Continuă vizionarea — De unde ai rămas")
+  const [watchProgressMap, setWatchProgressMap] = useState<
+    Record<string, VodWatchProgressEntry>
+  >(() => loadWatchProgressMap());
+
   // Active Movie / Series Player Modal state
   const [activeVodItem, setActiveVodItem] = useState<CinemetaItem | null>(null);
   const [detailedMeta, setDetailedMeta] = useState<DetailedMeta | null>(null);
   const [isMetaLoading, setIsMetaLoading] = useState<boolean>(false);
-  const [activeServer, setActiveServer] = useState<VodServerId>('vidsrc_me');
+  const [activeServer, setActiveServer] = useState<VodServerId>('vidspark');
   const [preferredSubLang, setPreferredSubLang] =
     useState<SubtitleLangId>('ro');
   const [selectedSeason, setSelectedSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<number>(1);
+
+  // The start timestamp passed into the iframe URL when opening/switching servers/episodes
+  const [resumeStartSeconds, setResumeStartSeconds] = useState<number>(0);
+  // The live current playback second tracked via postMessage + active watch timer
+  const [liveCurrentTime, setLiveCurrentTime] = useState<number>(0);
+  const [liveDuration, setLiveDuration] = useState<number>(0);
+
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const vodIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const lastPostMessageTimeRef = useRef<number>(0);
+  const preserveEpisodeOnOpenRef = useRef<boolean>(false);
 
   // Lampa state
   const [lampaServer, setLampaServer] = useState<string>(
@@ -277,6 +404,304 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [m3uPlaylistUrl, setM3uPlaylistUrl] = useState('');
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sorted list of items in "Continuă vizionarea"
+  const continueWatchingList = useMemo(() => {
+    return Object.values(watchProgressMap)
+      .filter((entry) => entry && entry.item && entry.currentTime >= 5)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 12);
+  }, [watchProgressMap]);
+
+  // Persist watch progress helper
+  const updateWatchProgress = useCallback(
+    (
+      item: CinemetaItem,
+      season: number,
+      episode: number,
+      currentTime: number,
+      duration: number,
+      server: VodServerId,
+      subLang: SubtitleLangId
+    ) => {
+      const cleanTime = Math.max(0, Math.floor(currentTime || 0));
+      const defaultDur = item.type === 'series' ? 2700 : 5400;
+      const cleanDur =
+        duration && Number.isFinite(duration) && duration > 60
+          ? Math.floor(duration)
+          : defaultDur;
+
+      setWatchProgressMap((prev) => {
+        const existing = prev[item.id];
+        const epKey = `S${season}E${episode}`;
+        const prevEpMap = existing?.episodeProgressMap || {};
+        const nextEntry: VodWatchProgressEntry = {
+          item: {
+            ...existing?.item,
+            ...item,
+          },
+          season,
+          episode,
+          currentTime: cleanTime,
+          duration: cleanDur,
+          server,
+          subLang,
+          updatedAt: Date.now(),
+          episodeProgressMap: {
+            ...prevEpMap,
+            [epKey]: {
+              currentTime: cleanTime,
+              duration: cleanDur,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+        const nextMap = {
+          ...prev,
+          [item.id]: nextEntry,
+        };
+        saveWatchProgressMap(nextMap);
+        return nextMap;
+      });
+    },
+    []
+  );
+
+  const removeWatchProgress = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setWatchProgressMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      saveWatchProgressMap(next);
+      return next;
+    });
+  };
+
+  // Open a movie or series and automatically resume from where the user left off
+  const handleOpenVodItem = useCallback(
+    (
+      item: CinemetaItem,
+      overrideSeason?: number,
+      overrideEpisode?: number,
+      overrideStartSeconds?: number
+    ) => {
+      const saved = watchProgressMap[item.id];
+      const targetSeason =
+        overrideSeason ?? (saved?.season ? saved.season : 1);
+      const targetEpisode =
+        overrideEpisode ?? (saved?.episode ? saved.episode : 1);
+      const epKey = `S${targetSeason}E${targetEpisode}`;
+      const epSaved = saved?.episodeProgressMap?.[epKey];
+
+      const startSec =
+        overrideStartSeconds !== undefined
+          ? overrideStartSeconds
+          : item.type === 'series'
+            ? (epSaved?.currentTime ??
+              (saved &&
+              saved.season === targetSeason &&
+              saved.episode === targetEpisode
+                ? saved.currentTime
+                : 0))
+            : (saved?.currentTime ?? 0);
+
+      const durSec =
+        item.type === 'series'
+          ? (epSaved?.duration ?? saved?.duration ?? 2700)
+          : (saved?.duration ?? 5400);
+
+      const targetServer = saved?.server
+        ? normalizeServerId(saved.server)
+        : activeServer;
+      const targetSub = saved?.subLang || preferredSubLang;
+
+      preserveEpisodeOnOpenRef.current = Boolean(
+        overrideSeason !== undefined ||
+          overrideEpisode !== undefined ||
+          (saved && item.type === 'series')
+      );
+
+      setActiveVodItem(item);
+      setSelectedSeason(targetSeason);
+      setSelectedEpisode(targetEpisode);
+      setActiveServer(targetServer);
+      setPreferredSubLang(targetSub);
+      setResumeStartSeconds(startSec);
+      setLiveCurrentTime(startSec);
+      setLiveDuration(durSec);
+
+      // Immediately record that this item was opened
+      updateWatchProgress(
+        item,
+        targetSeason,
+        targetEpisode,
+        Math.max(startSec, 5),
+        durSec,
+        targetServer,
+        targetSub
+      );
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [watchProgressMap, activeServer, preferredSubLang, updateWatchProgress]
+  );
+
+  // Listen to real-time postMessage events from VidSpark / VidSrc / VidZee / PlayerJS embeds
+  useEffect(() => {
+    if (!activeVodItem) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      let payload = event.data;
+      if (!payload) return;
+
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      let reportedTime: number | null = null;
+      let reportedDuration: number | null = null;
+
+      // 1. VidSpark / VidSrc Pro format: { source: 'vidspark-player', event: 'timeupdate' | 'seeked' | 'pause', currentTime, duration }
+      if (
+        typeof payload.currentTime === 'number' &&
+        Number.isFinite(payload.currentTime)
+      ) {
+        reportedTime = payload.currentTime;
+        if (
+          typeof payload.duration === 'number' &&
+          Number.isFinite(payload.duration) &&
+          payload.duration > 0
+        ) {
+          reportedDuration = payload.duration;
+        }
+      }
+      // 2. VidZee / VidLink PLAYER_EVENT format: { type: 'PLAYER_EVENT', data: { event, currentTime, duration } }
+      else if (
+        payload.type === 'PLAYER_EVENT' &&
+        payload.data &&
+        typeof payload.data.currentTime === 'number'
+      ) {
+        reportedTime = payload.data.currentTime;
+        if (
+          typeof payload.data.duration === 'number' &&
+          payload.data.duration > 0
+        ) {
+          reportedDuration = payload.data.duration;
+        }
+      }
+      // 3. MEDIA_DATA format
+      else if (payload.type === 'MEDIA_DATA' && payload.data) {
+        const progress =
+          payload.data.progress?.watched ?? payload.data.currentTime;
+        const duration =
+          payload.data.progress?.duration ?? payload.data.duration;
+        if (typeof progress === 'number' && Number.isFinite(progress)) {
+          reportedTime = progress;
+        }
+        if (
+          typeof duration === 'number' &&
+          Number.isFinite(duration) &&
+          duration > 0
+        ) {
+          reportedDuration = duration;
+        }
+      }
+
+      if (reportedTime !== null && reportedTime >= 3) {
+        lastPostMessageTimeRef.current = Date.now();
+        const cleanSec = Math.floor(reportedTime);
+        setLiveCurrentTime(cleanSec);
+        if (reportedDuration && reportedDuration > 60) {
+          setLiveDuration(Math.floor(reportedDuration));
+        }
+        updateWatchProgress(
+          activeVodItem,
+          selectedSeason,
+          selectedEpisode,
+          cleanSec,
+          reportedDuration || liveDuration,
+          activeServer,
+          preferredSubLang
+        );
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [
+    activeVodItem,
+    selectedSeason,
+    selectedEpisode,
+    activeServer,
+    preferredSubLang,
+    liveDuration,
+    updateWatchProgress,
+  ]);
+
+  // Fallback automatic watch-time tracker (every 5 seconds while the movie/series player is open & visible)
+  useEffect(() => {
+    if (!activeVodItem) return;
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      // If the embed player already sent a postMessage within the last 6 seconds, rely on its exact timestamp
+      if (Date.now() - lastPostMessageTimeRef.current < 6000) return;
+
+      setLiveCurrentTime((prev) => {
+        const nextSec = prev + 5;
+        updateWatchProgress(
+          activeVodItem,
+          selectedSeason,
+          selectedEpisode,
+          nextSec,
+          liveDuration,
+          activeServer,
+          preferredSubLang
+        );
+        return nextSec;
+      });
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    activeVodItem,
+    selectedSeason,
+    selectedEpisode,
+    activeServer,
+    preferredSubLang,
+    liveDuration,
+    updateWatchProgress,
+  ]);
+
+  // Send seek command to iframe or reload iframe with updated startAt timestamp
+  const handleSeekToSeconds = (targetSeconds: number) => {
+    if (!activeVodItem) return;
+    const clean = Math.max(0, Math.floor(targetSeconds));
+    setResumeStartSeconds(clean);
+    setLiveCurrentTime(clean);
+    updateWatchProgress(
+      activeVodItem,
+      selectedSeason,
+      selectedEpisode,
+      clean,
+      liveDuration,
+      activeServer,
+      preferredSubLang
+    );
+    try {
+      vodIframeRef.current?.contentWindow?.postMessage(
+        { action: 'seek', time: clean },
+        '*'
+      );
+    } catch {
+      // ignore cross-origin error
+    }
+  };
 
   // Debounce search query
   useEffect(() => {
@@ -400,8 +825,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
     let cancelled = false;
     setIsMetaLoading(true);
-    setSelectedSeason(1);
-    setSelectedEpisode(1);
 
     const fetchDetails = async () => {
       try {
@@ -418,7 +841,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           type: activeVodItem.type,
         });
 
+        // Only default to Season 1 Episode 1 if we didn't restore a saved episode
         if (
+          !preserveEpisodeOnOpenRef.current &&
           activeVodItem.type === 'series' &&
           Array.isArray(data.meta.videos) &&
           data.meta.videos.length > 0
@@ -476,6 +901,31 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         (a, b) => (a.episode || a.number || 1) - (b.episode || b.number || 1)
       );
   }, [detailedMeta, selectedSeason]);
+
+  const handleSelectEpisode = (seasonNum: number, epNum: number) => {
+    if (!activeVodItem) return;
+    const saved = watchProgressMap[activeVodItem.id];
+    const epKey = `S${seasonNum}E${epNum}`;
+    const epSaved = saved?.episodeProgressMap?.[epKey];
+    const startSec = epSaved?.currentTime ?? 0;
+    const durSec = epSaved?.duration ?? 2700;
+
+    setSelectedSeason(seasonNum);
+    setSelectedEpisode(epNum);
+    setResumeStartSeconds(startSec);
+    setLiveCurrentTime(startSec);
+    setLiveDuration(durSec);
+
+    updateWatchProgress(
+      activeVodItem,
+      seasonNum,
+      epNum,
+      Math.max(startSec, 5),
+      durSec,
+      activeServer,
+      preferredSubLang
+    );
+  };
 
   const toggleSaveVodItem = (item: CinemetaItem, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -592,6 +1042,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   };
 
   const displayedItems = activeTab === 'saved' ? savedItems : catalogItems;
+  const activeItemForEmbed: CinemetaItem | null = activeVodItem
+    ? {
+        ...activeVodItem,
+        moviedb_id: detailedMeta?.moviedb_id ?? activeVodItem.moviedb_id,
+      }
+    : null;
 
   return (
     <div className="space-y-5">
@@ -607,7 +1063,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 Mediatecă — Filme & Seriale On-Demand
               </h1>
               <p className="text-xs text-slate-600 dark:text-zinc-400 truncate">
-                Catalog complet de filme și seriale online cu sezoane, episoade și subtitrări
+                Reluare automată de unde ai rămas • Scut Anti-Popup activat pe toate serverele
               </p>
             </div>
           </div>
@@ -698,7 +1154,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       </section>
 
       {/* ACTIVE ON-DEMAND MOVIE / SERIES PLAYER PANEL */}
-      {activeVodItem && (
+      {activeVodItem && activeItemForEmbed && (
         <section className="rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl overflow-hidden">
           {/* Player Top Bar */}
           <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-zinc-900 border-b border-zinc-800 space-y-2">
@@ -718,6 +1174,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     {activeVodItem.imdbRating}
                   </span>
                 )}
+                <span
+                  title="Toate reclamele de tip pop-up și redirect sunt blocate automat în player"
+                  className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold shrink-0"
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>Anti-Popup Activ</span>
+                </span>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
@@ -749,7 +1212,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   <button
                     key={srv.id}
                     type="button"
-                    onClick={() => setActiveServer(srv.id)}
+                    onClick={() => {
+                      // Preserve current playback position when switching servers
+                      setResumeStartSeconds(liveCurrentTime);
+                      setActiveServer(srv.id);
+                      updateWatchProgress(
+                        activeVodItem,
+                        selectedSeason,
+                        selectedEpisode,
+                        liveCurrentTime,
+                        liveDuration,
+                        srv.id,
+                        preferredSubLang
+                      );
+                    }}
                     title={srv.badge}
                     className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                       active
@@ -771,7 +1247,19 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   <button
                     key={sub.id}
                     type="button"
-                    onClick={() => setPreferredSubLang(sub.id)}
+                    onClick={() => {
+                      setResumeStartSeconds(liveCurrentTime);
+                      setPreferredSubLang(sub.id);
+                      updateWatchProgress(
+                        activeVodItem,
+                        selectedSeason,
+                        selectedEpisode,
+                        liveCurrentTime,
+                        liveDuration,
+                        activeServer,
+                        sub.id
+                      );
+                    }}
                     className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                       active
                         ? 'bg-emerald-500 text-zinc-950 font-bold shadow-xs'
@@ -786,25 +1274,102 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 Embedded VOD Stream Player */}
+          {/* 16:9 Sandboxed VOD Stream Player (Popups & Redirects Strictly Blocked!) */}
           <div
             ref={playerContainerRef}
             className="relative w-full aspect-video bg-black"
           >
             <iframe
-              key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}`}
+              ref={vodIframeRef}
+              key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
               src={buildVodEmbedUrl(
                 activeServer,
-                activeVodItem,
+                activeItemForEmbed,
                 selectedSeason,
                 selectedEpisode,
-                preferredSubLang
+                preferredSubLang,
+                resumeStartSeconds
               )}
               title={activeVodItem.name}
               className="w-full h-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
+              referrerPolicy="origin"
               allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               allowFullScreen
+              onLoad={() => {
+                if (resumeStartSeconds > 5) {
+                  window.setTimeout(() => {
+                    try {
+                      vodIframeRef.current?.contentWindow?.postMessage(
+                        { action: 'seek', time: resumeStartSeconds },
+                        '*'
+                      );
+                    } catch {
+                      // ignore
+                    }
+                  }, 1200);
+                }
+              }}
             />
+          </div>
+
+          {/* Resume / Playback Position Control Strip */}
+          <div className="px-3 sm:px-5 py-2 bg-zinc-900/95 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-950/90 border border-brand-700/60 text-brand-300 font-semibold">
+                <History className="w-3.5 h-3.5 text-brand-400 shrink-0" />
+                <span>
+                  Poziție salvată: <strong>{formatWatchSeconds(liveCurrentTime)}</strong>
+                </span>
+              </span>
+              {resumeStartSeconds > 5 && (
+                <span className="hidden sm:inline text-zinc-400">
+                  (Reluat automat de la {formatWatchSeconds(resumeStartSeconds)})
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {liveCurrentTime > 15 && (
+                <button
+                  type="button"
+                  onClick={() => handleSeekToSeconds(liveCurrentTime)}
+                  title="Sari direct la minutul salvat"
+                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Reluare {formatWatchSeconds(liveCurrentTime)}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => handleSeekToSeconds(Math.max(0, liveCurrentTime - 300))}
+                title="Înapoi cu 5 minute"
+                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
+              >
+                -5 min
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSeekToSeconds(liveCurrentTime + 300)}
+                title="Înainte cu 5 minute"
+                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
+              >
+                +5 min
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSeekToSeconds(0)}
+                title="Pornește filmul/episodul de la început (00:00)"
+                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>De la 00:00</span>
+              </button>
+            </div>
           </div>
 
           {/* Series Seasons & Episodes Selector */}
@@ -829,10 +1394,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           <button
                             key={seasonNum}
                             type="button"
-                            onClick={() => {
-                              setSelectedSeason(seasonNum);
-                              setSelectedEpisode(1);
-                            }}
+                            onClick={() => handleSelectEpisode(seasonNum, 1)}
                             className={`min-h-[34px] px-3.5 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${
                               active
                                 ? 'bg-amber-500 text-zinc-950 shadow-xs'
@@ -852,29 +1414,41 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       {episodesForSeason.map((ep) => {
                         const epNum = ep.episode || ep.number || 1;
                         const isCurrentEp = epNum === selectedEpisode;
+                        const epKey = `S${selectedSeason}E${epNum}`;
+                        const epSaved =
+                          watchProgressMap[activeVodItem.id]
+                            ?.episodeProgressMap?.[epKey];
+
                         return (
                           <button
                             key={ep.id || `${ep.season}_${epNum}`}
                             type="button"
-                            onClick={() => setSelectedEpisode(epNum)}
+                            onClick={() =>
+                              handleSelectEpisode(selectedSeason, epNum)
+                            }
                             className={`p-2.5 rounded-2xl border text-left flex items-start gap-2.5 transition-all ${
                               isCurrentEp
                                 ? 'bg-amber-500/20 border-amber-500 text-white'
                                 : 'bg-zinc-950/70 hover:bg-zinc-800/80 border-zinc-800 text-zinc-200'
                             }`}
                           >
-                            {ep.thumbnail ? (
-                              <img
-                                src={ep.thumbnail}
-                                alt={ep.name}
-                                loading="lazy"
-                                className="w-20 h-12 rounded-lg object-cover shrink-0 bg-zinc-800"
-                              />
-                            ) : (
-                              <div className="w-20 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
+                            <div className="relative w-20 h-12 rounded-lg overflow-hidden shrink-0 bg-zinc-800 flex items-center justify-center">
+                              {ep.thumbnail ? (
+                                <img
+                                  src={ep.thumbnail}
+                                  alt={ep.name}
+                                  loading="lazy"
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
                                 <Play className="w-4 h-4 text-amber-400 fill-current" />
-                              </div>
-                            )}
+                              )}
+                              {epSaved && epSaved.currentTime > 10 && (
+                                <span className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/85 text-[9px] font-bold text-emerald-400">
+                                  {formatWatchSeconds(epSaved.currentTime)}
+                                </span>
+                              )}
+                            </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[11px] font-extrabold text-amber-400 shrink-0">
@@ -957,6 +1531,100 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           </div>
         </section>
       )}
+
+      {/* CONTINUE WATCHING ("DE UNDE AI RĂMAS") SHELF */}
+      {(activeTab === 'movies' ||
+        activeTab === 'series' ||
+        activeTab === 'saved') &&
+        continueWatchingList.length > 0 && (
+          <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <History className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+                <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100">
+                  Continuă vizionarea — De unde ai rămas ({continueWatchingList.length})
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setWatchProgressMap({});
+                  saveWatchProgressMap({});
+                }}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-slate-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Șterge istoricul
+              </button>
+            </div>
+
+            <div className="flex items-stretch gap-2.5 overflow-x-auto no-scrollbar pb-1">
+              {continueWatchingList.map((entry) => {
+                const { item, season, episode, currentTime, duration } = entry;
+                const pct = Math.min(
+                  96,
+                  Math.max(6, Math.round((currentTime / (duration || 5400)) * 100))
+                );
+                const posterUrl =
+                  item.poster ||
+                  `https://images.metahub.space/poster/medium/${item.id}/img`;
+
+                return (
+                  <div
+                    key={`cw_${item.id}`}
+                    onClick={() =>
+                      handleOpenVodItem(item, season, episode, currentTime)
+                    }
+                    className="group relative w-44 sm:w-52 shrink-0 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-500 p-2 flex items-center gap-2.5 cursor-pointer transition-all"
+                  >
+                    <div className="relative w-12 h-16 rounded-xl overflow-hidden bg-zinc-900 shrink-0">
+                      <img
+                        src={posterUrl}
+                        alt={item.name}
+                        loading="lazy"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                        <div className="w-6 h-6 rounded-full bg-brand-600 text-white flex items-center justify-center shadow">
+                          <Play className="w-3 h-3 fill-current ml-0.5" />
+                        </div>
+                      </div>
+                      <div className="absolute bottom-0 inset-x-0 h-1 bg-zinc-800">
+                        <div
+                          className="h-full bg-emerald-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1 pr-4">
+                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate group-hover:text-brand-600 dark:group-hover:text-brand-400">
+                        {item.name}
+                      </p>
+                      <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 mt-0.5 truncate">
+                        {item.type === 'series'
+                          ? `S${season}:E${episode} • ${formatWatchSeconds(currentTime)}`
+                          : `Min. ${formatWatchSeconds(currentTime)}`}
+                      </p>
+                      <span className="inline-block mt-1 text-[10px] font-semibold text-brand-700 dark:text-brand-300">
+                        ▶ Reluare
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => removeWatchProgress(item.id, e)}
+                      aria-label="Elimină din Continuă vizionarea"
+                      title="Elimină"
+                      className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-slate-200/80 dark:bg-zinc-800 hover:bg-rose-500 hover:text-white text-slate-600 dark:text-zinc-400 flex items-center justify-center transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
       {/* MOVIES / SERIES / SAVED CATALOG */}
       {(activeTab === 'movies' ||
@@ -1054,6 +1722,22 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 {displayedItems.map((item) => {
                   const isSaved = savedItems.some((x) => x.id === item.id);
                   const isPlayingNow = activeVodItem?.id === item.id;
+                  const progressEntry = watchProgressMap[item.id];
+                  const hasProgress =
+                    progressEntry && progressEntry.currentTime >= 10;
+                  const progressPct = hasProgress
+                    ? Math.min(
+                        96,
+                        Math.max(
+                          6,
+                          Math.round(
+                            (progressEntry.currentTime /
+                              (progressEntry.duration || 5400)) *
+                              100
+                          )
+                        )
+                      )
+                    : 0;
                   const posterUrl =
                     item.poster ||
                     `https://images.metahub.space/poster/medium/${item.id}/img`;
@@ -1061,10 +1745,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   return (
                     <article
                       key={`${item.type}_${item.id}`}
-                      onClick={() => {
-                        setActiveVodItem(item);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
+                      onClick={() => handleOpenVodItem(item)}
                       className={`group cursor-pointer rounded-xl sm:rounded-2xl border overflow-hidden flex flex-col justify-between transition-all duration-200 ${
                         isPlayingNow
                           ? 'bg-brand-50 dark:bg-brand-950/40 border-brand-500 ring-2 ring-brand-500/40 shadow-md'
@@ -1114,6 +1795,27 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                             />
                           </button>
                         </div>
+
+                        {/* Resume Badge at Bottom of Poster */}
+                        {hasProgress && (
+                          <div className="absolute bottom-2 inset-x-1.5 flex justify-center pointer-events-none">
+                            <span className="px-2 py-0.5 rounded-full bg-black/85 backdrop-blur-xs text-emerald-400 text-[9px] sm:text-[10px] font-bold truncate shadow">
+                              {item.type === 'series'
+                                ? `▶ S${progressEntry.season}:E${progressEntry.episode} • ${formatWatchSeconds(progressEntry.currentTime)}`
+                                : `▶ ${formatWatchSeconds(progressEntry.currentTime)}`}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Progress Bar on Poster Bottom */}
+                        {hasProgress && (
+                          <div className="absolute bottom-0 inset-x-0 h-1 bg-zinc-800/90">
+                            <div
+                              className="h-full bg-emerald-500"
+                              style={{ width: `${progressPct}%` }}
+                            />
+                          </div>
+                        )}
 
                         {/* Play Overlay on Hover */}
                         <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center p-2 transition-opacity">
@@ -1244,6 +1946,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               src={lampaServer}
               title="Lampa Smart TV VOD Catalog"
               className="w-full h-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
               allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               allowFullScreen
             />
@@ -1404,7 +2107,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     Redă Link Video Direct (.MP4, .MKV, .M3U8)
                   </h2>
                   <p className="text-xs text-slate-600 dark:text-zinc-400">
-                    Redă orice fișier sau link video direct în player cu suport pentru subtitrare <code>.SRT</code> / <code>.VTT</code>.
+                    Redă orice fișier sau link video direct în player cu suport pentru subtitrare <code>.SRT</code> / <code>.VTT</code> și reluare automată.
                   </p>
                 </div>
               </div>

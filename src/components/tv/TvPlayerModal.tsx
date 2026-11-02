@@ -891,6 +891,37 @@ export const TvPlayerModal: React.FC = () => {
                 crossOrigin="anonymous"
                 onPlaying={() => setVideoStatus('playing')}
                 onLoadedData={() => setVideoStatus('playing')}
+                onLoadedMetadata={(e) => {
+                  const vid = e.currentTarget;
+                  if (!currentTvChannel?.url || !Number.isFinite(vid.duration) || vid.duration <= 90) return;
+                  try {
+                    const raw = localStorage.getItem('aether_native_video_progress_v1');
+                    const map = raw ? JSON.parse(raw) : {};
+                    const savedTime = Number(map[currentTvChannel.url]);
+                    if (Number.isFinite(savedTime) && savedTime > 5 && savedTime < vid.duration - 15) {
+                      vid.currentTime = savedTime;
+                    }
+                  } catch {
+                    // ignore storage errors
+                  }
+                }}
+                onTimeUpdate={(e) => {
+                  const vid = e.currentTarget;
+                  if (!currentTvChannel?.url || !Number.isFinite(vid.duration) || vid.duration <= 90) return;
+                  if (vid.currentTime < 5) return;
+                  try {
+                    const raw = localStorage.getItem('aether_native_video_progress_v1');
+                    const map = raw ? JSON.parse(raw) : {};
+                    if (vid.currentTime >= vid.duration - 15) {
+                      delete map[currentTvChannel.url];
+                    } else {
+                      map[currentTvChannel.url] = Math.floor(vid.currentTime);
+                    }
+                    localStorage.setItem('aether_native_video_progress_v1', JSON.stringify(map));
+                  } catch {
+                    // ignore storage errors
+                  }
+                }}
                 className="w-full h-full object-contain bg-black"
               >
                 {customSubtitleUrl && (
