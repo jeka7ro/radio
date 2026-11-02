@@ -1291,23 +1291,6 @@ export const TvPlayerModal: React.FC = () => {
                           />
                           <span>Urmează în program</span>
                         </div>
-                        {archiveDays.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsOsdOverlayOpen(false);
-                              setIsSidePanelOpen(true);
-                              setSidePanelTab('archive');
-                            }}
-                            className="min-h-[26px] px-2.5 py-0.5 rounded-full bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
-                          >
-                            <History className="w-3 h-3" aria-hidden="true" />
-                            <span>
-                              ⏪ Arhivă {archiveDays.length} Zile (
-                              {archiveProgrammes.length})
-                            </span>
-                          </button>
-                        )}
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
                         {epg.upcoming.slice(0, 3).map((item, idx) => (
