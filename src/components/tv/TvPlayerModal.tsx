@@ -20,7 +20,6 @@ import {
   ListFilter,
   History,
   Play,
-  PanelRight,
 } from 'lucide-react';
 import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
@@ -810,28 +809,6 @@ export const TvPlayerModal: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => {
-                setIsOsdOverlayOpen(false);
-                setIsSidePanelOpen((v) => !v);
-              }}
-              aria-pressed={showSideColumn}
-              title={
-                showSideColumn
-                  ? 'Ascunde panoul din dreapta (Canale & Arhivă)'
-                  : 'Deschide panoul din dreapta (Canale & Arhivă)'
-              }
-              className={`min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
-                showSideColumn
-                  ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
-              }`}
-            >
-              <PanelRight className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span className="hidden xs:inline">Canale</span>
-            </button>
-
-            <button
-              type="button"
               onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
               aria-pressed={isFavorite}
               aria-label={format(
@@ -1343,49 +1320,6 @@ export const TvPlayerModal: React.FC = () => {
           {/* RIGHT COLUMN: Side-by-Side Channel Switcher OR Multi-Day TV Archive */}
           {showSideColumn && (
             <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-[#0b111e] flex flex-col shrink-0 lg:shrink min-h-[280px] max-h-[52vh] lg:min-h-0 lg:max-h-none overflow-hidden">
-              {/* Desktop Side Panel Header (hidden on mobile since Controls Bar right above already has Canale & Arhivă toggles) */}
-              <div className="hidden lg:flex shrink-0 items-center justify-between gap-2 px-3 py-2 bg-zinc-900/90 border-b border-zinc-800">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setSidePanelTab('channels')}
-                    className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
-                      sidePanelTab === 'channels'
-                        ? 'bg-brand-600 text-white shadow-xs'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                    }`}
-                  >
-                    <Tv className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Canale ({tvQueue.length || 1})</span>
-                  </button>
-
-                  {archiveDays.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSidePanelTab('archive')}
-                      className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
-                        sidePanelTab === 'archive'
-                          ? 'bg-emerald-500 text-zinc-950 shadow-xs'
-                          : 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300'
-                      }`}
-                    >
-                      <History className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Arhivă ({archiveDays.length} Zile)</span>
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsSidePanelOpen(false)}
-                  aria-label="Ascunde panoul lateral"
-                  title="Ascunde panoul lateral"
-                  className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white inline-flex items-center justify-center transition-colors"
-                >
-                  <X className="w-4 h-4" aria-hidden="true" />
-                </button>
-              </div>
-
               {/* Tab 1: Clean Channel List */}
               {sidePanelTab === 'channels' ? (
                 <div className="flex-1 min-h-0 p-2 sm:p-2.5 flex flex-col overflow-hidden">
