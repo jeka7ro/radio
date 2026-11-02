@@ -7,6 +7,7 @@
  */
 
 const trackRichMetaCache = new Map();
+const latestStreamTitleByUrl = new Map();
 
 const ISRC_CODE_REGEX = /\b[A-Z]{2}[A-Z0-9]{3}\d{7}\b/gi;
 const ISO_DATE_REGEX =
@@ -14,14 +15,21 @@ const ISO_DATE_REGEX =
 const ID3_FRAME_REGEX =
   /\b(?:ID3|TIT2|TPE1|TPE2|TALB|TXXX|TRCK|TYER|TDRC|TCON|TCOP|TSSE|PRIV|APIC|WXXX|COMM|USLT|StreamTitle)\b/g;
 
-async function readIcyStreamTitle(streamUrl) {
+function extractMaxIsoTimestamp(raw) {
+  const matches = (raw || '').match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\b/g);
+  if (!matches || matches.length === 0) return '';
+  return matches.reduce((max, cur) => (cur > max ? cur : max), '');
+}
+
+async function probeSingleIcyStreamTitle(streamUrl) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4000);
+  const timeoutId = setTimeout(() => controller.abort(), 3200);
   try {
     const res = await fetch(streamUrl, {
       headers: {
         'Icy-MetaData': '1',
         'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+        Connection: 'close',
       },
       redirect: 'follow',
       signal: controller.signal,
@@ -90,6 +98,60 @@ async function readIcyStreamTitle(streamUrl) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function readIcyStreamTitle(streamUrl) {
+  const isClusteredStream =
+    /radiomontecarlo\.net|unitedradio\.it|105\.net|virginradio\.it|r101\.it|subasio\.it/i.test(
+      streamUrl
+    );
+
+  if (!isClusteredStream) {
+    const single = await probeSingleIcyStreamTitle(streamUrl);
+    if (!single) return single;
+    const singleIso = extractMaxIsoTimestamp(single);
+    if (!singleIso) return single;
+  }
+
+  const results = (
+    await Promise.all(
+      Array.from({ length: 6 }, () => probeSingleIcyStreamTitle(streamUrl))
+    )
+  ).filter((r) => Boolean(r && r.trim()));
+
+  if (results.length === 0) {
+    const prev = latestStreamTitleByUrl.get(streamUrl);
+    if (prev && Date.now() - prev.updatedAt < 3 * 60 * 1000) {
+      return prev.rawTitle;
+    }
+    return null;
+  }
+
+  const withIso = results
+    .map((rawTitle) => ({
+      rawTitle,
+      maxIso: extractMaxIsoTimestamp(rawTitle),
+    }))
+    .sort((a, b) => b.maxIso.localeCompare(a.maxIso));
+
+  const best = withIso[0];
+  const prevBest = latestStreamTitleByUrl.get(streamUrl);
+
+  if (best.maxIso && prevBest?.maxIso && best.maxIso < prevBest.maxIso) {
+    if (Date.now() - prevBest.updatedAt < 4 * 60 * 1000) {
+      return prevBest.rawTitle;
+    }
+  }
+
+  if (best.maxIso) {
+    latestStreamTitleByUrl.set(streamUrl, {
+      rawTitle: best.rawTitle,
+      maxIso: best.maxIso,
+      updatedAt: Date.now(),
+    });
+  }
+
+  return best.rawTitle;
 }
 
 async function readIcecastStatusTitle(streamUrl) {
@@ -405,7 +467,7 @@ async function resolveRichTrackMetadata(rawStreamTitle, stationName = '') {
     ? artist.split(/[,&/;]|feat\.?|ft\.?|vs\.?|with/i)[0].trim()
     : '';
   const cleanSongTitle = title
-    .replace(/\([^)]*\)/g, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, '')
     .replace(/feat\.?.*$/i, '')
     .trim();
 

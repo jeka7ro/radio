@@ -235,15 +235,28 @@ interface RichTrackInfo {
 }
 
 const trackRichMetaCache = new Map<string, RichTrackInfo>();
+const latestStreamTitleByUrl = new Map<
+  string,
+  { rawTitle: string; maxIso: string; updatedAt: number }
+>();
 
-async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
+function extractMaxIsoTimestamp(raw: string): string {
+  const matches = raw.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\b/g);
+  if (!matches || matches.length === 0) return '';
+  return matches.reduce((max, cur) => (cur > max ? cur : max), '');
+}
+
+async function probeSingleIcyStreamTitle(
+  streamUrl: string
+): Promise<string | null> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3500);
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
   try {
     const res = await fetch(streamUrl, {
       headers: {
         'Icy-MetaData': '1',
         'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+        Connection: 'close',
       },
       redirect: 'follow',
       signal: controller.signal,
@@ -283,7 +296,6 @@ async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
         const lenByte = buf[pos];
         const metaLen = lenByte * 16;
         if (pos + 1 + metaLen > buf.length) {
-          // Need more bytes from stream for this metadata block
           break;
         }
         if (metaLen > 0) {
@@ -319,6 +331,68 @@ async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
     clearTimeout(timeoutId);
     return null;
   }
+}
+
+/**
+ * Reads ICY StreamTitle while defeating frozen round-robin edge nodes (e.g. Mediaset / RMC / UnitedRadio)
+ * where 3 out of 4 load-balanced backend instances return stale metadata from days ago.
+ */
+async function readIcyStreamTitle(streamUrl: string): Promise<string | null> {
+  const isClusteredStream =
+    /radiomontecarlo\.net|unitedradio\.it|105\.net|virginradio\.it|r101\.it|subasio\.it/i.test(
+      streamUrl
+    );
+
+  if (!isClusteredStream) {
+    const single = await probeSingleIcyStreamTitle(streamUrl);
+    if (!single) return single;
+    // If this non-clustered stream also embeds ISO timestamps, verify freshness
+    const singleIso = extractMaxIsoTimestamp(single);
+    if (!singleIso) return single;
+  }
+
+  // Fire 6 parallel probes so we hit the live backend node across the 4-node nginx round-robin
+  const results = (
+    await Promise.all(
+      Array.from({ length: 6 }, () => probeSingleIcyStreamTitle(streamUrl))
+    )
+  ).filter((r): r is string => Boolean(r && r.trim()));
+
+  if (results.length === 0) {
+    const prev = latestStreamTitleByUrl.get(streamUrl);
+    if (prev && Date.now() - prev.updatedAt < 3 * 60 * 1000) {
+      return prev.rawTitle;
+    }
+    return null;
+  }
+
+  const withIso = results
+    .map((rawTitle) => ({
+      rawTitle,
+      maxIso: extractMaxIsoTimestamp(rawTitle),
+    }))
+    .sort((a, b) => b.maxIso.localeCompare(a.maxIso));
+
+  const best = withIso[0];
+  const prevBest = latestStreamTitleByUrl.get(streamUrl);
+
+  // If best candidate has an ISO timestamp older than a previously seen live timestamp on this stream,
+  // all 6 probes hit frozen nodes -> return the cached live title if still recent (< 4 mins)
+  if (best.maxIso && prevBest?.maxIso && best.maxIso < prevBest.maxIso) {
+    if (Date.now() - prevBest.updatedAt < 4 * 60 * 1000) {
+      return prevBest.rawTitle;
+    }
+  }
+
+  if (best.maxIso) {
+    latestStreamTitleByUrl.set(streamUrl, {
+      rawTitle: best.rawTitle,
+      maxIso: best.maxIso,
+      updatedAt: Date.now(),
+    });
+  }
+
+  return best.rawTitle;
 }
 
 async function readIcecastStatusTitle(streamUrl: string): Promise<string | null> {
@@ -666,7 +740,7 @@ async function resolveRichTrackMetadata(
     ? artist.split(/[,&/;]|feat\.?|ft\.?|vs\.?|with/i)[0].trim()
     : '';
   const cleanSongTitle = title
-    .replace(/\([^)]*\)/g, '')
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, '')
     .replace(/feat\.?.*$/i, '')
     .trim();
 

@@ -310,6 +310,15 @@ export function useAudioPlayer() {
         const data = await res.json();
         if (cancelled) return;
         if (data?.track) {
+          const prevRaw = useRadioStore.getState().nowPlayingMeta?.rawTitle || '';
+          const nextRaw = String(data.track.rawTitle || '');
+          const prevDates = prevRaw.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\b/g);
+          const nextDates = nextRaw.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\b/g);
+          const prevMaxIso = prevDates ? prevDates[prevDates.length - 1] : '';
+          const nextMaxIso = nextDates ? nextDates[nextDates.length - 1] : '';
+          if (prevMaxIso && nextMaxIso && nextMaxIso < prevMaxIso) {
+            return;
+          }
           setNowPlayingMeta(data.track);
           setNowPlayingTitle(
             data.track.artist
