@@ -50,6 +50,9 @@ export const MiniPlayer: React.FC = () => {
   const setVolume = useRadioStore((state) => state.setVolume);
   const toggleMute = useRadioStore((state) => state.toggleMute);
   const toggleFavorite = useRadioStore((state) => state.toggleFavorite);
+  const isExpandedPlayerOpen = useRadioStore(
+    (state) => state.isExpandedPlayerOpen
+  );
   const setExpandedPlayerOpen = useRadioStore(
     (state) => state.setExpandedPlayerOpen
   );
@@ -111,8 +114,10 @@ export const MiniPlayer: React.FC = () => {
   const handleOpenNormalPlayer = async () => {
     if (isRadioPipOpen) {
       await toggleRadioPip();
+      setExpandedPlayerOpen(true);
+      return;
     }
-    setExpandedPlayerOpen(true);
+    setExpandedPlayerOpen(!isExpandedPlayerOpen);
   };
 
   return (
