@@ -5,6 +5,7 @@ import {
   Loader2,
   AlertCircle,
   SlidersHorizontal,
+  Subtitles,
 } from 'lucide-react';
 import {
   OfflineMediaItem,
@@ -18,6 +19,10 @@ interface VodNativeHlsPlayerProps {
   audioTrackLabels?: string[];
   startAtSeconds?: number;
   poster?: string;
+  subtitleVttUrl?: string | null;
+  subtitleLabel?: string;
+  onOpenSubtitleFinder?: () => void;
+  onClearSubtitle?: () => void;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onStreamError?: () => void;
 }
@@ -28,6 +33,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   audioTrackLabels = [],
   startAtSeconds = 0,
   poster,
+  subtitleVttUrl,
+  subtitleLabel,
+  onOpenSubtitleFinder,
+  onClearSubtitle,
   onTimeUpdate,
   onStreamError,
 }) => {
@@ -205,6 +214,22 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     };
   }, [hlsUrl, offlineItem?.id]);
 
+  // Activate external WebVTT subtitle track whenever subtitleVttUrl changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !subtitleVttUrl) return;
+    const timer = window.setTimeout(() => {
+      try {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          video.textTracks[i].mode = 'showing';
+        }
+      } catch {
+        // ignore
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [subtitleVttUrl]);
+
   return (
     <div className="relative w-full h-full bg-black flex flex-col">
       <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
@@ -213,6 +238,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           controls
           playsInline
           autoPlay
+          crossOrigin="anonymous"
           poster={poster}
           onPlaying={() => setStatus('playing')}
           onTimeUpdate={(e) => {
@@ -225,7 +251,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           className="w-full h-full object-contain bg-black"
-        />
+        >
+          {subtitleVttUrl && (
+            <track
+              key={subtitleVttUrl}
+              kind="subtitles"
+              src={subtitleVttUrl}
+              label={subtitleLabel || 'Subtitrare Online'}
+              srcLang="ro"
+              default
+            />
+          )}
+        </video>
 
         {status === 'loading' && (
           <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center gap-2 bg-black/60">
@@ -247,69 +284,99 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           </div>
         )}
 
-        {/* Floating Audio & Quality Selector Overlay (Top-Right of Video) */}
-        {(audioTracks.length > 1 || qualityLevels.length > 1) && (
-          <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5">
-            {audioTracks.length > 1 && (
-              <div className="h-7 px-2.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-100 inline-flex items-center gap-1 backdrop-blur-xs">
-                <Languages className="w-3 h-3 text-amber-400 shrink-0" />
-                <select
-                  aria-label="Pista audio"
-                  value={activeAudioTrack}
-                  onChange={(e) => {
-                    const id = Number(e.target.value);
-                    setActiveAudioTrack(id);
-                    if (hlsRef.current) {
-                      hlsRef.current.audioTrack = id;
-                    }
-                  }}
-                  className="bg-transparent text-zinc-100 font-semibold outline-none cursor-pointer max-w-[130px] truncate"
+        {/* Floating Audio, Subtitle & Quality Selector Overlay (Top-Right of Video) */}
+        <div className="absolute top-2.5 right-2.5 z-10 flex flex-wrap items-center justify-end gap-1.5">
+          {onOpenSubtitleFinder && (
+            <div className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onOpenSubtitleFinder}
+                title="Caută și descarcă subtitrări de pe net (OpenSubtitles .SRT)"
+                className={`h-7 px-2.5 rounded-full border text-[11px] font-semibold inline-flex items-center gap-1 backdrop-blur-xs transition-colors cursor-pointer ${
+                  subtitleVttUrl
+                    ? 'bg-emerald-600/95 border-emerald-400 text-white'
+                    : 'bg-zinc-900/90 hover:bg-zinc-800 border-zinc-700 text-zinc-100'
+                }`}
+              >
+                <Subtitles className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                <span className="max-w-[130px] truncate">
+                  {subtitleVttUrl
+                    ? subtitleLabel || 'Subtitrare activă'
+                    : 'Subtitrări Net (.SRT)'}
+                </span>
+              </button>
+              {subtitleVttUrl && onClearSubtitle && (
+                <button
+                  type="button"
+                  onClick={onClearSubtitle}
+                  title="Oprește subtitrarea"
+                  className="h-7 px-2 rounded-full bg-zinc-900/90 hover:bg-rose-600 border border-zinc-700 text-[10px] font-bold text-zinc-200 backdrop-blur-xs cursor-pointer"
                 >
-                  {audioTracks.map((trk) => (
-                    <option
-                      key={trk.id}
-                      value={trk.id}
-                      className="bg-zinc-900 text-zinc-100"
-                    >
-                      {trk.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+                  Oprit
+                </button>
+              )}
+            </div>
+          )}
 
-            {qualityLevels.length > 1 && (
-              <div className="h-7 px-2.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-100 inline-flex items-center gap-1 backdrop-blur-xs">
-                <SlidersHorizontal className="w-3 h-3 text-emerald-400 shrink-0" />
-                <select
-                  aria-label="Calitate video"
-                  value={activeQuality}
-                  onChange={(e) => {
-                    const lvl = Number(e.target.value);
-                    setActiveQuality(lvl);
-                    if (hlsRef.current) {
-                      hlsRef.current.currentLevel = lvl;
-                    }
-                  }}
-                  className="bg-transparent text-zinc-100 font-semibold outline-none cursor-pointer"
-                >
-                  <option value={-1} className="bg-zinc-900 text-zinc-100">
-                    Auto HD
+          {audioTracks.length > 1 && (
+            <div className="h-7 px-2.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-100 inline-flex items-center gap-1 backdrop-blur-xs">
+              <Languages className="w-3 h-3 text-amber-400 shrink-0" />
+              <select
+                aria-label="Pista audio"
+                value={activeAudioTrack}
+                onChange={(e) => {
+                  const id = Number(e.target.value);
+                  setActiveAudioTrack(id);
+                  if (hlsRef.current) {
+                    hlsRef.current.audioTrack = id;
+                  }
+                }}
+                className="bg-transparent text-zinc-100 font-semibold outline-none cursor-pointer max-w-[130px] truncate"
+              >
+                {audioTracks.map((trk) => (
+                  <option
+                    key={trk.id}
+                    value={trk.id}
+                    className="bg-zinc-900 text-zinc-100"
+                  >
+                    {trk.name}
                   </option>
-                  {qualityLevels.map((q) => (
-                    <option
-                      key={q.index}
-                      value={q.index}
-                      className="bg-zinc-900 text-zinc-100"
-                    >
-                      {q.height}p
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        )}
+                ))}
+              </select>
+            </div>
+          )}
+
+          {qualityLevels.length > 1 && (
+            <div className="h-7 px-2.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-[11px] text-zinc-100 inline-flex items-center gap-1 backdrop-blur-xs">
+              <SlidersHorizontal className="w-3 h-3 text-emerald-400 shrink-0" />
+              <select
+                aria-label="Calitate video"
+                value={activeQuality}
+                onChange={(e) => {
+                  const lvl = Number(e.target.value);
+                  setActiveQuality(lvl);
+                  if (hlsRef.current) {
+                    hlsRef.current.currentLevel = lvl;
+                  }
+                }}
+                className="bg-transparent text-zinc-100 font-semibold outline-none cursor-pointer"
+              >
+                <option value={-1} className="bg-zinc-900 text-zinc-100">
+                  Auto HD
+                </option>
+                {qualityLevels.map((q) => (
+                  <option
+                    key={q.index}
+                    value={q.index}
+                    className="bg-zinc-900 text-zinc-100"
+                  >
+                    {q.height}p
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

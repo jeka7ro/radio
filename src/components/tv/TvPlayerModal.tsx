@@ -20,11 +20,13 @@ import {
   ListFilter,
   History,
   Play,
+  Globe,
 } from 'lucide-react';
 import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
 import { StationAvatar } from '../common/StationAvatar';
 import { TvOsdChannelList } from './TvOsdChannelList';
+import { OnlineSubtitleFinderModal } from './OnlineSubtitleFinderModal';
 import { useTranslation } from '../../i18n/useTranslation';
 import {
   getCountryFlagEmoji,
@@ -310,6 +312,8 @@ export const TvPlayerModal: React.FC = () => {
     null
   );
   const [customSubtitleName, setCustomSubtitleName] = useState<string>('');
+  const [isOnlineSubFinderOpen, setIsOnlineSubFinderOpen] =
+    useState<boolean>(false);
 
   const isOpen = Boolean(currentTvChannel);
 
@@ -670,6 +674,10 @@ export const TvPlayerModal: React.FC = () => {
   };
 
   const handleSubtitleTrackChange = (trackIdx: number) => {
+    if (trackIdx === -98) {
+      setIsOnlineSubFinderOpen(true);
+      return;
+    }
     if (trackIdx === -99) {
       subFileInputRef.current?.click();
       return;
@@ -1179,11 +1187,25 @@ export const TvPlayerModal: React.FC = () => {
                         {customSubtitleName || '.SRT'}
                       </option>
                     )}
+                    <option value={-98} className="bg-zinc-900 text-emerald-300">
+                      Caută pe Net (.SRT)...
+                    </option>
                     <option value={-99} className="bg-zinc-900 text-amber-300">
-                      + .SRT / .VTT...
+                      + .SRT din Dispozitiv...
                     </option>
                   </select>
                 </div>
+
+                {/* Search & Download Online Subtitles (OpenSubtitles) */}
+                <button
+                  type="button"
+                  onClick={() => setIsOnlineSubFinderOpen(true)}
+                  aria-label="Caută și descarcă subtitrări de pe net (.SRT)"
+                  title="Caută și descarcă subtitrări de pe net (OpenSubtitles .SRT)"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-400 inline-flex items-center justify-center border border-zinc-700 shrink-0 transition-colors"
+                >
+                  <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
 
                 {/* Upload custom .SRT / .VTT subtitle file */}
                 <input
@@ -1465,6 +1487,32 @@ export const TvPlayerModal: React.FC = () => {
           )}
         </div>
       </div>
+
+      <OnlineSubtitleFinderModal
+        isOpen={isOnlineSubFinderOpen}
+        onClose={() => setIsOnlineSubFinderOpen(false)}
+        initialTitle={
+          activeArchiveProg?.title ||
+          epg?.now?.title ||
+          currentTvChannel.name.replace(/\b(HD|FHD|4K|SD|RO|RU|MD)\b/gi, '').trim()
+        }
+        initialType="movie"
+        onApplySubtitle={({ vttBlobUrl, label }) => {
+          if (customSubtitleUrl) {
+            URL.revokeObjectURL(customSubtitleUrl);
+          }
+          setCustomSubtitleUrl(vttBlobUrl);
+          setCustomSubtitleName(label);
+          setActiveSubtitleTrack(999);
+          window.setTimeout(() => {
+            const video = videoRef.current;
+            if (!video) return;
+            for (let i = 0; i < video.textTracks.length; i += 1) {
+              video.textTracks[i].mode = 'showing';
+            }
+          }, 150);
+        }}
+      />
     </dialog>
   );
 };

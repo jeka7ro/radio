@@ -33,6 +33,7 @@ import {
   Trash2,
   CheckCircle2,
   FolderDown,
+  Subtitles,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
@@ -48,7 +49,12 @@ import {
   exportOfflineItemToDeviceFile,
   formatBytes,
 } from '../services/offlineMediaService';
+import {
+  fetchOnlineSubtitlesByImdb,
+  downloadSubtitleAsVttBlobUrl,
+} from '../services/subtitleSearchService';
 import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
+import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
 
 interface MediatecaViewProps {
   selectedCountry: EnrichedCountry;
@@ -805,6 +811,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   >(null);
   const [liveCurrentTime, setLiveCurrentTime] = useState<number>(0);
   const [liveDuration, setLiveDuration] = useState<number>(0);
+
+  // Online Subtitle Finder & Active WebVTT Track State
+  const [isSubFinderOpen, setIsSubFinderOpen] = useState<boolean>(false);
+  const [activeSubVttUrl, setActiveSubVttUrl] = useState<string | null>(null);
+  const [activeSubLabel, setActiveSubLabel] = useState<string>('');
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const vodIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -1877,6 +1888,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             <VodNativeHlsPlayer
               offlineItem={activeOfflineItem}
               poster={activeOfflineItem.poster}
+              subtitleVttUrl={activeSubVttUrl}
+              subtitleLabel={activeSubLabel}
+              onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
+              onClearSubtitle={() => {
+                setActiveSubVttUrl(null);
+                setActiveSubLabel('');
+              }}
               startAtSeconds={
                 (() => {
                   try {
@@ -2062,6 +2080,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         activeServer,
                         sub.id
                       );
+                      // Also auto-fetch OpenSubtitles track for this language if on Native Player
+                      if (activeVodItem.id.startsWith('tt')) {
+                        void fetchOnlineSubtitlesByImdb({
+                          imdbId: activeVodItem.id,
+                          type: activeVodItem.type,
+                          season: selectedSeason,
+                          episode: selectedEpisode,
+                        }).then(async (list) => {
+                          const match = list.find(
+                            (t) => t.langCode2 === sub.id
+                          );
+                          if (match) {
+                            const { vttBlobUrl } =
+                              await downloadSubtitleAsVttBlobUrl(match.url);
+                            setActiveSubVttUrl(vttBlobUrl);
+                            setActiveSubLabel(match.langLabel);
+                          }
+                        });
+                      }
                     }}
                     className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                       active
@@ -2074,6 +2111,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   </button>
                 );
               })}
+
+              <button
+                type="button"
+                onClick={() => setIsSubFinderOpen(true)}
+                title="Caută și descarcă subtitrări .SRT de pe internet (OpenSubtitles)"
+                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-950 hover:bg-emerald-900 border border-emerald-600/60 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+              >
+                <Subtitles className="w-3 h-3 shrink-0" />
+                <span>+ Subtitrări Net (.SRT)</span>
+              </button>
             </div>
           </div>
 
@@ -2162,6 +2209,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   hlsUrl={resolvedDirectStream.hlsUrl}
                   audioTrackLabels={resolvedDirectStream.audioNames}
                   startAtSeconds={resumeStartSeconds}
+                  subtitleVttUrl={activeSubVttUrl}
+                  subtitleLabel={activeSubLabel}
+                  onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
+                  onClearSubtitle={() => {
+                    setActiveSubVttUrl(null);
+                    setActiveSubLabel('');
+                  }}
                   poster={
                     activeVodItem.background ||
                     activeVodItem.poster ||
@@ -3276,6 +3330,26 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Online Subtitle Finder Modal (OpenSubtitles .SRT Search & Apply) */}
+      <OnlineSubtitleFinderModal
+        isOpen={isSubFinderOpen}
+        onClose={() => setIsSubFinderOpen(false)}
+        initialImdbId={
+          activeVodItem?.id.startsWith('tt') ? activeVodItem.id : ''
+        }
+        initialTitle={
+          activeVodItem?.name || activeOfflineItem?.title || ''
+        }
+        initialType={activeVodItem?.type || 'movie'}
+        initialSeason={selectedSeason}
+        initialEpisode={selectedEpisode}
+        initialLangFilter={preferredSubLang}
+        onApplySubtitle={({ vttBlobUrl, label }) => {
+          setActiveSubVttUrl(vttBlobUrl);
+          setActiveSubLabel(label);
+        }}
+      />
     </div>
   );
 };
