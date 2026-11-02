@@ -800,6 +800,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   // The start timestamp passed into the player when opening/switching servers/episodes
   const [resumeStartSeconds, setResumeStartSeconds] = useState<number>(0);
+  const [pendingResumePromptSec, setPendingResumePromptSec] = useState<
+    number | null
+  >(null);
   const [liveCurrentTime, setLiveCurrentTime] = useState<number>(0);
   const [liveDuration, setLiveDuration] = useState<number>(0);
 
@@ -959,23 +962,21 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       setSelectedEpisode(targetEpisode);
       setActiveServer(targetServer);
       setPreferredSubLang(targetSub);
-      setResumeStartSeconds(startSec);
-      setLiveCurrentTime(startSec);
       setLiveDuration(durSec);
 
-      updateWatchProgress(
-        item,
-        targetSeason,
-        targetEpisode,
-        Math.max(startSec, 5),
-        durSec,
-        targetServer,
-        targetSub
-      );
+      if (startSec > 10) {
+        setPendingResumePromptSec(startSec);
+        setResumeStartSeconds(startSec);
+        setLiveCurrentTime(startSec);
+      } else {
+        setPendingResumePromptSec(null);
+        setResumeStartSeconds(0);
+        setLiveCurrentTime(0);
+      }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
     },
-    [watchProgressMap, preferredSubLang, updateWatchProgress]
+    [watchProgressMap, preferredSubLang]
   );
 
   // Resolve Direct HLS Stream & Seasons/Episodes from `/api/vod-stream` whenever activeVodItem / season / episode changes
@@ -1126,7 +1127,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   // Fallback automatic watch-time tracker for iframe embeds
   useEffect(() => {
-    if (!activeVodItem || activeServer === 'kinogram_hls') return;
+    if (
+      !activeVodItem ||
+      activeServer === 'kinogram_hls' ||
+      pendingResumePromptSec !== null
+    ) {
+      return;
+    }
 
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
@@ -1155,32 +1162,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     activeServer,
     preferredSubLang,
     liveDuration,
+    pendingResumePromptSec,
     updateWatchProgress,
   ]);
-
-  const handleSeekToSeconds = (targetSeconds: number) => {
-    if (!activeVodItem) return;
-    const clean = Math.max(0, Math.floor(targetSeconds));
-    setResumeStartSeconds(clean);
-    setLiveCurrentTime(clean);
-    updateWatchProgress(
-      activeVodItem,
-      selectedSeason,
-      selectedEpisode,
-      clean,
-      liveDuration,
-      activeServer,
-      preferredSubLang
-    );
-    try {
-      vodIframeRef.current?.contentWindow?.postMessage(
-        { action: 'seek', time: clean },
-        '*'
-      );
-    } catch {
-      // ignore cross-origin error
-    }
-  };
 
   // Start Offline Download of the currently open Movie / Episode into IndexedDB
   const handleDownloadCurrentVodOffline = async () => {
@@ -1540,19 +1524,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
     setSelectedSeason(seasonNum);
     setSelectedEpisode(epNum);
-    setResumeStartSeconds(startSec);
-    setLiveCurrentTime(startSec);
     setLiveDuration(durSec);
 
-    updateWatchProgress(
-      activeVodItem,
-      seasonNum,
-      epNum,
-      Math.max(startSec, 5),
-      durSec,
-      activeServer,
-      preferredSubLang
-    );
+    if (startSec > 10) {
+      setPendingResumePromptSec(startSec);
+      setResumeStartSeconds(startSec);
+      setLiveCurrentTime(startSec);
+    } else {
+      setPendingResumePromptSec(null);
+      setResumeStartSeconds(0);
+      setLiveCurrentTime(0);
+    }
   };
 
   const toggleSaveVodItem = (item: CinemetaItem, e?: React.MouseEvent) => {
@@ -1954,7 +1936,58 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                {existingOfflineItem ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveOfflineItem(existingOfflineItem);
+                        setActiveVodItem(null);
+                      }}
+                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 transition-colors"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Redă Offline ({formatBytes(existingOfflineItem.sizeBytes)})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void exportOfflineItemToDeviceFile(existingOfflineItem)
+                      }
+                      title="Salvează fișierul în memoria telefonului / PC-ului"
+                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
+                    >
+                      <FolderDown className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Salvează</span>
+                    </button>
+                  </>
+                ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
+                  <div className="inline-flex items-center gap-1">
+                    <select
+                      aria-label="Calitate descărcare offline"
+                      value={downloadQuality}
+                      onChange={(e) =>
+                        setDownloadQuality(Number(e.target.value) as 360 | 720)
+                      }
+                      className="h-[30px] px-2 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-[11px] font-semibold outline-none cursor-pointer"
+                    >
+                      <option value={360}>SD 360p</option>
+                      <option value={720}>HD 720p</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={Boolean(activeDownloadProgress)}
+                      onClick={() => void handleDownloadCurrentVodOffline()}
+                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1 shadow-xs transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descarcă Offline</span>
+                    </button>
+                  </div>
+                ) : null}
+
                 <button
                   type="button"
                   onClick={handleFullscreenPlayer}
@@ -2044,12 +2077,78 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 VOD Stream Player (Native HLS Player on Server 1 OR Unsandboxed Iframe on Servers 2-7) */}
+          {/* 16:9 VOD Stream Player (with Resume Prompt if watched previously) */}
           <div
             ref={playerContainerRef}
             className="relative w-full aspect-video bg-black"
           >
-            {activeServer === 'kinogram_hls' ? (
+            {pendingResumePromptSec !== null ? (
+              <div className="relative w-full h-full flex items-center justify-center p-4 overflow-hidden">
+                {(activeVodItem.background || activeVodItem.poster) && (
+                  <img
+                    src={activeVodItem.background || activeVodItem.poster}
+                    alt=""
+                    className="absolute inset-0 w-full h-full object-cover opacity-25 blur-md scale-105 pointer-events-none"
+                  />
+                )}
+                <div className="relative z-10 max-w-md w-full p-5 sm:p-6 rounded-2xl bg-zinc-900/95 border border-zinc-700/80 shadow-2xl text-center space-y-4 backdrop-blur-md">
+                  <div className="w-11 h-11 rounded-2xl bg-brand-600/20 border border-brand-500/40 text-brand-400 flex items-center justify-center mx-auto">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-sm sm:text-base font-bold text-white">
+                      De unde vrei să pornească redarea?
+                    </h3>
+                    <p className="text-xs text-zinc-300">
+                      {activeVodItem.type === 'series'
+                        ? `Sezonul ${selectedSeason}, Episodul ${selectedEpisode} — ai rămas la `
+                        : 'Ai rămas la '}
+                      <strong className="text-amber-400 font-mono">
+                        {formatWatchSeconds(pendingResumePromptSec)}
+                      </strong>
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const resumeSec = pendingResumePromptSec;
+                        setResumeStartSeconds(resumeSec);
+                        setLiveCurrentTime(resumeSec);
+                        setPendingResumePromptSec(null);
+                      }}
+                      className="w-full sm:w-auto min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-1.5 shadow-md transition-colors cursor-pointer"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>
+                        Continuă de la {formatWatchSeconds(pendingResumePromptSec)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResumeStartSeconds(0);
+                        setLiveCurrentTime(0);
+                        setPendingResumePromptSec(null);
+                        updateWatchProgress(
+                          activeVodItem,
+                          selectedSeason,
+                          selectedEpisode,
+                          0,
+                          liveDuration,
+                          activeServer,
+                          preferredSubLang
+                        );
+                      }}
+                      className="w-full sm:w-auto min-h-[38px] px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>De la început (00:00)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : activeServer === 'kinogram_hls' ? (
               isDirectStreamLoading ? (
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-zinc-300">
                   <Loader2 className="w-8 h-8 text-brand-400 animate-spin" />
@@ -2139,152 +2238,44 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             )}
           </div>
 
-          {/* Resume + Offline Download Control Strip */}
-          <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-t border-zinc-800 space-y-2 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-950/90 border border-brand-700/60 text-brand-300 font-semibold">
-                  <History className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-                  <span>
-                    Poziție salvată: <strong>{formatWatchSeconds(liveCurrentTime)}</strong>
-                  </span>
-                </span>
-
-                {/* Offline Download Controls */}
-                {existingOfflineItem ? (
-                  <div className="inline-flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveOfflineItem(existingOfflineItem);
-                        setActiveVodItem(null);
-                      }}
-                      className="min-h-[28px] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold inline-flex items-center gap-1.5 transition-colors"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>
-                        Descărcat Offline ({formatBytes(existingOfflineItem.sizeBytes)}) — Redă Offline
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void exportOfflineItemToDeviceFile(existingOfflineItem)
-                      }
-                      title="Salvează fișierul în memoria telefonului / PC-ului"
-                      className="min-h-[28px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 font-semibold inline-flex items-center gap-1"
-                    >
-                      <FolderDown className="w-3.5 h-3.5" />
-                      <span>Salvează fișierul</span>
-                    </button>
-                  </div>
-                ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
-                  <div className="inline-flex items-center gap-1.5">
-                    <select
-                      aria-label="Calitate descărcare offline"
-                      value={downloadQuality}
-                      onChange={(e) =>
-                        setDownloadQuality(Number(e.target.value) as 360 | 720)
-                      }
-                      className="h-7 px-2.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-200 font-semibold outline-none cursor-pointer"
-                    >
-                      <option value={360}>SD 360p (Rapid ~250MB)</option>
-                      <option value={720}>HD 720p (~600MB)</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      disabled={Boolean(activeDownloadProgress)}
-                      onClick={() => void handleDownloadCurrentVodOffline()}
-                      className="min-h-[28px] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Descarcă Offline pe Device</span>
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-                {liveCurrentTime > 15 && (
-                  <button
-                    type="button"
-                    onClick={() => handleSeekToSeconds(liveCurrentTime)}
-                    title="Sari direct la minutul salvat"
-                    className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
-                  >
-                    <Play className="w-3 h-3 fill-current" />
-                    <span>Reluare {formatWatchSeconds(liveCurrentTime)}</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleSeekToSeconds(Math.max(0, liveCurrentTime - 300))
-                  }
-                  title="Înapoi cu 5 minute"
-                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
-                >
-                  -5 min
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSeekToSeconds(liveCurrentTime + 300)}
-                  title="Înainte cu 5 minute"
-                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
-                >
-                  +5 min
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSeekToSeconds(0)}
-                  title="Pornește filmul/episodul de la început (00:00)"
-                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>De la 00:00</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Active Offline Download Progress Bar */}
-            {activeDownloadProgress && (
-              <div className="p-2.5 rounded-xl bg-zinc-950 border border-emerald-700/60 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-emerald-300 font-bold flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>{activeDownloadProgress.stage}</span>
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-white">
-                      {activeDownloadProgress.percent}% •{' '}
-                      {formatBytes(activeDownloadProgress.downloadedBytes)}
+          {/* Active Offline Download Progress Bar (only visible during download) */}
+          {(activeDownloadProgress || downloadError) && (
+            <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-t border-zinc-800 space-y-2 text-xs">
+              {activeDownloadProgress && (
+                <div className="p-2.5 rounded-xl bg-zinc-950 border border-emerald-700/60 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-emerald-300 font-bold flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>{activeDownloadProgress.stage}</span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={handleCancelDownload}
-                      className="px-2.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-bold"
-                    >
-                      Anulează
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-white">
+                        {activeDownloadProgress.percent}% •{' '}
+                        {formatBytes(activeDownloadProgress.downloadedBytes)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCancelDownload}
+                        className="px-2.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-bold"
+                      >
+                        Anulează
+                      </button>
+                    </div>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
+                      style={{ width: `${activeDownloadProgress.percent}%` }}
+                    />
                   </div>
                 </div>
-                <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
-                    style={{ width: `${activeDownloadProgress.percent}%` }}
-                  />
-                </div>
-              </div>
-            )}
+              )}
 
-            {downloadError && (
-              <p className="text-rose-400 font-semibold">{downloadError}</p>
-            )}
-          </div>
+              {downloadError && (
+                <p className="text-rose-400 font-semibold">{downloadError}</p>
+              )}
+            </div>
+          )}
 
           {/* Series Seasons & Episodes Selector */}
           {activeVodItem.type === 'series' && (
