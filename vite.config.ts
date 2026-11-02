@@ -1062,6 +1062,41 @@ function tvStreamProxyPlugin(): Plugin {
         }
       });
 
+      server.middlewares.use('/api/vod-stream', async (req, res) => {
+        try {
+          const reqUrl = new URL(req.url || '', 'http://localhost');
+          const kp = reqUrl.searchParams.get('kp') || '';
+          const imdb = reqUrl.searchParams.get('imdb') || '';
+          const season = Number(reqUrl.searchParams.get('season')) || 1;
+          const episode = Number(reqUrl.searchParams.get('episode')) || 1;
+          // @ts-expect-error .mjs dynamic import
+          const mod = await import('./netlify/functions/vod-stream.mjs');
+          const result = await mod.resolveVodStreamData({
+            kp,
+            imdb,
+            season,
+            episode,
+          });
+          res.writeHead(result.ok ? 200 : 404, {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache',
+          });
+          res.end(JSON.stringify(result));
+        } catch (err) {
+          res.writeHead(500, {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json; charset=utf-8',
+          });
+          res.end(
+            JSON.stringify({
+              ok: false,
+              error: err instanceof Error ? err.message : 'VOD stream error',
+            })
+          );
+        }
+      });
+
       server.middlewares.use('/api/tv-epg', async (req, res) => {
         try {
           const reqUrl = new URL(req.url || '', 'http://localhost');

@@ -28,20 +28,44 @@ import {
   Compass,
   Smile,
   Globe,
+  Download,
+  HardDriveDownload,
+  Trash2,
+  CheckCircle2,
+  FolderDown,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
 import { TvChannel } from '../types/radio';
 import { parseM3uPlaylist } from '../services/tvApi';
+import {
+  OfflineMediaItem,
+  OfflineDownloadProgress,
+  listOfflineItems,
+  deleteOfflineItem,
+  downloadHlsToOfflineDb,
+  saveLocalFileToOfflineDb,
+  exportOfflineItemToDeviceFile,
+  formatBytes,
+} from '../services/offlineMediaService';
+import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
 
 interface MediatecaViewProps {
   selectedCountry: EnrichedCountry;
 }
 
-type MediatecaTab = 'movies' | 'series' | 'saved' | 'lampa' | 'custom';
+type MediatecaTab =
+  | 'movies'
+  | 'series'
+  | 'russia'
+  | 'offline'
+  | 'saved'
+  | 'lampa'
+  | 'custom';
 
 interface CinemetaItem {
-  id: string; // IMDb ID e.g. tt15239678
+  id: string; // IMDb ID e.g. tt15239678 or kp_5304403
+  kpId?: string; // Kinopoisk ID e.g. 5304403
   moviedb_id?: number | string; // TMDB ID e.g. 693134
   type: 'movie' | 'series';
   name: string;
@@ -75,6 +99,8 @@ interface DetailedMeta extends CinemetaItem {
 }
 
 type VodServerId =
+  | 'kinogram_hls'
+  | 'kinogram_embed'
   | 'vidspark'
   | 'vidzee'
   | 'nontongo'
@@ -101,6 +127,24 @@ interface VodWatchProgressEntry {
   episodeProgressMap?: Record<string, EpisodeProgress>;
 }
 
+interface ResolvedDirectVodStream {
+  ok: boolean;
+  type?: 'movie' | 'series';
+  hlsUrl?: string;
+  title?: string;
+  duration?: number;
+  audioNames?: string[];
+  seasons?: Array<{
+    season: number;
+    episodes: Array<{
+      episode: number;
+      title: string;
+      duration: number;
+      audioNames?: string[];
+    }>;
+  }>;
+}
+
 const SUBTITLE_LANGUAGES: Array<{
   id: SubtitleLangId;
   label: string;
@@ -116,28 +160,38 @@ const SUBTITLE_LANGUAGES: Array<{
 
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
+    id: 'kinogram_hls',
+    label: 'Server 1: Player Nativ HD (Audio RU + Offline)',
+    badge: 'Fără Reclame • Dublaj RU / Original + Descărcare Offline pe Device',
+  },
+  {
+    id: 'kinogram_embed',
+    label: 'Server 2: Kinogram RU (Дубляж)',
+    badge: 'Fără Pop-up • Filme & Seriale Rusești + Dublaj RU Multi-Audio',
+  },
+  {
     id: 'vidspark',
-    label: 'Server 1: VidSpark Direct HD',
+    label: 'Server 3: VidSpark Direct HD',
     badge: 'Fără Reclame • Reluare Automată + Subtitrări RO/RU/EN',
   },
   {
     id: 'vidzee',
-    label: 'Server 2: VidZee Multi-Server',
+    label: 'Server 4: VidZee Multi-Server',
     badge: 'Fără Pop-up • Reluare Automată + Multi-Sub',
   },
   {
     id: 'nontongo',
-    label: 'Server 3: NontonGo VIP & 4K',
+    label: 'Server 5: NontonGo VIP & 4K',
     badge: 'Fără Pop-up • 3 Surse HD/VIP + Subtitrări',
   },
   {
     id: 'vidsrc_pm',
-    label: 'Server 4: VidSrc Pro',
+    label: 'Server 6: VidSrc Pro',
     badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
   },
   {
     id: 'frembed',
-    label: 'Server 5: CloudStream Backup',
+    label: 'Server 7: CloudStream Backup',
     badge: 'Fără Pop-up • Backup Global',
   },
 ];
@@ -160,6 +214,271 @@ const GENRE_FILTERS: Array<{
   { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
   { id: 'Romance', label: 'Romantic', Icon: Heart },
   { id: 'Documentary', label: 'Documentare', Icon: Globe },
+];
+
+/**
+ * Curated & Verified Russian Movies & Series Catalog (with exact Kinopoisk & IMDb IDs)
+ */
+const RUSSIAN_MEDIA_CATALOG: CinemetaItem[] = [
+  {
+    id: 'tt28429213',
+    kpId: '5304403',
+    type: 'series',
+    name: 'Слово пацана. Кровь на асфальте',
+    releaseInfo: '2023',
+    imdbRating: '8.5',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/5304403.jpg',
+    genres: ['Драма', 'Криминал'],
+    description:
+      'Конец 1980-х. Пока родители борются за выживание, брошенные всеми дети сбиваются в уличные стаи и делят асфальт.',
+  },
+  {
+    id: 'tt0337898',
+    type: 'series',
+    name: 'Бригада (Brigada)',
+    releaseInfo: '2002',
+    imdbRating: '8.3',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/79848.jpg',
+    genres: ['Криминал', 'Драма', 'Боевик'],
+    description:
+      'История четырех друзей детства, обычных московских парней, Саши Белого, Космоса, Пчёлы и Фила, выросших в одном дворе.',
+  },
+  {
+    id: 'tt4426042',
+    kpId: '820638',
+    type: 'series',
+    name: 'Мажор (Silver Spoon)',
+    releaseInfo: '2014–2025',
+    imdbRating: '7.8',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/820638.jpg',
+    genres: ['Драма', 'Криминал', 'Детектив'],
+    description:
+      'Сын высокопоставленного человека Игорь Соколовский попадает на службу в отделение полиции, где пытается раскрыть тайну гибели матери.',
+  },
+  {
+    id: 'tt2363260',
+    kpId: '687595',
+    type: 'series',
+    name: 'Кухня (Kitchen)',
+    releaseInfo: '2012–2016',
+    imdbRating: '8.4',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/687595.jpg',
+    genres: ['Комедия', 'Мелодрама'],
+    description:
+      'Максим Лавров приезжает в Москву и устраивается поваром в элитный ресторан французской кухни Claude Monet.',
+  },
+  {
+    id: 'tt0118767',
+    kpId: '41519',
+    type: 'movie',
+    name: 'Брат (Brat)',
+    releaseInfo: '1997',
+    imdbRating: '7.8',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/41519.jpg',
+    genres: ['Драма', 'Криминал', 'Боевик'],
+    description:
+      'Демобилизованный Данила Багров приезжает в Петербург к старшему брату и оказывается втянут в криминальный мир 90-х.',
+  },
+  {
+    id: 'tt0238883',
+    kpId: '41520',
+    type: 'movie',
+    name: 'Брат 2 (Brat 2)',
+    releaseInfo: '2000',
+    imdbRating: '7.8',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/41520.jpg',
+    genres: ['Боевик', 'Криминал'],
+    description:
+      'Данила Багров отправляется в Америку, чтобы восстановить справедливость и помочь брату погибшего боевого товарища.',
+  },
+  {
+    id: 'tt5135336',
+    kpId: '838050',
+    type: 'series',
+    name: 'Метод (The Method)',
+    releaseInfo: '2015–2025',
+    imdbRating: '7.4',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/838050.jpg',
+    genres: ['Триллер', 'Детектив', 'Драма'],
+    description:
+      'Гениальный следователь Родион Меглин раскрывает самые сложные серийные убийства вместе со стажеркой Есеней.',
+  },
+  {
+    id: 'tt11418452',
+    kpId: '1183582',
+    type: 'movie',
+    name: 'Холоп (Son of a Rich)',
+    releaseInfo: '2019',
+    imdbRating: '6.7',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1183582.jpg',
+    genres: ['Комедия'],
+    description:
+      'Избалованный мажор Гриша попадает в подстроенную деревню XIX века, где становится обычным конюхом.',
+  },
+  {
+    id: 'tt21916002',
+    kpId: '5047468',
+    type: 'movie',
+    name: 'Холоп 2 (Son of a Rich 2)',
+    releaseInfo: '2024',
+    imdbRating: '6.5',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/5047468.jpg',
+    genres: ['Комедия'],
+    description:
+      'Перевоспитавшийся Гриша сам берется за перевоспитание избалованной дочки чиновницы Кати в декорациях 1812 года.',
+  },
+  {
+    id: 'tt14536120',
+    kpId: '1115471',
+    type: 'movie',
+    name: 'Мастер и Маргарита',
+    releaseInfo: '2024',
+    imdbRating: '7.6',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1115471.jpg',
+    genres: ['Драма', 'Фэнтези', 'Мелодрама'],
+    description:
+      'Москва 1930-х годов. Известный писатель оказывается в центре литературного скандала и знакомится с Маргаритой и таинственным Воландом.',
+  },
+  {
+    id: 'tt9151230',
+    kpId: '1108682',
+    type: 'series',
+    name: 'Эпидемия (To the Lake)',
+    releaseInfo: '2019–2022',
+    imdbRating: '7.3',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1108682.jpg',
+    genres: ['Фантастика', 'Триллер', 'Драма'],
+    description:
+      'Москву поражает неизвестный смертельный вирус. Несколько семей пытаются спастись на уединенном острове в Карелии.',
+  },
+  {
+    id: 'tt14306560',
+    kpId: '1224067',
+    type: 'series',
+    name: 'Вампиры средней полосы',
+    releaseInfo: '2021–2025',
+    imdbRating: '8.3',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1224067.jpg',
+    genres: ['Детектив', 'Комедия', 'Фэнтези'],
+    description:
+      'В Смоленске живет необычная семья вампиров во главе со старейшиной Святославом Вернидубовичем, которые никого не убивают.',
+  },
+  {
+    id: 'tt10404944',
+    kpId: '1100777',
+    type: 'series',
+    name: 'Триггер (Trigger)',
+    releaseInfo: '2018–2024',
+    imdbRating: '8.5',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1100777.jpg',
+    genres: ['Драма', 'Психология'],
+    description:
+      'Психолог Артём Стрелецкий практикует метод провокативной терапии, заставляя клиентов взглянуть в лицо своим страхам.',
+  },
+  {
+    id: 'kp_913033',
+    kpId: '913033',
+    type: 'series',
+    name: 'Полицейский с Рублёвки',
+    releaseInfo: '2016–2019',
+    imdbRating: '8.1',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/913033.jpg',
+    genres: ['Комедия', 'Детектив'],
+    description:
+      'Гриша Измайлов — оперуполномоченный в самом элитном районе России, который раскрывает дела с фирменным черным юмором.',
+  },
+  {
+    id: 'tt22074038',
+    kpId: '4370148',
+    type: 'movie',
+    name: 'Чебурашка (Cheburashka)',
+    releaseInfo: '2023',
+    imdbRating: '7.3',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/4370148.jpg',
+    genres: ['Семейный', 'Комедия'],
+    description:
+      'Мохнатый непоседливый зверек из далекой апельсиновой страны попадает в тихий приморский городок к угрюмому садовнику Гене.',
+  },
+  {
+    id: 'tt8820590',
+    type: 'movie',
+    name: 'Т-34 (T-34)',
+    releaseInfo: '2018',
+    imdbRating: '6.8',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/939981.jpg',
+    genres: ['Военный', 'Боевик', 'Драма'],
+    description:
+      'Пленный курсант Ивушкин планирует дерзкий побег с немецкого полигона на легендарном танке Т-34.',
+  },
+  {
+    id: 'tt3560686',
+    kpId: '808639',
+    type: 'movie',
+    name: 'Дурак (The Fool)',
+    releaseInfo: '2014',
+    imdbRating: '8.1',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/808639.jpg',
+    genres: ['Драма'],
+    description:
+      'Простой сантехник обнаруживает трещину в старом общежитии, которое может рухнуть в любую минуту вместе с 800 жильцами.',
+  },
+  {
+    id: 'tt2802154',
+    kpId: '705356',
+    type: 'movie',
+    name: 'Левиафан (Leviathan)',
+    releaseInfo: '2014',
+    imdbRating: '7.6',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/705356.jpg',
+    genres: ['Драма', 'Криминал'],
+    description:
+      'Автомеханик Николай из северного городка вступает в неравную борьбу с коррумпированным мэром за свой дом и землю.',
+  },
+  {
+    id: 'tt0381936',
+    type: 'movie',
+    name: 'Бумер (Bumer)',
+    releaseInfo: '2003',
+    imdbRating: '7.0',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/40774.jpg',
+    genres: ['Криминал', 'Драма'],
+    description:
+      'Четверо друзей уходят от погони на черном BMW по дорогам российской глубинки.',
+  },
+  {
+    id: 'tt0420982',
+    type: 'movie',
+    name: 'Жмурки (Dead Man’s Bluff)',
+    releaseInfo: '2005',
+    imdbRating: '7.2',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/81555.jpg',
+    genres: ['Комедия', 'Криминал'],
+    description:
+      'Черная криминальная комедия Алексея Балабанова о двух незадачливых бандитах середины 90-х.',
+  },
+  {
+    id: 'kp_378244',
+    kpId: '378244',
+    type: 'series',
+    name: 'Ликвидация (Liquidation)',
+    releaseInfo: '2007',
+    imdbRating: '8.5',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/378244.jpg',
+    genres: ['Детектив', 'Криминал', 'Драма'],
+    description:
+      'Послевоенная Одесса, 1946 год. Давид Гоцман и маршал Жуков ведут борьбу с бандитским подпольем и неуловимым Академиком.',
+  },
+  {
+    id: 'tt0403783',
+    type: 'series',
+    name: 'Мастер и Маргарита (Сериал 2005)',
+    releaseInfo: '2005',
+    imdbRating: '7.6',
+    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/161104.jpg',
+    genres: ['Драма', 'Мистика'],
+    description:
+      'Классическая многосерийная экранизация великого романа Михаила Булгакова режиссера Владимира Бортко.',
+  },
 ];
 
 const LAMPA_PLUGINS = [
@@ -204,6 +523,8 @@ function loadSavedVodItems(): CinemetaItem[] {
 }
 
 const VALID_SERVERS = new Set<VodServerId>([
+  'kinogram_hls',
+  'kinogram_embed',
   'vidspark',
   'vidzee',
   'nontongo',
@@ -215,7 +536,7 @@ function normalizeServerId(raw: unknown): VodServerId {
   if (typeof raw === 'string' && VALID_SERVERS.has(raw as VodServerId)) {
     return raw as VodServerId;
   }
-  return 'vidspark';
+  return 'kinogram_hls';
 }
 
 function loadWatchProgressMap(): Record<string, VodWatchProgressEntry> {
@@ -268,12 +589,23 @@ function buildVodEmbedUrl(
   subLang: SubtitleLangId,
   startSeconds: number
 ): string {
-  const imdbId = item.id;
-  const tmdbOrImdbId = item.moviedb_id ? String(item.moviedb_id) : imdbId;
+  const imdbId = item.id.startsWith('tt') ? item.id : '';
+  const kpId =
+    item.kpId ||
+    (item.id.startsWith('kp_') ? item.id.replace(/^kp_/, '') : '');
+  const tmdbOrImdbId = item.moviedb_id
+    ? String(item.moviedb_id)
+    : imdbId || kpId;
   const isSeries = item.type === 'series';
   const start = Math.max(0, Math.floor(startSeconds || 0));
 
   switch (server) {
+    case 'kinogram_hls':
+    case 'kinogram_embed': {
+      const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;
+      const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
+      return `https://api.kinogram.best/embed/${path}${qs}`;
+    }
     case 'vidspark': {
       const params = new URLSearchParams();
       params.set('autoplay', 'true');
@@ -327,6 +659,60 @@ function buildVodEmbedUrl(
   }
 }
 
+async function searchKinopoiskByKeyword(
+  keyword: string
+): Promise<CinemetaItem[]> {
+  try {
+    const res = await fetch(
+      `https://kinopoiskapiunofficial.tech/api/v2.1/films/search-by-keyword?keyword=${encodeURIComponent(
+        keyword.trim()
+      )}&page=1`,
+      {
+        headers: {
+          'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+        },
+      }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      films?: Array<{
+        filmId: number;
+        nameRu?: string;
+        nameEn?: string;
+        type?: string;
+        year?: string;
+        rating?: string;
+        posterUrlPreview?: string;
+        posterUrl?: string;
+        description?: string;
+        genres?: Array<{ genre: string }>;
+      }>;
+    };
+    return (data.films || []).map((f) => {
+      const isSeries =
+        f.type === 'TV_SERIES' ||
+        f.type === 'MINI_SERIES' ||
+        f.type === 'TV_SHOW';
+      return {
+        id: `kp_${f.filmId}`,
+        kpId: String(f.filmId),
+        type: isSeries ? 'series' : 'movie',
+        name: f.nameRu || f.nameEn || `Film #${f.filmId}`,
+        releaseInfo: f.year && f.year !== 'null' ? f.year : undefined,
+        imdbRating:
+          f.rating && f.rating !== 'null' && !f.rating.includes('%')
+            ? f.rating
+            : undefined,
+        poster: f.posterUrlPreview || f.posterUrl,
+        genres: f.genres?.map((g) => g.genre).filter(Boolean),
+        description: f.description,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function resolveSearchQueryToEnglishIfCyrillic(
   rawQuery: string
 ): Promise<string> {
@@ -361,11 +747,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   );
 
   const [activeTab, setActiveTab] = useState<MediatecaTab>('movies');
+  const [russiaFilter, setRussiaFilter] = useState<'all' | 'movie' | 'series'>(
+    'all'
+  );
   const [selectedGenre, setSelectedGenre] = useState<string>('top');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedQuery, setDebouncedQuery] = useState<string>('');
 
   const [catalogItems, setCatalogItems] = useState<CinemetaItem[]>([]);
+  const [russiaSearchResults, setRussiaSearchResults] = useState<
+    CinemetaItem[]
+  >([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [skipOffset, setSkipOffset] = useState<number>(0);
@@ -375,6 +767,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     loadSavedVodItems()
   );
 
+  // Offline Downloaded Videos Library State (IndexedDB)
+  const [offlineItems, setOfflineItems] = useState<OfflineMediaItem[]>([]);
+  const [activeOfflineItem, setActiveOfflineItem] =
+    useState<OfflineMediaItem | null>(null);
+  const [downloadQuality, setDownloadQuality] = useState<360 | 720>(360);
+  const [activeDownloadProgress, setActiveDownloadProgress] =
+    useState<OfflineDownloadProgress | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadAbortRef = useRef<AbortController | null>(null);
+  const localVideoInputRef = useRef<HTMLInputElement | null>(null);
+
   // Watch progress state ("Continuă vizionarea — De unde ai rămas")
   const [watchProgressMap, setWatchProgressMap] = useState<
     Record<string, VodWatchProgressEntry>
@@ -383,16 +786,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   // Active Movie / Series Player Modal state
   const [activeVodItem, setActiveVodItem] = useState<CinemetaItem | null>(null);
   const [detailedMeta, setDetailedMeta] = useState<DetailedMeta | null>(null);
+  const [resolvedDirectStream, setResolvedDirectStream] =
+    useState<ResolvedDirectVodStream | null>(null);
+  const [isDirectStreamLoading, setIsDirectStreamLoading] =
+    useState<boolean>(false);
   const [isMetaLoading, setIsMetaLoading] = useState<boolean>(false);
-  const [activeServer, setActiveServer] = useState<VodServerId>('vidspark');
+  const [activeServer, setActiveServer] =
+    useState<VodServerId>('kinogram_hls');
   const [preferredSubLang, setPreferredSubLang] =
     useState<SubtitleLangId>('ro');
   const [selectedSeason, setSelectedSeason] = useState<number>(1);
   const [selectedEpisode, setSelectedEpisode] = useState<number>(1);
 
-  // The start timestamp passed into the iframe URL when opening/switching servers/episodes
+  // The start timestamp passed into the player when opening/switching servers/episodes
   const [resumeStartSeconds, setResumeStartSeconds] = useState<number>(0);
-  // The live current playback second tracked via postMessage + active watch timer
   const [liveCurrentTime, setLiveCurrentTime] = useState<number>(0);
   const [liveDuration, setLiveDuration] = useState<number>(0);
 
@@ -414,6 +821,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [m3uPlaylistUrl, setM3uPlaylistUrl] = useState('');
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Refresh offline library from IndexedDB
+  const refreshOfflineLibrary = useCallback(async () => {
+    try {
+      const items = await listOfflineItems();
+      setOfflineItems(items);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshOfflineLibrary();
+  }, [refreshOfflineLibrary]);
 
   // Sorted list of items in "Continuă vizionarea"
   const continueWatchingList = useMemo(() => {
@@ -495,6 +916,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       overrideEpisode?: number,
       overrideStartSeconds?: number
     ) => {
+      setActiveOfflineItem(null);
+      setDownloadError(null);
+
       const saved = watchProgressMap[item.id];
       const targetSeason =
         overrideSeason ?? (saved?.season ? saved.season : 1);
@@ -520,9 +944,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           ? (epSaved?.duration ?? saved?.duration ?? 2700)
           : (saved?.duration ?? 5400);
 
+      // Default to Native HLS (Server 1) so Russian audio & Offline Download are immediately ready
       const targetServer = saved?.server
         ? normalizeServerId(saved.server)
-        : activeServer;
+        : 'kinogram_hls';
       const targetSub = saved?.subLang || preferredSubLang;
 
       preserveEpisodeOnOpenRef.current = Boolean(
@@ -540,7 +965,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       setLiveCurrentTime(startSec);
       setLiveDuration(durSec);
 
-      // Immediately record that this item was opened
       updateWatchProgress(
         item,
         targetSeason,
@@ -553,12 +977,59 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
     },
-    [watchProgressMap, activeServer, preferredSubLang, updateWatchProgress]
+    [watchProgressMap, preferredSubLang, updateWatchProgress]
   );
 
-  // Listen to real-time postMessage events from VidSpark / VidSrc / VidZee / PlayerJS embeds
+  // Resolve Direct HLS Stream & Seasons/Episodes from `/api/vod-stream` whenever activeVodItem / season / episode changes
   useEffect(() => {
-    if (!activeVodItem) return;
+    if (!activeVodItem) {
+      setResolvedDirectStream(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsDirectStreamLoading(true);
+
+    const kp =
+      activeVodItem.kpId ||
+      (activeVodItem.id.startsWith('kp_')
+        ? activeVodItem.id.replace(/^kp_/, '')
+        : '');
+    const imdb = activeVodItem.id.startsWith('tt') ? activeVodItem.id : '';
+
+    const fetchDirectStream = async () => {
+      try {
+        const res = await fetch(
+          `/api/vod-stream?kp=${encodeURIComponent(kp)}&imdb=${encodeURIComponent(
+            imdb
+          )}&season=${selectedSeason}&episode=${selectedEpisode}`
+        );
+        if (!res.ok) {
+          if (!cancelled) setResolvedDirectStream({ ok: false });
+          return;
+        }
+        const data = (await res.json()) as ResolvedDirectVodStream;
+        if (cancelled) return;
+        setResolvedDirectStream(data);
+        if (data.duration && data.duration > 60) {
+          setLiveDuration(data.duration);
+        }
+      } catch {
+        if (!cancelled) setResolvedDirectStream({ ok: false });
+      } finally {
+        if (!cancelled) setIsDirectStreamLoading(false);
+      }
+    };
+
+    void fetchDirectStream();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeVodItem, selectedSeason, selectedEpisode]);
+
+  // Listen to real-time postMessage events from VidSpark / VidSrc / VidZee embeds
+  useEffect(() => {
+    if (!activeVodItem || activeServer === 'kinogram_hls') return;
 
     const handleMessage = (event: MessageEvent) => {
       let payload = event.data;
@@ -576,7 +1047,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       let reportedTime: number | null = null;
       let reportedDuration: number | null = null;
 
-      // 1. VidSpark / VidSrc Pro format: { source: 'vidspark-player', event: 'timeupdate' | 'seeked' | 'pause', currentTime, duration }
       if (
         typeof payload.currentTime === 'number' &&
         Number.isFinite(payload.currentTime)
@@ -589,9 +1059,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         ) {
           reportedDuration = payload.duration;
         }
-      }
-      // 2. VidZee / VidLink PLAYER_EVENT format: { type: 'PLAYER_EVENT', data: { event, currentTime, duration } }
-      else if (
+      } else if (
         payload.type === 'PLAYER_EVENT' &&
         payload.data &&
         typeof payload.data.currentTime === 'number'
@@ -603,9 +1071,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         ) {
           reportedDuration = payload.data.duration;
         }
-      }
-      // 3. MEDIA_DATA format
-      else if (payload.type === 'MEDIA_DATA' && payload.data) {
+      } else if (payload.type === 'MEDIA_DATA' && payload.data) {
         const progress =
           payload.data.progress?.watched ?? payload.data.currentTime;
         const duration =
@@ -653,13 +1119,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     updateWatchProgress,
   ]);
 
-  // Fallback automatic watch-time tracker (every 5 seconds while the movie/series player is open & visible)
+  // Fallback automatic watch-time tracker for iframe embeds
   useEffect(() => {
-    if (!activeVodItem) return;
+    if (!activeVodItem || activeServer === 'kinogram_hls') return;
 
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      // If the embed player already sent a postMessage within the last 6 seconds, rely on its exact timestamp
       if (Date.now() - lastPostMessageTimeRef.current < 6000) return;
 
       setLiveCurrentTime((prev) => {
@@ -688,7 +1153,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     updateWatchProgress,
   ]);
 
-  // Send seek command to iframe or reload iframe with updated startAt timestamp
   const handleSeekToSeconds = (targetSeconds: number) => {
     if (!activeVodItem) return;
     const clean = Math.max(0, Math.floor(targetSeconds));
@@ -713,6 +1177,92 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     }
   };
 
+  // Start Offline Download of the currently open Movie / Episode into IndexedDB
+  const handleDownloadCurrentVodOffline = async () => {
+    if (!activeVodItem || !resolvedDirectStream?.hlsUrl) return;
+    if (activeDownloadProgress) return;
+
+    setDownloadError(null);
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
+
+    const offlineId =
+      activeVodItem.type === 'series'
+        ? `vod_${activeVodItem.id}_S${selectedSeason}E${selectedEpisode}`
+        : `vod_${activeVodItem.id}`;
+
+    const subtitleLabel =
+      activeVodItem.type === 'series'
+        ? `Sezonul ${selectedSeason} • Episodul ${selectedEpisode}`
+        : activeVodItem.releaseInfo || 'Film Complet';
+
+    try {
+      setActiveDownloadProgress({
+        percent: 1,
+        downloadedBytes: 0,
+        totalSegments: 0,
+        completedSegments: 0,
+        stage: 'Se pregătește descărcarea Offline...',
+      });
+
+      await downloadHlsToOfflineDb({
+        id: offlineId,
+        title: activeVodItem.name,
+        subtitleLabel,
+        poster:
+          activeVodItem.poster ||
+          `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`,
+        masterM3u8Url: resolvedDirectStream.hlsUrl,
+        preferredHeight: downloadQuality,
+        audioLabel:
+          resolvedDirectStream.audioNames?.[0] || 'Русский / Original',
+        signal: controller.signal,
+        onProgress: (prog) => setActiveDownloadProgress(prog),
+      });
+
+      await refreshOfflineLibrary();
+      window.setTimeout(() => {
+        setActiveDownloadProgress(null);
+      }, 2500);
+    } catch (err) {
+      setActiveDownloadProgress(null);
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setDownloadError('Descărcarea a fost oprită.');
+      } else {
+        setDownloadError(
+          err instanceof Error
+            ? err.message
+            : 'Eroare la descărcarea filmului offline.'
+        );
+      }
+    } finally {
+      downloadAbortRef.current = null;
+    }
+  };
+
+  const handleCancelDownload = () => {
+    downloadAbortRef.current?.abort();
+    downloadAbortRef.current = null;
+    setActiveDownloadProgress(null);
+  };
+
+  const handleImportLocalVideoToOfflineDb = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const saved = await saveLocalFileToOfflineDb(file);
+      await refreshOfflineLibrary();
+      setActiveOfflineItem(saved);
+      setActiveVodItem(null);
+    } catch {
+      // ignore
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   // Debounce search query
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -720,6 +1270,28 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     }, 350);
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
+
+  // Search Kinopoisk when in 'russia' tab OR when user types Cyrillic
+  useEffect(() => {
+    if (activeTab !== 'russia') return;
+    if (!debouncedQuery) {
+      setRussiaSearchResults([]);
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    void searchKinopoiskByKeyword(debouncedQuery).then((res) => {
+      if (!cancelled) {
+        setRussiaSearchResults(res);
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, debouncedQuery]);
 
   // Fetch Movies or Series catalog from Cinemeta
   useEffect(() => {
@@ -733,6 +1305,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
     const fetchCatalog = async () => {
       try {
+        // If user searches in Cyrillic in Movies/Series tab, also fetch Kinopoisk results!
+        if (debouncedQuery && /[а-яА-ЯёЁ]/.test(debouncedQuery)) {
+          const kpRes = await searchKinopoiskByKeyword(debouncedQuery);
+          if (!cancelled && kpRes.length > 0) {
+            setCatalogItems(kpRes);
+            setHasMore(false);
+            setIsLoading(false);
+            return;
+          }
+        }
+
         let url = '';
         if (debouncedQuery) {
           const effectiveQuery =
@@ -833,6 +1416,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       return;
     }
 
+    if (!activeVodItem.id.startsWith('tt')) {
+      setDetailedMeta({ ...activeVodItem });
+      setIsMetaLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setIsMetaLoading(true);
 
@@ -851,7 +1440,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           type: activeVodItem.type,
         });
 
-        // Only default to Season 1 Episode 1 if we didn't restore a saved episode
         if (
           !preserveEpisodeOnOpenRef.current &&
           activeVodItem.type === 'series' &&
@@ -892,25 +1480,50 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     };
   }, [activeVodItem]);
 
+  // Combine Cinemeta episodes with Kinogram/Collaps episodes (so Russian series ALWAYS have all seasons & episodes!)
+  const effectiveVideos = useMemo<SeriesEpisode[]>(() => {
+    if (detailedMeta?.videos && detailedMeta.videos.length > 0) {
+      return detailedMeta.videos;
+    }
+    if (
+      resolvedDirectStream?.seasons &&
+      resolvedDirectStream.seasons.length > 0
+    ) {
+      const list: SeriesEpisode[] = [];
+      for (const s of resolvedDirectStream.seasons) {
+        for (const ep of s.episodes) {
+          list.push({
+            id: `kp_s${s.season}_e${ep.episode}`,
+            name: ep.title || `Серия ${ep.episode}`,
+            season: s.season,
+            episode: ep.episode,
+          });
+        }
+      }
+      return list;
+    }
+    return [];
+  }, [detailedMeta?.videos, resolvedDirectStream?.seasons]);
+
   const availableSeasons = useMemo(() => {
-    if (!detailedMeta?.videos) return [];
+    if (effectiveVideos.length === 0) return [];
     return Array.from(
       new Set(
-        detailedMeta.videos
+        effectiveVideos
           .map((v) => v.season)
           .filter((s) => typeof s === 'number' && s > 0)
       )
     ).sort((a, b) => a - b);
-  }, [detailedMeta]);
+  }, [effectiveVideos]);
 
   const episodesForSeason = useMemo(() => {
-    if (!detailedMeta?.videos) return [];
-    return detailedMeta.videos
+    if (effectiveVideos.length === 0) return [];
+    return effectiveVideos
       .filter((v) => v.season === selectedSeason)
       .sort(
         (a, b) => (a.episode || a.number || 1) - (b.episode || b.number || 1)
       );
-  }, [detailedMeta, selectedSeason]);
+  }, [effectiveVideos, selectedSeason]);
 
   const handleSelectEpisode = (seasonNum: number, epNum: number) => {
     if (!activeVodItem) return;
@@ -1051,13 +1664,40 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     }
   };
 
-  const displayedItems = activeTab === 'saved' ? savedItems : catalogItems;
+  const displayedItems = useMemo(() => {
+    if (activeTab === 'saved') return savedItems;
+    if (activeTab === 'russia') {
+      const base = debouncedQuery ? russiaSearchResults : RUSSIAN_MEDIA_CATALOG;
+      if (russiaFilter === 'all') return base;
+      return base.filter((x) => x.type === russiaFilter);
+    }
+    return catalogItems;
+  }, [
+    activeTab,
+    savedItems,
+    debouncedQuery,
+    russiaSearchResults,
+    russiaFilter,
+    catalogItems,
+  ]);
+
   const activeItemForEmbed: CinemetaItem | null = activeVodItem
     ? {
         ...activeVodItem,
         moviedb_id: detailedMeta?.moviedb_id ?? activeVodItem.moviedb_id,
       }
     : null;
+
+  const currentVodOfflineId = activeVodItem
+    ? activeVodItem.type === 'series'
+      ? `vod_${activeVodItem.id}_S${selectedSeason}E${selectedEpisode}`
+      : `vod_${activeVodItem.id}`
+    : '';
+
+  const existingOfflineItem = useMemo(
+    () => offlineItems.find((x) => x.id === currentVodOfflineId) || null,
+    [offlineItems, currentVodOfflineId]
+  );
 
   return (
     <div className="space-y-5">
@@ -1070,10 +1710,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
             <div className="min-w-0 flex-1">
               <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-100 tracking-tight truncate">
-                Mediatecă — Filme & Seriale On-Demand
+                Mediatecă — Filme, Seriale & Biblioteca Offline
               </h1>
               <p className="text-xs text-slate-600 dark:text-zinc-400 truncate">
-                Reluare automată de unde ai rămas • Scut Anti-Popup activat pe toate serverele
+                Catalog Global + Rusia (Audio RU) • Descărcare Locală & Vizionare Offline pe Device
               </p>
             </div>
           </div>
@@ -1085,6 +1725,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               onClick={() => {
                 setActiveTab('movies');
                 setActiveVodItem(null);
+                setActiveOfflineItem(null);
               }}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                 activeTab === 'movies'
@@ -1093,7 +1734,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }`}
             >
               <Film className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Filme Online</span>
+              <span>Filme</span>
             </button>
 
             <button
@@ -1101,6 +1742,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               onClick={() => {
                 setActiveTab('series');
                 setActiveVodItem(null);
+                setActiveOfflineItem(null);
               }}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                 activeTab === 'series'
@@ -1115,8 +1757,42 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             <button
               type="button"
               onClick={() => {
+                setActiveTab('russia');
+                setActiveVodItem(null);
+                setActiveOfflineItem(null);
+              }}
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                activeTab === 'russia'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-200 border border-indigo-200/80 dark:border-indigo-800/70 hover:bg-indigo-100'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Rusia (Filme & Seriale RU)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('offline');
+                setActiveVodItem(null);
+              }}
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                activeTab === 'offline'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 border border-emerald-200/80 dark:border-emerald-800/70 hover:bg-emerald-100'
+              }`}
+            >
+              <HardDriveDownload className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Descărcate Offline ({offlineItems.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setActiveTab('saved');
                 setActiveVodItem(null);
+                setActiveOfflineItem(null);
               }}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                 activeTab === 'saved'
@@ -1133,6 +1809,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               onClick={() => {
                 setActiveTab('lampa');
                 setActiveVodItem(null);
+                setActiveOfflineItem(null);
               }}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                 activeTab === 'lampa'
@@ -1149,6 +1826,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               onClick={() => {
                 setActiveTab('custom');
                 setActiveVodItem(null);
+                setActiveOfflineItem(null);
               }}
               className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                 activeTab === 'custom'
@@ -1162,6 +1840,81 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           </div>
         </div>
       </section>
+
+      {/* ACTIVE OFFLINE VIDEO PLAYER PANEL (100% FĂRĂ INTERNET DIN INDEXEDDB) */}
+      {activeOfflineItem && (
+        <section className="rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-emerald-700/60 shadow-2xl overflow-hidden">
+          <div className="px-3.5 sm:px-5 py-2.5 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500 text-zinc-950 text-[10px] sm:text-xs font-extrabold uppercase tracking-wider shrink-0">
+                REDARE OFFLINE LOCALĂ
+              </span>
+              <h2 className="text-sm sm:text-lg font-bold text-white truncate">
+                {activeOfflineItem.title}
+              </h2>
+              {activeOfflineItem.subtitleLabel && (
+                <span className="text-xs text-emerald-300 truncate hidden sm:inline">
+                  • {activeOfflineItem.subtitleLabel}
+                </span>
+              )}
+              <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 text-[11px] font-semibold shrink-0">
+                {formatBytes(activeOfflineItem.sizeBytes)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => void exportOfflineItemToDeviceFile(activeOfflineItem)}
+                title="Salvează fișierul video în folderul Downloads al dispozitivului"
+                className="min-h-[30px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
+              >
+                <FolderDown className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Salvează în Telefon/PC</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveOfflineItem(null)}
+                className="min-h-[30px] px-3 py-1 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Închide</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="relative w-full aspect-video bg-black">
+            <VodNativeHlsPlayer
+              offlineItem={activeOfflineItem}
+              poster={activeOfflineItem.poster}
+              startAtSeconds={
+                (() => {
+                  try {
+                    const raw = localStorage.getItem('aether_native_video_progress_v1');
+                    const map = raw ? JSON.parse(raw) : {};
+                    return Number(map[activeOfflineItem.id]) || 0;
+                  } catch {
+                    return 0;
+                  }
+                })()
+              }
+              onTimeUpdate={(cur) => {
+                try {
+                  const raw = localStorage.getItem('aether_native_video_progress_v1');
+                  const map = raw ? JSON.parse(raw) : {};
+                  map[activeOfflineItem.id] = cur;
+                  localStorage.setItem(
+                    'aether_native_video_progress_v1',
+                    JSON.stringify(map)
+                  );
+                } catch {
+                  // ignore
+                }
+              }}
+            />
+          </div>
+        </section>
+      )}
 
       {/* ACTIVE ON-DEMAND MOVIE / SERIES PLAYER PANEL */}
       {activeVodItem && activeItemForEmbed && (
@@ -1223,7 +1976,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     key={srv.id}
                     type="button"
                     onClick={() => {
-                      // Preserve current playback position when switching servers
                       setResumeStartSeconds(liveCurrentTime);
                       setActiveServer(srv.id);
                       updateWatchProgress(
@@ -1284,108 +2036,254 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 Sandboxed VOD Stream Player (Popups & Redirects Strictly Blocked!) */}
+          {/* 16:9 VOD Stream Player (Native HLS Player on Server 1 OR Sandboxed Iframe on Servers 2-7) */}
           <div
             ref={playerContainerRef}
             className="relative w-full aspect-video bg-black"
           >
-            <iframe
-              ref={vodIframeRef}
-              key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
-              src={buildVodEmbedUrl(
-                activeServer,
-                activeItemForEmbed,
-                selectedSeason,
-                selectedEpisode,
-                preferredSubLang,
-                resumeStartSeconds
-              )}
-              title={activeVodItem.name}
-              className="w-full h-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
-              referrerPolicy="origin"
-              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-              allowFullScreen
-              onLoad={() => {
-                if (resumeStartSeconds > 5) {
-                  window.setTimeout(() => {
-                    try {
-                      vodIframeRef.current?.contentWindow?.postMessage(
-                        { action: 'seek', time: resumeStartSeconds },
-                        '*'
-                      );
-                    } catch {
-                      // ignore
-                    }
-                  }, 1200);
-                }
-              }}
-            />
+            {activeServer === 'kinogram_hls' ? (
+              isDirectStreamLoading ? (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-zinc-300">
+                  <Loader2 className="w-8 h-8 text-brand-400 animate-spin" />
+                  <span className="text-xs font-semibold">
+                    Se conectează la serverul video direct (Audio RU / Original)...
+                  </span>
+                </div>
+              ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
+                <VodNativeHlsPlayer
+                  key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                  hlsUrl={resolvedDirectStream.hlsUrl}
+                  audioTrackLabels={resolvedDirectStream.audioNames}
+                  startAtSeconds={resumeStartSeconds}
+                  poster={
+                    activeVodItem.background ||
+                    activeVodItem.poster ||
+                    `https://images.metahub.space/background/medium/${activeVodItem.id}/img`
+                  }
+                  onTimeUpdate={(cur, dur) => {
+                    setLiveCurrentTime(cur);
+                    if (dur > 60) setLiveDuration(dur);
+                    updateWatchProgress(
+                      activeVodItem,
+                      selectedSeason,
+                      selectedEpisode,
+                      cur,
+                      dur || liveDuration,
+                      activeServer,
+                      preferredSubLang
+                    );
+                  }}
+                  onStreamError={() => setActiveServer('kinogram_embed')}
+                />
+              ) : (
+                <iframe
+                  ref={vodIframeRef}
+                  key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                  src={buildVodEmbedUrl(
+                    activeVodItem.id.startsWith('kp_')
+                      ? 'kinogram_embed'
+                      : 'vidspark',
+                    activeItemForEmbed,
+                    selectedSeason,
+                    selectedEpisode,
+                    preferredSubLang,
+                    resumeStartSeconds
+                  )}
+                  title={activeVodItem.name}
+                  className="w-full h-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
+                  referrerPolicy="origin"
+                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              )
+            ) : (
+              <iframe
+                ref={vodIframeRef}
+                key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
+                src={buildVodEmbedUrl(
+                  activeServer,
+                  activeItemForEmbed,
+                  selectedSeason,
+                  selectedEpisode,
+                  preferredSubLang,
+                  resumeStartSeconds
+                )}
+                title={activeVodItem.name}
+                className="w-full h-full border-0"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
+                referrerPolicy="origin"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                allowFullScreen
+                onLoad={() => {
+                  if (resumeStartSeconds > 5) {
+                    window.setTimeout(() => {
+                      try {
+                        vodIframeRef.current?.contentWindow?.postMessage(
+                          { action: 'seek', time: resumeStartSeconds },
+                          '*'
+                        );
+                      } catch {
+                        // ignore
+                      }
+                    }, 1200);
+                  }
+                }}
+              />
+            )}
           </div>
 
-          {/* Resume / Playback Position Control Strip */}
-          <div className="px-3 sm:px-5 py-2 bg-zinc-900/95 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-950/90 border border-brand-700/60 text-brand-300 font-semibold">
-                <History className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-                <span>
-                  Poziție salvată: <strong>{formatWatchSeconds(liveCurrentTime)}</strong>
+          {/* Resume + Offline Download Control Strip */}
+          <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-t border-zinc-800 space-y-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-950/90 border border-brand-700/60 text-brand-300 font-semibold">
+                  <History className="w-3.5 h-3.5 text-brand-400 shrink-0" />
+                  <span>
+                    Poziție salvată: <strong>{formatWatchSeconds(liveCurrentTime)}</strong>
+                  </span>
                 </span>
-              </span>
-              {resumeStartSeconds > 5 && (
-                <span className="hidden sm:inline text-zinc-400">
-                  (Reluat automat de la {formatWatchSeconds(resumeStartSeconds)})
-                </span>
-              )}
-            </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-              {liveCurrentTime > 15 && (
+                {/* Offline Download Controls */}
+                {existingOfflineItem ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveOfflineItem(existingOfflineItem);
+                        setActiveVodItem(null);
+                      }}
+                      className="min-h-[28px] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>
+                        Descărcat Offline ({formatBytes(existingOfflineItem.sizeBytes)}) — Redă Offline
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void exportOfflineItemToDeviceFile(existingOfflineItem)
+                      }
+                      title="Salvează fișierul în memoria telefonului / PC-ului"
+                      className="min-h-[28px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 font-semibold inline-flex items-center gap-1"
+                    >
+                      <FolderDown className="w-3.5 h-3.5" />
+                      <span>Salvează fișierul</span>
+                    </button>
+                  </div>
+                ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <select
+                      aria-label="Calitate descărcare offline"
+                      value={downloadQuality}
+                      onChange={(e) =>
+                        setDownloadQuality(Number(e.target.value) as 360 | 720)
+                      }
+                      className="h-7 px-2.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-200 font-semibold outline-none cursor-pointer"
+                    >
+                      <option value={360}>SD 360p (Rapid ~250MB)</option>
+                      <option value={720}>HD 720p (~600MB)</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={Boolean(activeDownloadProgress)}
+                      onClick={() => void handleDownloadCurrentVodOffline()}
+                      className="min-h-[28px] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descarcă Offline pe Device</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {liveCurrentTime > 15 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSeekToSeconds(liveCurrentTime)}
+                    title="Sari direct la minutul salvat"
+                    className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>Reluare {formatWatchSeconds(liveCurrentTime)}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => handleSeekToSeconds(liveCurrentTime)}
-                  title="Sari direct la minutul salvat"
-                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
+                  onClick={() =>
+                    handleSeekToSeconds(Math.max(0, liveCurrentTime - 300))
+                  }
+                  title="Înapoi cu 5 minute"
+                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
                 >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>Reluare {formatWatchSeconds(liveCurrentTime)}</span>
+                  -5 min
                 </button>
-              )}
 
-              <button
-                type="button"
-                onClick={() => handleSeekToSeconds(Math.max(0, liveCurrentTime - 300))}
-                title="Înapoi cu 5 minute"
-                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
-              >
-                -5 min
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSeekToSeconds(liveCurrentTime + 300)}
+                  title="Înainte cu 5 minute"
+                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
+                >
+                  +5 min
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSeekToSeconds(liveCurrentTime + 300)}
-                title="Înainte cu 5 minute"
-                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold shrink-0 transition-colors"
-              >
-                +5 min
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSeekToSeconds(0)}
-                title="Pornește filmul/episodul de la început (00:00)"
-                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>De la 00:00</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSeekToSeconds(0)}
+                  title="Pornește filmul/episodul de la început (00:00)"
+                  className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold inline-flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>De la 00:00</span>
+                </button>
+              </div>
             </div>
+
+            {/* Active Offline Download Progress Bar */}
+            {activeDownloadProgress && (
+              <div className="p-2.5 rounded-xl bg-zinc-950 border border-emerald-700/60 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-emerald-300 font-bold flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>{activeDownloadProgress.stage}</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-white">
+                      {activeDownloadProgress.percent}% •{' '}
+                      {formatBytes(activeDownloadProgress.downloadedBytes)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCancelDownload}
+                      className="px-2.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-bold"
+                    >
+                      Anulează
+                    </button>
+                  </div>
+                </div>
+                <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
+                    style={{ width: `${activeDownloadProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {downloadError && (
+              <p className="text-rose-400 font-semibold">{downloadError}</p>
+            )}
           </div>
 
           {/* Series Seasons & Episodes Selector */}
           {activeVodItem.type === 'series' && (
             <div className="p-4 sm:p-5 bg-zinc-900/90 border-t border-zinc-800 space-y-4">
-              {isMetaLoading ? (
+              {isMetaLoading && effectiveVideos.length === 0 ? (
                 <div className="flex items-center gap-2 text-xs text-zinc-400 py-2">
                   <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
                   <span>Se încarcă sezoanele și episoadele...</span>
@@ -1542,9 +2440,176 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         </section>
       )}
 
+      {/* OFFLINE DOWNLOADED VIDEOS LIBRARY TAB ("DESCĂRCATE OFFLINE") */}
+      {activeTab === 'offline' && (
+        <section className="space-y-4">
+          <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                <HardDriveDownload className="w-5 h-5 text-emerald-500" />
+                <span>
+                  Biblioteca Video Offline pe Dispozitiv ({offlineItems.length})
+                </span>
+              </h2>
+              <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                Filmele și episoadele descărcate aici sunt stocate local în memoria internă a aplicației (IndexedDB) și pot fi privite <strong>100% fără internet</strong>.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <input
+                ref={localVideoInputRef}
+                type="file"
+                accept="video/*,.mp4,.mkv,.webm,.mov"
+                onChange={(e) => void handleImportLocalVideoToOfflineDb(e)}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => localVideoInputRef.current?.click()}
+                className="min-h-[38px] px-4 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>+ Adaugă Video de pe Device (.MP4 / .MKV)</span>
+              </button>
+            </div>
+          </div>
+
+          {offlineItems.length === 0 ? (
+            <div className="p-8 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-center space-y-3">
+              <HardDriveDownload className="w-10 h-10 text-emerald-500 mx-auto" />
+              <p className="text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-200">
+                Nu ai încă niciun film sau episod descărcat Offline
+              </p>
+              <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
+                Deschide orice film sau serial din tab-urile <strong>Filme</strong>, <strong>Seriale</strong> sau <strong>Rusia (RU)</strong> și apasă pe butonul verde <strong>„Descarcă Offline pe Device”</strong> de sub player, sau încarcă un fișier video de pe telefon/PC.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('russia')}
+                  className="min-h-[36px] px-4 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+                >
+                  Explorează Filme & Seriale Rusia
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('movies')}
+                  className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold"
+                >
+                  Explorează Filme Populare
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {offlineItems.map((item) => {
+                const isPlaying = activeOfflineItem?.id === item.id;
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-3.5 rounded-2xl border flex gap-3.5 transition-all ${
+                      isPlaying
+                        ? 'bg-emerald-950/30 border-emerald-500 ring-2 ring-emerald-500/30'
+                        : 'bg-white dark:bg-zinc-900 border-slate-200/80 dark:border-zinc-800'
+                    }`}
+                  >
+                    <div
+                      onClick={() => {
+                        setActiveVodItem(null);
+                        setActiveOfflineItem(item);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="relative w-20 h-28 rounded-xl overflow-hidden bg-zinc-800 shrink-0 cursor-pointer flex items-center justify-center group"
+                    >
+                      {item.poster ? (
+                        <img
+                          src={item.poster}
+                          alt={item.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Film className="w-7 h-7 text-zinc-500" />
+                      )}
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <div className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow">
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                            {item.qualityLabel}
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+                            {formatBytes(item.sizeBytes)}
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-zinc-100 truncate mt-1">
+                          {item.title}
+                        </h3>
+                        {item.subtitleLabel && (
+                          <p className="text-xs text-slate-500 dark:text-zinc-400 truncate">
+                            {item.subtitleLabel}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveVodItem(null);
+                            setActiveOfflineItem(item);
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="min-h-[32px] px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 transition-colors"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>Redă Offline</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void exportOfflineItemToDeviceFile(item)}
+                          title="Salvează ca fișier în folderul Downloads al dispozitivului"
+                          className="min-h-[32px] px-2.5 py-1 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-semibold inline-flex items-center gap-1"
+                        >
+                          <FolderDown className="w-3.5 h-3.5" />
+                          <span>Salvează</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (activeOfflineItem?.id === item.id) {
+                              setActiveOfflineItem(null);
+                            }
+                            await deleteOfflineItem(item.id);
+                            await refreshOfflineLibrary();
+                          }}
+                          title="Șterge din memoria Offline"
+                          className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-rose-600 hover:text-white text-slate-500 dark:text-zinc-400 inline-flex items-center justify-center ml-auto transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* CONTINUE WATCHING ("DE UNDE AI RĂMAS") SHELF */}
       {(activeTab === 'movies' ||
         activeTab === 'series' ||
+        activeTab === 'russia' ||
         activeTab === 'saved') &&
         continueWatchingList.length > 0 && (
           <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs space-y-3">
@@ -1636,9 +2701,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           </section>
         )}
 
-      {/* MOVIES / SERIES / SAVED CATALOG */}
+      {/* MOVIES / SERIES / RUSSIA / SAVED CATALOG */}
       {(activeTab === 'movies' ||
         activeTab === 'series' ||
+        activeTab === 'russia' ||
         activeTab === 'saved') && (
         <>
           {activeTab !== 'saved' && (
@@ -1654,9 +2720,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={
-                    activeTab === 'series'
-                      ? 'Caută seriale (ex: Breaking Bad, Game of Thrones, The Sopranos)...'
-                      : 'Caută filme (ex: Dune, Gladiator, Oppenheimer, Interstellar)...'
+                    activeTab === 'russia'
+                      ? 'Caută filme și seriale rusești (ex: Бригада, Слово пацана, Мажор, Кухня, Брат)...'
+                      : activeTab === 'series'
+                        ? 'Caută seriale (ex: Breaking Bad, Game of Thrones, Бригада)...'
+                        : 'Caută filme (ex: Dune, Gladiator, Oppenheimer, Брат)...'
                   }
                   className="w-full min-h-[38px] sm:min-h-[42px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
                 />
@@ -1671,35 +2739,65 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 )}
               </div>
 
-              {/* Single-row Genre Filter Pills */}
-              {!debouncedQuery && (
+              {/* Filter Pills for Russia Tab vs Global Movies/Series */}
+              {activeTab === 'russia' ? (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                  {GENRE_FILTERS.map((g) => {
-                    const active = selectedGenre === g.id;
-                    const GenreIcon = g.Icon;
+                  {[
+                    { id: 'all', label: 'Toate (Filme & Seriale RU)' },
+                    { id: 'series', label: 'Seriale Rusești (Сериалы)' },
+                    { id: 'movie', label: 'Filme Rusești (Кино)' },
+                  ].map((f) => {
+                    const active = russiaFilter === f.id;
                     return (
                       <button
-                        key={g.id}
+                        key={f.id}
                         type="button"
-                        onClick={() => setSelectedGenre(g.id)}
-                        className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                        onClick={() =>
+                          setRussiaFilter(f.id as 'all' | 'movie' | 'series')
+                        }
+                        className={`min-h-[32px] px-3.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
                           active
-                            ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                            : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-indigo-400'
                         }`}
                       >
-                        <GenreIcon className="w-3.5 h-3.5 shrink-0" />
-                        <span>{g.label}</span>
+                        <span>{f.label}</span>
                       </button>
                     );
                   })}
                 </div>
+              ) : (
+                !debouncedQuery && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                    {GENRE_FILTERS.map((g) => {
+                      const active = selectedGenre === g.id;
+                      const GenreIcon = g.Icon;
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => setSelectedGenre(g.id)}
+                          className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                            active
+                              ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
+                              : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
+                          }`}
+                        >
+                          <GenreIcon className="w-3.5 h-3.5 shrink-0" />
+                          <span>{g.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )
               )}
             </div>
           )}
 
-          {/* Poster Grid (3 columns on mobile so 9-12 movies fit on screen at once) */}
-          {isLoading && activeTab !== 'saved' ? (
+          {/* Poster Grid */}
+          {isLoading &&
+          activeTab !== 'saved' &&
+          !(activeTab === 'russia' && !debouncedQuery) ? (
             <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
               {Array.from({ length: 18 }).map((_, idx) => (
                 <div
@@ -1770,33 +2868,35 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           alt={item.name}
                           loading="lazy"
                           onError={(e) => {
-                            const target = e.currentTarget;
-                            target.style.display = 'none';
+                            e.currentTarget.style.display = 'none';
                           }}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
 
-                        {/* Top Badges */}
-                        <div className="absolute top-1.5 inset-x-1.5 flex items-center justify-between gap-1">
+                        {/* Top-Left Rating Badge */}
+                        <div className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 flex items-center gap-1">
                           {item.imdbRating ? (
-                            <span className="px-1.5 py-0.2 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] sm:text-[11px] font-extrabold inline-flex items-center gap-0.5 shadow-xs">
+                            <span className="inline-flex items-center gap-0.5 px-1.5 sm:px-2 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] sm:text-[11px] font-extrabold shadow">
                               <Star className="w-2.5 h-2.5 sm:w-3 sm:h-3 fill-current" />
                               {item.imdbRating}
                             </span>
                           ) : (
-                            <span className="px-1.5 py-0.2 rounded-full bg-black/75 text-white text-[9px] sm:text-[10px] font-bold uppercase">
+                            <span className="px-1.5 sm:px-2 py-0.5 rounded-full bg-black/75 text-white text-[9px] sm:text-[10px] font-bold uppercase">
                               {item.type === 'series' ? 'SERIAL' : 'FILM'}
                             </span>
                           )}
+                        </div>
 
+                        {/* Top-Right Save Heart */}
+                        <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2">
                           <button
                             type="button"
                             onClick={(e) => toggleSaveVodItem(item, e)}
-                            aria-label="Salvează"
+                            aria-label="Salvează în Lista Mea"
                             className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center backdrop-blur-xs transition-colors ${
                               isSaved
                                 ? 'bg-rose-600 text-white'
-                                : 'bg-black/60 hover:bg-black/80 text-white'
+                                : 'bg-black/65 text-zinc-200 hover:bg-rose-600 hover:text-white'
                             }`}
                           >
                             <Heart
@@ -1865,7 +2965,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               </div>
 
               {/* Load More Button */}
-              {activeTab !== 'saved' && hasMore && (
+              {(activeTab === 'movies' || activeTab === 'series') && hasMore && (
                 <div className="flex justify-center pt-4">
                   <button
                     type="button"
@@ -1970,7 +3070,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               </h3>
               <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1">
                 Cum se activează în Lampa de mai sus: mergi în{' '}
-                <strong>Настройки (⚙️ dreapta-sus) → Расширения (Extensions) → Добавить плагин (Add Plugin)</strong>{' '}
+                <strong>Настройки (dreapta-sus) → Расширения (Extensions) → Добавить плагин (Add Plugin)</strong>{' '}
                 și lipește oricare dintre linkurile de mai jos:
               </p>
             </div>

@@ -1,0 +1,207 @@
+function extractBalancedJsonArray(str, startIdx) {
+  const openIdx = str.indexOf('[', startIdx);
+  if (openIdx < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = openIdx; i < str.length; i++) {
+    const ch = str[i];
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (ch === '\\') {
+      esc = true;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = !inStr;
+      continue;
+    }
+    if (!inStr) {
+      if (ch === '[') depth++;
+      else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(str.slice(openIdx, i + 1));
+          } catch {
+            return null;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function fetchKinogramEmbed(path) {
+  const host = 'https://api.kinogram.best';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const res = await fetch(`${host}/embed/${path}`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Origin: host,
+        Referer: `${host}/`,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (!html || !html.includes('makePlayer(')) return null;
+    return html;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function resolveVodStreamData({ kp, imdb, season = 1, episode = 1 }) {
+  const candidates = [];
+  if (kp && /^\d+$/.test(String(kp).trim())) {
+    candidates.push(`kp/${String(kp).trim()}`);
+  }
+  if (imdb && /^tt\d+$/i.test(String(imdb).trim())) {
+    candidates.push(`imdb/${String(imdb).trim()}`);
+  }
+
+  let html = null;
+  let usedPath = '';
+  for (const path of candidates) {
+    html = await fetchKinogramEmbed(path);
+    if (html) {
+      usedPath = path;
+      break;
+    }
+  }
+
+  if (!html) {
+    return { ok: false, error: 'Stream not found on VOD balancer' };
+  }
+
+  // Extract dynamic token appended by player script: else o[k]+='&'+VARNAME
+  const addMatch = html.match(/else\s+o\[k\]\+=.\&.\+([a-zA-Z0-9_]+)/);
+  const varName = addMatch?.[1];
+  const varValMatch = varName
+    ? html.match(new RegExp(`${varName}\\s*=\\s*"([^"]+)"`))
+    : null;
+  const token = varValMatch?.[1] || '';
+
+  // Check if series playlist with seasons exists
+  const seasonsIdx = html.indexOf('seasons:');
+  if (seasonsIdx >= 0) {
+    const rawSeasons = extractBalancedJsonArray(html, seasonsIdx);
+    if (Array.isArray(rawSeasons) && rawSeasons.length > 0) {
+      const targetSeason =
+        rawSeasons.find((s) => Number(s.season) === Number(season)) ||
+        rawSeasons[0];
+      const episodes = Array.isArray(targetSeason?.episodes)
+        ? targetSeason.episodes
+        : [];
+      const targetEp =
+        episodes.find((e) => Number(e.episode) === Number(episode)) ||
+        episodes[0];
+
+      const cleanSeasons = rawSeasons.map((s) => ({
+        season: Number(s.season) || 1,
+        episodes: (Array.isArray(s.episodes) ? s.episodes : []).map((ep) => ({
+          episode: Number(ep.episode) || 1,
+          title: ep.title || `Episodul ${ep.episode}`,
+          duration: Number(ep.duration) || 0,
+          audioNames: Array.isArray(ep.audio?.names)
+            ? ep.audio.names
+            : ['Русский'],
+        })),
+      }));
+
+      if (targetEp?.hls) {
+        const hlsUrl = targetEp.hls + (token ? `&${token}` : '');
+        return {
+          ok: true,
+          type: 'series',
+          sourcePath: usedPath,
+          season: Number(targetSeason.season) || 1,
+          episode: Number(targetEp.episode) || 1,
+          title: targetEp.title || '',
+          duration: Number(targetEp.duration) || 0,
+          audioNames: Array.isArray(targetEp.audio?.names)
+            ? targetEp.audio.names
+            : ['Русский'],
+          hlsUrl,
+          seasons: cleanSeasons,
+        };
+      }
+    }
+  }
+
+  // Movie extraction
+  const hlsMatch = html.match(/hls:\s*"([^"]+)"/);
+  const titleMatch = html.match(/title:\s*"([^"]+)"/);
+  const posterMatch = html.match(/poster:\s*"([^"]+)"/);
+  const audioMatch = html.match(/audio:\s*(\{"names":\[[^\]]+\][^}]*\})/);
+
+  if (hlsMatch?.[1]) {
+    let audioNames = ['Русский / Original'];
+    try {
+      if (audioMatch?.[1]) {
+        const parsed = JSON.parse(audioMatch[1]);
+        if (Array.isArray(parsed.names) && parsed.names.length > 0) {
+          audioNames = parsed.names;
+        }
+      }
+    } catch {
+      // keep default
+    }
+
+    const hlsUrl = hlsMatch[1] + (token ? `&${token}` : '');
+    return {
+      ok: true,
+      type: 'movie',
+      sourcePath: usedPath,
+      title: titleMatch?.[1] || '',
+      poster: posterMatch?.[1] || '',
+      audioNames,
+      hlsUrl,
+    };
+  }
+
+  return { ok: false, error: 'No HLS stream found in embed response' };
+}
+
+export async function handler(event) {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'public, max-age=120',
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers, body: '' };
+  }
+
+  const params = event.queryStringParameters || {};
+  const kp = params.kp || '';
+  const imdb = params.imdb || '';
+  const season = Number(params.season) || 1;
+  const episode = Number(params.episode) || 1;
+
+  if (!kp && !imdb) {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ ok: false, error: 'Missing kp or imdb parameter' }),
+    };
+  }
+
+  const result = await resolveVodStreamData({ kp, imdb, season, episode });
+  return {
+    statusCode: result.ok ? 200 : 404,
+    headers,
+    body: JSON.stringify(result),
+  };
+}
