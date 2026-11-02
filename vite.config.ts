@@ -1067,6 +1067,9 @@ function tvStreamProxyPlugin(): Plugin {
           const reqUrl = new URL(req.url || '', 'http://localhost');
           const kp = reqUrl.searchParams.get('kp') || '';
           const imdb = reqUrl.searchParams.get('imdb') || '';
+          const title = reqUrl.searchParams.get('title') || '';
+          const mediaType = reqUrl.searchParams.get('type') || '';
+          const year = reqUrl.searchParams.get('year') || '';
           const season = Number(reqUrl.searchParams.get('season')) || 1;
           const episode = Number(reqUrl.searchParams.get('episode')) || 1;
           // @ts-expect-error .mjs dynamic import
@@ -1074,6 +1077,9 @@ function tvStreamProxyPlugin(): Plugin {
           const result = await mod.resolveVodStreamData({
             kp,
             imdb,
+            title,
+            mediaType,
+            year,
             season,
             episode,
           });

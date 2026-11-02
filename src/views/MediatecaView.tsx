@@ -130,6 +130,7 @@ interface VodWatchProgressEntry {
 interface ResolvedDirectVodStream {
   ok: boolean;
   type?: 'movie' | 'series';
+  sourcePath?: string;
   hlsUrl?: string;
   title?: string;
   duration?: number;
@@ -148,14 +149,13 @@ interface ResolvedDirectVodStream {
 const SUBTITLE_LANGUAGES: Array<{
   id: SubtitleLangId;
   label: string;
-  flag: string;
 }> = [
-  { id: 'ro', label: 'Română', flag: '🇷🇴' },
-  { id: 'ru', label: 'Русский', flag: '🇷🇺' },
-  { id: 'en', label: 'English', flag: '🇬🇧' },
-  { id: 'es', label: 'Español', flag: '🇪🇸' },
-  { id: 'fr', label: 'Français', flag: '🇫🇷' },
-  { id: 'de', label: 'Deutsch', flag: '🇩🇪' },
+  { id: 'ro', label: 'Română' },
+  { id: 'ru', label: 'Русский' },
+  { id: 'en', label: 'English' },
+  { id: 'es', label: 'Español' },
+  { id: 'fr', label: 'Français' },
+  { id: 'de', label: 'Deutsch' },
 ];
 
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
@@ -944,10 +944,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           ? (epSaved?.duration ?? saved?.duration ?? 2700)
           : (saved?.duration ?? 5400);
 
-      // Default to Native HLS (Server 1) so Russian audio & Offline Download are immediately ready
-      const targetServer = saved?.server
-        ? normalizeServerId(saved.server)
-        : 'kinogram_hls';
+      // Always open on Native HLS (Server 1) so Russian audio, ad-free playback & Offline Download are immediately active
+      const targetServer: VodServerId = 'kinogram_hls';
       const targetSub = saved?.subLang || preferredSubLang;
 
       preserveEpisodeOnOpenRef.current = Boolean(
@@ -996,12 +994,19 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         ? activeVodItem.id.replace(/^kp_/, '')
         : '');
     const imdb = activeVodItem.id.startsWith('tt') ? activeVodItem.id : '';
+    const title = activeVodItem.name || '';
+    const mediaType = activeVodItem.type || '';
+    const year = activeVodItem.releaseInfo || activeVodItem.year || '';
 
     const fetchDirectStream = async () => {
       try {
         const res = await fetch(
           `/api/vod-stream?kp=${encodeURIComponent(kp)}&imdb=${encodeURIComponent(
             imdb
+          )}&title=${encodeURIComponent(title)}&type=${encodeURIComponent(
+            mediaType
+          )}&year=${encodeURIComponent(
+            year
           )}&season=${selectedSeason}&episode=${selectedEpisode}`
         );
         if (!res.ok) {
@@ -1684,6 +1689,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const activeItemForEmbed: CinemetaItem | null = activeVodItem
     ? {
         ...activeVodItem,
+        kpId: resolvedDirectStream?.sourcePath?.startsWith('kp/')
+          ? resolvedDirectStream.sourcePath.replace(/^kp\//, '')
+          : activeVodItem.kpId,
         moviedb_id: detailedMeta?.moviedb_id ?? activeVodItem.moviedb_id,
       }
     : null;
@@ -2028,7 +2036,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                     }`}
                   >
-                    <span>{sub.flag}</span>
+                    <Globe className="w-3 h-3 shrink-0" aria-hidden="true" />
                     <span>{sub.id.toUpperCase()}</span>
                   </button>
                 );
@@ -2036,7 +2044,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 VOD Stream Player (Native HLS Player on Server 1 OR Sandboxed Iframe on Servers 2-7) */}
+          {/* 16:9 VOD Stream Player (Native HLS Player on Server 1 OR Unsandboxed Iframe on Servers 2-7) */}
           <div
             ref={playerContainerRef}
             className="relative w-full aspect-video bg-black"
@@ -2091,7 +2099,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   )}
                   title={activeVodItem.name}
                   className="w-full h-full border-0"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
                   referrerPolicy="origin"
                   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                   allowFullScreen
@@ -2111,7 +2118,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 )}
                 title={activeVodItem.name}
                 className="w-full h-full border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-pointer-lock"
                 referrerPolicy="origin"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen

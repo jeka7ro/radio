@@ -61,7 +61,68 @@ async function fetchKinogramEmbed(path) {
   }
 }
 
-export async function resolveVodStreamData({ kp, imdb, season = 1, episode = 1 }) {
+async function lookupKpIdsByTitle(title, mediaType = '', year = '') {
+  if (!title || String(title).trim().length < 2) return [];
+  const cleanTitle = String(title).trim();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(
+      `https://kinopoiskapiunofficial.tech/api/v2.1/films/search-by-keyword?keyword=${encodeURIComponent(
+        cleanTitle
+      )}&page=1`,
+      {
+        headers: {
+          'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const films = Array.isArray(data?.films) ? data.films : [];
+    const wantSeries = mediaType === 'series';
+    const cleanYear = String(year || '').slice(0, 4);
+
+    const scored = films
+      .filter((f) => f && f.filmId)
+      .map((f) => {
+        let score = 0;
+        const isSeriesType =
+          f.type === 'TV_SERIES' ||
+          f.type === 'MINI_SERIES' ||
+          f.type === 'TV_SHOW';
+        if (mediaType && isSeriesType === wantSeries) score += 10;
+        const nameEn = String(f.nameEn || '').toLowerCase();
+        const nameRu = String(f.nameRu || '').toLowerCase();
+        const q = cleanTitle.toLowerCase();
+        if (nameEn === q || nameRu === q) score += 15;
+        else if (nameEn.includes(q) || nameRu.includes(q)) score += 5;
+        if (cleanYear && String(f.year || '').startsWith(cleanYear)) {
+          score += 8;
+        }
+        return { filmId: String(f.filmId), score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, 3).map((x) => x.filmId);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function resolveVodStreamData({
+  kp,
+  imdb,
+  title = '',
+  mediaType = '',
+  year = '',
+  season = 1,
+  episode = 1,
+}) {
   const candidates = [];
   if (kp && /^\d+$/.test(String(kp).trim())) {
     candidates.push(`kp/${String(kp).trim()}`);
@@ -77,6 +138,21 @@ export async function resolveVodStreamData({ kp, imdb, season = 1, episode = 1 }
     if (html) {
       usedPath = path;
       break;
+    }
+  }
+
+  // Fallback: if IMDb ID is not linked on Kinogram yet (e.g. new 2025/2026 titles like Nocturne),
+  // resolve Kinopoisk ID by title + type + year and fetch kp/{filmId}
+  if (!html && title) {
+    const fallbackKpIds = await lookupKpIdsByTitle(title, mediaType, year);
+    for (const fKp of fallbackKpIds) {
+      const path = `kp/${fKp}`;
+      if (candidates.includes(path)) continue;
+      html = await fetchKinogramEmbed(path);
+      if (html) {
+        usedPath = path;
+        break;
+      }
     }
   }
 
@@ -187,21 +263,33 @@ export async function handler(event) {
   const params = event.queryStringParameters || {};
   const kp = params.kp || '';
   const imdb = params.imdb || '';
+  const title = params.title || '';
+  const mediaType = params.type || '';
+  const year = params.year || '';
   const season = Number(params.season) || 1;
   const episode = Number(params.episode) || 1;
 
-  if (!kp && !imdb) {
+  if (!kp && !imdb && !title) {
     return {
       statusCode: 400,
       headers,
-      body: JSON.stringify({ ok: false, error: 'Missing kp or imdb parameter' }),
+      body: JSON.stringify({ ok: false, error: 'Missing kp, imdb, or title parameter' }),
     };
   }
 
-  const result = await resolveVodStreamData({ kp, imdb, season, episode });
+  const result = await resolveVodStreamData({
+    kp,
+    imdb,
+    title,
+    mediaType,
+    year,
+    season,
+    episode,
+  });
   return {
     statusCode: result.ok ? 200 : 404,
     headers,
     body: JSON.stringify(result),
   };
 }
+
