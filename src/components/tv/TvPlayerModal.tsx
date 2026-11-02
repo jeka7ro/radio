@@ -843,7 +843,7 @@ export const TvPlayerModal: React.FC = () => {
           <div className="shrink-0 px-3 sm:px-6 py-2 bg-amber-950/90 border-b border-amber-600/60 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-zinc-950 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
-                ⏪ ARHIVĂ TV (CATCH-UP)
+                ARHIVĂ TV (CATCH-UP)
               </span>
               <span className="text-xs sm:text-sm font-bold text-amber-200 truncate">
                 {activeArchiveProg.title}
@@ -1256,7 +1256,7 @@ export const TvPlayerModal: React.FC = () => {
                           )}
                         </div>
                         <span className="text-xs font-bold text-emerald-400 tabular-nums">
-                          ⏳ {epgStats.remainingShort} ({epgStats.progress}%)
+                          {epgStats.remainingShort} ({epgStats.progress}%)
                         </span>
                       </div>
 
@@ -1445,11 +1445,11 @@ export const TvPlayerModal: React.FC = () => {
 
                               {isLiveNow ? (
                                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold shrink-0">
-                                  🟢 ACUM
+                                  ACUM
                                 </span>
                               ) : isPast ? (
                                 <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold shrink-0">
-                                  ⏪ ARHIVĂ
+                                  ARHIVĂ
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-[10px] font-medium shrink-0">

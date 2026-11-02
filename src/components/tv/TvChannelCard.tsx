@@ -154,7 +154,7 @@ export const TvChannelCard: React.FC<TvChannelCardProps> = React.memo(
                     {formatEpgTime(epg.now.start)}–{formatEpgTime(epg.now.stop)}
                   </span>
                   <span className="text-[11px] font-bold text-brand-700 dark:text-brand-300 tabular-nums shrink-0">
-                    ⏳ {epgStats.remainingShort}
+                    {epgStats.remainingShort}
                   </span>
                 </div>
 
