@@ -20,6 +20,7 @@ import {
   ListFilter,
   History,
   Play,
+  PanelRight,
 } from 'lucide-react';
 import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
@@ -809,6 +810,28 @@ export const TvPlayerModal: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => {
+                setIsOsdOverlayOpen(false);
+                setIsSidePanelOpen((v) => !v);
+              }}
+              aria-pressed={showSideColumn}
+              title={
+                showSideColumn
+                  ? 'Ascunde panoul din dreapta (Canale & Arhivă)'
+                  : 'Deschide panoul din dreapta (Canale & Arhivă)'
+              }
+              className={`min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+                showSideColumn
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
+                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
+              }`}
+            >
+              <PanelRight className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span className="hidden xs:inline">Canale</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
               aria-pressed={isFavorite}
               aria-label={format(
@@ -1066,7 +1089,7 @@ export const TvPlayerModal: React.FC = () => {
                     }
                   }}
                   aria-pressed={showSideColumn && sidePanelTab === 'channels'}
-                  title="Deschide / închide lista de canale"
+                  title="Deschide / închide lista de canale în dreapta"
                   className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
                     showSideColumn && sidePanelTab === 'channels'
                       ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
@@ -1074,7 +1097,7 @@ export const TvPlayerModal: React.FC = () => {
                   }`}
                 >
                   <Tv className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  <span>{tvQueue.length || 1}</span>
+                  <span>Canale ({tvQueue.length || 1})</span>
                 </button>
 
                 {/* Toggle 7-Day TV Archive */}
@@ -1091,7 +1114,7 @@ export const TvPlayerModal: React.FC = () => {
                       }
                     }}
                     aria-pressed={showSideColumn && sidePanelTab === 'archive'}
-                    title={`Arhivă TV (${archiveDays.length} zile)`}
+                    title={`Deschide / închide Arhiva TV (${archiveDays.length} zile)`}
                     className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
                       (showSideColumn && sidePanelTab === 'archive') ||
                       activeArchiveProg
@@ -1100,7 +1123,7 @@ export const TvPlayerModal: React.FC = () => {
                     }`}
                   >
                     <History className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                    <span>{archiveDays.length}z</span>
+                    <span>Arhivă ({archiveDays.length}z)</span>
                   </button>
                 )}
               </div>
