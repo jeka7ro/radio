@@ -8,22 +8,22 @@
     },
     {
       "icon": "movie",
-      "label": "Smart TV Lampa (Filme, Seriale, TV & Radio)",
-      "action": "link:{PREFIX}/?tvmode=1"
+      "label": "Smart TV (Filme & Seriale)",
+      "action": "link:{PREFIX}/tv"
     },
     {
       "icon": "live-tv",
-      "label": "TV Online Live (Player Nativ MSX)",
+      "label": "TV Online Live",
       "data": "{PREFIX}/msx/tv.json"
     },
     {
       "icon": "radio",
-      "label": "Radio Online (Player Nativ MSX)",
+      "label": "Radio Online",
       "data": "{PREFIX}/msx/radio.json"
     },
     {
       "icon": "theaters",
-      "label": "Lampa.mx Original",
+      "label": "Lampa Smart TV",
       "action": "link:http://lampa.mx"
     },
     {

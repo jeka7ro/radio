@@ -13,7 +13,7 @@
       "titleFooter": "Filme, Seriale, TV Online (iEdem + 18+) & Radio cu Poză",
       "icon": "msx-white:movie",
       "color": "purple",
-      "action": "link:{PREFIX}/?tvmode=1"
+      "action": "link:{PREFIX}/tv"
     },
     {
       "layout": "4,0,4,3",

@@ -30,6 +30,12 @@ export const App: React.FC = () => {
   const [isSmartTvMode, setIsSmartTvMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
+    const pathname = window.location.pathname.toLowerCase();
+    const isTvPath =
+      pathname === '/tv' ||
+      pathname.startsWith('/tv/') ||
+      pathname === '/lampa' ||
+      window.location.hash === '#tv';
     const savedTvPref = (() => {
       try {
         return localStorage.getItem('aether_smart_tv_mode') === '1';
@@ -45,10 +51,12 @@ export const App: React.FC = () => {
       }
     })();
     return (
+      isTvPath ||
+      params.has('tv') ||
       params.get('tvmode') === '1' ||
       savedTvPref ||
       inIframe ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen/i.test(
+      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
         navigator.userAgent
       )
     );
@@ -59,9 +67,7 @@ export const App: React.FC = () => {
       document.documentElement.classList.add('smart-tv-mode');
       try {
         localStorage.setItem('aether_smart_tv_mode', '1');
-        const url = new URL(window.location.href);
-        url.searchParams.set('tvmode', '1');
-        window.history.replaceState({}, '', url.toString());
+        window.history.replaceState({}, '', '/tv');
       } catch {
         // ignore
       }
@@ -72,7 +78,7 @@ export const App: React.FC = () => {
       window.removeEventListener('aether:enter-smart-tv', handleEnterSmartTv);
   }, []);
 
-  // Support deep-link URL query parameters (?tab=mediateca|tv|home|countries|favorites|settings & ?tvmode=1)
+  // Support deep-link URL query parameters (?tab=mediateca|tv|home|countries|favorites|settings & /tv)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
@@ -87,9 +93,13 @@ export const App: React.FC = () => {
       setActiveTab(tabParam);
     }
 
+    const pathname = window.location.pathname.toLowerCase();
     const isTvMode =
+      pathname === '/tv' ||
+      pathname.startsWith('/tv/') ||
+      params.has('tv') ||
       params.get('tvmode') === '1' ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen/i.test(
+      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
         navigator.userAgent
       );
     if (isTvMode) {
@@ -223,9 +233,7 @@ export const App: React.FC = () => {
           document.documentElement.classList.remove('smart-tv-mode');
           try {
             localStorage.removeItem('aether_smart_tv_mode');
-            const url = new URL(window.location.href);
-            url.searchParams.delete('tvmode');
-            window.history.replaceState({}, '', url.toString());
+            window.history.replaceState({}, '', '/');
           } catch {
             // ignore
           }
