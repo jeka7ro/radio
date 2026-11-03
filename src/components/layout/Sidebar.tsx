@@ -34,13 +34,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
 
   return (
     <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 bg-white dark:bg-zinc-900 border-r border-slate-200/80 dark:border-zinc-800/80 z-30 pb-24">
-      {/* Brand Header */}
-      <div className="flex items-center gap-3 px-6 h-20 border-b border-slate-200/70 dark:border-zinc-800/70">
+      {/* Brand Header (aligned to exact 64px / h-16 height to match Header border-b) */}
+      <div className="flex items-center gap-3 px-6 h-16 border-b border-slate-200/80 dark:border-zinc-800/80 shrink-0">
         <div
           aria-hidden="true"
-          className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm"
+          className="w-9 h-9 rounded-full bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm shrink-0"
         >
-          <Radio className="w-5 h-5" />
+          <Radio className="w-4 h-4" />
         </div>
         <div>
           <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-zinc-100 block leading-none">

@@ -57,9 +57,9 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           >
             <div
               aria-hidden="true"
-              className="w-7 h-7 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm flex-shrink-0"
+              className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm flex-shrink-0"
             >
-              <Radio className="w-3.5 h-3.5 sm:w-5 sm:h-5" />
+              <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
             <span className="text-xs sm:text-base font-bold tracking-tight text-slate-900 dark:text-zinc-100 hidden xs:inline">
               AetherRadio
