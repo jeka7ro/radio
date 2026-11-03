@@ -245,13 +245,13 @@ export const OnlineSubtitleFinderModal: React.FC<
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl max-h-[88vh] rounded-2xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-2xl max-h-[88vh] rounded-3xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
         <div className="px-4 py-3 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
               <Subtitles className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -283,24 +283,24 @@ export const OnlineSubtitleFinderModal: React.FC<
             className="flex flex-wrap sm:flex-nowrap items-center gap-2"
           >
             <div className="relative flex-1 min-w-[180px]">
-              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Numele filmului sau serialului (ex: Dune, Nocturne, Gladiator)..."
-                className="w-full h-9 pl-8 pr-3 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500"
+                className="w-full h-9 pl-9 pr-3.5 rounded-full bg-zinc-950 border border-zinc-700 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500"
               />
             </div>
 
-            <div className="inline-flex rounded-xl bg-zinc-950 p-0.5 border border-zinc-800 shrink-0">
+            <div className="inline-flex rounded-full bg-zinc-950 p-0.5 border border-zinc-800 shrink-0">
               <button
                 type="button"
                 onClick={() => {
                   setMediaType('movie');
                   if (query.trim()) void handleSearchTitle(query, 'movie', true);
                 }}
-                className={`h-8 px-2.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
+                className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
                   mediaType === 'movie'
                     ? 'bg-emerald-600 text-white'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -315,7 +315,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                   setMediaType('series');
                   if (query.trim()) void handleSearchTitle(query, 'series', true);
                 }}
-                className={`h-8 px-2.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
+                className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
                   mediaType === 'series'
                     ? 'bg-emerald-600 text-white'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -338,7 +338,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     onChange={(e) =>
                       setSeason(Math.max(1, Number(e.target.value) || 1))
                     }
-                    className="w-12 h-9 px-1.5 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-center font-bold text-white"
+                    className="w-12 h-9 px-1.5 rounded-full bg-zinc-950 border border-zinc-700 text-xs text-center font-bold text-white"
                   />
                 </label>
                 <label className="inline-flex items-center gap-1 text-[11px] text-zinc-400">
@@ -351,7 +351,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     onChange={(e) =>
                       setEpisode(Math.max(1, Number(e.target.value) || 1))
                     }
-                    className="w-12 h-9 px-1.5 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-center font-bold text-white"
+                    className="w-12 h-9 px-1.5 rounded-full bg-zinc-950 border border-zinc-700 text-xs text-center font-bold text-white"
                   />
                 </label>
               </div>
@@ -360,7 +360,7 @@ export const OnlineSubtitleFinderModal: React.FC<
             <button
               type="submit"
               disabled={isSearchingMedia}
-              className="h-9 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+              className="h-9 px-4 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
             >
               {isSearchingMedia ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -466,11 +466,11 @@ export const OnlineSubtitleFinderModal: React.FC<
             filteredSubtitles.map((sub) => (
               <div
                 key={sub.id}
-                className="p-2.5 sm:p-3 rounded-xl bg-zinc-950/90 hover:bg-zinc-950 border border-zinc-800/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-colors"
+                className="p-3 rounded-2xl bg-zinc-950/90 hover:bg-zinc-950 border border-zinc-800/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-colors"
               >
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold uppercase shrink-0">
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold uppercase shrink-0">
                       {sub.langCode2}
                     </span>
                     <span className="text-xs sm:text-sm font-bold text-white truncate">
@@ -490,7 +490,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     type="button"
                     disabled={applyingId === sub.id}
                     onClick={() => void handleApplyTrack(sub)}
-                    className="min-h-[32px] px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="min-h-[32px] px-3.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     {applyingId === sub.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -505,7 +505,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     disabled={downloadingId === sub.id}
                     onClick={() => void handleDownloadTrackFile(sub)}
                     title="Salvează fișierul .SRT în dispozitiv"
-                    className="min-h-[32px] px-2.5 py-1 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-200 border border-zinc-700 text-xs font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                    className="min-h-[32px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-200 border border-zinc-700 text-xs font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
                   >
                     {downloadingId === sub.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />

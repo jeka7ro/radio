@@ -1724,7 +1724,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           {/* Left Compact Title */}
           <div className="flex items-center gap-2.5 shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-rose-600 text-white flex items-center justify-center shadow-xs shrink-0">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-500 to-rose-600 text-white flex items-center justify-center shadow-xs shrink-0">
               <Clapperboard className="w-4 h-4" aria-hidden="true" />
             </div>
             <div>
@@ -2160,27 +2160,27 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   <img
                     src={activeVodItem.background || activeVodItem.poster}
                     alt=""
-                    className="absolute inset-0 w-full h-full object-cover opacity-25 blur-md scale-105 pointer-events-none"
+                    className="absolute inset-0 w-full h-full object-cover opacity-30 blur-xl scale-110 pointer-events-none"
                   />
                 )}
-                <div className="relative z-10 max-w-md w-full p-5 sm:p-6 rounded-2xl bg-zinc-900/95 border border-zinc-700/80 shadow-2xl text-center space-y-4 backdrop-blur-md">
-                  <div className="w-11 h-11 rounded-2xl bg-brand-600/20 border border-brand-500/40 text-brand-400 flex items-center justify-center mx-auto">
+                <div className="relative z-10 max-w-lg w-full px-6 py-6 sm:px-8 sm:py-7 rounded-[32px] bg-zinc-950/80 border border-white/15 shadow-2xl text-center space-y-5 backdrop-blur-xl">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-500/25 to-emerald-500/20 border border-white/15 text-emerald-400 flex items-center justify-center mx-auto shadow-inner">
                     <History className="w-5 h-5" />
                   </div>
-                  <div className="space-y-1">
-                    <h3 className="text-sm sm:text-base font-bold text-white">
+                  <div className="space-y-1.5">
+                    <h3 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
                       De unde vrei să pornească redarea?
                     </h3>
-                    <p className="text-xs text-zinc-300">
+                    <p className="text-xs sm:text-sm text-zinc-300">
                       {activeVodItem.type === 'series'
-                        ? `Sezonul ${selectedSeason}, Episodul ${selectedEpisode} — ai rămas la `
+                        ? `Sezonul ${selectedSeason} • Episodul ${selectedEpisode} — ai rămas la `
                         : 'Ai rămas la '}
-                      <strong className="text-amber-400 font-mono">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/30 text-amber-300 font-mono font-bold text-xs">
                         {formatWatchSeconds(pendingResumePromptSec)}
-                      </strong>
+                      </span>
                     </p>
                   </div>
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1">
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -2189,9 +2189,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         setLiveCurrentTime(resumeSec);
                         setPendingResumePromptSec(null);
                       }}
-                      className="w-full sm:w-auto min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-1.5 shadow-md transition-colors cursor-pointer"
+                      className="min-h-[42px] px-6 py-2.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 whitespace-nowrap shadow-lg shadow-emerald-950/50 transition-all cursor-pointer"
                     >
-                      <Play className="w-4 h-4 fill-current" />
+                      <Play className="w-4 h-4 fill-current shrink-0" />
                       <span>
                         Continuă de la {formatWatchSeconds(pendingResumePromptSec)}
                       </span>
@@ -2212,9 +2212,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           preferredSubLang
                         );
                       }}
-                      className="w-full sm:w-auto min-h-[38px] px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      className="min-h-[42px] px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-white border border-white/15 text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 whitespace-nowrap backdrop-blur-md transition-all cursor-pointer"
                     >
-                      <RotateCcw className="w-4 h-4" />
+                      <RotateCcw className="w-4 h-4 shrink-0" />
                       <span>De la început (00:00)</span>
                     </button>
                   </div>
