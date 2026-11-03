@@ -20,7 +20,6 @@ import {
   Layers,
   ChevronRight,
   RotateCcw,
-  ShieldCheck,
   History,
   Flame,
   Zap,
@@ -1952,199 +1951,170 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       {/* ACTIVE ON-DEMAND MOVIE / SERIES PLAYER PANEL */}
       {activeVodItem && activeItemForEmbed && (
         <section className="rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl overflow-hidden">
-          {/* Player Top Bar */}
-          <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-zinc-900 border-b border-zinc-800 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 text-[10px] sm:text-xs font-extrabold uppercase tracking-wider shrink-0">
-                  {activeVodItem.type === 'series'
-                    ? `S${selectedSeason}:E${selectedEpisode}`
-                    : 'FILM'}
+          {/* Single-Line Compact Player Top Bar (No cluttered server/language rows) */}
+          <div className="px-3.5 sm:px-5 py-2.5 bg-zinc-900 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+            {/* Left: Episode/Film Badge + Title + Rating */}
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-zinc-950 text-[10px] sm:text-xs font-extrabold uppercase tracking-wider shrink-0">
+                {activeVodItem.type === 'series'
+                  ? `S${selectedSeason}:E${selectedEpisode}`
+                  : 'FILM'}
+              </span>
+              <h2 className="text-sm sm:text-base font-bold text-white truncate">
+                {activeVodItem.name}
+              </h2>
+              {activeVodItem.imdbRating && (
+                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold shrink-0">
+                  <Star className="w-3 h-3 fill-current" />
+                  {activeVodItem.imdbRating}
                 </span>
-                <h2 className="text-sm sm:text-lg font-bold text-white truncate">
-                  {activeVodItem.name}
-                </h2>
-                {activeVodItem.imdbRating && (
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold shrink-0">
-                    <Star className="w-3 h-3 fill-current" />
-                    {activeVodItem.imdbRating}
-                  </span>
-                )}
-                <span
-                  title="Toate reclamele de tip pop-up și redirect sunt blocate automat în player"
-                  className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold shrink-0"
-                >
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>Anti-Popup Activ</span>
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                {existingOfflineItem ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveOfflineItem(existingOfflineItem);
-                        setActiveVodItem(null);
-                      }}
-                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 transition-colors"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Redă Offline ({formatBytes(existingOfflineItem.sizeBytes)})</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void exportOfflineItemToDeviceFile(existingOfflineItem)
-                      }
-                      title="Salvează fișierul în memoria telefonului / PC-ului"
-                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1"
-                    >
-                      <FolderDown className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Salvează</span>
-                    </button>
-                  </>
-                ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
-                  <div className="inline-flex items-center gap-1">
-                    <select
-                      aria-label="Calitate descărcare offline"
-                      value={downloadQuality}
-                      onChange={(e) =>
-                        setDownloadQuality(Number(e.target.value) as 360 | 720)
-                      }
-                      className="h-[30px] px-2 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-200 text-[11px] font-semibold outline-none cursor-pointer"
-                    >
-                      <option value={360}>SD 360p</option>
-                      <option value={720}>HD 720p</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      disabled={Boolean(activeDownloadProgress)}
-                      onClick={() => void handleDownloadCurrentVodOffline()}
-                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1 shadow-xs transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Descarcă Offline</span>
-                    </button>
-                  </div>
-                ) : null}
-
-                <button
-                  type="button"
-                  onClick={handleFullscreenPlayer}
-                  className="min-h-[30px] px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                  <span className="hidden xs:inline">Fullscreen</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveVodItem(null)}
-                  className="min-h-[30px] px-2.5 py-1 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Închide</span>
-                </button>
-              </div>
+              )}
             </div>
 
-            {/* Single-line Horizontal Server + Subtitle Switcher */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-              {VOD_SERVERS.map((srv) => {
-                const active = activeServer === srv.id;
-                return (
-                  <button
-                    key={srv.id}
-                    type="button"
-                    onClick={() => {
-                      setResumeStartSeconds(liveCurrentTime);
-                      setActiveServer(srv.id);
-                      updateWatchProgress(
-                        activeVodItem,
-                        selectedSeason,
-                        selectedEpisode,
-                        liveCurrentTime,
-                        liveDuration,
-                        srv.id,
-                        preferredSubLang
-                      );
-                    }}
-                    title={srv.badge}
-                    className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
-                      active
-                        ? 'bg-brand-600 text-white shadow-xs'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                    }`}
-                  >
-                    <Layers className="w-3 h-3 text-brand-400" />
-                    <span>{srv.label}</span>
-                  </button>
-                );
-              })}
+            {/* Right: Compact Pill Controls (Server Dropdown, Audio/Lang Dropdown, Subtitrări, Offline, Fullscreen, Închide) */}
+            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              {/* 1. Server Selector Dropdown */}
+              <div className="relative inline-flex items-center">
+                <Layers className="w-3.5 h-3.5 text-brand-400 absolute left-3 pointer-events-none" />
+                <select
+                  aria-label="Alege Serverul Video"
+                  value={activeServer}
+                  onChange={(e) => {
+                    const srvId = e.target.value as VodServerId;
+                    setResumeStartSeconds(liveCurrentTime);
+                    setActiveServer(srvId);
+                    updateWatchProgress(
+                      activeVodItem,
+                      selectedSeason,
+                      selectedEpisode,
+                      liveCurrentTime,
+                      liveDuration,
+                      srvId,
+                      preferredSubLang
+                    );
+                  }}
+                  className="h-8 pl-8 pr-6 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-100 text-xs font-semibold outline-none cursor-pointer transition-colors"
+                >
+                  {VOD_SERVERS.map((srv) => (
+                    <option
+                      key={srv.id}
+                      value={srv.id}
+                      className="bg-zinc-900 text-zinc-100"
+                    >
+                      {srv.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <span className="text-zinc-700 select-none">|</span>
+              {/* 2. Audio / Subtitle Language Selector Dropdown */}
+              <div className="relative inline-flex items-center">
+                <Globe className="w-3.5 h-3.5 text-emerald-400 absolute left-3 pointer-events-none" />
+                <select
+                  aria-label="Alege Pista Audio / Limba Subtitrării"
+                  value={preferredSubLang}
+                  onChange={(e) => {
+                    const langId = e.target.value as SubtitleLangId;
+                    setResumeStartSeconds(liveCurrentTime);
+                    setPreferredSubLang(langId);
+                    updateWatchProgress(
+                      activeVodItem,
+                      selectedSeason,
+                      selectedEpisode,
+                      liveCurrentTime,
+                      liveDuration,
+                      activeServer,
+                      langId
+                    );
+                    if (activeVodItem.id.startsWith('tt')) {
+                      void fetchOnlineSubtitlesByImdb({
+                        imdbId: activeVodItem.id,
+                        type: activeVodItem.type,
+                        season: selectedSeason,
+                        episode: selectedEpisode,
+                      }).then(async (list) => {
+                        const match = list.find((t) => t.langCode2 === langId);
+                        if (match) {
+                          const { vttBlobUrl } =
+                            await downloadSubtitleAsVttBlobUrl(match.url);
+                          setActiveSubVttUrl(vttBlobUrl);
+                          setActiveSubLabel(match.langLabel);
+                        }
+                      });
+                    }
+                  }}
+                  className="h-8 pl-8 pr-6 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-100 text-xs font-semibold outline-none cursor-pointer transition-colors"
+                >
+                  {SUBTITLE_LANGUAGES.map((sub) => (
+                    <option
+                      key={sub.id}
+                      value={sub.id}
+                      className="bg-zinc-900 text-zinc-100"
+                    >
+                      Limbă: {sub.label} ({sub.id.toUpperCase()})
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              {SUBTITLE_LANGUAGES.map((sub) => {
-                const active = preferredSubLang === sub.id;
-                return (
-                  <button
-                    key={sub.id}
-                    type="button"
-                    onClick={() => {
-                      setResumeStartSeconds(liveCurrentTime);
-                      setPreferredSubLang(sub.id);
-                      updateWatchProgress(
-                        activeVodItem,
-                        selectedSeason,
-                        selectedEpisode,
-                        liveCurrentTime,
-                        liveDuration,
-                        activeServer,
-                        sub.id
-                      );
-                      // Also auto-fetch OpenSubtitles track for this language if on Native Player
-                      if (activeVodItem.id.startsWith('tt')) {
-                        void fetchOnlineSubtitlesByImdb({
-                          imdbId: activeVodItem.id,
-                          type: activeVodItem.type,
-                          season: selectedSeason,
-                          episode: selectedEpisode,
-                        }).then(async (list) => {
-                          const match = list.find(
-                            (t) => t.langCode2 === sub.id
-                          );
-                          if (match) {
-                            const { vttBlobUrl } =
-                              await downloadSubtitleAsVttBlobUrl(match.url);
-                            setActiveSubVttUrl(vttBlobUrl);
-                            setActiveSubLabel(match.langLabel);
-                          }
-                        });
-                      }
-                    }}
-                    className={`min-h-[28px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
-                      active
-                        ? 'bg-emerald-500 text-zinc-950 font-bold shadow-xs'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                    }`}
-                  >
-                    <Globe className="w-3 h-3 shrink-0" aria-hidden="true" />
-                    <span>{sub.id.toUpperCase()}</span>
-                  </button>
-                );
-              })}
-
+              {/* 3. Subtitrări Button (Opens Online Subtitle Finder Modal) */}
               <button
                 type="button"
                 onClick={() => setIsSubFinderOpen(true)}
-                title="Caută și descarcă subtitrări .SRT de pe internet (OpenSubtitles)"
-                className="min-h-[28px] px-2.5 py-0.5 rounded-full bg-emerald-950 hover:bg-emerald-900 border border-emerald-600/60 text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                title="Caută, aplică sau descarcă subtitrări .SRT de pe internet"
+                className="h-8 px-3 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
               >
-                <Subtitles className="w-3 h-3 shrink-0" />
-                <span>+ Subtitrări Net (.SRT)</span>
+                <Subtitles className="w-3.5 h-3.5 shrink-0" />
+                <span>Subtitrări</span>
+              </button>
+
+              {/* 4. Compact Offline Button */}
+              {existingOfflineItem ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveOfflineItem(existingOfflineItem);
+                    setActiveVodItem(null);
+                  }}
+                  title={`Redă din memoria Offline (${formatBytes(existingOfflineItem.sizeBytes)})`}
+                  className="h-8 px-3 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Offline</span>
+                </button>
+              ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
+                <button
+                  type="button"
+                  disabled={Boolean(activeDownloadProgress)}
+                  onClick={() => void handleDownloadCurrentVodOffline()}
+                  title="Descarcă filmul/episodul pentru vizionare Offline fără internet"
+                  className="h-8 px-3 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Offline</span>
+                </button>
+              ) : null}
+
+              {/* 5. Fullscreen Icon Button */}
+              <button
+                type="button"
+                onClick={handleFullscreenPlayer}
+                title="Ecran complet (Fullscreen)"
+                aria-label="Fullscreen"
+                className="h-8 w-8 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
+
+              {/* 6. Close Button */}
+              <button
+                type="button"
+                onClick={() => setActiveVodItem(null)}
+                title="Închide playerul"
+                className="h-8 px-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Închide</span>
               </button>
             </div>
           </div>
