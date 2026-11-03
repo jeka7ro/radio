@@ -30,6 +30,13 @@ export const App: React.FC = () => {
   const [isSmartTvMode, setIsSmartTvMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
+    const savedTvPref = (() => {
+      try {
+        return localStorage.getItem('aether_smart_tv_mode') === '1';
+      } catch {
+        return false;
+      }
+    })();
     const inIframe = (() => {
       try {
         return window.self !== window.top;
@@ -39,6 +46,7 @@ export const App: React.FC = () => {
     })();
     return (
       params.get('tvmode') === '1' ||
+      savedTvPref ||
       inIframe ||
       /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen/i.test(
         navigator.userAgent
@@ -49,6 +57,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     const handleEnterSmartTv = () => {
       document.documentElement.classList.add('smart-tv-mode');
+      try {
+        localStorage.setItem('aether_smart_tv_mode', '1');
+        const url = new URL(window.location.href);
+        url.searchParams.set('tvmode', '1');
+        window.history.replaceState({}, '', url.toString());
+      } catch {
+        // ignore
+      }
       setIsSmartTvMode(true);
     };
     window.addEventListener('aether:enter-smart-tv', handleEnterSmartTv);
@@ -80,8 +96,9 @@ export const App: React.FC = () => {
       document.documentElement.classList.add('smart-tv-mode');
     }
 
-    // Smart TV Remote D-Pad spatial navigation & LG webOS Back key (461)
+    // Smart TV Remote D-Pad spatial navigation & LG webOS Back key (461) for Web Mode
     const handleTvRemoteKeyDown = (e: KeyboardEvent) => {
+      if (isSmartTvMode) return;
       const target = e.target as HTMLElement | null;
       const isTextInput =
         target &&
@@ -179,7 +196,7 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleTvRemoteKeyDown);
     return () => window.removeEventListener('keydown', handleTvRemoteKeyDown);
-  }, [setActiveTab]);
+  }, [setActiveTab, isSmartTvMode]);
 
   // Dynamically update document title per active view & playing station
   useEffect(() => {
@@ -204,6 +221,14 @@ export const App: React.FC = () => {
       <SmartTvLampaView
         onExitTvMode={() => {
           document.documentElement.classList.remove('smart-tv-mode');
+          try {
+            localStorage.removeItem('aether_smart_tv_mode');
+            const url = new URL(window.location.href);
+            url.searchParams.delete('tvmode');
+            window.history.replaceState({}, '', url.toString());
+          } catch {
+            // ignore
+          }
           setIsSmartTvMode(false);
         }}
       />

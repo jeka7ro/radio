@@ -129,19 +129,19 @@ https://hls01ns.antenaplay.ro/hls/tralala-hd/index.m3u8
 https://hls01ns.antenaplay.ro/hls/tralala-desene-animate-hd/index.m3u8
 #EXTINF:-1 tvg-id="Travel.Mix.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/travel-mix.jpg" group-title="Documentary",Travel Mix HD (1080p)
 https://hls02ns.antenaplay.ro/hls/travel-mix-hd/index.m3u8
-#EXTINF:-1 tvg-id="ViasatHistory.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/9e/Viasat_History_2026.svg" group-title="Documentary",Viasat History HD
+#EXTINF:-1 tvg-id="ViasatHistory.ro" tvg-logo="https://ngrch.github.io/iptv/logos/viju_history.png" group-title="Documentary",Viasat History HD
 https://stream8.cinerama.uz/1046/index.m3u8
-#EXTINF:-1 tvg-id="ViasatExplore.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/7/71/Viasat_Explore_2026.svg" group-title="Documentary",Viasat Explore HD
+#EXTINF:-1 tvg-id="ViasatExplore.ro" tvg-logo="https://ngrch.github.io/iptv/logos/viju_explore.png" group-title="Documentary",Viasat Explore HD
 http://stream.mcquack.net/239/index.m3u8
-#EXTINF:-1 tvg-id="ViasatNature.ro" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/2/24/Cropped-viasat-nature.png" group-title="Documentary",Viasat Nature HD
+#EXTINF:-1 tvg-id="ViasatNature.ro" tvg-logo="https://ngrch.github.io/iptv/logos/viju_nature.png" group-title="Documentary",Viasat Nature HD
 https://stream3.cinerama.uz/1228/mono.m3u8
-#EXTINF:-1 tvg-id="NationalGeographic.ro" tvg-logo="https://iptvx.one/picons/nat-geo.png" group-title="Documentary",National Geographic HD (1080p)
+#EXTINF:-1 tvg-id="NationalGeographic.ro" tvg-logo="https://ngrch.github.io/iptv/logos/discovery.png" group-title="Documentary",National Geographic HD (1080p)
 https://stream8.cinerama.uz/1041/index.m3u8
-#EXTINF:-1 tvg-id="NatGeoWild.ro" tvg-logo="https://iptvx.one/picons/nat-geo-wild.png" group-title="Documentary",National Geographic Wild HD (1080p)
+#EXTINF:-1 tvg-id="NatGeoWild.ro" tvg-logo="https://ngrch.github.io/iptv/logos/viju_nature.png" group-title="Documentary",National Geographic Wild HD (1080p)
 https://stream8.cinerama.uz/1042/index.m3u8
 #EXTINF:-1 tvg-id="DiscoveryChannel.ro" tvg-logo="https://ngrch.github.io/iptv/logos/discovery.png" group-title="Documentary",Discovery Channel HD (1080p)
 https://stream8.cinerama.uz/1039/index.m3u8
-#EXTINF:-1 tvg-id="AnimalPlanet.ro" tvg-logo="https://iptvx.one/picons/animal-planet.png" group-title="Documentary",Animal Planet HD (1080p)
+#EXTINF:-1 tvg-id="AnimalPlanet.ro" tvg-logo="https://ngrch.github.io/iptv/logos/viju_nature.png" group-title="Documentary",Animal Planet HD (1080p)
 https://stream8.cinerama.uz/1043/index.m3u8
 #EXTINF:-1 tvg-id="Aleph.News.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/aleph-news.jpg" group-title="News",Aleph News HD (720p)
 https://stream-aleph.m.ro/Aleph/ngrp:Alephnewsmain.stream_all/playlist.m3u8
@@ -158,39 +158,39 @@ https://tvr-moldova.lg.mncdn.com/tvrmoldova/smil:tvrmoldova.smil/chunklist.m3u8
 // Top verified Russian Full HD federal channels placed at the very top of RU & Global lists
 const CURATED_RUSSIAN_TOP_HD_M3U = `
 #EXTM3U
-#EXTINF:-1 tvg-id="pervy" tvg-logo="https://iptvx.one/picons/pervy.png" group-title="Основные",Первый канал HD / Channel One HD (1080p)
+#EXTINF:-1 tvg-id="pervy" tvg-logo="https://ngrch.github.io/iptv/logos/perviy.png" group-title="Основные",Первый канал HD / Channel One HD (1080p)
 https://stream3.cinerama.uz/1214/mono.m3u8
-#EXTINF:-1 tvg-id="pervy" tvg-logo="https://iptvx.one/picons/pervy.png" group-title="Основные",Первый канал / Channel One (Russia) (1080p)
+#EXTINF:-1 tvg-id="pervy" tvg-logo="https://ngrch.github.io/iptv/logos/perviy.png" group-title="Основные",Первый канал / Channel One (Russia) (1080p)
 http://flussonic.mkpnet.ru/tv-4f9598ab5f91dca4/video.m3u8
-#EXTINF:-1 tvg-id="pervy" tvg-logo="https://iptvx.one/picons/pervy.png" group-title="Основные",Первый канал Европа / Channel One Europe (HD)
+#EXTINF:-1 tvg-id="pervy" tvg-logo="https://ngrch.github.io/iptv/logos/perviy.png" group-title="Основные",Первый канал Европа / Channel One Europe (HD)
 https://streaming.thestream.cyou/live/210-req_offset_28000000-req_window_0-3k_v5.m3u8
-#EXTINF:-1 tvg-id="rossia1" tvg-logo="https://iptvx.one/picons/rossia1.png" group-title="Основные",Россия 1 HD / Russia 1 HD (1080p)
+#EXTINF:-1 tvg-id="rossia1" tvg-logo="https://ngrch.github.io/iptv/logos/rossiya_1.png" group-title="Основные",Россия 1 HD / Russia 1 HD (1080p)
 https://live.smotrim.ru/vgtrk/0/russia1-hd/index.m3u8
-#EXTINF:-1 tvg-id="rossia1" tvg-logo="https://iptvx.one/picons/rossia1.png" group-title="Основные",Россия 1 (2) / Russia 1 (1080p)
+#EXTINF:-1 tvg-id="rossia1" tvg-logo="https://ngrch.github.io/iptv/logos/rossiya_1.png" group-title="Основные",Россия 1 (2) / Russia 1 (1080p)
 https://stream8.cinerama.uz/1020/index.m3u8
-#EXTINF:-1 tvg-id="ntv" tvg-logo="https://iptvx.one/picons/ntv.png" group-title="Основные",НТВ HD / NTV HD (1080p)
+#EXTINF:-1 tvg-id="ntv" tvg-logo="https://ngrch.github.io/iptv/logos/ntv.png" group-title="Основные",НТВ HD / NTV HD (1080p)
 https://cdn.ntv.ru/ntv-msk_hd/index.m3u8
-#EXTINF:-1 tvg-id="ntv" tvg-logo="https://iptvx.one/picons/ntv.png" group-title="Основные",НТВ (2) / NTV (HD)
+#EXTINF:-1 tvg-id="ntv" tvg-logo="https://ngrch.github.io/iptv/logos/ntv.png" group-title="Основные",НТВ (2) / NTV (HD)
 https://cdn.ntv.ru/ntv0/index.m3u8
-#EXTINF:-1 tvg-id="sts" tvg-logo="https://iptvx.one/picons/sts.png" group-title="Основные",СТС HD / STS HD (1080p)
+#EXTINF:-1 tvg-id="sts" tvg-logo="https://ngrch.github.io/iptv/logos/sts.png" group-title="Основные",СТС HD / STS HD (1080p)
 http://stream.mcquack.net/138/index.m3u8
-#EXTINF:-1 tvg-id="tnt" tvg-logo="https://iptvx.one/picons/tnt.png" group-title="Основные",ТНТ HD / TNT Russia HD (1080p)
+#EXTINF:-1 tvg-id="tnt" tvg-logo="https://ngrch.github.io/iptv/logos/tnt.png" group-title="Основные",ТНТ HD / TNT Russia HD (1080p)
 http://stream.mcquack.net/135/index.m3u8
-#EXTINF:-1 tvg-id="tnt" tvg-logo="https://iptvx.one/picons/tnt.png" group-title="Основные",ТНТ (2) / TNT Russia (Live)
+#EXTINF:-1 tvg-id="tnt" tvg-logo="https://ngrch.github.io/iptv/logos/tnt.png" group-title="Основные",ТНТ (2) / TNT Russia (Live)
 https://bl.rutube.ru/livestream/546602986e6a424d74d594876ddb3f04/index.m3u8?s=K-z3nz49R1oGQ-5yPSd8pg&e=2082157024&scheme=https
-#EXTINF:-1 tvg-id="match-tv" tvg-logo="https://iptvx.one/picons/match-tv.png" group-title="Спортивные",Матч! ТВ / Match TV (HD)
+#EXTINF:-1 tvg-id="match-tv" tvg-logo="https://ngrch.github.io/iptv/logos/match.png" group-title="Спортивные",Матч! ТВ / Match TV (HD)
 http://stream.mcquack.net/169/index.m3u8
-#EXTINF:-1 tvg-id="piatnica" tvg-logo="https://iptvx.one/picons/piatnica.png" group-title="Развлекательные",Пятница! / Friday! (HD)
+#EXTINF:-1 tvg-id="piatnica" tvg-logo="https://ngrch.github.io/iptv/logos/pyatnica.png" group-title="Развлекательные",Пятница! / Friday! (HD)
 http://stream.mcquack.net/181/index.m3u8
-#EXTINF:-1 tvg-id="tv3-ru" tvg-logo="https://iptvx.one/picons/tv3-ru.png" group-title="Развлекательные",ТВ-3 HD / TV-3 HD (1080p)
+#EXTINF:-1 tvg-id="tv3-ru" tvg-logo="https://ngrch.github.io/iptv/logos/tv3.png" group-title="Развлекательные",ТВ-3 HD / TV-3 HD (1080p)
 http://stream.mcquack.net/136/index.m3u8
-#EXTINF:-1 tvg-id="subbota" tvg-logo="https://iptvx.one/picons/subbota.png" group-title="Развлекательные",Суббота! HD / Subbota! HD (1080p)
+#EXTINF:-1 tvg-id="subbota" tvg-logo="https://ngrch.github.io/iptv/logos/subbota.png" group-title="Развлекательные",Суббота! HD / Subbota! HD (1080p)
 http://stream.mcquack.net/269/index.m3u8
-#EXTINF:-1 tvg-id="domashny" tvg-logo="https://iptvx.one/picons/domashny.png" group-title="Развлекательные",Домашний / Domashniy (HD)
+#EXTINF:-1 tvg-id="domashny" tvg-logo="https://ngrch.github.io/iptv/logos/domashniy.png" group-title="Развлекательные",Домашний / Domashniy (HD)
 http://stream.mcquack.net/227/index.m3u8
-#EXTINF:-1 tvg-id="zvezda" tvg-logo="https://iptvx.one/picons/zvezda.png" group-title="Основные",Звезда HD / Zvezda HD (1080p)
+#EXTINF:-1 tvg-id="zvezda" tvg-logo="https://ngrch.github.io/iptv/logos/zvezda.png" group-title="Основные",Звезда HD / Zvezda HD (1080p)
 https://tvchannelstream1.tvzvezda.ru/cdn/tvzvezda/playlist_hdhigh.m3u8
-#EXTINF:-1 tvg-id="rossia-k" tvg-logo="https://iptvx.one/picons/rossia-k.png" group-title="Основные",Россия-Культура HD / Russia-K (1080p)
+#EXTINF:-1 tvg-id="rossia-k" tvg-logo="https://ngrch.github.io/iptv/logos/rossiya_k.png" group-title="Основные",Россия-Культура HD / Russia-K (1080p)
 https://live.smotrim.ru/vgtrk/0/kultura-hd/index.m3u8
 `;
 
@@ -255,55 +255,51 @@ const RUSSIAN_BILINGUAL_NAMES: Record<string, string> = {
 };
 
 const FALLBACK_LOGO_RULES: Array<[RegExp, string]> = [
-  [/^Первый канал|Channel One/i, 'https://iptvx.one/picons/pervy.png'],
-  [/^Россия 1\b|Russia 1/i, 'https://iptvx.one/picons/rossia1.png'],
-  [/^Россия 24|Russia 24/i, 'https://iptvx.one/picons/rossia24.png'],
-  [/^Россия[ -]?К|Культура/i, 'https://iptvx.one/picons/rossia-k.png'],
-  [/^НТВ Сериал|NTV Series/i, 'https://iptvx.one/picons/ntv-serial.png'],
-  [/^НТВ Хит/i, 'https://iptvx.one/picons/ntv-hit.png'],
-  [/^НТВ Право/i, 'https://iptvx.one/picons/ntv-pravo.png'],
-  [/^НТВ Стиль/i, 'https://iptvx.one/picons/ntv-stil.png'],
-  [/^НТВ\b|^NTV/i, 'https://iptvx.one/picons/ntv.png'],
-  [/^ТНТ4|TNT4/i, 'https://iptvx.one/picons/tnt4.png'],
-  [/^ТНТ Music|TNT Music/i, 'https://iptvx.one/picons/tnt-music.png'],
-  [/^ТНТ\b|^TNT/i, 'https://iptvx.one/picons/tnt.png'],
-  [/^СТС Love|STS Love/i, 'https://iptvx.one/picons/sts-love.png'],
-  [/^СТС Kids|STS Kids/i, 'https://iptvx.one/picons/sts-kids.png'],
-  [/^СТС\b|^STS/i, 'https://iptvx.one/picons/sts.png'],
-  [/^РЕН ТВ|REN TV/i, 'https://iptvx.one/picons/rentv.png'],
-  [/^Пятница|Pyatnitsa|Friday!/i, 'https://iptvx.one/picons/piatnica.png'],
-  [/^Матч!?\s*Боец|Match!?\s*Boets/i, 'https://iptvx.one/picons/match-boec.png'],
-  [/^Матч!?\s*Страна/i, 'https://iptvx.one/picons/match-strana.png'],
-  [/^Матч!?\s*Арена/i, 'https://iptvx.one/picons/match-arena.png'],
-  [/^Матч!?\s*Игра/i, 'https://iptvx.one/picons/match-igra.png'],
-  [/^Матч|Match/i, 'https://iptvx.one/picons/match-tv.png'],
-  [/^ТВ[ -]?3\b|TV-3/i, 'https://iptvx.one/picons/tv3-ru.png'],
-  [/^Домашний|Domashniy/i, 'https://iptvx.one/picons/domashny.png'],
-  [/^Звезда|Zvezda/i, 'https://iptvx.one/picons/zvezda.png'],
-  [/^Карусель|Karusel/i, 'https://iptvx.one/picons/karusel.png'],
-  [/^ТВ Центр|ТВЦ|TV Center/i, 'https://iptvx.one/picons/tvc.png'],
-  [/^Суббота|Subbota/i, 'https://iptvx.one/picons/subbota.png'],
-  [/^Муз-ТВ|Muz-TV/i, 'https://iptvx.one/picons/muztv.png'],
-  [/^Пятый канал|5 канал/i, 'https://iptvx.one/picons/5kanal.png'],
-  [/^ОТР\b/i, 'https://iptvx.one/picons/otr.png'],
-  [/^Мир 24/i, 'https://iptvx.one/picons/mir24.png'],
-  [/^Мир\b/i, 'https://iptvx.one/picons/mir.png'],
-  [/^Спас\b/i, 'https://iptvx.one/picons/spas.png'],
-  [/^Ю\b|^Ю-ТВ/i, 'https://iptvx.one/picons/u-tv.png'],
-  [/^Че!?$|^Че\b/i, 'https://iptvx.one/picons/che.png'],
-  [/^Дом Кино Премиум/i, 'https://iptvx.one/picons/domkino-premium.png'],
-  [/^Дом Кино/i, 'https://iptvx.one/picons/domkino.png'],
-  [/^Кинопремьера/i, 'https://iptvx.one/picons/kinopremiera.png'],
-  [/^Кинохит/i, 'https://iptvx.one/picons/kinohit.png'],
-  [/^Киносемья/i, 'https://iptvx.one/picons/kinosemia.png'],
-  [/^Киносвидание/i, 'https://iptvx.one/picons/kinosvidanie.png'],
-  [/^Кинокомедия/i, 'https://iptvx.one/picons/kinokomedia.png'],
-  [/^Киномикс/i, 'https://iptvx.one/picons/kinomix.png'],
-  [/^Киноужас/i, 'https://iptvx.one/picons/kinoujas.png'],
-  [/^Кинопоказ/i, 'https://iptvx.one/picons/kinopokaz.png'],
-  [/^Мужское Кино/i, 'https://iptvx.one/picons/mujskoe-kino.png'],
-  [/^Родное Кино/i, 'https://iptvx.one/picons/rodnoe-kino.png'],
-  [/^Индийское Кино/i, 'https://iptvx.one/picons/indijskoe-kino.png'],
+  [/^Первый канал|^Первый\b|Channel One/i, 'https://ngrch.github.io/iptv/logos/perviy.png'],
+  [/^Россия 1\b|Russia 1/i, 'https://ngrch.github.io/iptv/logos/rossiya_1.png'],
+  [/^Россия 24|Russia 24/i, 'https://ngrch.github.io/iptv/logos/rossiya_24.png'],
+  [/^Россия[ -]?К|Культура/i, 'https://ngrch.github.io/iptv/logos/rossiya_k.png'],
+  [/^НТВ Хит/i, 'https://ngrch.github.io/iptv/logos/ntv_hit.png'],
+  [/^НТВ\b|^NTV/i, 'https://ngrch.github.io/iptv/logos/ntv.png'],
+  [/^ТНТ4|TNT4/i, 'https://ngrch.github.io/iptv/logos/tnt4.png'],
+  [/^ТНТ\b|^TNT/i, 'https://ngrch.github.io/iptv/logos/tnt.png'],
+  [/^СТС Love|STS Love/i, 'https://ngrch.github.io/iptv/logos/sts_love.png'],
+  [/^СТС\b|^STS/i, 'https://ngrch.github.io/iptv/logos/sts.png'],
+  [/^РЕН ТВ|REN TV/i, 'https://ngrch.github.io/iptv/logos/ren_tv.png'],
+  [/^Пятница|Pyatnitsa|Friday!/i, 'https://ngrch.github.io/iptv/logos/pyatnica.png'],
+  [/^Матч|Match/i, 'https://ngrch.github.io/iptv/logos/match.png'],
+  [/^ТВ[ -]?3\b|TV-3/i, 'https://ngrch.github.io/iptv/logos/tv3.png'],
+  [/^Домашний|Domashniy/i, 'https://ngrch.github.io/iptv/logos/domashniy.png'],
+  [/^Звезда|Zvezda/i, 'https://ngrch.github.io/iptv/logos/zvezda.png'],
+  [/^Карусель|Karusel/i, 'https://ngrch.github.io/iptv/logos/karusel.png'],
+  [/^ТВ Центр|ТВЦ|TV Center/i, 'https://ngrch.github.io/iptv/logos/tv_tsentr.png'],
+  [/^Суббота|Subbota/i, 'https://ngrch.github.io/iptv/logos/subbota.png'],
+  [/^Муз[ -]?ТВ|Muz-TV/i, 'https://ngrch.github.io/iptv/logos/muz_tv.png'],
+  [/^Пятый|5 канал/i, 'https://ngrch.github.io/iptv/logos/pyatiy.png'],
+  [/^ОТР\b/i, 'https://ngrch.github.io/iptv/logos/otr.png'],
+  [/^Мир\b|^Мир 24/i, 'https://ngrch.github.io/iptv/logos/mir.png'],
+  [/^Спас\b/i, 'https://ngrch.github.io/iptv/logos/spas.png'],
+  [/^Ю\b|^Ю-ТВ/i, 'https://ngrch.github.io/iptv/logos/you.png'],
+  [/^Че!?$|^Че\b/i, 'https://ngrch.github.io/iptv/logos/che.png'],
+  [/^Дом Кино Премиум/i, 'https://ngrch.github.io/iptv/logos/dom_premium.png'],
+  [/^Дом Кино/i, 'https://ngrch.github.io/iptv/logos/dom_kino.png'],
+  [/^Кинопремьера/i, 'https://ngrch.github.io/iptv/logos/kinopremiera.png'],
+  [/^Кинохит/i, 'https://ngrch.github.io/iptv/logos/kinohit.png'],
+  [/^Киносемья/i, 'https://ngrch.github.io/iptv/logos/kinoseria.png'],
+  [/^Кинокомедия/i, 'https://ngrch.github.io/iptv/logos/kinokomedia.png'],
+  [/^Мужское Кино/i, 'https://ngrch.github.io/iptv/logos/muzhskoe.png'],
+  [/^Русский Детектив/i, 'https://ngrch.github.io/iptv/logos/ru_detectiv.png'],
+  [/^2x2|2х2/i, 'https://ngrch.github.io/iptv/logos/2x2.png'],
+  [/^Мосфильм/i, 'https://ngrch.github.io/iptv/logos/mosfilm.png'],
+  [/^Победа/i, 'https://ngrch.github.io/iptv/logos/pobeda.png'],
+  [/^Солнце/i, 'https://ngrch.github.io/iptv/logos/solnce.png'],
+  [/^viju TV1000 Action/i, 'https://ngrch.github.io/iptv/logos/viju_action.png'],
+  [/^viju TV1000 Русское/i, 'https://ngrch.github.io/iptv/logos/viju_russkoe.png'],
+  [/^viju TV1000/i, 'https://ngrch.github.io/iptv/logos/viju_tv1000.png'],
+  [/^viju Explore/i, 'https://ngrch.github.io/iptv/logos/viju_explore.png'],
+  [/^viju History/i, 'https://ngrch.github.io/iptv/logos/viju_history.png'],
+  [/^viju Nature/i, 'https://ngrch.github.io/iptv/logos/viju_nature.png'],
+  [/^Discovery/i, 'https://ngrch.github.io/iptv/logos/discovery.png'],
   [/^Pro\s*TV\b/i, 'https://static.cinemagia.ro/img/tv_station/pro-tv-hd.jpg'],
   [/^Antena\s*1\b/i, 'https://static.cinemagia.ro/img/tv_station/antena-1-hd.jpg'],
   [/^Antena\s*3\b/i, 'https://static.cinemagia.ro/img/tv_station/antena-3-cnn-hd.jpg'],
@@ -329,7 +325,10 @@ const FALLBACK_LOGO_RULES: Array<[RegExp, string]> = [
 function resolveFallbackLogo(channelName: string, existingLogo: string): string {
   for (const [pattern, logoUrl] of FALLBACK_LOGO_RULES) {
     if (pattern.test(channelName)) {
-      if (!existingLogo || /imgur\.com|wikia\.nocookie\.net/i.test(existingLogo)) {
+      if (
+        !existingLogo ||
+        /iptvx\.one|imgur\.com|wikia\.nocookie\.net/i.test(existingLogo)
+      ) {
         return logoUrl;
       }
     }
@@ -607,7 +606,7 @@ export async function fetchTvChannelsByCountry(
     return all.slice(0, 2500);
   }
 
-  const cacheKey = `tv_channels_v3_${upperCode}`;
+  const cacheKey = `tv_channels_v5_${upperCode}`;
   if (!forceRefresh) {
     const cached = getCachedData<TvChannel[]>(cacheKey);
     if (cached) {
@@ -833,3 +832,38 @@ export function downloadM3uFile(content: string, filename: string): void {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Checks whether a TV channel belongs to the 18+ / Adult / iEdem "Для взрослых" / "взрослые" category.
+ */
+export function isAdultTvChannel(ch: TvChannel): boolean {
+  const combined = `${ch.group || ''} ${ch.name || ''}`;
+  return /(?:взросл|для взрослых|эротик|шалун|русская ночь|искушение|ночной клуб|brazzers|hustler|redlight|dorcel|penthouse|playboy|private\s*tv|vivid|babes|barely\s*legal|extasy|passion\s*xxx|pink\s*o|blue\s*hustler|erox|cento\s*x\s*cento|superone|babestation|visit-x|\bxxx\b|\badult\b|\b18\+)/i.test(
+    combined
+  );
+}
+
+/**
+ * Fetches 18+ Adult TV channels from iptv-org categories/xxx.m3u to supplement iEdem "Для взрослых" channels.
+ */
+export async function fetchAdultTvChannels(): Promise<TvChannel[]> {
+  const cacheKey = 'tv_channels_v5_ADULT_XXX';
+  const cached = getCachedData<TvChannel[]>(cacheKey);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+  try {
+    const res = await fetch(`${IPTV_BASE_URL}/categories/xxx.m3u`);
+    if (!res.ok) return [];
+    const text = await res.text();
+    const parsed = parseM3uPlaylist(text, 'INT').map((ch) => ({
+      ...ch,
+      group: 'Для взрослых (18+)',
+    }));
+    setCachedData(cacheKey, parsed, DEFAULT_TTL_MS);
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+

@@ -14,11 +14,13 @@ import {
 import {
   OnlineSubtitleTrack,
   SubtitleMediaCandidate,
+  SubtitleCue,
   fetchOnlineSubtitlesByImdb,
   searchMediaForSubtitles,
   downloadSubtitleAsVttBlobUrl,
   saveSubtitleFileToDevice,
   convertSrtToWebVtt,
+  parseSrtToCues,
 } from '../../services/subtitleSearchService';
 
 interface OnlineSubtitleFinderModalProps {
@@ -35,6 +37,7 @@ interface OnlineSubtitleFinderModalProps {
     label: string;
     langCode2: string;
     rawSrt: string;
+    cues: SubtitleCue[];
   }) => void;
 }
 
@@ -176,7 +179,7 @@ export const OnlineSubtitleFinderModal: React.FC<
     setApplyingId(track.id);
     setErrorMsg(null);
     try {
-      const { vttBlobUrl, rawSrt } = await downloadSubtitleAsVttBlobUrl(
+      const { vttBlobUrl, rawSrt, cues } = await downloadSubtitleAsVttBlobUrl(
         track.url
       );
       onApplySubtitle({
@@ -184,6 +187,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         label: `${track.langLabel} (${track.releaseName.slice(0, 28)})`,
         langCode2: track.langCode2,
         rawSrt,
+        cues,
       });
       onClose();
     } catch (err) {
@@ -221,6 +225,7 @@ export const OnlineSubtitleFinderModal: React.FC<
     try {
       const rawText = await file.text();
       const vttText = convertSrtToWebVtt(rawText);
+      const cues = parseSrtToCues(rawText);
       const blob = new Blob([vttText], { type: 'text/vtt;charset=utf-8' });
       const vttBlobUrl = URL.createObjectURL(blob);
       onApplySubtitle({
@@ -228,6 +233,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         label: file.name.replace(/\.(srt|vtt)$/i, ''),
         langCode2: 'custom',
         rawSrt: rawText,
+        cues,
       });
       onClose();
     } catch {

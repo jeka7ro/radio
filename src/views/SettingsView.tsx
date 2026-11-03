@@ -22,6 +22,12 @@ export const SettingsView: React.FC = () => {
   const { t, language, setLanguage } = useTranslation();
   const theme = useRadioStore((state) => state.theme);
   const setTheme = useRadioStore((state) => state.setTheme);
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
+  const setAdultContentEnabled = useRadioStore(
+    (state) => state.setAdultContentEnabled
+  );
 
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);
   const [isSmartTvModalOpen, setIsSmartTvModalOpen] = useState<boolean>(false);
@@ -173,6 +179,55 @@ export const SettingsView: React.FC = () => {
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* Adult Content (18+ / Для взрослых — iEdem & TV) ON / OFF Card */}
+      <div className="bg-white dark:bg-zinc-900/80 p-3.5 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div
+              aria-hidden="true"
+              className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 flex items-center justify-center flex-shrink-0 text-sm sm:text-base font-extrabold"
+            >
+              18+
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-lg font-semibold text-slate-900 dark:text-zinc-100">
+                Conținut pentru Adulți (18+ / Для взрослых — iEdem & TV)
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-zinc-400">
+                Afișează sau ascunde categoria „18+ Adulți / Для взрослых” în TV Online, lista iEdem și Smart TV
+              </p>
+            </div>
+          </div>
+
+          <div className="inline-flex p-1 rounded-full bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 shrink-0">
+            <button
+              type="button"
+              onClick={() => setAdultContentEnabled(true)}
+              aria-pressed={adultContentEnabled}
+              className={`min-h-[36px] px-4 py-1 rounded-full text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                adultContentEnabled
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              ON (Pornit)
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdultContentEnabled(false)}
+              aria-pressed={!adultContentEnabled}
+              className={`min-h-[36px] px-4 py-1 rounded-full text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                !adultContentEnabled
+                  ? 'bg-rose-600 text-white shadow'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              OFF (Oprit)
+            </button>
+          </div>
         </div>
       </div>
 

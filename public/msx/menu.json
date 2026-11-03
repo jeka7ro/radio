@@ -4,26 +4,26 @@
     {
       "icon": "apps",
       "label": "AetherRadio Hub",
-      "data": "https://radiotv-jk.netlify.app/msx/launcher.json"
+      "data": "{PREFIX}/msx/launcher.json"
     },
     {
       "icon": "movie",
-      "label": "Mediatecă (Filme & Seriale)",
-      "action": "link:https://radiotv-jk.netlify.app/?tab=mediateca&tvmode=1"
+      "label": "Smart TV Lampa (Filme, Seriale, TV & Radio)",
+      "action": "link:{PREFIX}/?tvmode=1"
     },
     {
       "icon": "live-tv",
-      "label": "TV Online Live",
-      "data": "https://radiotv-jk.netlify.app/msx/tv.json"
+      "label": "TV Online Live (Player Nativ MSX)",
+      "data": "{PREFIX}/msx/tv.json"
     },
     {
       "icon": "radio",
-      "label": "Radio Online",
-      "data": "https://radiotv-jk.netlify.app/msx/radio.json"
+      "label": "Radio Online (Player Nativ MSX)",
+      "data": "{PREFIX}/msx/radio.json"
     },
     {
       "icon": "theaters",
-      "label": "Lampa Smart TV",
+      "label": "Lampa.mx Original",
       "action": "link:http://lampa.mx"
     },
     {

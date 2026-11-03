@@ -1299,6 +1299,7 @@ function tvStreamProxyPlugin(): Plugin {
 export default defineConfig({
   plugins: [react(), tvStreamProxyPlugin()],
   server: {
+    host: true,
     port: 8769,
     strictPort: true,
   },

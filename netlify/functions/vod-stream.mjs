@@ -195,8 +195,16 @@ export async function resolveVodStreamData({
         })),
       }));
 
-      if (targetEp?.hls) {
-        const hlsUrl = targetEp.hls + (token ? `&${token}` : '');
+      if (targetEp?.hls || targetEp?.dash) {
+        const dashUrl = targetEp.dash
+          ? targetEp.dash + (token ? `&${token}` : '')
+          : undefined;
+        const dashaUrl = targetEp.dasha
+          ? targetEp.dasha + (token ? `&${token}` : '')
+          : undefined;
+        const hlsUrl = targetEp.hls
+          ? targetEp.hls + (token ? `&${token}` : '')
+          : undefined;
         return {
           ok: true,
           type: 'series',
@@ -208,6 +216,8 @@ export async function resolveVodStreamData({
           audioNames: Array.isArray(targetEp.audio?.names)
             ? targetEp.audio.names
             : ['Русский'],
+          dashUrl,
+          dashaUrl,
           hlsUrl,
           seasons: cleanSeasons,
         };
@@ -216,12 +226,14 @@ export async function resolveVodStreamData({
   }
 
   // Movie extraction
+  const dashMatch = html.match(/dash:\s*"([^"]+)"/);
+  const dashaMatch = html.match(/dasha:\s*"([^"]+)"/);
   const hlsMatch = html.match(/hls:\s*"([^"]+)"/);
   const titleMatch = html.match(/title:\s*"([^"]+)"/);
   const posterMatch = html.match(/poster:\s*"([^"]+)"/);
   const audioMatch = html.match(/audio:\s*(\{"names":\[[^\]]+\][^}]*\})/);
 
-  if (hlsMatch?.[1]) {
+  if (hlsMatch?.[1] || dashMatch?.[1]) {
     let audioNames = ['Русский / Original'];
     try {
       if (audioMatch?.[1]) {
@@ -234,7 +246,15 @@ export async function resolveVodStreamData({
       // keep default
     }
 
-    const hlsUrl = hlsMatch[1] + (token ? `&${token}` : '');
+    const dashUrl = dashMatch?.[1]
+      ? dashMatch[1] + (token ? `&${token}` : '')
+      : undefined;
+    const dashaUrl = dashaMatch?.[1]
+      ? dashaMatch[1] + (token ? `&${token}` : '')
+      : undefined;
+    const hlsUrl = hlsMatch?.[1]
+      ? hlsMatch[1] + (token ? `&${token}` : '')
+      : undefined;
     return {
       ok: true,
       type: 'movie',
@@ -242,6 +262,8 @@ export async function resolveVodStreamData({
       title: titleMatch?.[1] || '',
       poster: posterMatch?.[1] || '',
       audioNames,
+      dashUrl,
+      dashaUrl,
       hlsUrl,
     };
   }

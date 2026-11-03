@@ -3,6 +3,8 @@ import { TvChannel, TvSortOption } from '../types/radio';
 import {
   fetchTvChannelsByCountry,
   fetchAllGlobalTvChannels,
+  fetchAdultTvChannels,
+  isAdultTvChannel,
 } from '../services/tvApi';
 import {
   fetchEpgForCountry,
@@ -17,11 +19,15 @@ const CATALOG_REVISION = 13;
 export function useTvChannels(countryCode: string) {
   const customTvChannels = useRadioStore((state) => state.customTvChannels);
   const favoriteTvChannels = useRadioStore((state) => state.favoriteTvChannels);
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
   const searchQuery = useRadioStore((state) => state.tvSearchQuery);
   const setSearchQuery = useRadioStore((state) => state.setTvSearchQuery);
 
   const [countryChannels, setCountryChannels] = useState<TvChannel[]>([]);
   const [globalChannels, setGlobalChannels] = useState<TvChannel[] | null>(null);
+  const [adultExtraChannels, setAdultExtraChannels] = useState<TvChannel[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isGlobalLoading, setIsGlobalLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,18 +114,47 @@ export function useTvChannels(countryCode: string) {
     setVisibleCount(PAGE_SIZE);
   }, [searchQuery, selectedCategory, sortBy, searchScope]);
 
+  useEffect(() => {
+    if (!adultContentEnabled) {
+      setAdultExtraChannels([]);
+      if (selectedCategory === '__adult__') {
+        setSelectedCategory('');
+      }
+      return;
+    }
+    let cancelled = false;
+    fetchAdultTvChannels()
+      .then((list) => {
+        if (!cancelled) setAdultExtraChannels(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [adultContentEnabled, selectedCategory]);
+
   const activeSourceChannels = useMemo(() => {
+    let rawList: TvChannel[] = [];
     if (onlyFavorites) {
-      return favoriteTvChannels;
+      rawList = favoriteTvChannels;
+    } else if (onlyCustom && customTvChannels.length > 0) {
+      rawList = customTvChannels;
+    } else {
+      const isGlobalMode =
+        searchScope === 'all' || countryCode.toUpperCase() === 'ALL';
+      const base =
+        isGlobalMode && globalChannels ? globalChannels : countryChannels;
+      const merged =
+        customTvChannels.length === 0 ? base : [...customTvChannels, ...base];
+      rawList =
+        selectedCategory === '__adult__' && adultContentEnabled
+          ? [...customTvChannels, ...adultExtraChannels, ...base]
+          : merged;
     }
-    if (onlyCustom && customTvChannels.length > 0) {
-      return customTvChannels;
+    if (!adultContentEnabled) {
+      return rawList.filter((ch) => !isAdultTvChannel(ch));
     }
-    const isGlobalMode =
-      searchScope === 'all' || countryCode.toUpperCase() === 'ALL';
-    const base = isGlobalMode && globalChannels ? globalChannels : countryChannels;
-    if (customTvChannels.length === 0) return base;
-    return [...customTvChannels, ...base];
+    return rawList;
   }, [
     onlyFavorites,
     favoriteTvChannels,
@@ -129,19 +164,23 @@ export function useTvChannels(countryCode: string) {
     globalChannels,
     countryChannels,
     customTvChannels,
+    selectedCategory,
+    adultContentEnabled,
+    adultExtraChannels,
   ]);
 
   const popularCategories = useMemo(() => {
     const counts = new Map<string, number>();
     for (const ch of activeSourceChannels) {
       if (!ch.group) continue;
+      if (!adultContentEnabled && isAdultTvChannel(ch)) continue;
       counts.set(ch.group, (counts.get(ch.group) || 0) + 1);
     }
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 15)
+      .slice(0, 40)
       .map(([cat]) => cat);
-  }, [activeSourceChannels]);
+  }, [activeSourceChannels, adultContentEnabled]);
 
   const filteredAndSortedChannels = useMemo(() => {
     const normalizeText = (str: string) =>
@@ -156,6 +195,9 @@ export function useTvChannels(countryCode: string) {
     const catFilter = selectedCategory.trim().toLowerCase();
 
     const filtered = activeSourceChannels.filter((ch) => {
+      if (!adultContentEnabled && isAdultTvChannel(ch)) {
+        return false;
+      }
       if (q) {
         const searchable = normalizeText(
           `${ch.name} ${ch.group} ${ch.countryCode}`
@@ -165,6 +207,9 @@ export function useTvChannels(countryCode: string) {
         const compactMatch =
           qCompact.length >= 3 && searchableCompact.includes(qCompact);
         if (!tokenMatch && !compactMatch) return false;
+      }
+      if (catFilter === '__adult__') {
+        return isAdultTvChannel(ch);
       }
       if (catFilter === '__cinema__') {
         if (
@@ -189,7 +234,13 @@ export function useTvChannels(countryCode: string) {
       }
       return a.name.localeCompare(b.name);
     });
-  }, [activeSourceChannels, searchQuery, selectedCategory, sortBy]);
+  }, [
+    activeSourceChannels,
+    searchQuery,
+    selectedCategory,
+    sortBy,
+    adultContentEnabled,
+  ]);
 
   const visibleChannels = useMemo(() => {
     return filteredAndSortedChannels.slice(0, visibleCount);

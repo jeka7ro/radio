@@ -29,6 +29,7 @@ interface RadioState {
   isMuted: boolean;
   language: LanguageCode;
   theme: ThemeMode;
+  adultContentEnabled: boolean;
 
   // UI & Navigation state
   activeTab: NavigationTab;
@@ -110,6 +111,7 @@ interface RadioState {
   // Preferences actions
   setLanguage: (lang: LanguageCode) => void;
   setTheme: (theme: ThemeMode) => void;
+  setAdultContentEnabled: (enabled: boolean) => void;
 }
 
 export const useRadioStore = create<RadioState>()(
@@ -130,6 +132,7 @@ export const useRadioStore = create<RadioState>()(
       isMuted: false,
       language: detectInitialLanguage(),
       theme: 'system',
+      adultContentEnabled: true,
 
       activeTab: 'home',
       lastMediaTab: 'home',
@@ -637,6 +640,9 @@ export const useRadioStore = create<RadioState>()(
       setLanguage: (lang) => set({ language: lang }),
 
       setTheme: (theme) => set({ theme }),
+
+      setAdultContentEnabled: (enabled) =>
+        set({ adultContentEnabled: enabled }),
     }),
     {
       name: 'aether-radio-storage',
@@ -646,12 +652,23 @@ export const useRadioStore = create<RadioState>()(
           try {
             localStorage.setItem(name, value);
           } catch {
-            // If customTvChannels is huge and exceeds 5MB localStorage quota, trim customTvChannels so core settings (selectedCountryCode, activeTab, favorites) always persist
+            // If customTvChannels is huge and exceeds 5MB localStorage quota, keep all adult ("взрослые") channels + top 1200 channels so iEdem adult channels at the end of the playlist are never cut off!
             try {
               const parsed = JSON.parse(value);
-              if (parsed?.state?.customTvChannels?.length > 300) {
-                parsed.state.customTvChannels =
-                  parsed.state.customTvChannels.slice(0, 300);
+              if (Array.isArray(parsed?.state?.customTvChannels) && parsed.state.customTvChannels.length > 600) {
+                const allCustom: TvChannel[] = parsed.state.customTvChannels;
+                const adultChannels = allCustom.filter((c) =>
+                  /(?:взросл|для взрослых|эротик|шалун|русская ночь|brazzers|hustler|redlight|dorcel|penthouse|playboy|xxx|adult|18\+)/i.test(
+                    `${c.group || ''} ${c.name || ''}`
+                  )
+                );
+                const otherChannels = allCustom
+                  .filter((c) => !adultChannels.includes(c))
+                  .slice(0, 1200);
+                parsed.state.customTvChannels = [
+                  ...otherChannels,
+                  ...adultChannels,
+                ];
                 localStorage.setItem(name, JSON.stringify(parsed));
               }
             } catch {
@@ -679,6 +696,7 @@ export const useRadioStore = create<RadioState>()(
         isMuted: state.isMuted,
         language: state.language,
         theme: state.theme,
+        adultContentEnabled: state.adultContentEnabled,
       }),
     }
   )

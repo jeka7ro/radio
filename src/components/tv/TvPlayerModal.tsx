@@ -21,6 +21,7 @@ import {
   History,
   Play,
   Globe,
+  VolumeX,
 } from 'lucide-react';
 import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
@@ -237,8 +238,18 @@ interface HlsTrackItem {
   lang?: string;
 }
 
-export const TvPlayerModal: React.FC = () => {
+interface TvPlayerModalProps {
+  isSmartTvFullMode?: boolean;
+}
+
+export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
+  isSmartTvFullMode = false,
+}) => {
   const { t, language, format } = useTranslation();
+  const effectiveTvFullMode =
+    isSmartTvFullMode ||
+    (typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('smart-tv-mode'));
 
   const currentTvChannel = useRadioStore((state) => state.currentTvChannel);
   const tvQueue = useRadioStore((state) => state.tvQueue);
@@ -293,16 +304,23 @@ export const TvPlayerModal: React.FC = () => {
   const [videoStatus, setVideoStatus] = useState<
     'loading' | 'playing' | 'error'
   >('loading');
+  const [isAutoMuted, setIsAutoMuted] = useState(false);
   const [reloadCount, setReloadCount] = useState(0);
   const [streamIndex, setStreamIndex] = useState(0);
   const [isOsdOverlayOpen, setIsOsdOverlayOpen] = useState(false);
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+    effectiveTvFullMode
+      ? false
+      : typeof window !== 'undefined'
+        ? window.innerWidth >= 1024
+        : true
   );
   const [sidePanelTab, setSidePanelTab] = useState<'channels' | 'archive'>(
     'channels'
   );
-  const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(true);
+  const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(
+    () => !effectiveTvFullMode
+  );
 
   const [audioTracks, setAudioTracks] = useState<HlsTrackItem[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
@@ -319,12 +337,17 @@ export const TvPlayerModal: React.FC = () => {
 
   useEffect(() => {
     setStreamIndex(0);
+    setIsAutoMuted(false);
     setAudioTracks([]);
     setActiveAudioTrack(0);
     setSubtitleTracks([]);
     setActiveSubtitleTrack(-1);
     setActiveArchiveProg(currentTvChannel?.archiveProgram || null);
-  }, [currentTvChannel?.id, currentTvChannel?.archiveProgram]);
+    if (effectiveTvFullMode) {
+      setIsSidePanelOpen(false);
+      setIsInfoPanelOpen(false);
+    }
+  }, [currentTvChannel?.id, currentTvChannel?.archiveProgram, effectiveTvFullMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -428,6 +451,7 @@ export const TvPlayerModal: React.FC = () => {
       if (cancelled) return;
       try {
         video.muted = false;
+        setIsAutoMuted(false);
         await video.play();
         if (!cancelled) setVideoStatus('playing');
       } catch {
@@ -435,6 +459,7 @@ export const TvPlayerModal: React.FC = () => {
         if (cancelled) return;
         try {
           video.muted = true;
+          setIsAutoMuted(true);
           await video.play();
           if (!cancelled) setVideoStatus('playing');
         } catch {
@@ -759,9 +784,19 @@ export const TvPlayerModal: React.FC = () => {
           closeTvPlayer();
         }
       }}
-      className="mx-auto mt-11 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md"
+      className={
+        effectiveTvFullMode
+          ? 'fixed inset-0 m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden backdrop:bg-black'
+          : 'mx-auto mt-11 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md'
+      }
     >
-      <div className="flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden">
+      <div
+        className={
+          effectiveTvFullMode
+            ? 'flex flex-col w-screen h-screen overflow-hidden'
+            : 'flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
+        }
+      >
         {/* Top bar — Single Clean Row (Channel Info on Left, Source/Fav/Close on Right) */}
         <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-5 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
@@ -884,12 +919,16 @@ export const TvPlayerModal: React.FC = () => {
               showSideColumn
                 ? 'lg:col-span-7 xl:col-span-7'
                 : 'lg:col-span-12'
-            } flex flex-col shrink-0 lg:shrink lg:min-h-0 lg:overflow-y-auto bg-zinc-950`}
+            } flex flex-col flex-1 shrink-0 lg:shrink lg:min-h-0 lg:overflow-y-auto bg-zinc-950`}
           >
-            {/* 16:9 Video Area (100% unobstructed so native iOS/Android Fullscreen & Volume controls are NEVER blocked!) */}
+            {/* Video Area (Full height in TV Full Mode, or 16:9 when side/EPG panels are open) */}
             <div
               ref={videoContainerRef}
-              className="group/video relative aspect-video w-full shrink-0 bg-black flex items-center justify-center overflow-hidden"
+              className={`group/video relative w-full bg-black flex items-center justify-center overflow-hidden ${
+                effectiveTvFullMode && !showSideColumn && !isInfoPanelOpen
+                  ? 'flex-1 min-h-0'
+                  : 'aspect-video shrink-0'
+              }`}
             >
               <video
                 ref={videoRef}
@@ -899,6 +938,11 @@ export const TvPlayerModal: React.FC = () => {
                 crossOrigin="anonymous"
                 onPlaying={() => setVideoStatus('playing')}
                 onLoadedData={() => setVideoStatus('playing')}
+                onVolumeChange={(e) => {
+                  if (!e.currentTarget.muted && isAutoMuted) {
+                    setIsAutoMuted(false);
+                  }
+                }}
                 onLoadedMetadata={(e) => {
                   const vid = e.currentTarget;
                   if (!currentTvChannel?.url || !Number.isFinite(vid.duration) || vid.duration <= 90) return;
@@ -943,6 +987,25 @@ export const TvPlayerModal: React.FC = () => {
                   />
                 )}
               </video>
+
+              {/* Unmute banner if browser forced muted autoplay */}
+              {isAutoMuted && videoStatus === 'playing' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const v = videoRef.current;
+                    if (v) {
+                      v.muted = false;
+                      v.volume = 1;
+                      setIsAutoMuted(false);
+                    }
+                  }}
+                  className="absolute top-14 left-1/2 -translate-x-1/2 z-30 px-5 py-2.5 rounded-full bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-2xl animate-pulse cursor-pointer"
+                >
+                  <VolumeX className="w-4 h-4" />
+                  <span>Sunet oprit de browser — Apasă OK pentru Sunet</span>
+                </button>
+              )}
 
               {/* Floating Smart TV OSD Channel List Overlay (when triggered) */}
               {isOsdOverlayOpen && (
@@ -1062,6 +1125,11 @@ export const TvPlayerModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
+                    if (effectiveTvFullMode) {
+                      setIsOsdOverlayOpen((v) => !v);
+                      setIsSidePanelOpen(false);
+                      return;
+                    }
                     if (isOsdOverlayOpen) {
                       setIsOsdOverlayOpen(false);
                       setIsSidePanelOpen(true);
@@ -1073,10 +1141,14 @@ export const TvPlayerModal: React.FC = () => {
                       setSidePanelTab('channels');
                     }
                   }}
-                  aria-pressed={showSideColumn && sidePanelTab === 'channels'}
-                  title="Deschide / închide lista de canale în dreapta"
+                  aria-pressed={
+                    isOsdOverlayOpen ||
+                    (showSideColumn && sidePanelTab === 'channels')
+                  }
+                  title="Deschide / închide lista de canale"
                   className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
-                    showSideColumn && sidePanelTab === 'channels'
+                    isOsdOverlayOpen ||
+                    (showSideColumn && sidePanelTab === 'channels')
                       ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
                       : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
                   }`}

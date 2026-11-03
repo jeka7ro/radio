@@ -65,6 +65,9 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
     (state) => state.clearCustomTvChannels
   );
   const favoriteTvChannels = useRadioStore((state) => state.favoriteTvChannels);
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
   const recentTvSearches = useRadioStore((state) => state.recentTvSearches);
   const addRecentTvSearch = useRadioStore((state) => state.addRecentTvSearch);
   const removeRecentTvSearch = useRadioStore(
@@ -947,6 +950,26 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
               <span aria-hidden="true">🎬</span>
               <span>Cinema</span>
             </button>
+
+            {adultContentEnabled && (
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedCategory(
+                    selectedCategory === '__adult__' ? '' : '__adult__'
+                  )
+                }
+                aria-pressed={selectedCategory === '__adult__'}
+                className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors inline-flex items-center gap-1 ${
+                  selectedCategory === '__adult__'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-300/80 dark:border-rose-800/80 hover:bg-rose-100'
+                }`}
+              >
+                <span aria-hidden="true">🔞</span>
+                <span>18+ Adulți / Для взрослых</span>
+              </button>
+            )}
 
             {popularCategories.map((cat) => {
               const active = selectedCategory === cat;

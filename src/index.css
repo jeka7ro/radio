@@ -71,12 +71,16 @@ body {
   white-space: nowrap !important;
 }
 
-/* High contrast focus indicators */
-:where(a:any-link, button, input, select):focus-visible,
-html.smart-tv-mode :where(a:any-link, button, input, select):focus {
+/* High contrast focus indicators (Normal Web Mode only; Smart TV Lampa mode uses native Lampa silver/white focus) */
+html:not(.smart-tv-mode) :where(a:any-link, button, input, select):focus-visible {
   outline: 3px solid var(--brand-color);
   outline-offset: 3px;
   box-shadow: 0 0 0 5px rgba(139, 92, 246, 0.35);
+}
+
+html.smart-tv-mode :where(a:any-link, button, input, select):focus,
+html.smart-tv-mode :where(a:any-link, button, input, select):focus-visible {
+  outline: none !important;
 }
 
 /* Defer rendering for off-screen station cards below the initial fold */

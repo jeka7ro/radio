@@ -86,6 +86,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
             </button>
           );
         })}
+
+        {/* Dedicated Smart TV (Lampa Mode) Launcher in Left Sidebar */}
+        <div className="pt-3 mt-3 border-t border-slate-200/80 dark:border-zinc-800/80">
+          <button
+            type="button"
+            onClick={() => {
+              document.documentElement.classList.add('smart-tv-mode');
+              window.dispatchEvent(new Event('aether:enter-smart-tv'));
+            }}
+            className="w-full min-h-[46px] flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-bold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-md transition-all cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <Tv className="w-5 h-5" aria-hidden="true" />
+              <span>Mod Smart TV</span>
+            </span>
+            <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider rounded-full bg-white/20 text-white">
+              Lampa
+            </span>
+          </button>
+        </div>
       </nav>
 
       {/* Active Country Quick Selector Card (Only shown on Radio / TV / Countries views, hidden on Mediatecă) */}

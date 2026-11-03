@@ -94,8 +94,21 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           )}
         </div>
 
-        {/* Right: Language & Theme controls */}
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        {/* Right: Smart TV Mode + Language & Theme controls */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              document.documentElement.classList.add('smart-tv-mode');
+              window.dispatchEvent(new Event('aether:enter-smart-tv'));
+            }}
+            title="Comută în Interfața Smart TV (Stil Lampa)"
+            className="min-h-[32px] sm:min-h-[40px] px-3 sm:px-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] sm:text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+          >
+            <Monitor className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
+            <span>Mod Smart TV</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setLanguage(language === 'ro' ? 'en' : 'ro')}

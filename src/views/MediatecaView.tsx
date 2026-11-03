@@ -49,9 +49,12 @@ import {
   formatBytes,
 } from '../services/offlineMediaService';
 import {
+  SubtitleCue,
   fetchOnlineSubtitlesByImdb,
   downloadSubtitleAsVttBlobUrl,
+  autoResolveAndFetchBestRoRuSubtitle,
 } from '../services/subtitleSearchService';
+import { resolveDirectVodStreamClient } from '../services/vodStreamClient';
 import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
 import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
 import { SmartTvMsxModal } from '../components/tv/SmartTvMsxModal';
@@ -158,6 +161,8 @@ interface ResolvedDirectVodStream {
   ok: boolean;
   type?: 'movie' | 'series';
   sourcePath?: string;
+  dashUrl?: string;
+  dashaUrl?: string;
   hlsUrl?: string;
   title?: string;
   duration?: number;
@@ -188,33 +193,33 @@ const SUBTITLE_LANGUAGES: Array<{
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
     id: 'kinogram_hls',
-    label: 'S1: Nativ HD (Audio RU + Offline)',
-    badge: 'Fără Reclame • Dublaj RU / Original + Descărcare Offline pe Device',
-  },
-  {
-    id: 'kinogram_embed',
-    label: 'S2: Kinogram RU',
-    badge: 'Fără Pop-up • Filme & Seriale Rusești + Dublaj RU Multi-Audio',
+    label: 'S1: Nativ 1080p Full HD (Original + Offline)',
+    badge: 'Fără Reclame • 1080p Full HD • Audio Original / RU + Descărcare Offline',
   },
   {
     id: 'vidspark',
-    label: 'S3: VidSpark',
+    label: 'S2: VidSpark 1080p/4K',
     badge: 'Fără Reclame • Reluare Automată + Subtitrări RO/RU/EN',
   },
   {
+    id: 'kinogram_embed',
+    label: 'S3: Kinogram 1080p Multi-Audio',
+    badge: 'Fără Pop-up • Filme & Seriale + Dublaj Multi-Audio',
+  },
+  {
     id: 'vidzee',
-    label: 'S4: VidZee',
+    label: 'S4: VidZee 1080p',
     badge: 'Fără Pop-up • Reluare Automată + Multi-Sub',
   },
   {
-    id: 'nontongo',
-    label: 'S5: NontonGo 4K',
-    badge: 'Fără Pop-up • 3 Surse HD/VIP + Subtitrări',
+    id: 'vidsrc_pm',
+    label: 'S5: VidSrc 1080p',
+    badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
   },
   {
-    id: 'vidsrc_pm',
-    label: 'S6: VidSrc',
-    badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
+    id: 'nontongo',
+    label: 'S6: MultiEmbed 4K / 1080p VIP',
+    badge: 'Fără Pop-up • Surse Multiple 4K/1080p + Subtitrări',
   },
   {
     id: 'frembed',
@@ -241,6 +246,7 @@ const GENRE_FILTERS: Array<{
   { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
   { id: 'Romance', label: 'Romantic', Icon: Heart },
   { id: 'Documentary', label: 'Documentare', Icon: Globe },
+  { id: 'Adult', label: '🔞 18+ Adulți / Для взрослых', Icon: Flame },
 ];
 
 const ORIGIN_COUNTRIES: Array<{
@@ -314,6 +320,7 @@ const KP_GENRE_MAP: Record<string, number> = {
   Animation: 18,
   Romance: 4,
   Documentary: 22,
+  Adult: 28,
 };
 
 async function fetchKinopoiskCatalogPages(params: {
@@ -574,15 +581,9 @@ function buildVodEmbedUrl(
         : `https://player.vidzee.wtf/embed/movie/${tmdbOrImdbId}${suffix}`;
     }
     case 'nontongo': {
-      const params = new URLSearchParams();
-      params.set('autoplay', '1');
-      if (start > 5) {
-        params.set('start', String(start));
-        params.set('t', String(start));
-      }
       return isSeries
-        ? `https://nontongo.win/embed/tv/${imdbId}/${season}/${episode}?${params.toString()}`
-        : `https://nontongo.win/embed/movie/${imdbId}?${params.toString()}`;
+        ? `https://multiembed.mov/?video_id=${imdbId}&s=${season}&e=${episode}`
+        : `https://multiembed.mov/?video_id=${imdbId}`;
     }
     case 'vidsrc_pm': {
       const params = new URLSearchParams();
@@ -689,6 +690,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const clearCustomTvChannels = useRadioStore(
     (state) => state.clearCustomTvChannels
   );
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
 
   const [activeTab, setActiveTab] = useState<MediatecaTab>('movies');
   const [selectedOriginCountry, setSelectedOriginCountry] =
@@ -754,6 +758,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [isSmartTvModalOpen, setIsSmartTvModalOpen] = useState<boolean>(false);
   const [activeSubVttUrl, setActiveSubVttUrl] = useState<string | null>(null);
   const [activeSubLabel, setActiveSubLabel] = useState<string>('');
+  const [activeSubCues, setActiveSubCues] = useState<SubtitleCue[]>([]);
+  const [iframeSubOffsetSec, setIframeSubOffsetSec] = useState<number>(0);
 
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const vodIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -871,6 +877,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     ) => {
       setActiveOfflineItem(null);
       setDownloadError(null);
+      setIsDirectStreamLoading(true);
+      setResolvedDirectStream(null);
 
       const saved = watchProgressMap[item.id];
       const targetSeason =
@@ -929,7 +937,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     [watchProgressMap, preferredSubLang]
   );
 
-  // Resolve Direct HLS Stream & Seasons/Episodes from `/api/vod-stream` whenever activeVodItem / season / episode changes
+  // Auto-hide the non-blocking resume banner after 12 seconds
+  useEffect(() => {
+    if (pendingResumePromptSec === null) return;
+    const t = window.setTimeout(() => setPendingResumePromptSec(null), 12000);
+    return () => window.clearTimeout(t);
+  }, [pendingResumePromptSec]);
+
+  // Resolve Direct HLS Stream & Seasons/Episodes directly in browser first (with /api/vod-stream fallback)
   useEffect(() => {
     if (!activeVodItem) {
       setResolvedDirectStream(null);
@@ -951,31 +966,55 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
     const fetchDirectStream = async () => {
       try {
-        const res = await fetch(
-          `/api/vod-stream?kp=${encodeURIComponent(kp)}&imdb=${encodeURIComponent(
-            imdb
-          )}&title=${encodeURIComponent(title)}&type=${encodeURIComponent(
-            mediaType
-          )}&year=${encodeURIComponent(
-            year
-          )}&season=${selectedSeason}&episode=${selectedEpisode}`
-        );
-        if (!res.ok) {
-          if (!cancelled) setResolvedDirectStream({ ok: false });
-          return;
-        }
-        const data = (await res.json()) as ResolvedDirectVodStream;
+        const data = await resolveDirectVodStreamClient({
+          kp,
+          imdb,
+          title,
+          type: mediaType,
+          year,
+          season: selectedSeason,
+          episode: selectedEpisode,
+        });
         if (cancelled) return;
         setResolvedDirectStream(data);
         if (data.duration && data.duration > 60) {
           setLiveDuration(data.duration);
         }
+        if (data?.ok && (data.dashUrl || data.hlsUrl)) {
+          if (data.dashUrl || !imdb) {
+            setActiveServer('kinogram_hls');
+          } else {
+            setActiveServer('nontongo');
+          }
+        } else {
+          setActiveServer(imdb ? 'nontongo' : 'kinogram_embed');
+        }
       } catch {
-        if (!cancelled) setResolvedDirectStream({ ok: false });
+        if (!cancelled) {
+          setResolvedDirectStream({ ok: false });
+          setActiveServer(imdb ? 'nontongo' : 'kinogram_embed');
+        }
       } finally {
         if (!cancelled) setIsDirectStreamLoading(false);
       }
     };
+
+    // Auto-load Romanian ('ro') or Russian ('ru') subtitle by default
+    autoResolveAndFetchBestRoRuSubtitle({
+      imdbId: imdb,
+      title,
+      type: activeVodItem.type,
+      season: selectedSeason,
+      episode: selectedEpisode,
+      preferredLang: preferredSubLang,
+    })
+      .then((subRes) => {
+        if (cancelled || !subRes) return;
+        setActiveSubVttUrl(subRes.vttBlobUrl);
+        setActiveSubLabel(subRes.track.langLabel);
+        setActiveSubCues(subRes.cues);
+      })
+      .catch(() => {});
 
     void fetchDirectStream();
     return () => {
@@ -1075,34 +1114,36 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     updateWatchProgress,
   ]);
 
-  // Fallback automatic watch-time tracker for iframe embeds
+  // Fallback automatic watch-time tracker for iframe embeds (ticks at 1s when subtitles are active)
   useEffect(() => {
-    if (
-      !activeVodItem ||
-      activeServer === 'kinogram_hls' ||
-      pendingResumePromptSec !== null
-    ) {
+    const isUsingNativeHls =
+      activeServer === 'kinogram_hls' &&
+      Boolean(resolvedDirectStream?.ok && resolvedDirectStream?.hlsUrl);
+    if (!activeVodItem || isUsingNativeHls) {
       return;
     }
 
+    const stepSec = activeSubCues.length > 0 ? 1 : 5;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      if (Date.now() - lastPostMessageTimeRef.current < 6000) return;
+      if (Date.now() - lastPostMessageTimeRef.current < 3000) return;
 
       setLiveCurrentTime((prev) => {
-        const nextSec = prev + 5;
-        updateWatchProgress(
-          activeVodItem,
-          selectedSeason,
-          selectedEpisode,
-          nextSec,
-          liveDuration,
-          activeServer,
-          preferredSubLang
-        );
+        const nextSec = prev + stepSec;
+        if (nextSec % 5 === 0) {
+          updateWatchProgress(
+            activeVodItem,
+            selectedSeason,
+            selectedEpisode,
+            nextSec,
+            liveDuration,
+            activeServer,
+            preferredSubLang
+          );
+        }
         return nextSec;
       });
-    }, 5000);
+    }, stepSec * 1000);
 
     return () => window.clearInterval(timer);
   }, [
@@ -1112,7 +1153,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     activeServer,
     preferredSubLang,
     liveDuration,
-    pendingResumePromptSec,
+    resolvedDirectStream,
+    activeSubCues.length,
     updateWatchProgress,
   ]);
 
@@ -1211,7 +1253,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   }, [searchQuery]);
 
   const useKinopoiskCatalog =
-    selectedOriginCountry !== 'ALL' || selectedYearFilter !== 'ALL';
+    selectedOriginCountry !== 'ALL' ||
+    selectedYearFilter !== 'ALL' ||
+    selectedGenre === 'Adult';
 
   // Fetch Movies or Series catalog (from Kinopoisk v2.2 when Country/Year filters are active, or Cinemeta for Global)
   useEffect(() => {
@@ -1930,10 +1974,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               poster={activeOfflineItem.poster}
               subtitleVttUrl={activeSubVttUrl}
               subtitleLabel={activeSubLabel}
+              subtitleCues={activeSubCues}
               onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
               onClearSubtitle={() => {
                 setActiveSubVttUrl(null);
                 setActiveSubLabel('');
+                setActiveSubCues([]);
               }}
               startAtSeconds={
                 (() => {
@@ -2051,10 +2097,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       }).then(async (list) => {
                         const match = list.find((t) => t.langCode2 === langId);
                         if (match) {
-                          const { vttBlobUrl } =
+                          const { vttBlobUrl, cues } =
                             await downloadSubtitleAsVttBlobUrl(match.url);
                           setActiveSubVttUrl(vttBlobUrl);
                           setActiveSubLabel(match.langLabel);
+                          setActiveSubCues(cues);
                         }
                       });
                     }
@@ -2073,15 +2120,23 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 </select>
               </div>
 
-              {/* 3. Subtitrări Button (Opens Online Subtitle Finder Modal) */}
+              {/* 3. Single Unified Subtitrări Button (Opens Online Subtitle Finder Modal) */}
               <button
                 type="button"
                 onClick={() => setIsSubFinderOpen(true)}
                 title="Caută, aplică sau descarcă subtitrări .SRT de pe internet"
-                className="h-8 px-3 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                className={`h-8 px-3 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  activeSubCues.length > 0 || activeSubVttUrl
+                    ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white font-bold'
+                    : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-emerald-300'
+                }`}
               >
                 <Subtitles className="w-3.5 h-3.5 shrink-0" />
-                <span>Subtitrări</span>
+                <span className="max-w-[140px] truncate">
+                  {activeSubCues.length > 0 || activeSubVttUrl
+                    ? `Sub: ${activeSubLabel || 'Activă'}`
+                    : 'Subtitrări'}
+                </span>
               </button>
 
               {/* 4. Compact Offline Button */}
@@ -2135,97 +2190,88 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 VOD Stream Player (with Resume Prompt if watched previously) */}
+          {/* 16:9 VOD Stream Player (Immediate Autoplay + Non-Blocking Resume Banner) */}
           <div
             ref={playerContainerRef}
             className="relative w-full aspect-video bg-black"
           >
-            {pendingResumePromptSec !== null ? (
-              <div className="relative w-full h-full flex items-center justify-center p-4 overflow-hidden">
-                {(activeVodItem.background || activeVodItem.poster) && (
-                  <img
-                    src={activeVodItem.background || activeVodItem.poster}
-                    alt=""
-                    className="absolute inset-0 w-full h-full object-cover opacity-30 blur-xl scale-110 pointer-events-none"
-                  />
-                )}
-                <div className="relative z-10 max-w-lg w-full px-6 py-6 sm:px-8 sm:py-7 rounded-[32px] bg-zinc-950/80 border border-white/15 shadow-2xl text-center space-y-5 backdrop-blur-xl">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-500/25 to-emerald-500/20 border border-white/15 text-emerald-400 flex items-center justify-center mx-auto shadow-inner">
-                    <History className="w-5 h-5" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <h3 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
-                      De unde vrei să pornească redarea?
-                    </h3>
-                    <p className="text-xs sm:text-sm text-zinc-300">
-                      {activeVodItem.type === 'series'
-                        ? `Sezonul ${selectedSeason} • Episodul ${selectedEpisode} — ai rămas la `
-                        : 'Ai rămas la '}
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/30 text-amber-300 font-mono font-bold text-xs">
-                        {formatWatchSeconds(pendingResumePromptSec)}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const resumeSec = pendingResumePromptSec;
-                        setResumeStartSeconds(resumeSec);
-                        setLiveCurrentTime(resumeSec);
-                        setPendingResumePromptSec(null);
-                      }}
-                      className="min-h-[42px] px-6 py-2.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 whitespace-nowrap shadow-lg shadow-emerald-950/50 transition-all cursor-pointer"
-                    >
-                      <Play className="w-4 h-4 fill-current shrink-0" />
-                      <span>
-                        Continuă de la {formatWatchSeconds(pendingResumePromptSec)}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setResumeStartSeconds(0);
-                        setLiveCurrentTime(0);
-                        setPendingResumePromptSec(null);
-                        updateWatchProgress(
-                          activeVodItem,
-                          selectedSeason,
-                          selectedEpisode,
-                          0,
-                          liveDuration,
-                          activeServer,
-                          preferredSubLang
-                        );
-                      }}
-                      className="min-h-[42px] px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-white border border-white/15 text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 whitespace-nowrap backdrop-blur-md transition-all cursor-pointer"
-                    >
-                      <RotateCcw className="w-4 h-4 shrink-0" />
-                      <span>De la început (00:00)</span>
-                    </button>
-                  </div>
-                </div>
+            {/* Non-blocking floating banner when resuming from a saved timestamp */}
+            {pendingResumePromptSec !== null && (
+              <div className="absolute top-2.5 left-2.5 z-30 flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-950/90 border border-emerald-500/40 text-xs text-zinc-100 shadow-2xl backdrop-blur-md">
+                <History className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>
+                  Reluat automat de la{' '}
+                  <strong className="text-amber-300 font-mono">
+                    {formatWatchSeconds(pendingResumePromptSec)}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResumeStartSeconds(0);
+                    setLiveCurrentTime(0);
+                    setPendingResumePromptSec(null);
+                    updateWatchProgress(
+                      activeVodItem,
+                      selectedSeason,
+                      selectedEpisode,
+                      0,
+                      liveDuration,
+                      activeServer,
+                      preferredSubLang
+                    );
+                  }}
+                  className="px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>De la început (00:00)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingResumePromptSec(null)}
+                  className="px-1.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
               </div>
-            ) : activeServer === 'kinogram_hls' ? (
+            )}
+
+            {activeServer === 'kinogram_hls' ? (
               isDirectStreamLoading ? (
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-zinc-300">
                   <Loader2 className="w-8 h-8 text-brand-400 animate-spin" />
                   <span className="text-xs font-semibold">
-                    Se conectează la serverul video direct (Audio RU / Original)...
+                    Pornire automată stream HD (Audio RU / Original)...
                   </span>
                 </div>
-              ) : resolvedDirectStream?.ok && resolvedDirectStream.hlsUrl ? (
+              ) : resolvedDirectStream?.ok &&
+                (resolvedDirectStream.dashUrl ||
+                  resolvedDirectStream.hlsUrl) ? (
                 <VodNativeHlsPlayer
                   key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                  dashUrl={resolvedDirectStream.dashUrl}
                   hlsUrl={resolvedDirectStream.hlsUrl}
                   audioTrackLabels={resolvedDirectStream.audioNames}
                   startAtSeconds={resumeStartSeconds}
+                  imdbId={
+                    activeVodItem.id.startsWith('tt') ? activeVodItem.id : ''
+                  }
+                  mediaType={activeVodItem.type}
+                  season={selectedSeason}
+                  episode={selectedEpisode}
                   subtitleVttUrl={activeSubVttUrl}
                   subtitleLabel={activeSubLabel}
+                  subtitleCues={activeSubCues}
+                  onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
+                    setActiveSubVttUrl(vttBlobUrl);
+                    setActiveSubLabel(label);
+                    setActiveSubCues(cues);
+                  }}
                   onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
                   onClearSubtitle={() => {
                     setActiveSubVttUrl(null);
                     setActiveSubLabel('');
+                    setActiveSubCues([]);
                   }}
                   poster={
                     activeVodItem.background ||
@@ -2248,13 +2294,89 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   onStreamError={() => setActiveServer('kinogram_embed')}
                 />
               ) : (
+                <div className="relative w-full h-full">
+                  <iframe
+                    ref={vodIframeRef}
+                    key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                    src={buildVodEmbedUrl(
+                      activeVodItem.id.startsWith('kp_')
+                        ? 'kinogram_embed'
+                        : 'vidspark',
+                      activeItemForEmbed,
+                      selectedSeason,
+                      selectedEpisode,
+                      preferredSubLang,
+                      resumeStartSeconds
+                    )}
+                    title={activeVodItem.name}
+                    className="w-full h-full border-0"
+                    referrerPolicy="origin"
+                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                    allowFullScreen
+                  />
+                  {activeSubCues.length > 0 && (
+                    <>
+                      <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
+                        <span className="max-w-[110px] truncate font-bold">
+                          CC: {activeSubLabel || 'Activă'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIframeSubOffsetSec((s) => s - 1)}
+                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                        >
+                          -1s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIframeSubOffsetSec((s) => s + 1)}
+                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                        >
+                          +1s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveSubVttUrl(null);
+                            setActiveSubLabel('');
+                            setActiveSubCues([]);
+                          }}
+                          className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {(() => {
+                        const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
+                        const cue = activeSubCues.find(
+                          (c) => effectiveSec >= c.start && effectiveSec <= c.end
+                        );
+                        if (!cue) return null;
+                        return (
+                          <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
+                            <div
+                              className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
+                              style={{
+                                textShadow:
+                                  '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
+                              }}
+                            >
+                              {cue.text}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+                </div>
+              )
+            ) : (
+              <div className="relative w-full h-full">
                 <iframe
                   ref={vodIframeRef}
-                  key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                  key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
                   src={buildVodEmbedUrl(
-                    activeVodItem.id.startsWith('kp_')
-                      ? 'kinogram_embed'
-                      : 'vidspark',
+                    activeServer,
                     activeItemForEmbed,
                     selectedSeason,
                     selectedEpisode,
@@ -2266,40 +2388,76 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   referrerPolicy="origin"
                   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                   allowFullScreen
+                  onLoad={() => {
+                    if (resumeStartSeconds > 5) {
+                      window.setTimeout(() => {
+                        try {
+                          vodIframeRef.current?.contentWindow?.postMessage(
+                            { action: 'seek', time: resumeStartSeconds },
+                            '*'
+                          );
+                        } catch {
+                          // ignore
+                        }
+                      }, 1200);
+                    }
+                  }}
                 />
-              )
-            ) : (
-              <iframe
-                ref={vodIframeRef}
-                key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
-                src={buildVodEmbedUrl(
-                  activeServer,
-                  activeItemForEmbed,
-                  selectedSeason,
-                  selectedEpisode,
-                  preferredSubLang,
-                  resumeStartSeconds
+                {activeSubCues.length > 0 && (
+                  <>
+                    <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
+                      <span className="max-w-[110px] truncate font-bold">
+                        CC: {activeSubLabel || 'Activă'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIframeSubOffsetSec((s) => s - 1)}
+                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                      >
+                        -1s
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIframeSubOffsetSec((s) => s + 1)}
+                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                      >
+                        +1s
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSubVttUrl(null);
+                          setActiveSubLabel('');
+                          setActiveSubCues([]);
+                        }}
+                        className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {(() => {
+                      const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
+                      const cue = activeSubCues.find(
+                        (c) => effectiveSec >= c.start && effectiveSec <= c.end
+                      );
+                      if (!cue) return null;
+                      return (
+                        <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
+                          <div
+                            className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
+                            style={{
+                              textShadow:
+                                '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
+                            }}
+                          >
+                            {cue.text}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>
                 )}
-                title={activeVodItem.name}
-                className="w-full h-full border-0"
-                referrerPolicy="origin"
-                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                allowFullScreen
-                onLoad={() => {
-                  if (resumeStartSeconds > 5) {
-                    window.setTimeout(() => {
-                      try {
-                        vodIframeRef.current?.contentWindow?.postMessage(
-                          { action: 'seek', time: resumeStartSeconds },
-                          '*'
-                        );
-                      } catch {
-                        // ignore
-                      }
-                    }, 1200);
-                  }
-                }}
-              />
+              </div>
             )}
           </div>
 
@@ -2929,9 +3087,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               {/* Genre Pills */}
               {!debouncedQuery && (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                  {GENRE_FILTERS.map((g) => {
+                  {GENRE_FILTERS.filter(
+                    (g) => adultContentEnabled || g.id !== 'Adult'
+                  ).map((g) => {
                     const active = selectedGenre === g.id;
                     const GenreIcon = g.Icon;
+                    const isAdultGenre = g.id === 'Adult';
                     return (
                       <button
                         key={g.id}
@@ -2939,8 +3100,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         onClick={() => setSelectedGenre(g.id)}
                         className={`min-h-[30px] sm:min-h-[34px] px-2.5 sm:px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                           active
-                            ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                            : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
+                            ? isAdultGenre
+                              ? 'bg-rose-600 text-white shadow-xs'
+                              : 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
+                            : isAdultGenre
+                              ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-300/80 dark:border-rose-800 hover:border-rose-500'
+                              : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
                         }`}
                       >
                         <GenreIcon className="w-3.5 h-3.5 shrink-0" />
@@ -3480,9 +3645,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         initialSeason={selectedSeason}
         initialEpisode={selectedEpisode}
         initialLangFilter={preferredSubLang}
-        onApplySubtitle={({ vttBlobUrl, label }) => {
+        onApplySubtitle={({ vttBlobUrl, label, cues }) => {
           setActiveSubVttUrl(vttBlobUrl);
           setActiveSubLabel(label);
+          setActiveSubCues(cues);
+          setIframeSubOffsetSec(0);
         }}
       />
 

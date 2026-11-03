@@ -228,22 +228,106 @@ export function convertSrtToWebVtt(rawText: string, offsetSeconds = 0): string {
   return out.join('\n');
 }
 
+export interface SubtitleCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Parse raw SRT or WebVTT text into an array of timed SubtitleCue objects.
+ */
+export function parseSrtToCues(
+  rawText: string,
+  offsetSeconds = 0
+): SubtitleCue[] {
+  const cleaned = rawText
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  const parseTimestamp = (ts: string): number => {
+    const normalized = ts.trim().replace(',', '.');
+    const parts = normalized.split(':');
+    if (parts.length === 3) {
+      return (
+        (Number(parts[0]) || 0) * 3600 +
+        (Number(parts[1]) || 0) * 60 +
+        (Number(parts[2]) || 0)
+      );
+    }
+    if (parts.length === 2) {
+      return (Number(parts[0]) || 0) * 60 + (Number(parts[1]) || 0);
+    }
+    return 0;
+  };
+
+  const blocks = cleaned.split(/\n{2,}/);
+  const cues: SubtitleCue[] = [];
+  const timeRegex =
+    /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})/;
+
+  for (const block of blocks) {
+    const lines = block
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) continue;
+
+    let timeLineIdx = -1;
+    let match: RegExpMatchArray | null = null;
+    for (let i = 0; i < Math.min(lines.length, 3); i++) {
+      const m = lines[i].match(timeRegex);
+      if (m) {
+        timeLineIdx = i;
+        match = m;
+        break;
+      }
+    }
+
+    if (timeLineIdx >= 0 && match) {
+      const start = Math.max(0, parseTimestamp(match[1]) + offsetSeconds);
+      const end = Math.max(0, parseTimestamp(match[2]) + offsetSeconds);
+      const textLines = lines
+        .slice(timeLineIdx + 1)
+        .map((l) =>
+          l
+            .replace(/<[^>]+>/g, '')
+            .replace(/\{[^}]+\}/g, '')
+            .trim()
+        )
+        .filter(Boolean);
+
+      if (textLines.length > 0 && end > start) {
+        cues.push({
+          start,
+          end,
+          text: textLines.join('\n'),
+        });
+      }
+    }
+  }
+
+  return cues;
+}
+
 /**
  * Download an online subtitle track and return both raw SRT text and a WebVTT Blob URL for `<track>`.
  */
 export async function downloadSubtitleAsVttBlobUrl(
   subUrl: string,
   offsetSeconds = 0
-): Promise<{ vttBlobUrl: string; rawSrt: string }> {
+): Promise<{ vttBlobUrl: string; rawSrt: string; cues: SubtitleCue[] }> {
   const res = await fetch(subUrl);
   if (!res.ok) {
     throw new Error(`Nu am putut descărca subtitrarea (${res.status})`);
   }
   const rawSrt = await res.text();
   const vttText = convertSrtToWebVtt(rawSrt, offsetSeconds);
+  const cues = parseSrtToCues(rawSrt, offsetSeconds);
   const blob = new Blob([vttText], { type: 'text/vtt;charset=utf-8' });
   const vttBlobUrl = URL.createObjectURL(blob);
-  return { vttBlobUrl, rawSrt };
+  return { vttBlobUrl, rawSrt, cues };
 }
 
 /**
@@ -269,4 +353,140 @@ export async function saveSubtitleFileToDevice(
   document.body.removeChild(a);
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
 }
+
+export type AudioTrackPreference = 'original' | 'ru' | 'uk' | 'first';
+
+/**
+ * Find the index of the Original Language audio track (e.g. "Eng.Original", "Оригинал", "English", "Original")
+ * from an array of audio track names. Defaults to 0 if no original track is detected.
+ */
+export function findPreferredOriginalAudioTrackIndex(labels: string[]): number {
+  if (!Array.isArray(labels) || labels.length === 0) return 0;
+
+  // Priority 1: Explicit Original / English / Оригинал track
+  const origIdx = labels.findIndex((name) =>
+    /orig|ориг|eng\.?\s*orig|english|английск|англ|v\.?o\.?\b/i.test(
+      String(name || '')
+    )
+  );
+  if (origIdx >= 0) return origIdx;
+
+  // Priority 2: "Субтитры" / "Subtitles" audio track (in Kinogram/Alloha this is Original Audio)
+  const subTrackIdx = labels.findIndex((name) =>
+    /субт|subt/i.test(String(name || ''))
+  );
+  if (subTrackIdx >= 0) return subTrackIdx;
+
+  return 0;
+}
+
+/**
+ * Resolve audio track index based on user's configured Smart TV audio preference.
+ */
+export function resolveAudioTrackIndexByPreference(
+  labels: string[],
+  pref: AudioTrackPreference = 'original'
+): number {
+  if (!Array.isArray(labels) || labels.length === 0) return 0;
+
+  if (pref === 'first') return 0;
+
+  if (pref === 'original') {
+    return findPreferredOriginalAudioTrackIndex(labels);
+  }
+
+  if (pref === 'uk') {
+    const ukIdx = labels.findIndex((name) =>
+      /укр|ukr|ua\b|postmodern|dnipro|так треба/i.test(String(name || ''))
+    );
+    return ukIdx >= 0 ? ukIdx : 0;
+  }
+
+  if (pref === 'ru') {
+    // Prefer Dublaj (Дубляж / Дубл. / HDRezka / LostFilm) or first Russian track (excluding Original & Ukrainian)
+    const dubIdx = labels.findIndex(
+      (name) =>
+        /дубл|hdrezka|lostfilm|red head|jaskier|кубик|winmedia|moviedalen|tvshows/i.test(
+          String(name || '')
+        ) && !/укр|ukr|orig|ориг/i.test(String(name || ''))
+    );
+    if (dubIdx >= 0) return dubIdx;
+
+    const ruIdx = labels.findIndex(
+      (name) => !/orig|ориг|eng|english|укр|ukr/i.test(String(name || ''))
+    );
+    return ruIdx >= 0 ? ruIdx : 0;
+  }
+
+  return findPreferredOriginalAudioTrackIndex(labels);
+}
+
+/**
+ * Automatically resolve IMDb ID (if missing) and fetch + download the best subtitle according to preferredLang.
+ */
+export async function autoResolveAndFetchBestRoRuSubtitle(params: {
+  imdbId?: string;
+  title?: string;
+  nameOriginal?: string;
+  type: 'movie' | 'series';
+  season?: number;
+  episode?: number;
+  preferredLang?: string;
+}): Promise<{
+  resolvedImdbId: string;
+  track: OnlineSubtitleTrack;
+  vttBlobUrl: string;
+  cues: SubtitleCue[];
+} | null> {
+  if (params.preferredLang === 'off') return null;
+
+  let cleanImdb = (params.imdbId || '').trim();
+
+  if (!cleanImdb.startsWith('tt')) {
+    const query = (params.nameOriginal || params.title || '').trim();
+    if (query.length >= 2) {
+      const candidates = await searchMediaForSubtitles(query, params.type);
+      if (candidates[0]?.imdbId) {
+        cleanImdb = candidates[0].imdbId;
+      }
+    }
+  }
+
+  if (!cleanImdb.startsWith('tt')) return null;
+
+  const tracks = await fetchOnlineSubtitlesByImdb({
+    imdbId: cleanImdb,
+    type: params.type,
+    season: params.season || 1,
+    episode: params.episode || 1,
+  });
+
+  if (tracks.length === 0) return null;
+
+  // Priority order based on user's preferredLang ('ro' | 'ru' | 'en')
+  const pref =
+    params.preferredLang === 'ru'
+      ? ['ru', 'ro', 'en']
+      : params.preferredLang === 'en'
+        ? ['en', 'ro', 'ru']
+        : ['ro', 'ru', 'en'];
+  let chosen: OnlineSubtitleTrack | undefined;
+  for (const code of pref) {
+    chosen = tracks.find((t) => t.langCode2 === code);
+    if (chosen) break;
+  }
+
+  if (!chosen) return null;
+
+  const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(chosen.url);
+  if (!cues || cues.length === 0) return null;
+
+  return {
+    resolvedImdbId: cleanImdb,
+    track: chosen,
+    vttBlobUrl,
+    cues,
+  };
+}
+
 
