@@ -71,7 +71,6 @@ type MediatecaTab =
 type OriginCountryFilterId =
   | 'ALL'
   | 'RU'
-  | 'SU'
   | 'RO'
   | 'US'
   | 'GB'
@@ -256,12 +255,6 @@ const ORIGIN_COUNTRIES: Array<{
     label: 'Rusia (Россия — Filme & Seriale RU)',
     shortLabel: 'Rusia (RU)',
     kpCountryId: 34,
-  },
-  {
-    id: 'SU',
-    label: 'URSS Clasice (СССР)',
-    shortLabel: 'URSS',
-    kpCountryId: 33,
   },
   {
     id: 'RO',
@@ -1233,12 +1226,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
     const fetchCatalog = async () => {
       try {
-        // 1. If user searches in Cyrillic OR has RU/SU country selected while searching, query Kinopoisk keyword API
+        // 1. If user searches in Cyrillic OR has RU country selected while searching, query Kinopoisk keyword API
         if (
           debouncedQuery &&
           (/[а-яА-ЯёЁ]/.test(debouncedQuery) ||
-            selectedOriginCountry === 'RU' ||
-            selectedOriginCountry === 'SU')
+            selectedOriginCountry === 'RU')
         ) {
           const kpRes = await searchKinopoiskByKeyword(debouncedQuery);
           if (!cancelled && kpRes.length > 0) {
@@ -1250,7 +1242,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           }
         }
 
-        // 2. If Country filter (e.g. Rusia, URSS, România, Turcia, SUA) or Year filter is active (and no search query), use Kinopoisk v2.2 Filters API
+        // 2. If Country filter (e.g. Rusia, România, Turcia, SUA) or Year filter is active (and no search query), use Kinopoisk v2.2 Filters API
         if (!debouncedQuery && useKinopoiskCatalog) {
           const countryObj = ORIGIN_COUNTRIES.find(
             (c) => c.id === selectedOriginCountry
@@ -1260,7 +1252,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           const order = selectedGenre === 'imdbRating' ? 'RATING' : 'NUM_VOTE';
           const preferRussianTitles =
             selectedOriginCountry === 'RU' ||
-            selectedOriginCountry === 'SU' ||
             selectedOriginCountry === 'UA' ||
             preferredSubLang === 'ru';
 
@@ -1368,7 +1359,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         const order = selectedGenre === 'imdbRating' ? 'RATING' : 'NUM_VOTE';
         const preferRussianTitles =
           selectedOriginCountry === 'RU' ||
-          selectedOriginCountry === 'SU' ||
           selectedOriginCountry === 'UA' ||
           preferredSubLang === 'ru';
 
@@ -2810,7 +2800,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     onChange={(e) => {
                       const val = e.target.value as OriginCountryFilterId;
                       setSelectedOriginCountry(val);
-                      if (val === 'RU' || val === 'SU') {
+                      if (val === 'RU') {
                         setPreferredSubLang('ru');
                       } else if (val === 'RO') {
                         setPreferredSubLang('ro');
@@ -2894,7 +2884,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 </div>
               </div>
 
-              {/* Quick Country Origin Pills (Toate Țările, Rusia, URSS, România, SUA, UK, Turcia, Coreea...) */}
+              {/* Quick Country Origin Pills (Toate Țările, Rusia, România, SUA, UK, Turcia, Coreea...) */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
                 {ORIGIN_COUNTRIES.slice(0, 9).map((c) => {
                   const active = selectedOriginCountry === c.id;
@@ -2904,7 +2894,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       type="button"
                       onClick={() => {
                         setSelectedOriginCountry(c.id);
-                        if (c.id === 'RU' || c.id === 'SU') {
+                        if (c.id === 'RU') {
                           setPreferredSubLang('ru');
                         } else if (c.id === 'RO') {
                           setPreferredSubLang('ro');
