@@ -1,7 +1,5 @@
-const CACHE_NAME = 'aether-radio-v1';
+const CACHE_NAME = 'aether-radio-v3';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.webmanifest',
   '/icons/favicon.svg',
   '/icons/icon-192.svg',
@@ -63,6 +61,19 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Network-first for HTML navigation requests so deploys never serve stale index.html with old asset hashes
+  if (
+    request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    url.pathname === '/tv' ||
+    url.pathname === '/index.html'
+  ) {
+    event.respondWith(
+      fetch(request).catch(() => caches.match('/index.html'))
     );
     return;
   }

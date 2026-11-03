@@ -1304,6 +1304,6 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
-    target: 'esnext',
+    target: ['es2017', 'chrome68', 'safari12'],
   },
 });

@@ -646,38 +646,55 @@ export const useRadioStore = create<RadioState>()(
     }),
     {
       name: 'aether-radio-storage',
-      storage: createJSONStorage(() => ({
-        getItem: (name) => localStorage.getItem(name),
-        setItem: (name, value) => {
-          try {
-            localStorage.setItem(name, value);
-          } catch {
-            // If customTvChannels is huge and exceeds 5MB localStorage quota, keep all adult ("взрослые") channels + top 1200 channels so iEdem adult channels at the end of the playlist are never cut off!
+      storage: createJSONStorage(() => {
+        const memoryFallback = new Map<string, string>();
+        return {
+          getItem: (name) => {
             try {
-              const parsed = JSON.parse(value);
-              if (Array.isArray(parsed?.state?.customTvChannels) && parsed.state.customTvChannels.length > 600) {
-                const allCustom: TvChannel[] = parsed.state.customTvChannels;
-                const adultChannels = allCustom.filter((c) =>
-                  /(?:взросл|для взрослых|эротик|шалун|русская ночь|brazzers|hustler|redlight|dorcel|penthouse|playboy|xxx|adult|18\+)/i.test(
-                    `${c.group || ''} ${c.name || ''}`
-                  )
-                );
-                const otherChannels = allCustom
-                  .filter((c) => !adultChannels.includes(c))
-                  .slice(0, 1200);
-                parsed.state.customTvChannels = [
-                  ...otherChannels,
-                  ...adultChannels,
-                ];
-                localStorage.setItem(name, JSON.stringify(parsed));
+              return localStorage.getItem(name) ?? memoryFallback.get(name) ?? null;
+            } catch {
+              return memoryFallback.get(name) ?? null;
+            }
+          },
+          setItem: (name, value) => {
+            memoryFallback.set(name, value);
+            try {
+              localStorage.setItem(name, value);
+            } catch {
+              // If customTvChannels is huge and exceeds 5MB localStorage quota, keep all adult ("взрослые") channels + top 1200 channels so iEdem adult channels at the end of the playlist are never cut off!
+              try {
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed?.state?.customTvChannels) && parsed.state.customTvChannels.length > 600) {
+                  const allCustom: TvChannel[] = parsed.state.customTvChannels;
+                  const adultChannels = allCustom.filter((c) =>
+                    /(?:взросл|для взрослых|эротик|шалун|русская ночь|brazzers|hustler|redlight|dorcel|penthouse|playboy|xxx|adult|18\+)/i.test(
+                      `${c.group || ''} ${c.name || ''}`
+                    )
+                  );
+                  const otherChannels = allCustom
+                    .filter((c) => !adultChannels.includes(c))
+                    .slice(0, 1200);
+                  parsed.state.customTvChannels = [
+                    ...otherChannels,
+                    ...adultChannels,
+                  ];
+                  localStorage.setItem(name, JSON.stringify(parsed));
+                }
+              } catch {
+                // ignore
               }
+            }
+          },
+          removeItem: (name) => {
+            memoryFallback.delete(name);
+            try {
+              localStorage.removeItem(name);
             } catch {
               // ignore
             }
-          }
-        },
-        removeItem: (name) => localStorage.removeItem(name),
-      })),
+          },
+        };
+      }),
       partialize: (state) => ({
         selectedCountryCode: state.selectedCountryCode,
         activeTab: state.activeTab,
