@@ -1,5 +1,5 @@
 {
   "name": "AetherRadio Smart TV",
   "version": "1.0.0",
-  "parameter": "menu:{PREFIX}{SERVER}/msx/menu.json"
+  "parameter": "menu:https://radiotv-jk.netlify.app/msx/menu.json"
 }

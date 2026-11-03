@@ -13,7 +13,7 @@
       "titleFooter": "Toate canalele RO / MD / RU / Internaționale",
       "icon": "msx-white:apps",
       "color": "purple",
-      "action": "link:{PREFIX}{SERVER}/?tab=tv&tvmode=1"
+      "action": "link:https://radiotv-jk.netlify.app/?tab=tv&tvmode=1"
     },
     {
       "title": "TVR 1 HD",

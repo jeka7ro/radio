@@ -13,7 +13,7 @@
       "titleFooter": "Căutare, Țări, Favorite & Metadate Piese Live",
       "icon": "msx-white:apps",
       "color": "teal",
-      "action": "link:{PREFIX}{SERVER}/?tab=home&tvmode=1"
+      "action": "link:https://radiotv-jk.netlify.app/?tab=home&tvmode=1"
     },
     {
       "title": "Europa FM",

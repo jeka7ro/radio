@@ -13,7 +13,7 @@
       "titleFooter": "Catalog Global, Rusia & România + Subtitrări",
       "icon": "msx-white:movie",
       "color": "purple",
-      "action": "link:{PREFIX}{SERVER}/?tab=mediateca&tvmode=1"
+      "action": "link:https://radiotv-jk.netlify.app/?tab=mediateca&tvmode=1"
     },
     {
       "layout": "4,0,4,3",
@@ -21,7 +21,7 @@
       "titleFooter": "Canale TV RO / MD / RU / Intl + Program EPG",
       "icon": "msx-white:live-tv",
       "color": "indigo",
-      "action": "link:{PREFIX}{SERVER}/?tab=tv&tvmode=1"
+      "action": "link:https://radiotv-jk.netlify.app/?tab=tv&tvmode=1"
     },
     {
       "layout": "8,0,4,3",
@@ -29,7 +29,7 @@
       "titleFooter": "1000+ posturi din România, Moldova & Global",
       "icon": "msx-white:radio",
       "color": "teal",
-      "action": "link:{PREFIX}{SERVER}/?tab=home&tvmode=1"
+      "action": "link:https://radiotv-jk.netlify.app/?tab=home&tvmode=1"
     },
     {
       "layout": "0,3,4,3",
@@ -45,7 +45,7 @@
       "titleFooter": "Redare directă HLS în playerul nativ al TV-ului",
       "icon": "msx-white:tv",
       "color": "blue",
-      "action": "content:{PREFIX}{SERVER}/msx/tv.json"
+      "action": "content:https://radiotv-jk.netlify.app/msx/tv.json"
     },
     {
       "layout": "8,3,4,3",
@@ -53,7 +53,7 @@
       "titleFooter": "Ascultă posturi populare direct în MSX",
       "icon": "msx-white:audiotrack",
       "color": "emerald",
-      "action": "content:{PREFIX}{SERVER}/msx/radio.json"
+      "action": "content:https://radiotv-jk.netlify.app/msx/radio.json"
     }
   ]
 }

@@ -1,0 +1,60 @@
+{
+  "type": "pages",
+  "headline": "AetherRadio — Portal Smart TV LG",
+  "template": {
+    "type": "separate",
+    "layout": "0,0,4,3",
+    "color": "msx-glass"
+  },
+  "items": [
+    {
+      "layout": "0,0,4,3",
+      "title": "Mediatecă — Filme & Seriale",
+      "titleFooter": "Catalog Global, Rusia & România + Subtitrări",
+      "icon": "msx-white:movie",
+      "color": "purple",
+      "action": "link:https://radiotv-jk.netlify.app/?tab=mediateca&tvmode=1"
+    },
+    {
+      "layout": "4,0,4,3",
+      "title": "TV Online Live (Grilă Completă)",
+      "titleFooter": "Canale TV RO / MD / RU / Intl + Program EPG",
+      "icon": "msx-white:live-tv",
+      "color": "indigo",
+      "action": "link:https://radiotv-jk.netlify.app/?tab=tv&tvmode=1"
+    },
+    {
+      "layout": "8,0,4,3",
+      "title": "Posturi Radio Online",
+      "titleFooter": "1000+ posturi din România, Moldova & Global",
+      "icon": "msx-white:radio",
+      "color": "teal",
+      "action": "link:https://radiotv-jk.netlify.app/?tab=home&tvmode=1"
+    },
+    {
+      "layout": "0,3,4,3",
+      "title": "Lampa Smart TV",
+      "titleFooter": "Interfață TV dedicată pentru telecomandă LG",
+      "icon": "msx-white:theaters",
+      "color": "amber",
+      "action": "link:http://lampa.mx"
+    },
+    {
+      "layout": "4,3,4,3",
+      "title": "Canale TV (Player Nativ MSX)",
+      "titleFooter": "Redare directă HLS în playerul nativ al TV-ului",
+      "icon": "msx-white:tv",
+      "color": "blue",
+      "action": "content:https://radiotv-jk.netlify.app/msx/tv.json"
+    },
+    {
+      "layout": "8,3,4,3",
+      "title": "Radio Rapid (Player Nativ MSX)",
+      "titleFooter": "Ascultă posturi populare direct în MSX",
+      "icon": "msx-white:audiotrack",
+      "color": "emerald",
+      "action": "content:https://radiotv-jk.netlify.app/msx/radio.json"
+    }
+  ]
+}
+

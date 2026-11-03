@@ -11,3 +11,12 @@
   Access-Control-Allow-Headers: *
   Content-Type: application/json; charset=utf-8
   Cache-Control: no-cache
+
+/m.json
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, HEAD, OPTIONS
+  Access-Control-Allow-Headers: *
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: no-cache
+
+
