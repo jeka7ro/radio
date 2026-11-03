@@ -78,7 +78,7 @@ function extractCountryFromTvgId(
 
 // Dead or geo-blocked streams that redirect to block screens outside Russia
 const DEAD_OR_PLACEHOLDER_PATTERNS =
-  /nosignal\d*\.antenaplay\.ro|[a-z0-9-]+\.cfd\/|freeott\.top|rpprod\.hbbtv\.cdn\.cra\.cz|ucom\.am|strm\.yandex\.ru|15plusmg\.ru|31\.148\.48\.15|45\.153\.24\.78|89\.33\.29\.115|cdn\.ngenix\.net|serv30\.vintera\.tv\/restream\/1_old|vgtrkregion-reg\.cdnvideo\.ru\/vgtrk\/0\/russia24|t\.me\//i;
+  /nosignal\d*\.antenaplay\.ro|live4dai\.antenaplay\.ro|[a-z0-9-]+\.cfd\/|freeott\.top|rpprod\.hbbtv\.cdn\.cra\.cz|ucom\.am|strm\.yandex\.ru|15plusmg\.ru|31\.148\.48\.15|45\.153\.24\.78|89\.33\.29\.115|cdn\.ngenix\.net|serv30\.vintera\.tv\/restream\/1_old|vgtrkregion-reg\.cdnvideo\.ru\/vgtrk\/0\/russia24|t\.me\//i;
 
 // Verified high-speed HD CDNs that sort to the top in Quality mode
 const PREMIUM_STREAM_HOSTS =
@@ -89,8 +89,6 @@ const CURATED_ROMANIAN_TOP_HD_M3U = `
 #EXTM3U
 #EXTINF:-1 tvg-id="PRO.TV.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/pro-tv-hd.jpg" group-title="General",Pro TV HD (1080p)
 https://cmero-ott-live.ssl.cdn.cra.cz/channels/cme-ro-voyo-news/playlist.m3u8?offsetSeconds=0&url=0
-#EXTINF:-1 tvg-id="Antena.1.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/antena-1-hd.jpg" group-title="General",Antena 1 HD (Romania)
-https://live4dai.antenaplay.ro/live2_sdi14/live2_sdi14_600k.m3u8
 #EXTINF:-1 tvg-id="Antena.3.CNN.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/antena-3-cnn-hd.jpg" group-title="News",Antena 3 CNN (1080p)
 https://live3vox.antenaplay.ro/a3free/a3free.m3u8
 #EXTINF:-1 tvg-id="Digi.24.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/digi-24-hd.jpg" group-title="News",Digi 24 HD (720p)
@@ -117,16 +115,14 @@ https://stream.realitatea.net/realitatea/plus_md/ts:playlist.m3u8
 https://hls02ns.antenaplay.ro/hls/prima-news-hd/index.m3u8
 #EXTINF:-1 tvg-id="Euronews.Romania.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/euronews-romania.jpg" group-title="News",Euronews România
 https://hls02ns.antenaplay.ro/hls/euronews-ro-sd/index.m3u8
-#EXTINF:-1 tvg-id="Antena.Stars.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/antena-stars-hd.jpg" group-title="Entertainment",Antena Stars HD
-https://live4dai.antenaplay.ro/live2_sdi07/live2_sdi07_600k.m3u8
-#EXTINF:-1 tvg-id="Happy.Channel.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/happy-channel-hd.jpg" group-title="Movies",Happy Channel
-https://live4dai.antenaplay.ro/live2_aws4_sdi12/live2_aws4_sdi12_600k.m3u8
+#EXTINF:-1 tvg-id="AntenaMonden.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/antena-stars-hd.jpg" group-title="Entertainment",Antena Monden HD (720p)
+https://stream1.antenaplay.ro/live/AntenaMonden/playlist.m3u8
+#EXTINF:-1 tvg-id="AntenaSport.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/antena-1-hd.jpg" group-title="Sports",Antena Sport HD
+https://stream1.antenaplay.ro/as/AS.ro/chunklist.m3u8
 #EXTINF:-1 tvg-id="Cinemaraton.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/cinemaraton.jpg" group-title="Movies",Cinemaraton Plus HD (1080p)
 https://hls02ns.antenaplay.ro/hls/cinemaraton-plus-hd/index.m3u8
 #EXTINF:-1 tvg-id="Kiss.TV.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/kiss-tv.jpg" group-title="Music",Kiss TV HD (1080p)
 https://tv.broadcasting.ro/kisstv/a629c031-2170-4ee9-a36d-87a891aa3131.m3u8
-#EXTINF:-1 tvg-id="Rock.TV.HD.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/rock-tv-hd.jpg" group-title="Music",Rock TV HD (720p)
-https://tv.broadcasting.ro/rocktv/85c83a80-4f71-4f2d-a8d6-43f676896bcb.m3u8
 #EXTINF:-1 tvg-id="TraLaLa.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/tralala.jpg" group-title="Kids",TraLaLa TV HD (1080p)
 https://hls01ns.antenaplay.ro/hls/tralala-hd/index.m3u8
 #EXTINF:-1 tvg-id="TraLaLa.ro" tvg-logo="https://static.cinemagia.ro/img/tv_station/tralala.jpg" group-title="Kids",TraLaLa Desene Animate HD (1080p)
@@ -611,7 +607,7 @@ export async function fetchTvChannelsByCountry(
     return all.slice(0, 2500);
   }
 
-  const cacheKey = `tv_channels_v2_${upperCode}`;
+  const cacheKey = `tv_channels_v3_${upperCode}`;
   if (!forceRefresh) {
     const cached = getCachedData<TvChannel[]>(cacheKey);
     if (cached) {

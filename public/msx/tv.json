@@ -9,65 +9,71 @@
   },
   "items": [
     {
-      "title": "Deschide Grila TV Completă (EPG + Arhivă)",
-      "titleFooter": "Toate canalele RO / MD / RU / Internaționale",
+      "title": "Deschide Interfața TV Completă (Stil Lampa)",
+      "titleFooter": "Toate canalele RO / MD / RU + Filme & Seriale",
       "icon": "msx-white:apps",
-      "color": "purple",
-      "action": "link:https://radiotv-jk.netlify.app/?tab=tv&tvmode=1"
+      "color": "amber",
+      "action": "link:https://radiotv-jk.netlify.app/?tvmode=1"
+    },
+    {
+      "title": "Pro TV HD",
+      "titleFooter": "România • Generalist (1080p)",
+      "playerLabel": "Pro TV HD",
+      "action": "video:https://cmero-ott-live.ssl.cdn.cra.cz/channels/cme-ro-voyo-news/playlist.m3u8?offsetSeconds=0&url=0"
+    },
+    {
+      "title": "Digi 24 HD",
+      "titleFooter": "România • Știri Live",
+      "playerLabel": "Digi 24 HD",
+      "action": "video:https://edge-ar.rcs-rds.ro/digi24ar/index.m3u8"
+    },
+    {
+      "title": "Antena 3 CNN HD",
+      "titleFooter": "România • Știri Live",
+      "playerLabel": "Antena 3 CNN",
+      "action": "video:https://live3vox.antenaplay.ro/a3free/a3free.m3u8"
     },
     {
       "title": "TVR 1 HD",
-      "titleFooter": "România • Generalist",
+      "titleFooter": "România • TV Public (1080p)",
       "playerLabel": "TVR 1 HD",
-      "action": "video:https://tvr-tvr1.lg.m.ized.tv/tvr1.m3u8"
+      "action": "video:https://tvr-1.lg.mncdn.com/tvr1/smil:tvr1.smil/playlist.m3u8"
     },
     {
       "title": "TVR 2 HD",
-      "titleFooter": "România • Generalist",
+      "titleFooter": "România • TV Public (1080p)",
       "playerLabel": "TVR 2 HD",
-      "action": "video:https://tvr-tvr2.lg.m.ized.tv/tvr2.m3u8"
+      "action": "video:https://tvr-2.lg.mncdn.com/tvr2/smil:tvr2.smil/playlist.m3u8"
     },
     {
-      "title": "TVR Info",
+      "title": "TVR Info HD",
       "titleFooter": "România • Știri Live",
-      "playerLabel": "TVR Info",
-      "action": "video:https://tvr-tvrinfo.lg.m.ized.tv/tvrinfo.m3u8"
+      "playerLabel": "TVR Info HD",
+      "action": "video:https://tvr-info.lg.mncdn.com/tvrinfo/smil:tvrinfo.smil/playlist.m3u8"
     },
     {
-      "title": "TVR Moldova",
+      "title": "Moldova 1 HD",
+      "titleFooter": "Moldova • TV Public (1080p)",
+      "playerLabel": "Moldova 1 HD",
+      "action": "video:https://v0.trm.md/static/streaming-playlists/hls/9b79338b-1870-4cd7-91d4-0f6ce5cac7ca/master.m3u8"
+    },
+    {
+      "title": "TVR Moldova HD",
       "titleFooter": "Moldova / România • Generalist",
-      "playerLabel": "TVR Moldova",
-      "action": "video:https://tvr-tvrmoldova.lg.m.ized.tv/tvrmoldova.m3u8"
+      "playerLabel": "TVR Moldova HD",
+      "action": "video:https://tvr-moldova.lg.mncdn.com/tvrmoldova/smil:tvrmoldova.smil/chunklist.m3u8"
     },
     {
-      "title": "Euronews România",
-      "titleFooter": "România • Știri 24/7",
-      "playerLabel": "Euronews România",
-      "action": "video:https://euronews-romania-hls.rakuten.tv/fd8167be7e102f87f0bf8a1f05f2d61f/index.m3u8"
+      "title": "Первый канал HD (Channel One RU)",
+      "titleFooter": "Rusia • Generalist (1080p)",
+      "playerLabel": "Первый канал HD",
+      "action": "video:https://stream3.cinerama.uz/1214/mono.m3u8"
     },
     {
-      "title": "Moldova 1",
-      "titleFooter": "Moldova • TV Public",
-      "playerLabel": "Moldova 1",
-      "action": "video:https://trn03.trm.md/hls/moldova1.m3u8"
-    },
-    {
-      "title": "Jurnal TV",
-      "titleFooter": "Moldova • Generalist & Știri",
-      "playerLabel": "Jurnal TV",
-      "action": "video:https://live.jurnaltv.md/hls/jurnaltv.m3u8"
-    },
-    {
-      "title": "DW English",
-      "titleFooter": "Internațional • News",
-      "playerLabel": "DW English",
-      "action": "video:https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8"
-    },
-    {
-      "title": "France 24 English",
-      "titleFooter": "Internațional • News",
-      "playerLabel": "France 24",
-      "action": "video:https://live.france24.com/hls/live/2037179-b/F24_EN_HI_HLS/master.m3u8"
+      "title": "НТВ HD (NTV RU)",
+      "titleFooter": "Rusia • Generalist (1080p)",
+      "playerLabel": "НТВ HD",
+      "action": "video:https://cdn.ntv.ru/ntv-msk_hd/index.m3u8"
     }
   ]
 }

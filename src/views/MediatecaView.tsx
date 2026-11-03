@@ -1784,15 +1784,28 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               <span>Lampa TV</span>
             </button>
 
-            {/* Primary Tab 4: TV LG / Media Station X Setup */}
+            {/* Primary Tab 4: Mod Smart TV (Interfață Lampa pentru Telecomandă) */}
+            <button
+              type="button"
+              onClick={() => {
+                document.documentElement.classList.add('smart-tv-mode');
+                window.dispatchEvent(new Event('aether:enter-smart-tv'));
+              }}
+              title="Comută în Interfața Smart TV (Stil Lampa pentru Telecomandă)"
+              className="min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
+            >
+              <Tv className="w-4 h-4" aria-hidden="true" />
+              <span>Mod Smart TV</span>
+            </button>
+
+            {/* Primary Tab 5: Configurare TV LG / Media Station X */}
             <button
               type="button"
               onClick={() => setIsSmartTvModalOpen(true)}
-              title="Cum vezi toată aplicația pe televizor LG (Media Station X / WebOS)"
-              className="min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-300/80 dark:border-indigo-800/70 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+              title="Cum adaugi aplicația în Media Station X pe TV LG"
+              className="min-h-[36px] px-3 py-1.5 rounded-full text-xs font-bold inline-flex items-center gap-1 whitespace-nowrap shrink-0 bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
             >
-              <Tv className="w-4 h-4" aria-hidden="true" />
-              <span>TV LG / MSX</span>
+              <span>MSX Info</span>
             </button>
 
             <span

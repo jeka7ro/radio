@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRadioStore } from './store/useRadioStore';
 import { useTheme } from './hooks/useTheme';
 import { useCountries } from './hooks/useCountries';
@@ -15,6 +15,7 @@ import { MediatecaView } from './views/MediatecaView';
 import { CountriesView } from './views/CountriesView';
 import { FavoritesView } from './views/FavoritesView';
 import { SettingsView } from './views/SettingsView';
+import { SmartTvLampaView } from './views/SmartTvLampaView';
 
 export const App: React.FC = () => {
   useTheme();
@@ -25,6 +26,35 @@ export const App: React.FC = () => {
   const setActiveTab = useRadioStore((state) => state.setActiveTab);
   const currentStation = useRadioStore((state) => state.currentStation);
   const playerStatus = useRadioStore((state) => state.playerStatus);
+
+  const [isSmartTvMode, setIsSmartTvMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    const inIframe = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+    return (
+      params.get('tvmode') === '1' ||
+      inIframe ||
+      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen/i.test(
+        navigator.userAgent
+      )
+    );
+  });
+
+  useEffect(() => {
+    const handleEnterSmartTv = () => {
+      document.documentElement.classList.add('smart-tv-mode');
+      setIsSmartTvMode(true);
+    };
+    window.addEventListener('aether:enter-smart-tv', handleEnterSmartTv);
+    return () =>
+      window.removeEventListener('aether:enter-smart-tv', handleEnterSmartTv);
+  }, []);
 
   // Support deep-link URL query parameters (?tab=mediateca|tv|home|countries|favorites|settings & ?tvmode=1)
   useEffect(() => {
@@ -168,6 +198,17 @@ export const App: React.FC = () => {
       document.title = viewTitles[activeTab] || t.appTitle;
     }
   }, [activeTab, selectedCountry.localizedName, currentStation, playerStatus, t]);
+
+  if (isSmartTvMode) {
+    return (
+      <SmartTvLampaView
+        onExitTvMode={() => {
+          document.documentElement.classList.remove('smart-tv-mode');
+          setIsSmartTvMode(false);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-[100dvh] w-full max-w-[100vw] overflow-x-hidden flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100">

@@ -46,9 +46,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
     document.documentElement.classList.add('smart-tv-mode');
     setActiveTab(tab);
     onClose();
-    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
+    window.dispatchEvent(new Event('aether:enter-smart-tv'));
   };
 
   return (
@@ -135,15 +133,13 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
                 type="button"
                 onClick={() => {
                   document.documentElement.classList.add('smart-tv-mode');
-                  if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-                    document.documentElement.requestFullscreen().catch(() => {});
-                  }
                   onClose();
+                  window.dispatchEvent(new Event('aether:enter-smart-tv'));
                 }}
-                className="h-8 px-3.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="h-9 px-4 rounded-full bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
-                Activează Ecran Complet TV
+                Pornește Mod Smart TV (Stil Lampa)
               </button>
             </div>
 
