@@ -72,9 +72,11 @@ body {
 }
 
 /* High contrast focus indicators */
-:where(a:any-link, button, input, select):focus-visible {
+:where(a:any-link, button, input, select):focus-visible,
+html.smart-tv-mode :where(a:any-link, button, input, select):focus {
   outline: 3px solid var(--brand-color);
   outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgba(139, 92, 246, 0.35);
 }
 
 /* Defer rendering for off-screen station cards below the initial fold */

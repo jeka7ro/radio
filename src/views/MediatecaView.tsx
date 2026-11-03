@@ -54,6 +54,7 @@ import {
 } from '../services/subtitleSearchService';
 import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
 import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
+import { SmartTvMsxModal } from '../components/tv/SmartTvMsxModal';
 
 interface MediatecaViewProps {
   selectedCountry: EnrichedCountry;
@@ -757,6 +758,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   // Online Subtitle Finder & Active WebVTT Track State
   const [isSubFinderOpen, setIsSubFinderOpen] = useState<boolean>(false);
+  const [isSmartTvModalOpen, setIsSmartTvModalOpen] = useState<boolean>(false);
   const [activeSubVttUrl, setActiveSubVttUrl] = useState<string | null>(null);
   const [activeSubLabel, setActiveSubLabel] = useState<string>('');
 
@@ -1790,6 +1792,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             >
               <Popcorn className="w-4 h-4" aria-hidden="true" />
               <span>Lampa TV</span>
+            </button>
+
+            {/* Primary Tab 4: TV LG / Media Station X Setup */}
+            <button
+              type="button"
+              onClick={() => setIsSmartTvModalOpen(true)}
+              title="Cum vezi toată aplicația pe televizor LG (Media Station X / WebOS)"
+              className="min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-300/80 dark:border-indigo-800/70 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+            >
+              <Tv className="w-4 h-4" aria-hidden="true" />
+              <span>TV LG / MSX</span>
             </button>
 
             <span
@@ -3468,6 +3481,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           setActiveSubVttUrl(vttBlobUrl);
           setActiveSubLabel(label);
         }}
+      />
+
+      {/* Smart TV LG / Media Station X Guide Modal */}
+      <SmartTvMsxModal
+        isOpen={isSmartTvModalOpen}
+        onClose={() => setIsSmartTvModalOpen(false)}
       />
     </div>
   );

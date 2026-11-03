@@ -33,6 +33,8 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   if (
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/msx/') ||
+    url.pathname === '/start.json' ||
     url.pathname.startsWith('/src/') ||
     url.pathname.startsWith('/@') ||
     url.pathname.startsWith('/node_modules/') ||

@@ -1,0 +1,67 @@
+{
+  "type": "list",
+  "headline": "Radio Online — AetherRadio Smart TV",
+  "template": {
+    "type": "separate",
+    "layout": "0,0,3,2",
+    "color": "msx-glass",
+    "icon": "msx-white-soft:radio"
+  },
+  "items": [
+    {
+      "title": "Deschide AetherRadio Complet (1000+ Posturi)",
+      "titleFooter": "Căutare, Țări, Favorite & Metadate Piese Live",
+      "icon": "msx-white:apps",
+      "color": "teal",
+      "action": "link:{PREFIX}{SERVER}/?tab=home&tvmode=1"
+    },
+    {
+      "title": "Europa FM",
+      "titleFooter": "România • Pop / Știri",
+      "playerLabel": "Europa FM",
+      "action": "audio:https://astreaming.edi.ro:8443/EuropaFM_aac"
+    },
+    {
+      "title": "Radio ZU",
+      "titleFooter": "România • Top 40 / Hits",
+      "playerLabel": "Radio ZU",
+      "action": "audio:https://live4ro.antenaplay.ro/radiozu/radiozu-48000.m3u8"
+    },
+    {
+      "title": "Kiss FM România",
+      "titleFooter": "România • Hit Radio",
+      "playerLabel": "Kiss FM",
+      "action": "audio:https://live.kissfm.ro/kissfm.aacp"
+    },
+    {
+      "title": "Magic FM",
+      "titleFooter": "România • Soft Pop & Classic Hits",
+      "playerLabel": "Magic FM",
+      "action": "audio:https://live.magicfm.ro/magicfm.aacp"
+    },
+    {
+      "title": "Rock FM",
+      "titleFooter": "România • Classic Rock",
+      "playerLabel": "Rock FM",
+      "action": "audio:https://live.rockfm.ro/rockfm.aacp"
+    },
+    {
+      "title": "Digi FM",
+      "titleFooter": "România • Știri & Muzică",
+      "playerLabel": "Digi FM",
+      "action": "audio:https://edge76.rcs-rds.ro/digifm/digifm.mp3"
+    },
+    {
+      "title": "Radio România Actualități",
+      "titleFooter": "România • Postul Național",
+      "playerLabel": "Radio România Actualități",
+      "action": "audio:http://stream2.srr.ro:8002/"
+    },
+    {
+      "title": "Virgin Radio Romania",
+      "titleFooter": "România • Urban /CHR",
+      "playerLabel": "Virgin Radio",
+      "action": "audio:https://astreaming.edi.ro:8443/VirginRadio_aac"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "headline": "AetherRadio Smart TV",
+  "menu": [
+    {
+      "icon": "apps",
+      "label": "AetherRadio Hub",
+      "data": "{PREFIX}{SERVER}/msx/launcher.json"
+    },
+    {
+      "icon": "movie",
+      "label": "Mediatecă (Filme & Seriale)",
+      "action": "link:{PREFIX}{SERVER}/?tab=mediateca&tvmode=1"
+    },
+    {
+      "icon": "live-tv",
+      "label": "TV Online Live",
+      "data": "{PREFIX}{SERVER}/msx/tv.json"
+    },
+    {
+      "icon": "radio",
+      "label": "Radio Online",
+      "data": "{PREFIX}{SERVER}/msx/radio.json"
+    },
+    {
+      "icon": "theaters",
+      "label": "Lampa Smart TV",
+      "action": "link:http://lampa.mx"
+    },
+    {
+      "type": "separator"
+    },
+    {
+      "type": "settings",
+      "icon": "settings",
+      "label": "Setări MSX"
+    }
+  ]
+}

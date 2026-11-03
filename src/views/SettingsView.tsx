@@ -8,12 +8,15 @@ import {
   Info,
   Check,
   Server,
+  Tv,
+  Copy,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { useTranslation } from '../i18n/useTranslation';
 import { clearAllApiCache } from '../services/cacheService';
 import { getActiveServerHost } from '../services/radioBrowserApi';
 import { ThemeMode, LanguageCode } from '../types/radio';
+import { SmartTvMsxModal } from '../components/tv/SmartTvMsxModal';
 
 export const SettingsView: React.FC = () => {
   const { t, language, setLanguage } = useTranslation();
@@ -21,6 +24,15 @@ export const SettingsView: React.FC = () => {
   const setTheme = useRadioStore((state) => state.setTheme);
 
   const [cacheMessage, setCacheMessage] = useState<string | null>(null);
+  const [isSmartTvModalOpen, setIsSmartTvModalOpen] = useState<boolean>(false);
+  const [copiedMsx, setCopiedMsx] = useState<boolean>(false);
+
+  const msxHost =
+    typeof window !== 'undefined' &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1'
+      ? window.location.host
+      : 'radiotv-jk.netlify.app';
 
   const handleClearCache = () => {
     clearAllApiCache();
@@ -211,6 +223,65 @@ export const SettingsView: React.FC = () => {
         )}
       </div>
 
+      {/* Smart TV LG / Media Station X Card */}
+      <div className="bg-white dark:bg-zinc-900/80 p-5 rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 space-y-4">
+        <div className="flex items-start gap-3">
+          <div
+            aria-hidden="true"
+            className="w-10 h-10 rounded-xl bg-brand-100 dark:bg-brand-950/70 text-brand-700 dark:text-brand-300 flex items-center justify-center flex-shrink-0"
+          >
+            <Tv className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-zinc-100">
+              Conectare pe TV LG (Media Station X & webOS)
+            </h2>
+            <p className="text-sm text-slate-600 dark:text-zinc-400">
+              Introdu adresa de mai jos în aplicația <strong>Media Station X</strong> (Settings → Start Parameter → Setup) de pe televizorul tău LG:
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-xs sm:text-sm font-mono font-bold text-brand-700 dark:text-emerald-400 select-all">
+            <span>{msxHost}</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(msxHost);
+                setCopiedMsx(true);
+                window.setTimeout(() => setCopiedMsx(false), 2500);
+              }}
+              className="min-h-[40px] px-4 py-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 transition-colors"
+            >
+              {copiedMsx ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-500" />
+                  Copiat!
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  Copiază Start Parameter
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsSmartTvModalOpen(true)}
+              className="min-h-[40px] px-5 py-2 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 transition-colors"
+            >
+              <Tv className="w-4 h-4" />
+              Ghid Pas cu Pas TV LG
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* About Card */}
       <div className="bg-white dark:bg-zinc-900/80 p-5 rounded-3xl border border-slate-200/80 dark:border-zinc-800/80 flex items-start gap-3">
         <div
@@ -228,6 +299,11 @@ export const SettingsView: React.FC = () => {
           </p>
         </div>
       </div>
+
+      <SmartTvMsxModal
+        isOpen={isSmartTvModalOpen}
+        onClose={() => setIsSmartTvModalOpen(false)}
+      />
     </section>
   );
 };
