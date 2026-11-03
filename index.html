@@ -6,16 +6,91 @@
     <!-- MANDATORY: Declare support for both light and dark themes -->
     <meta name="color-scheme" content="light dark" />
     <script>
+      // Polyfills for Smart TV WebViews (LG webOS / Samsung Tizen / Android TV / MSX)
+      if (typeof window.globalThis === 'undefined') {
+        window.globalThis = window;
+      }
+      if (typeof window.queueMicrotask !== 'function') {
+        window.queueMicrotask = function (cb) {
+          Promise.resolve().then(cb).catch(function (e) {
+            setTimeout(function () { throw e; }, 0);
+          });
+        };
+      }
+      if (typeof Promise !== 'undefined' && typeof Promise.allSettled !== 'function') {
+        Promise.allSettled = function (promises) {
+          var arr = Array.prototype.slice.call(promises || []);
+          return Promise.all(
+            arr.map(function (p) {
+              return Promise.resolve(p).then(
+                function (value) { return { status: 'fulfilled', value: value }; },
+                function (reason) { return { status: 'rejected', reason: reason }; }
+              );
+            })
+          );
+        };
+      }
+      if (!Array.prototype.flat) {
+        Array.prototype.flat = function (depth) {
+          var d = depth === undefined ? 1 : Number(depth);
+          var result = [];
+          (function flatten(arr, currentDepth) {
+            for (var i = 0; i < arr.length; i++) {
+              if (Array.isArray(arr[i]) && currentDepth > 0) {
+                flatten(arr[i], currentDepth - 1);
+              } else {
+                result.push(arr[i]);
+              }
+            }
+          })(this, d);
+          return result;
+        };
+      }
+      if (!Array.prototype.flatMap) {
+        Array.prototype.flatMap = function (fn, thisArg) {
+          return this.map(fn, thisArg).flat(1);
+        };
+      }
+      if (!Object.fromEntries) {
+        Object.fromEntries = function (entries) {
+          var obj = {};
+          var arr = Array.from ? Array.from(entries) : entries;
+          for (var i = 0; i < arr.length; i++) {
+            if (arr[i]) obj[arr[i][0]] = arr[i][1];
+          }
+          return obj;
+        };
+      }
+      if (!String.prototype.replaceAll) {
+        String.prototype.replaceAll = function (search, replacement) {
+          if (search instanceof RegExp) return this.replace(search, replacement);
+          return this.split(String(search)).join(String(replacement));
+        };
+      }
+      if (!Array.prototype.at) {
+        Array.prototype.at = function (n) {
+          n = Math.trunc(n) || 0;
+          if (n < 0) n += this.length;
+          if (n < 0 || n >= this.length) return undefined;
+          return this[n];
+        };
+      }
+
       try {
-        const storedScheme = localStorage.getItem('color-scheme');
-        const meta = document.querySelector('meta[name="color-scheme"]');
+        var storedScheme = null;
+        try { storedScheme = localStorage.getItem('color-scheme'); } catch (e) {}
+        var meta = document.querySelector('meta[name="color-scheme"]');
         if (meta && (storedScheme === 'light' || storedScheme === 'dark')) {
           meta.content = storedScheme;
         }
-        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top);
-        const isDark = isTvRoute || storedScheme === 'dark' || (!storedScheme && prefersDark);
-        document.documentElement.classList.toggle('dark', isDark);
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top);
+        var isDark = isTvRoute || storedScheme === 'dark' || (!storedScheme && prefersDark);
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
         if (isTvRoute) {
           document.documentElement.classList.add('smart-tv-mode');
         }
@@ -33,6 +108,18 @@
           });
         }
       } catch (e) {}
+
+      window.addEventListener('error', function (ev) {
+        try {
+          var msg = (ev && ev.message ? ev.message : 'Script error') + ' (' + (ev && ev.filename ? ev.filename : '') + ':' + (ev && ev.lineno ? ev.lineno : '') + ')';
+          fetch('/api/tv-log?err=' + encodeURIComponent(msg) + '&ua=' + encodeURIComponent(navigator.userAgent)).catch(function(){});
+          var bootEl = document.getElementById('tv-boot-status');
+          if (bootEl) {
+            bootEl.innerHTML = 'Eroare pornire TV: ' + msg;
+            bootEl.style.color = '#f87171';
+          }
+        } catch (e) {}
+      });
     </script>
     <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
@@ -54,8 +141,13 @@
     />
     <title>AetherRadio — Radio Online Global</title>
   </head>
-  <body class="bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white">
-    <div id="root"></div>
+  <body class="bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white" style="background-color:#09090b;color:#f4f4f5;">
+    <div id="root">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#09090b;color:#f4f4f5;font-family:sans-serif;text-align:center;padding:24px;">
+        <div style="font-size:28px;font-weight:700;letter-spacing:0.5px;margin-bottom:10px;color:#fff;">AetherRadio Smart TV</div>
+        <div id="tv-boot-status" style="font-size:15px;color:#a1a1aa;">Se încarcă interfața Smart TV...</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

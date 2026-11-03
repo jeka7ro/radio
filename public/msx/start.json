@@ -1,5 +1,6 @@
 {
   "name": "AetherRadio Smart TV",
   "version": "1.0.0",
-  "parameter": "menu:{PREFIX}/msx/menu.json"
+  "parameter": "content:{PREFIX}/msx/start.json",
+  "action": "link:{PREFIX}/tv"
 }

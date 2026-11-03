@@ -1,6 +1,8 @@
 import { defineConfig, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import zlib from 'node:zlib';
+import fs from 'node:fs';
+import path from 'node:path';
 
 interface EpgProgrammeItem {
   t: string;
@@ -941,7 +943,93 @@ async function resolveRichTrackMetadata(
 function tvStreamProxyPlugin(): Plugin {
   return {
     name: 'tv-stream-proxy',
+    transformIndexHtml(html, ctx) {
+      if (ctx.bundle) {
+        // Replace <script type="module" crossorigin src="/assets/..."> with classic <script defer src="/assets/...">
+        // so older Smart TV WebViews (LG webOS / Samsung Tizen / MSX iframe) execute the IIFE bundle without ES Module / CORS restrictions
+        return html
+          .replace(
+            /<script\s+type="module"\s+crossorigin\s+src="([^"]+)"><\/script>/g,
+            '<script defer src="$1"></script>'
+          )
+          .replace(/\s+crossorigin(?=[\s>])/g, '');
+      }
+      return html;
+    },
     configureServer(server) {
+      server.middlewares.use('/api/tv-log', (req, res) => {
+        console.log('[SMART-TV-LOG]', req.url);
+        res.writeHead(200, { 'Access-Control-Allow-Origin': '*' });
+        res.end('ok');
+      });
+
+      server.middlewares.use((req, res, next) => {
+        const rawUrl = (req.url || '/').split('?')[0];
+        if (rawUrl === '/tv/msx/start.json' || rawUrl === '/tv/start.json') {
+          const startPath = path.resolve(process.cwd(), 'public/msx/start.json');
+          if (fs.existsSync(startPath)) {
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache',
+            });
+            res.end(fs.readFileSync(startPath));
+            return;
+          }
+        }
+
+        // When accessed from a Smart TV on LAN (e.g. 192.168.x.x), serve the pre-built ES2015 IIFE dist/ bundle
+        // so the TV never receives Vite 6's /@vite/client (which uses ES2022 private class fields #)
+        const hostHeader = req.headers.host || '';
+        const isLanTvClient =
+          hostHeader.startsWith('192.168.') ||
+          hostHeader.startsWith('10.') ||
+          /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+            req.headers['user-agent'] || ''
+          );
+
+        if (isLanTvClient && !rawUrl.startsWith('/api/') && !rawUrl.startsWith('/msx/')) {
+          const distDir = path.resolve(process.cwd(), 'dist');
+          if (rawUrl.startsWith('/assets/') || rawUrl.startsWith('/icons/') || rawUrl === '/sw.js' || rawUrl === '/manifest.webmanifest') {
+            const assetFile = path.join(distDir, rawUrl);
+            if (fs.existsSync(assetFile) && fs.statSync(assetFile).isFile()) {
+              const ext = path.extname(assetFile).toLowerCase();
+              const mime =
+                ext === '.js'
+                  ? 'application/javascript; charset=utf-8'
+                  : ext === '.css'
+                  ? 'text/css; charset=utf-8'
+                  : ext === '.svg'
+                  ? 'image/svg+xml'
+                  : ext === '.json' || ext === '.webmanifest'
+                  ? 'application/json; charset=utf-8'
+                  : 'application/octet-stream';
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': mime,
+                'Cache-Control': 'no-cache',
+              });
+              res.end(fs.readFileSync(assetFile));
+              return;
+            }
+          } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/index.html') {
+            const distIndex = path.join(distDir, 'index.html');
+            if (fs.existsSync(distIndex)) {
+              console.log(`[LAN-TV] Serving compiled ES2015 bundle to ${hostHeader}${req.url} (${req.headers['user-agent'] || ''})`);
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-cache',
+              });
+              res.end(fs.readFileSync(distIndex));
+              return;
+            }
+          }
+        }
+
+        next();
+      });
+
       server.middlewares.use('/api/radio-meta', async (req, res) => {
         try {
           const reqUrl = new URL(req.url || '', 'http://localhost');
@@ -1303,7 +1391,17 @@ export default defineConfig({
     port: 8769,
     strictPort: true,
   },
+  esbuild: {
+    target: 'es2015',
+  },
   build: {
-    target: ['es2017', 'chrome68', 'safari12'],
+    target: ['es2015', 'chrome58', 'safari11'],
+    cssCodeSplit: false,
+    rollupOptions: {
+      output: {
+        format: 'iife',
+        inlineDynamicImports: true,
+      },
+    },
   },
 });
