@@ -63,11 +63,33 @@ interface MediatecaViewProps {
 type MediatecaTab =
   | 'movies'
   | 'series'
-  | 'russia'
   | 'offline'
   | 'saved'
   | 'lampa'
   | 'custom';
+
+type OriginCountryFilterId =
+  | 'ALL'
+  | 'RU'
+  | 'SU'
+  | 'RO'
+  | 'US'
+  | 'GB'
+  | 'TR'
+  | 'KR'
+  | 'FR'
+  | 'DE'
+  | 'ES'
+  | 'IT'
+  | 'UA';
+
+type YearFilterId =
+  | 'ALL'
+  | '2025-2026'
+  | '2020-2024'
+  | '2010-2019'
+  | '2000-2009'
+  | '1950-1999';
 
 interface CinemetaItem {
   id: string; // IMDb ID e.g. tt15239678 or kp_5304403
@@ -167,37 +189,37 @@ const SUBTITLE_LANGUAGES: Array<{
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
     id: 'kinogram_hls',
-    label: 'Server 1: Player Nativ HD (Audio RU + Offline)',
+    label: 'S1: Nativ HD (Audio RU + Offline)',
     badge: 'Fără Reclame • Dublaj RU / Original + Descărcare Offline pe Device',
   },
   {
     id: 'kinogram_embed',
-    label: 'Server 2: Kinogram RU (Дубляж)',
+    label: 'S2: Kinogram RU',
     badge: 'Fără Pop-up • Filme & Seriale Rusești + Dublaj RU Multi-Audio',
   },
   {
     id: 'vidspark',
-    label: 'Server 3: VidSpark Direct HD',
+    label: 'S3: VidSpark',
     badge: 'Fără Reclame • Reluare Automată + Subtitrări RO/RU/EN',
   },
   {
     id: 'vidzee',
-    label: 'Server 4: VidZee Multi-Server',
+    label: 'S4: VidZee',
     badge: 'Fără Pop-up • Reluare Automată + Multi-Sub',
   },
   {
     id: 'nontongo',
-    label: 'Server 5: NontonGo VIP & 4K',
+    label: 'S5: NontonGo 4K',
     badge: 'Fără Pop-up • 3 Surse HD/VIP + Subtitrări',
   },
   {
     id: 'vidsrc_pm',
-    label: 'Server 6: VidSrc Pro',
+    label: 'S6: VidSrc',
     badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
   },
   {
     id: 'frembed',
-    label: 'Server 7: CloudStream Backup',
+    label: 'S7: Backup',
     badge: 'Fără Pop-up • Backup Global',
   },
 ];
@@ -222,270 +244,193 @@ const GENRE_FILTERS: Array<{
   { id: 'Documentary', label: 'Documentare', Icon: Globe },
 ];
 
-/**
- * Curated & Verified Russian Movies & Series Catalog (with exact Kinopoisk & IMDb IDs)
- */
-const RUSSIAN_MEDIA_CATALOG: CinemetaItem[] = [
+const ORIGIN_COUNTRIES: Array<{
+  id: OriginCountryFilterId;
+  label: string;
+  shortLabel: string;
+  kpCountryId?: number;
+}> = [
+  { id: 'ALL', label: 'Toate Țările (Global)', shortLabel: 'Toate Țările' },
   {
-    id: 'tt28429213',
-    kpId: '5304403',
-    type: 'series',
-    name: 'Слово пацана. Кровь на асфальте',
-    releaseInfo: '2023',
-    imdbRating: '8.5',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/5304403.jpg',
-    genres: ['Драма', 'Криминал'],
-    description:
-      'Конец 1980-х. Пока родители борются за выживание, брошенные всеми дети сбиваются в уличные стаи и делят асфальт.',
+    id: 'RU',
+    label: 'Rusia (Россия — Filme & Seriale RU)',
+    shortLabel: 'Rusia (RU)',
+    kpCountryId: 34,
   },
   {
-    id: 'tt0337898',
-    type: 'series',
-    name: 'Бригада (Brigada)',
-    releaseInfo: '2002',
-    imdbRating: '8.3',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/79848.jpg',
-    genres: ['Криминал', 'Драма', 'Боевик'],
-    description:
-      'История четырех друзей детства, обычных московских парней, Саши Белого, Космоса, Пчёлы и Фила, выросших в одном дворе.',
+    id: 'SU',
+    label: 'URSS Clasice (СССР)',
+    shortLabel: 'URSS',
+    kpCountryId: 33,
   },
   {
-    id: 'tt4426042',
-    kpId: '820638',
-    type: 'series',
-    name: 'Мажор (Silver Spoon)',
-    releaseInfo: '2014–2025',
-    imdbRating: '7.8',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/820638.jpg',
-    genres: ['Драма', 'Криминал', 'Детектив'],
-    description:
-      'Сын высокопоставленного человека Игорь Соколовский попадает на службу в отделение полиции, где пытается раскрыть тайну гибели матери.',
+    id: 'RO',
+    label: 'România (RO)',
+    shortLabel: 'România',
+    kpCountryId: 37,
+  },
+  { id: 'US', label: 'SUA (Hollywood)', shortLabel: 'SUA', kpCountryId: 1 },
+  {
+    id: 'GB',
+    label: 'Marea Britanie (UK)',
+    shortLabel: 'UK',
+    kpCountryId: 5,
   },
   {
-    id: 'tt2363260',
-    kpId: '687595',
-    type: 'series',
-    name: 'Кухня (Kitchen)',
-    releaseInfo: '2012–2016',
-    imdbRating: '8.4',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/687595.jpg',
-    genres: ['Комедия', 'Мелодрама'],
-    description:
-      'Максим Лавров приезжает в Москву и устраивается поваром в элитный ресторан французской кухни Claude Monet.',
+    id: 'TR',
+    label: 'Turcia (Seriale & Filme TR)',
+    shortLabel: 'Turcia',
+    kpCountryId: 44,
   },
   {
-    id: 'tt0118767',
-    kpId: '41519',
-    type: 'movie',
-    name: 'Брат (Brat)',
-    releaseInfo: '1997',
-    imdbRating: '7.8',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/41519.jpg',
-    genres: ['Драма', 'Криминал', 'Боевик'],
-    description:
-      'Демобилизованный Данила Багров приезжает в Петербург к старшему брату и оказывается втянут в криминальный мир 90-х.',
+    id: 'KR',
+    label: 'Coreea de Sud (K-Drama)',
+    shortLabel: 'Coreea (KR)',
+    kpCountryId: 49,
   },
-  {
-    id: 'tt0238883',
-    kpId: '41520',
-    type: 'movie',
-    name: 'Брат 2 (Brat 2)',
-    releaseInfo: '2000',
-    imdbRating: '7.8',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/41520.jpg',
-    genres: ['Боевик', 'Криминал'],
-    description:
-      'Данила Багров отправляется в Америку, чтобы восстановить справедливость и помочь брату погибшего боевого товарища.',
-  },
-  {
-    id: 'tt5135336',
-    kpId: '838050',
-    type: 'series',
-    name: 'Метод (The Method)',
-    releaseInfo: '2015–2025',
-    imdbRating: '7.4',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/838050.jpg',
-    genres: ['Триллер', 'Детектив', 'Драма'],
-    description:
-      'Гениальный следователь Родион Меглин раскрывает самые сложные серийные убийства вместе со стажеркой Есеней.',
-  },
-  {
-    id: 'tt11418452',
-    kpId: '1183582',
-    type: 'movie',
-    name: 'Холоп (Son of a Rich)',
-    releaseInfo: '2019',
-    imdbRating: '6.7',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1183582.jpg',
-    genres: ['Комедия'],
-    description:
-      'Избалованный мажор Гриша попадает в подстроенную деревню XIX века, где становится обычным конюхом.',
-  },
-  {
-    id: 'tt21916002',
-    kpId: '5047468',
-    type: 'movie',
-    name: 'Холоп 2 (Son of a Rich 2)',
-    releaseInfo: '2024',
-    imdbRating: '6.5',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/5047468.jpg',
-    genres: ['Комедия'],
-    description:
-      'Перевоспитавшийся Гриша сам берется за перевоспитание избалованной дочки чиновницы Кати в декорациях 1812 года.',
-  },
-  {
-    id: 'tt14536120',
-    kpId: '1115471',
-    type: 'movie',
-    name: 'Мастер и Маргарита',
-    releaseInfo: '2024',
-    imdbRating: '7.6',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1115471.jpg',
-    genres: ['Драма', 'Фэнтези', 'Мелодрама'],
-    description:
-      'Москва 1930-х годов. Известный писатель оказывается в центре литературного скандала и знакомится с Маргаритой и таинственным Воландом.',
-  },
-  {
-    id: 'tt9151230',
-    kpId: '1108682',
-    type: 'series',
-    name: 'Эпидемия (To the Lake)',
-    releaseInfo: '2019–2022',
-    imdbRating: '7.3',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1108682.jpg',
-    genres: ['Фантастика', 'Триллер', 'Драма'],
-    description:
-      'Москву поражает неизвестный смертельный вирус. Несколько семей пытаются спастись на уединенном острове в Карелии.',
-  },
-  {
-    id: 'tt14306560',
-    kpId: '1224067',
-    type: 'series',
-    name: 'Вампиры средней полосы',
-    releaseInfo: '2021–2025',
-    imdbRating: '8.3',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1224067.jpg',
-    genres: ['Детектив', 'Комедия', 'Фэнтези'],
-    description:
-      'В Смоленске живет необычная семья вампиров во главе со старейшиной Святославом Вернидубовичем, которые никого не убивают.',
-  },
-  {
-    id: 'tt10404944',
-    kpId: '1100777',
-    type: 'series',
-    name: 'Триггер (Trigger)',
-    releaseInfo: '2018–2024',
-    imdbRating: '8.5',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/1100777.jpg',
-    genres: ['Драма', 'Психология'],
-    description:
-      'Психолог Артём Стрелецкий практикует метод провокативной терапии, заставляя клиентов взглянуть в лицо своим страхам.',
-  },
-  {
-    id: 'kp_913033',
-    kpId: '913033',
-    type: 'series',
-    name: 'Полицейский с Рублёвки',
-    releaseInfo: '2016–2019',
-    imdbRating: '8.1',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/913033.jpg',
-    genres: ['Комедия', 'Детектив'],
-    description:
-      'Гриша Измайлов — оперуполномоченный в самом элитном районе России, который раскрывает дела с фирменным черным юмором.',
-  },
-  {
-    id: 'tt22074038',
-    kpId: '4370148',
-    type: 'movie',
-    name: 'Чебурашка (Cheburashka)',
-    releaseInfo: '2023',
-    imdbRating: '7.3',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/4370148.jpg',
-    genres: ['Семейный', 'Комедия'],
-    description:
-      'Мохнатый непоседливый зверек из далекой апельсиновой страны попадает в тихий приморский городок к угрюмому садовнику Гене.',
-  },
-  {
-    id: 'tt8820590',
-    type: 'movie',
-    name: 'Т-34 (T-34)',
-    releaseInfo: '2018',
-    imdbRating: '6.8',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/939981.jpg',
-    genres: ['Военный', 'Боевик', 'Драма'],
-    description:
-      'Пленный курсант Ивушкин планирует дерзкий побег с немецкого полигона на легендарном танке Т-34.',
-  },
-  {
-    id: 'tt3560686',
-    kpId: '808639',
-    type: 'movie',
-    name: 'Дурак (The Fool)',
-    releaseInfo: '2014',
-    imdbRating: '8.1',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/808639.jpg',
-    genres: ['Драма'],
-    description:
-      'Простой сантехник обнаруживает трещину в старом общежитии, которое может рухнуть в любую минуту вместе с 800 жильцами.',
-  },
-  {
-    id: 'tt2802154',
-    kpId: '705356',
-    type: 'movie',
-    name: 'Левиафан (Leviathan)',
-    releaseInfo: '2014',
-    imdbRating: '7.6',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/705356.jpg',
-    genres: ['Драма', 'Криминал'],
-    description:
-      'Автомеханик Николай из северного городка вступает в неравную борьбу с коррумпированным мэром за свой дом и землю.',
-  },
-  {
-    id: 'tt0381936',
-    type: 'movie',
-    name: 'Бумер (Bumer)',
-    releaseInfo: '2003',
-    imdbRating: '7.0',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/40774.jpg',
-    genres: ['Криминал', 'Драма'],
-    description:
-      'Четверо друзей уходят от погони на черном BMW по дорогам российской глубинки.',
-  },
-  {
-    id: 'tt0420982',
-    type: 'movie',
-    name: 'Жмурки (Dead Man’s Bluff)',
-    releaseInfo: '2005',
-    imdbRating: '7.2',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/81555.jpg',
-    genres: ['Комедия', 'Криминал'],
-    description:
-      'Черная криминальная комедия Алексея Балабанова о двух незадачливых бандитах середины 90-х.',
-  },
-  {
-    id: 'kp_378244',
-    kpId: '378244',
-    type: 'series',
-    name: 'Ликвидация (Liquidation)',
-    releaseInfo: '2007',
-    imdbRating: '8.5',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/378244.jpg',
-    genres: ['Детектив', 'Криминал', 'Драма'],
-    description:
-      'Послевоенная Одесса, 1946 год. Давид Гоцман и маршал Жуков ведут борьбу с бандитским подпольем и неуловимым Академиком.',
-  },
-  {
-    id: 'tt0403783',
-    type: 'series',
-    name: 'Мастер и Маргарита (Сериал 2005)',
-    releaseInfo: '2005',
-    imdbRating: '7.6',
-    poster: 'https://kinopoiskapiunofficial.tech/images/posters/kp_small/161104.jpg',
-    genres: ['Драма', 'Мистика'],
-    description:
-      'Классическая многосерийная экранизация великого романа Михаила Булгакова режиссера Владимира Бортко.',
-  },
+  { id: 'FR', label: 'Franța', shortLabel: 'Franța', kpCountryId: 3 },
+  { id: 'DE', label: 'Germania', shortLabel: 'Germania', kpCountryId: 9 },
+  { id: 'ES', label: 'Spania', shortLabel: 'Spania', kpCountryId: 8 },
+  { id: 'IT', label: 'Italia', shortLabel: 'Italia', kpCountryId: 10 },
+  { id: 'UA', label: 'Ucraina', shortLabel: 'Ucraina', kpCountryId: 106 },
 ];
+
+const YEAR_FILTERS: Array<{
+  id: YearFilterId;
+  label: string;
+  yearFrom?: number;
+  yearTo?: number;
+}> = [
+  { id: 'ALL', label: 'Toți anii' },
+  { id: '2025-2026', label: '2025 – 2026 (Noi)', yearFrom: 2025, yearTo: 2026 },
+  { id: '2020-2024', label: '2020 – 2024', yearFrom: 2020, yearTo: 2024 },
+  { id: '2010-2019', label: '2010 – 2019', yearFrom: 2010, yearTo: 2019 },
+  { id: '2000-2009', label: '2000 – 2009', yearFrom: 2000, yearTo: 2009 },
+  { id: '1950-1999', label: 'Clasice (< 2000)', yearFrom: 1950, yearTo: 1999 },
+];
+
+const KP_GENRE_MAP: Record<string, number> = {
+  Action: 11,
+  'Sci-Fi': 6,
+  Thriller: 1,
+  Comedy: 13,
+  Drama: 2,
+  Crime: 3,
+  Adventure: 7,
+  Horror: 17,
+  Animation: 18,
+  Romance: 4,
+  Documentary: 22,
+};
+
+async function fetchKinopoiskCatalogPages(params: {
+  mediaType: 'movie' | 'series';
+  countryId?: number;
+  genreId?: number;
+  order: 'NUM_VOTE' | 'RATING';
+  yearFrom?: number;
+  yearTo?: number;
+  startPage: number;
+  pageCount?: number;
+  preferRussianTitles?: boolean;
+}): Promise<{ items: CinemetaItem[]; hasMore: boolean; nextPage: number }> {
+  const {
+    mediaType,
+    countryId,
+    genreId,
+    order,
+    yearFrom,
+    yearTo,
+    startPage,
+    pageCount = 2,
+    preferRussianTitles = true,
+  } = params;
+
+  const kpType = mediaType === 'series' ? 'TV_SERIES' : 'FILM';
+  const collected: CinemetaItem[] = [];
+  let totalPages = 1;
+
+  for (let i = 0; i < pageCount; i++) {
+    const page = startPage + i;
+    if (i > 0 && page > totalPages) break;
+
+    const qs = new URLSearchParams();
+    qs.set('type', kpType);
+    qs.set('order', order);
+    qs.set('page', String(page));
+    if (countryId) qs.set('countries', String(countryId));
+    if (genreId) qs.set('genres', String(genreId));
+    if (yearFrom) qs.set('yearFrom', String(yearFrom));
+    if (yearTo) qs.set('yearTo', String(yearTo));
+
+    try {
+      const res = await fetch(
+        `https://kinopoiskapiunofficial.tech/api/v2.2/films?${qs.toString()}`,
+        {
+          headers: {
+            'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+          },
+        }
+      );
+      if (!res.ok) break;
+      const data = (await res.json()) as {
+        totalPages?: number;
+        items?: Array<{
+          kinopoiskId: number;
+          imdbId?: string | null;
+          nameRu?: string | null;
+          nameEn?: string | null;
+          nameOriginal?: string | null;
+          year?: number | string | null;
+          ratingKinopoisk?: number | null;
+          ratingImdb?: number | null;
+          posterUrlPreview?: string;
+          posterUrl?: string;
+          genres?: Array<{ genre: string }>;
+        }>;
+      };
+
+      totalPages = data.totalPages || 1;
+      for (const f of data.items || []) {
+        if (!f.kinopoiskId) continue;
+        const primaryName = preferRussianTitles
+          ? f.nameRu || f.nameOriginal || f.nameEn
+          : f.nameOriginal || f.nameEn || f.nameRu;
+        const secondaryName =
+          preferRussianTitles &&
+          f.nameOriginal &&
+          f.nameRu &&
+          f.nameOriginal !== f.nameRu
+            ? ` (${f.nameOriginal})`
+            : '';
+        const ratingVal = f.ratingKinopoisk || f.ratingImdb;
+        const validImdb =
+          f.imdbId && /^tt\d+$/.test(f.imdbId) ? f.imdbId : '';
+
+        collected.push({
+          id: validImdb || `kp_${f.kinopoiskId}`,
+          kpId: String(f.kinopoiskId),
+          type: mediaType,
+          name: `${primaryName || `Film #${f.kinopoiskId}`}${secondaryName}`,
+          releaseInfo:
+            f.year && String(f.year) !== 'null' ? String(f.year) : undefined,
+          imdbRating: ratingVal ? String(ratingVal) : undefined,
+          poster: f.posterUrlPreview || f.posterUrl,
+          genres: f.genres?.map((g) => g.genre).filter(Boolean),
+        });
+      }
+    } catch {
+      break;
+    }
+  }
+
+  const nextPage = startPage + pageCount;
+  return {
+    items: collected,
+    hasMore: nextPage <= totalPages && collected.length > 0,
+    nextPage,
+  };
+}
 
 const LAMPA_PLUGINS = [
   {
@@ -753,20 +698,19 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   );
 
   const [activeTab, setActiveTab] = useState<MediatecaTab>('movies');
-  const [russiaFilter, setRussiaFilter] = useState<'all' | 'movie' | 'series'>(
-    'all'
-  );
+  const [selectedOriginCountry, setSelectedOriginCountry] =
+    useState<OriginCountryFilterId>('ALL');
+  const [selectedYearFilter, setSelectedYearFilter] =
+    useState<YearFilterId>('ALL');
   const [selectedGenre, setSelectedGenre] = useState<string>('top');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [debouncedQuery, setDebouncedQuery] = useState<string>('');
 
   const [catalogItems, setCatalogItems] = useState<CinemetaItem[]>([]);
-  const [russiaSearchResults, setRussiaSearchResults] = useState<
-    CinemetaItem[]
-  >([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [skipOffset, setSkipOffset] = useState<number>(0);
+  const [kpPageOffset, setKpPageOffset] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
 
   const [savedItems, setSavedItems] = useState<CinemetaItem[]>(() =>
@@ -1272,51 +1216,73 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
-  // Search Kinopoisk when in 'russia' tab OR when user types Cyrillic
-  useEffect(() => {
-    if (activeTab !== 'russia') return;
-    if (!debouncedQuery) {
-      setRussiaSearchResults([]);
-      setIsLoading(false);
-      return;
-    }
+  const useKinopoiskCatalog =
+    selectedOriginCountry !== 'ALL' || selectedYearFilter !== 'ALL';
 
-    let cancelled = false;
-    setIsLoading(true);
-    void searchKinopoiskByKeyword(debouncedQuery).then((res) => {
-      if (!cancelled) {
-        setRussiaSearchResults(res);
-        setIsLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, debouncedQuery]);
-
-  // Fetch Movies or Series catalog from Cinemeta
+  // Fetch Movies or Series catalog (from Kinopoisk v2.2 when Country/Year filters are active, or Cinemeta for Global)
   useEffect(() => {
     if (activeTab !== 'movies' && activeTab !== 'series') return;
 
     let cancelled = false;
     setIsLoading(true);
     setSkipOffset(0);
+    setKpPageOffset(1);
 
     const mediaType = activeTab === 'series' ? 'series' : 'movie';
 
     const fetchCatalog = async () => {
       try {
-        // If user searches in Cyrillic in Movies/Series tab, also fetch Kinopoisk results!
-        if (debouncedQuery && /[а-яА-ЯёЁ]/.test(debouncedQuery)) {
+        // 1. If user searches in Cyrillic OR has RU/SU country selected while searching, query Kinopoisk keyword API
+        if (
+          debouncedQuery &&
+          (/[а-яА-ЯёЁ]/.test(debouncedQuery) ||
+            selectedOriginCountry === 'RU' ||
+            selectedOriginCountry === 'SU')
+        ) {
           const kpRes = await searchKinopoiskByKeyword(debouncedQuery);
           if (!cancelled && kpRes.length > 0) {
-            setCatalogItems(kpRes);
+            const byType = kpRes.filter((x) => x.type === mediaType);
+            setCatalogItems(byType.length > 0 ? byType : kpRes);
             setHasMore(false);
             setIsLoading(false);
             return;
           }
         }
 
+        // 2. If Country filter (e.g. Rusia, URSS, România, Turcia, SUA) or Year filter is active (and no search query), use Kinopoisk v2.2 Filters API
+        if (!debouncedQuery && useKinopoiskCatalog) {
+          const countryObj = ORIGIN_COUNTRIES.find(
+            (c) => c.id === selectedOriginCountry
+          );
+          const yearObj = YEAR_FILTERS.find((y) => y.id === selectedYearFilter);
+          const genreId = KP_GENRE_MAP[selectedGenre];
+          const order = selectedGenre === 'imdbRating' ? 'RATING' : 'NUM_VOTE';
+          const preferRussianTitles =
+            selectedOriginCountry === 'RU' ||
+            selectedOriginCountry === 'SU' ||
+            selectedOriginCountry === 'UA' ||
+            preferredSubLang === 'ru';
+
+          const kpData = await fetchKinopoiskCatalogPages({
+            mediaType,
+            countryId: countryObj?.kpCountryId,
+            genreId,
+            order,
+            yearFrom: yearObj?.yearFrom,
+            yearTo: yearObj?.yearTo,
+            startPage: 1,
+            pageCount: 2,
+            preferRussianTitles,
+          });
+
+          if (cancelled) return;
+          setCatalogItems(kpData.items);
+          setKpPageOffset(kpData.nextPage);
+          setHasMore(kpData.hasMore);
+          return;
+        }
+
+        // 3. Global Cinemeta Catalog / Search
         let url = '';
         if (debouncedQuery) {
           const effectiveQuery =
@@ -1339,10 +1305,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         const data = (await res.json()) as { metas?: CinemetaItem[] };
         if (cancelled) return;
 
-        const list = (data.metas || []).map((m) => ({
+        let list = (data.metas || []).map((m) => ({
           ...m,
           type: mediaType as 'movie' | 'series',
         }));
+
+        // If user searched with a Year filter active, filter the search results by year range
+        if (debouncedQuery && selectedYearFilter !== 'ALL') {
+          const yearObj = YEAR_FILTERS.find((y) => y.id === selectedYearFilter);
+          if (yearObj?.yearFrom && yearObj?.yearTo) {
+            list = list.filter((item) => {
+              const yrMatch = (item.releaseInfo || item.year || '').match(
+                /\b(19\d{2}|20\d{2})\b/
+              );
+              if (!yrMatch) return true;
+              const yr = Number(yrMatch[1]);
+              return yr >= yearObj.yearFrom! && yr <= yearObj.yearTo!;
+            });
+          }
+        }
 
         setCatalogItems(list);
         setHasMore(!debouncedQuery && list.length >= 40);
@@ -1360,16 +1341,63 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedGenre, debouncedQuery]);
+  }, [
+    activeTab,
+    selectedOriginCountry,
+    selectedYearFilter,
+    selectedGenre,
+    debouncedQuery,
+    useKinopoiskCatalog,
+    preferredSubLang,
+  ]);
 
-  // Load more pagination
+  // Load more pagination (supports both Kinopoisk v2.2 pages and Cinemeta skip)
   const handleLoadMore = async () => {
     if (isLoadingMore || !hasMore) return;
-    const nextSkip = skipOffset + 50;
     const mediaType = activeTab === 'series' ? 'series' : 'movie';
 
     setIsLoadingMore(true);
     try {
+      if (!debouncedQuery && useKinopoiskCatalog) {
+        const countryObj = ORIGIN_COUNTRIES.find(
+          (c) => c.id === selectedOriginCountry
+        );
+        const yearObj = YEAR_FILTERS.find((y) => y.id === selectedYearFilter);
+        const genreId = KP_GENRE_MAP[selectedGenre];
+        const order = selectedGenre === 'imdbRating' ? 'RATING' : 'NUM_VOTE';
+        const preferRussianTitles =
+          selectedOriginCountry === 'RU' ||
+          selectedOriginCountry === 'SU' ||
+          selectedOriginCountry === 'UA' ||
+          preferredSubLang === 'ru';
+
+        const kpData = await fetchKinopoiskCatalogPages({
+          mediaType,
+          countryId: countryObj?.kpCountryId,
+          genreId,
+          order,
+          yearFrom: yearObj?.yearFrom,
+          yearTo: yearObj?.yearTo,
+          startPage: kpPageOffset,
+          pageCount: 2,
+          preferRussianTitles,
+        });
+
+        if (kpData.items.length === 0) {
+          setHasMore(false);
+        } else {
+          setCatalogItems((prev) => {
+            const existingIds = new Set(prev.map((x) => x.id));
+            const unique = kpData.items.filter((x) => !existingIds.has(x.id));
+            return [...prev, ...unique];
+          });
+          setKpPageOffset(kpData.nextPage);
+          setHasMore(kpData.hasMore);
+        }
+        return;
+      }
+
+      const nextSkip = skipOffset + 50;
       let url = '';
       if (selectedGenre === 'top') {
         url = `https://v3-cinemeta.strem.io/catalog/${mediaType}/top/skip=${nextSkip}.json`;
@@ -1665,20 +1693,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   const displayedItems = useMemo(() => {
     if (activeTab === 'saved') return savedItems;
-    if (activeTab === 'russia') {
-      const base = debouncedQuery ? russiaSearchResults : RUSSIAN_MEDIA_CATALOG;
-      if (russiaFilter === 'all') return base;
-      return base.filter((x) => x.type === russiaFilter);
-    }
     return catalogItems;
-  }, [
-    activeTab,
-    savedItems,
-    debouncedQuery,
-    russiaSearchResults,
-    russiaFilter,
-    catalogItems,
-  ]);
+  }, [activeTab, savedItems, catalogItems]);
 
   const activeItemForEmbed: CinemetaItem | null = activeVodItem
     ? {
@@ -1702,26 +1718,28 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   );
 
   return (
-    <div className="space-y-5">
-      {/* Top Header Bar */}
-      <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs overflow-hidden">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500 to-rose-600 text-white flex items-center justify-center shadow-sm shrink-0">
-              <Clapperboard className="w-5 h-5" aria-hidden="true" />
+    <div className="space-y-4">
+      {/* Compact Top Header Bar: Primary Tabs (Filme, Seriale, Lampa TV) + Secondary Icon Buttons */}
+      <section className="px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          {/* Left Compact Title */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-rose-600 text-white flex items-center justify-center shadow-xs shrink-0">
+              <Clapperboard className="w-4 h-4" aria-hidden="true" />
             </div>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-100 tracking-tight truncate">
-                Mediatecă — Filme, Seriale & Biblioteca Offline
+            <div>
+              <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-zinc-100 leading-tight">
+                Mediatecă
               </h1>
-              <p className="text-xs text-slate-600 dark:text-zinc-400 truncate">
-                Catalog Global + Rusia (Audio RU) • Descărcare Locală & Vizionare Offline pe Device
+              <p className="text-[11px] text-slate-500 dark:text-zinc-400 hidden sm:block">
+                Filme & Seriale Online + Offline
               </p>
             </div>
           </div>
 
-          {/* Mode Switcher Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 max-w-full">
+          {/* Right Navigation: Prominent Primary Tabs + Compact Icon Actions */}
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5">
+            {/* Primary Tab 1: Filme */}
             <button
               type="button"
               onClick={() => {
@@ -1729,16 +1747,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'movies'
-                  ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
               }`}
             >
-              <Film className="w-3.5 h-3.5" aria-hidden="true" />
+              <Film className="w-4 h-4" aria-hidden="true" />
               <span>Filme</span>
             </button>
 
+            {/* Primary Tab 2: Seriale */}
             <button
               type="button"
               onClick={() => {
@@ -1746,66 +1765,17 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'series'
-                  ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
               }`}
             >
-              <Tv className="w-3.5 h-3.5" aria-hidden="true" />
+              <Tv className="w-4 h-4" aria-hidden="true" />
               <span>Seriale</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('russia');
-                setActiveVodItem(null);
-                setActiveOfflineItem(null);
-              }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
-                activeTab === 'russia'
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-800 dark:text-indigo-200 border border-indigo-200/80 dark:border-indigo-800/70 hover:bg-indigo-100'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Rusia (Filme & Seriale RU)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('offline');
-                setActiveVodItem(null);
-              }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
-                activeTab === 'offline'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 border border-emerald-200/80 dark:border-emerald-800/70 hover:bg-emerald-100'
-              }`}
-            >
-              <HardDriveDownload className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Descărcate Offline ({offlineItems.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('saved');
-                setActiveVodItem(null);
-                setActiveOfflineItem(null);
-              }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
-                activeTab === 'saved'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/70 hover:bg-rose-100'
-              }`}
-            >
-              <Heart className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Salvate ({savedItems.length})</span>
-            </button>
-
+            {/* Primary Tab 3: Lampa TV */}
             <button
               type="button"
               onClick={() => {
@@ -1813,16 +1783,69 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'lampa'
                   ? 'bg-amber-600 text-white shadow-xs'
                   : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/70 hover:bg-amber-100'
               }`}
             >
-              <Popcorn className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Lampa Smart TV</span>
+              <Popcorn className="w-4 h-4" aria-hidden="true" />
+              <span>Lampa TV</span>
             </button>
 
+            <span
+              className="h-5 w-px bg-slate-200 dark:bg-zinc-800 mx-0.5 shrink-0"
+              aria-hidden="true"
+            />
+
+            {/* Secondary Compact Icon 1: Descărcate Offline */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('offline');
+                setActiveVodItem(null);
+              }}
+              title={`Descărcate Offline pe Dispozitiv (${offlineItems.length})`}
+              aria-label={`Descărcate Offline (${offlineItems.length})`}
+              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${
+                activeTab === 'offline'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-zinc-700'
+              }`}
+            >
+              <HardDriveDownload className="w-4 h-4" aria-hidden="true" />
+              {offlineItems.length > 0 && (
+                <span className="text-[11px] font-extrabold">
+                  {offlineItems.length}
+                </span>
+              )}
+            </button>
+
+            {/* Secondary Compact Icon 2: Salvate / Favorite VOD */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('saved');
+                setActiveVodItem(null);
+                setActiveOfflineItem(null);
+              }}
+              title={`Salvate în Lista Mea (${savedItems.length})`}
+              aria-label={`Salvate (${savedItems.length})`}
+              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${
+                activeTab === 'saved'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-zinc-700'
+              }`}
+            >
+              <Heart className="w-4 h-4" aria-hidden="true" />
+              {savedItems.length > 0 && (
+                <span className="text-[11px] font-extrabold">
+                  {savedItems.length}
+                </span>
+              )}
+            </button>
+
+            {/* Secondary Compact Icon 3: Import .M3U / .MP4 */}
             <button
               type="button"
               onClick={() => {
@@ -1830,14 +1853,15 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+              title="Importă Fișier .M3U / Link Video Direct (.MP4, .M3U8)"
+              aria-label="Importă Fișier .M3U / .MP4"
+              className={`h-9 w-9 rounded-full inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'custom'
-                  ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
               }`}
             >
-              <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Fișier .M3U / .MP4</span>
+              <Upload className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -2534,19 +2558,26 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 Nu ai încă niciun film sau episod descărcat Offline
               </p>
               <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md mx-auto">
-                Deschide orice film sau serial din tab-urile <strong>Filme</strong>, <strong>Seriale</strong> sau <strong>Rusia (RU)</strong> și apasă pe butonul verde <strong>„Descarcă Offline pe Device”</strong> de sub player, sau încarcă un fișier video de pe telefon/PC.
+                Deschide orice film sau serial din <strong>Filme</strong> sau <strong>Seriale</strong> și apasă pe butonul verde <strong>„Descarcă Offline”</strong> din bara playerului, sau încarcă un fișier video de pe telefon/PC.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('russia')}
+                  onClick={() => {
+                    setActiveTab('series');
+                    setSelectedOriginCountry('RU');
+                    setPreferredSubLang('ru');
+                  }}
                   className="min-h-[36px] px-4 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
                 >
-                  Explorează Filme & Seriale Rusia
+                  Explorează Seriale Rusești (RU)
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('movies')}
+                  onClick={() => {
+                    setActiveTab('movies');
+                    setSelectedOriginCountry('ALL');
+                  }}
                   className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold"
                 >
                   Explorează Filme Populare
@@ -2661,7 +2692,6 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       {/* CONTINUE WATCHING ("DE UNDE AI RĂMAS") SHELF */}
       {(activeTab === 'movies' ||
         activeTab === 'series' ||
-        activeTab === 'russia' ||
         activeTab === 'saved') &&
         continueWatchingList.length > 0 && (
           <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs space-y-3">
@@ -2753,103 +2783,192 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           </section>
         )}
 
-      {/* MOVIES / SERIES / RUSSIA / SAVED CATALOG */}
+      {/* MOVIES / SERIES / SAVED CATALOG */}
       {(activeTab === 'movies' ||
         activeTab === 'series' ||
-        activeTab === 'russia' ||
         activeTab === 'saved') && (
         <>
           {activeTab !== 'saved' && (
-            <div className="space-y-2">
-              {/* Search Bar */}
-              <div className="relative">
-                <Search
-                  aria-hidden="true"
-                  className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder={
-                    activeTab === 'russia'
-                      ? 'Caută filme și seriale rusești (ex: Бригада, Слово пацана, Мажор, Кухня, Брат)...'
-                      : activeTab === 'series'
-                        ? 'Caută seriale (ex: Breaking Bad, Game of Thrones, Бригада)...'
-                        : 'Caută filme (ex: Dune, Gladiator, Oppenheimer, Брат)...'
-                  }
-                  className="w-full min-h-[38px] sm:min-h-[42px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
+            <div className="space-y-2.5">
+              {/* Search Bar + Filter Dropdowns (Țară, Anul lansării, Limbă Audio/Subtitrare) */}
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2">
+                <div className="relative flex-1">
+                  <Search
+                    aria-hidden="true"
+                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={
+                      activeTab === 'series'
+                        ? 'Caută seriale în orice limbă (ex: Breaking Bad, Слово пацана, Бригада, Мажор)...'
+                        : 'Caută filme în orice limbă (ex: Dune, Gladiator, Брат, Мастер и Маргарита)...'
+                    }
+                    className="w-full min-h-[38px] sm:min-h-[40px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Selects: Țară / Origine, Anul lansării, Limbă Audio / Subtitrare */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <select
+                    aria-label="Filtrează după țara de origine"
+                    value={selectedOriginCountry}
+                    onChange={(e) => {
+                      const val = e.target.value as OriginCountryFilterId;
+                      setSelectedOriginCountry(val);
+                      if (val === 'RU' || val === 'SU') {
+                        setPreferredSubLang('ru');
+                      } else if (val === 'RO') {
+                        setPreferredSubLang('ro');
+                      }
+                    }}
+                    className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${
+                      selectedOriginCountry !== 'ALL'
+                        ? 'bg-indigo-600 text-white border-indigo-500'
+                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
+                    }`}
                   >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
+                    {ORIGIN_COUNTRIES.map((c) => (
+                      <option
+                        key={c.id}
+                        value={c.id}
+                        className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
+                      >
+                        Țară: {c.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    aria-label="Filtrează după anul lansării"
+                    value={selectedYearFilter}
+                    onChange={(e) =>
+                      setSelectedYearFilter(e.target.value as YearFilterId)
+                    }
+                    className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${
+                      selectedYearFilter !== 'ALL'
+                        ? 'bg-amber-600 text-white border-amber-500'
+                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
+                    }`}
+                  >
+                    {YEAR_FILTERS.map((y) => (
+                      <option
+                        key={y.id}
+                        value={y.id}
+                        className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
+                      >
+                        An: {y.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    aria-label="Limbă Audio / Subtitrare preferată"
+                    value={preferredSubLang}
+                    onChange={(e) =>
+                      setPreferredSubLang(e.target.value as SubtitleLangId)
+                    }
+                    className="h-[36px] sm:h-[38px] px-3 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold outline-none cursor-pointer"
+                  >
+                    <option value="ro">Limbă / Sub: Română (RO)</option>
+                    <option value="ru">Limbă / Audio: Русский (RU)</option>
+                    <option value="en">Limbă / Sub: English (EN)</option>
+                    <option value="es">Limbă / Sub: Español (ES)</option>
+                    <option value="fr">Limbă / Sub: Français (FR)</option>
+                    <option value="de">Limbă / Sub: Deutsch (DE)</option>
+                  </select>
+
+                  {(selectedOriginCountry !== 'ALL' ||
+                    selectedYearFilter !== 'ALL' ||
+                    selectedGenre !== 'top' ||
+                    searchQuery) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOriginCountry('ALL');
+                        setSelectedYearFilter('ALL');
+                        setSelectedGenre('top');
+                        setSearchQuery('');
+                      }}
+                      title="Resetează toate filtrele"
+                      className="h-[36px] sm:h-[38px] px-3 rounded-full bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 text-rose-600 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/60 text-xs font-bold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* Filter Pills for Russia Tab vs Global Movies/Series */}
-              {activeTab === 'russia' ? (
+              {/* Quick Country Origin Pills (Toate Țările, Rusia, URSS, România, SUA, UK, Turcia, Coreea...) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                {ORIGIN_COUNTRIES.slice(0, 9).map((c) => {
+                  const active = selectedOriginCountry === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedOriginCountry(c.id);
+                        if (c.id === 'RU' || c.id === 'SU') {
+                          setPreferredSubLang('ru');
+                        } else if (c.id === 'RO') {
+                          setPreferredSubLang('ro');
+                        }
+                      }}
+                      className={`min-h-[30px] px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-indigo-400'
+                      }`}
+                    >
+                      <Globe className="w-3 h-3 shrink-0" />
+                      <span>{c.shortLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Genre Pills */}
+              {!debouncedQuery && (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                  {[
-                    { id: 'all', label: 'Toate (Filme & Seriale RU)' },
-                    { id: 'series', label: 'Seriale Rusești (Сериалы)' },
-                    { id: 'movie', label: 'Filme Rusești (Кино)' },
-                  ].map((f) => {
-                    const active = russiaFilter === f.id;
+                  {GENRE_FILTERS.map((g) => {
+                    const active = selectedGenre === g.id;
+                    const GenreIcon = g.Icon;
                     return (
                       <button
-                        key={f.id}
+                        key={g.id}
                         type="button"
-                        onClick={() =>
-                          setRussiaFilter(f.id as 'all' | 'movie' | 'series')
-                        }
-                        className={`min-h-[32px] px-3.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
+                        onClick={() => setSelectedGenre(g.id)}
+                        className={`min-h-[30px] sm:min-h-[34px] px-2.5 sm:px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                           active
-                            ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-indigo-400'
+                            ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
+                            : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
                         }`}
                       >
-                        <span>{f.label}</span>
+                        <GenreIcon className="w-3.5 h-3.5 shrink-0" />
+                        <span>{g.label}</span>
                       </button>
                     );
                   })}
                 </div>
-              ) : (
-                !debouncedQuery && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                    {GENRE_FILTERS.map((g) => {
-                      const active = selectedGenre === g.id;
-                      const GenreIcon = g.Icon;
-                      return (
-                        <button
-                          key={g.id}
-                          type="button"
-                          onClick={() => setSelectedGenre(g.id)}
-                          className={`min-h-[30px] sm:min-h-[36px] px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${
-                            active
-                              ? 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
-                              : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
-                          }`}
-                        >
-                          <GenreIcon className="w-3.5 h-3.5 shrink-0" />
-                          <span>{g.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )
               )}
             </div>
           )}
 
           {/* Poster Grid */}
-          {isLoading &&
-          activeTab !== 'saved' &&
-          !(activeTab === 'russia' && !debouncedQuery) ? (
+          {isLoading && activeTab !== 'saved' ? (
             <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
               {Array.from({ length: 18 }).map((_, idx) => (
                 <div
@@ -2863,18 +2982,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               <p className="text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-200">
                 {activeTab === 'saved'
                   ? 'Nu ai salvat încă niciun film sau serial în Lista Mea'
-                  : 'Niciun film sau serial găsit pentru această căutare'}
+                  : 'Niciun film sau serial găsit pentru filtrele selectate'}
               </p>
               <button
                 type="button"
                 onClick={() => {
                   setActiveTab('movies');
+                  setSelectedOriginCountry('ALL');
+                  setSelectedYearFilter('ALL');
                   setSearchQuery('');
                   setSelectedGenre('top');
                 }}
                 className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 text-white text-xs font-semibold"
               >
-                Explorează Filmele Populare
+                Resetează filtrele și explorează catalogul
               </button>
             </div>
           ) : (
