@@ -1,5 +1,5 @@
 import React from 'react';
-import { Radio, ChevronDown, Sun, Moon, Monitor } from 'lucide-react';
+import { Radio, ChevronDown, Sun, Moon, Monitor, Globe } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { EnrichedCountry } from '../../hooks/useCountries';
@@ -14,7 +14,13 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
   const theme = useRadioStore((state) => state.theme);
   const setTheme = useRadioStore((state) => state.setTheme);
   const setCountryModalOpen = useRadioStore((state) => state.setCountryModalOpen);
+  const activeTab = useRadioStore((state) => state.activeTab);
   const setActiveTab = useRadioStore((state) => state.setActiveTab);
+
+  const showCountrySelector =
+    activeTab === 'home' || activeTab === 'tv' || activeTab === 'countries';
+  const showRadioStationCount =
+    activeTab === 'home' || activeTab === 'countries';
 
   const cycleTheme = () => {
     const order: ThemeMode[] = ['system', 'dark', 'light'];
@@ -60,29 +66,32 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
             </span>
           </button>
 
-          {/* Country selector pill button */}
-          <button
-            type="button"
-            onClick={() => setCountryModalOpen(true)}
-            aria-label={`${t.header.changeCountry}: ${selectedCountry.localizedName}`}
-            className="min-h-[32px] sm:min-h-[40px] px-2.5 sm:px-4 py-1 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-brand-500/60 dark:hover:border-brand-500/60 flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-semibold text-slate-900 dark:text-zinc-100 shadow-2xs transition-colors"
-          >
-            <span className="text-sm sm:text-lg leading-none" aria-hidden="true">
-              {selectedCountry.flag}
-            </span>
-            <span className="truncate max-w-[115px] sm:max-w-[200px]">
-              {selectedCountry.localizedName}
-            </span>
-            {selectedCountry.stationcount > 0 && (
-              <span className="px-1.5 py-0.2 text-[10px] sm:text-xs font-medium rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
-                {selectedCountry.stationcount}
+          {/* Country selector pill button (only on Radio / TV / Countries views, hidden on Mediatecă) */}
+          {showCountrySelector && (
+            <button
+              type="button"
+              onClick={() => setCountryModalOpen(true)}
+              aria-label={`${t.header.changeCountry}: ${selectedCountry.localizedName}`}
+              className="min-h-[32px] sm:min-h-[40px] px-2.5 sm:px-4 py-1 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-brand-500/60 dark:hover:border-brand-500/60 flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-semibold text-slate-900 dark:text-zinc-100 shadow-2xs transition-colors"
+            >
+              <Globe
+                className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-brand-600 dark:text-brand-400 shrink-0"
+                aria-hidden="true"
+              />
+              <span className="truncate max-w-[115px] sm:max-w-[200px]">
+                {selectedCountry.localizedName}
               </span>
-            )}
-            <ChevronDown
-              className="w-3 h-3 sm:w-4 sm:h-4 text-slate-500 dark:text-zinc-400"
-              aria-hidden="true"
-            />
-          </button>
+              {showRadioStationCount && selectedCountry.stationcount > 0 && (
+                <span className="px-1.5 py-0.2 text-[10px] sm:text-xs font-medium rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
+                  {selectedCountry.stationcount}
+                </span>
+              )}
+              <ChevronDown
+                className="w-3 h-3 sm:w-4 sm:h-4 text-slate-500 dark:text-zinc-400"
+                aria-hidden="true"
+              />
+            </button>
+          )}
         </div>
 
         {/* Right: Language & Theme controls */}

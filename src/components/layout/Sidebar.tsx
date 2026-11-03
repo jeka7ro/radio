@@ -88,35 +88,41 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
         })}
       </nav>
 
-      {/* Active Country Quick Selector Card */}
-      <div className="px-4 py-4 border-t border-slate-200/70 dark:border-zinc-800/70">
-        <button
-          type="button"
-          onClick={() => setCountryModalOpen(true)}
-          aria-label={`${t.header.changeCountry}: ${selectedCountry.localizedName}`}
-          className="w-full min-h-[56px] px-4 py-3 rounded-full bg-slate-100/90 dark:bg-zinc-800/70 hover:bg-slate-200/70 dark:hover:bg-zinc-800 flex items-center justify-between gap-2.5 text-left transition-colors"
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="text-2xl leading-none" aria-hidden="true">
-              {selectedCountry.flag}
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
-                {selectedCountry.localizedName}
-              </p>
-              <p className="text-xs text-slate-600 dark:text-zinc-400">
-                {format(t.countries.stationsLabel, {
-                  count: selectedCountry.stationcount,
-                })}
-              </p>
+      {/* Active Country Quick Selector Card (Only shown on Radio / TV / Countries views, hidden on Mediatecă) */}
+      {(activeTab === 'home' ||
+        activeTab === 'tv' ||
+        activeTab === 'countries') && (
+        <div className="px-4 py-4 border-t border-slate-200/70 dark:border-zinc-800/70">
+          <button
+            type="button"
+            onClick={() => setCountryModalOpen(true)}
+            aria-label={`${t.header.changeCountry}: ${selectedCountry.localizedName}`}
+            className="w-full min-h-[56px] px-4 py-3 rounded-full bg-slate-100/90 dark:bg-zinc-800/70 hover:bg-slate-200/70 dark:hover:bg-zinc-800 flex items-center justify-between gap-2.5 text-left transition-colors"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-brand-600/15 text-brand-600 dark:text-brand-400 flex items-center justify-center shrink-0">
+                <Globe className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate">
+                  {selectedCountry.localizedName}
+                </p>
+                {(activeTab === 'home' || activeTab === 'countries') && (
+                  <p className="text-xs text-slate-600 dark:text-zinc-400">
+                    {format(t.countries.stationsLabel, {
+                      count: selectedCountry.stationcount,
+                    })}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-          <ChevronRight
-            className="w-4 h-4 text-slate-500 dark:text-zinc-400 flex-shrink-0"
-            aria-hidden="true"
-          />
-        </button>
-      </div>
+            <ChevronRight
+              className="w-4 h-4 text-slate-500 dark:text-zinc-400 flex-shrink-0"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      )}
     </aside>
   );
 };
