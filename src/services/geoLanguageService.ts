@@ -111,11 +111,10 @@ export function detectUserCountryCode(): string {
  * Converts a 2-letter ISO 3166-1 code (e.g. "RO") into its Unicode flag emoji.
  */
 export function getCountryFlagEmoji(isoCode: string): string {
-  if (!isoCode || isoCode.length !== 2) return '🌐';
+  if (!isoCode || isoCode.length !== 2) return 'INT';
   const upper = isoCode.toUpperCase();
-  if (!/^[A-Z]{2}$/.test(upper)) return '🌐';
-  const codePoints = [...upper].map((char) => 127397 + char.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
+  if (!/^[A-Z]{2}$/.test(upper)) return 'INT';
+  return upper;
 }
 
 const displayNamesCache: Partial<Record<LanguageCode, Intl.DisplayNames>> = {};

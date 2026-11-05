@@ -75,6 +75,11 @@
           return this[n];
         };
       }
+      if (typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D.prototype.roundRect) {
+        CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h) {
+          this.rect(x, y, w, h);
+        };
+      }
 
       try {
         var storedScheme = null;
@@ -125,11 +130,12 @@
     <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
     <meta
       name="description"
-      content="AetherRadio — Ascultă posturi de radio online din toată lumea, organizate pe țări, cu suport HLS, favorite și redare în fundal."
+      content="SmartCinema — Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web."
     />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="AetherRadio" />
+    <meta name="apple-mobile-web-app-title" content="SmartCinema" />
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
     <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -139,13 +145,14 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <title>AetherRadio — Radio Online Global</title>
+    <title>SmartCinema — Filme, Seriale, TV Live &amp; Radio</title>
   </head>
   <body class="bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white" style="background-color:#09090b;color:#f4f4f5;">
     <div id="root">
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#09090b;color:#f4f4f5;font-family:sans-serif;text-align:center;padding:24px;">
-        <div style="font-size:28px;font-weight:700;letter-spacing:0.5px;margin-bottom:10px;color:#fff;">AetherRadio Smart TV</div>
-        <div id="tv-boot-status" style="font-size:15px;color:#a1a1aa;">Se încarcă interfața Smart TV...</div>
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#070e1a;color:#f4f4f5;font-family:sans-serif;text-align:center;padding:24px;">
+        <img src="/icons/icon-192.svg" alt="SmartCinema" style="width:76px;height:76px;margin-bottom:16px;filter:drop-shadow(0 0 24px rgba(37, 99, 235,0.45));" />
+        <div style="font-size:30px;font-weight:800;letter-spacing:0.4px;margin-bottom:8px;color:#fff;">Smart<span style="color:#60a5fa;">Cinema</span></div>
+        <div id="tv-boot-status" style="font-size:15px;color:#60a5fa;">Se încarcă interfața SmartCinema TV...</div>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>

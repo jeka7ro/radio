@@ -35,15 +35,29 @@ function extractBalancedJsonArray(str, startIdx) {
   return null;
 }
 
-async function fetchKinogramEmbed(path) {
+const DEFAULT_VOD_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+function pickSafeDesktopUa(userAgent = '') {
+  const ua = String(userAgent || '').trim();
+  if (
+    !ua ||
+    /Web0S|WebOS|SmartTV|NetCast|Tizen|Large Screen|MSX|CrKey|AFT/i.test(ua)
+  ) {
+    return DEFAULT_VOD_UA;
+  }
+  return DEFAULT_VOD_UA;
+}
+
+async function fetchKinogramEmbed(path, userAgent = '') {
   const host = 'https://api.kinogram.best';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 9000);
+  const effectiveUa = pickSafeDesktopUa(userAgent);
   try {
     const res = await fetch(`${host}/embed/${path}`, {
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'User-Agent': effectiveUa,
         Origin: host,
         Referer: `${host}/`,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -122,7 +136,9 @@ export async function resolveVodStreamData({
   year = '',
   season = 1,
   episode = 1,
+  userAgent = '',
 }) {
+  const effectiveUa = pickSafeDesktopUa(userAgent);
   const candidates = [];
   if (kp && /^\d+$/.test(String(kp).trim())) {
     candidates.push(`kp/${String(kp).trim()}`);
@@ -134,7 +150,7 @@ export async function resolveVodStreamData({
   let html = null;
   let usedPath = '';
   for (const path of candidates) {
-    html = await fetchKinogramEmbed(path);
+    html = await fetchKinogramEmbed(path, effectiveUa);
     if (html) {
       usedPath = path;
       break;
@@ -148,7 +164,7 @@ export async function resolveVodStreamData({
     for (const fKp of fallbackKpIds) {
       const path = `kp/${fKp}`;
       if (candidates.includes(path)) continue;
-      html = await fetchKinogramEmbed(path);
+      html = await fetchKinogramEmbed(path, effectiveUa);
       if (html) {
         usedPath = path;
         break;
@@ -219,6 +235,7 @@ export async function resolveVodStreamData({
           dashUrl,
           dashaUrl,
           hlsUrl,
+          userAgent: effectiveUa,
           seasons: cleanSeasons,
         };
       }
@@ -265,6 +282,7 @@ export async function resolveVodStreamData({
       dashUrl,
       dashaUrl,
       hlsUrl,
+      userAgent: effectiveUa,
     };
   }
 
@@ -290,6 +308,8 @@ export async function handler(event) {
   const year = params.year || '';
   const season = Number(params.season) || 1;
   const episode = Number(params.episode) || 1;
+  const userAgent =
+    event.headers?.['user-agent'] || event.headers?.['User-Agent'] || '';
 
   if (!kp && !imdb && !title) {
     return {
@@ -307,6 +327,7 @@ export async function handler(event) {
     year,
     season,
     episode,
+    userAgent,
   });
   return {
     statusCode: result.ok ? 200 : 404,

@@ -33,6 +33,7 @@ import {
   CheckCircle2,
   FolderDown,
   Subtitles,
+  Smartphone,
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
@@ -57,7 +58,26 @@ import {
 import { resolveDirectVodStreamClient } from '../services/vodStreamClient';
 import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
 import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
+import {
+  ActorProfileModal,
+  CastCardsSection,
+} from '../components/tv/ActorProfileModal';
+import {
+  CastMemberCard,
+  fetchCastForVodItem,
+} from '../services/actorService';
 import { SmartTvMsxModal } from '../components/tv/SmartTvMsxModal';
+import {
+  TvUserProfile,
+  detectCurrentDeviceName,
+  loadSharedProfiles,
+  saveSharedProfiles,
+  loadSharedActiveProfileId,
+  saveSharedActiveProfileId,
+  isLocalHomeServer,
+} from '../services/deviceContinuityService';
+import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
+import { sortVodItemsByProductionYear } from './smartTvLampaHelpers';
 
 interface MediatecaViewProps {
   selectedCountry: EnrichedCountry;
@@ -154,6 +174,7 @@ interface VodWatchProgressEntry {
   server: VodServerId;
   subLang: SubtitleLangId;
   updatedAt: number;
+  deviceName?: string;
   episodeProgressMap?: Record<string, EpisodeProgress>;
 }
 
@@ -462,14 +483,36 @@ const LAMPA_PLUGINS = [
 const SAVED_VOD_STORAGE_KEY = 'aether_saved_vod_items_v1';
 const WATCH_PROGRESS_STORAGE_KEY = 'aether_vod_watch_progress_v1';
 
-function loadSavedVodItems(): CinemetaItem[] {
+function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
   try {
-    const raw = localStorage.getItem(SAVED_VOD_STORAGE_KEY);
+    const key = `${SAVED_VOD_STORAGE_KEY}_${profileId}`;
+    const raw =
+      localStorage.getItem(key) ||
+      (profileId === 'p1' ? localStorage.getItem(SAVED_VOD_STORAGE_KEY) : null);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void {
+  try {
+    localStorage.setItem(
+      `${SAVED_VOD_STORAGE_KEY}_${profileId}`,
+      JSON.stringify(items)
+    );
+    if (profileId === 'p1') {
+      localStorage.setItem(SAVED_VOD_STORAGE_KEY, JSON.stringify(items));
+    }
+    fetch(`/api/tv-saved?profileId=${encodeURIComponent(profileId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(items),
+    }).catch(() => {});
+  } catch {
+    // ignore
   }
 }
 
@@ -490,18 +533,25 @@ function normalizeServerId(raw: unknown): VodServerId {
   return 'kinogram_hls';
 }
 
-function loadWatchProgressMap(): Record<string, VodWatchProgressEntry> {
+function loadWatchProgressMap(
+  profileId = 'p1'
+): Record<string, VodWatchProgressEntry> {
   try {
-    const raw = localStorage.getItem(WATCH_PROGRESS_STORAGE_KEY);
+    const key = `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`;
+    const raw =
+      localStorage.getItem(key) ||
+      (profileId === 'p1'
+        ? localStorage.getItem(WATCH_PROGRESS_STORAGE_KEY)
+        : null);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
     const normalized: Record<string, VodWatchProgressEntry> = {};
-    for (const [key, val] of Object.entries(
+    for (const [k, val] of Object.entries(
       parsed as Record<string, VodWatchProgressEntry>
     )) {
       if (val && val.item && val.item.id) {
-        normalized[key] = {
+        normalized[k] = {
           ...val,
           server: normalizeServerId(val.server),
         };
@@ -513,9 +563,26 @@ function loadWatchProgressMap(): Record<string, VodWatchProgressEntry> {
   }
 }
 
-function saveWatchProgressMap(map: Record<string, VodWatchProgressEntry>): void {
+function saveWatchProgressMap(
+  map: Record<string, VodWatchProgressEntry>,
+  profileId = 'p1',
+  syncServer = true
+): void {
   try {
-    localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, JSON.stringify(map));
+    localStorage.setItem(
+      `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`,
+      JSON.stringify(map)
+    );
+    if (profileId === 'p1') {
+      localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, JSON.stringify(map));
+    }
+    if (syncServer && isLocalHomeServer()) {
+      fetch(`/api/tv-progress?profileId=${encodeURIComponent(profileId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(map),
+      }).catch(() => {});
+    }
   } catch {
     // ignore storage quota errors
   }
@@ -710,8 +777,30 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [kpPageOffset, setKpPageOffset] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
 
+  // Shared User Profiles & Cross-Device Continuity State
+  const [profiles, setProfiles] = useState<TvUserProfile[]>(() =>
+    loadSharedProfiles()
+  );
+  const [activeProfileId, setActiveProfileId] = useState<string>(() =>
+    loadSharedActiveProfileId()
+  );
+  const [isHandoffModalOpen, setIsHandoffModalOpen] = useState<boolean>(false);
+  const handoffUrlProcessedRef = useRef<boolean>(false);
+
+  const activeProfile = useMemo(
+    () => profiles.find((p) => p.id === activeProfileId) || profiles[0],
+    [profiles, activeProfileId]
+  );
+
+  const handleSelectProfile = useCallback((id: string) => {
+    setActiveProfileId(id);
+    saveSharedActiveProfileId(id);
+    setWatchProgressMap(loadWatchProgressMap(id));
+    setSavedItems(loadSavedVodItems(id));
+  }, []);
+
   const [savedItems, setSavedItems] = useState<CinemetaItem[]>(() =>
-    loadSavedVodItems()
+    loadSavedVodItems(loadSharedActiveProfileId())
   );
 
   // Offline Downloaded Videos Library State (IndexedDB)
@@ -728,11 +817,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   // Watch progress state ("Continuă vizionarea — De unde ai rămas")
   const [watchProgressMap, setWatchProgressMap] = useState<
     Record<string, VodWatchProgressEntry>
-  >(() => loadWatchProgressMap());
+  >(() => loadWatchProgressMap(loadSharedActiveProfileId()));
 
   // Active Movie / Series Player Modal state
   const [activeVodItem, setActiveVodItem] = useState<CinemetaItem | null>(null);
   const [detailedMeta, setDetailedMeta] = useState<DetailedMeta | null>(null);
+  const [castMembers, setCastMembers] = useState<CastMemberCard[]>([]);
+  const [isCastLoading, setIsCastLoading] = useState<boolean>(false);
+  const [selectedActor, setSelectedActor] = useState<CastMemberCard | null>(
+    null
+  );
   const [resolvedDirectStream, setResolvedDirectStream] =
     useState<ResolvedDirectVodStream | null>(null);
   const [isDirectStreamLoading, setIsDirectStreamLoading] =
@@ -795,6 +889,49 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     void refreshOfflineLibrary();
   }, [refreshOfflineLibrary]);
 
+  useEffect(() => {
+    if (!activeVodItem) {
+      setCastMembers([]);
+      setIsCastLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsCastLoading(true);
+    const imdbId = activeVodItem.id.startsWith('tt') ? activeVodItem.id : '';
+    const kpId =
+      activeVodItem.kpId ||
+      (activeVodItem.id.startsWith('kp_')
+        ? activeVodItem.id.replace(/^kp_/, '')
+        : '');
+
+    fetchCastForVodItem({
+      imdbId,
+      kpId,
+      fallbackCast: detailedMeta?.cast || activeVodItem.cast,
+      fallbackDirectors: detailedMeta?.director || activeVodItem.director,
+      lang: 'ro',
+    })
+      .then((list) => {
+        if (!cancelled) {
+          setCastMembers(list);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) {
+          setIsCastLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeVodItem?.id,
+    activeVodItem?.kpId,
+    detailedMeta?.cast,
+  ]);
+
   // Sorted list of items in "Continuă vizionarea"
   const continueWatchingList = useMemo(() => {
     return Object.values(watchProgressMap)
@@ -803,7 +940,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       .slice(0, 12);
   }, [watchProgressMap]);
 
-  // Persist watch progress helper
+  // Persist watch progress helper (records device name + syncs to shared profile server)
   const updateWatchProgress = useCallback(
     (
       item: CinemetaItem,
@@ -837,6 +974,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           server,
           subLang,
           updatedAt: Date.now(),
+          deviceName: detectCurrentDeviceName(),
           episodeProgressMap: {
             ...prevEpMap,
             [epKey]: {
@@ -850,11 +988,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           ...prev,
           [item.id]: nextEntry,
         };
-        saveWatchProgressMap(nextMap);
+        saveWatchProgressMap(nextMap, activeProfileId, true);
         return nextMap;
       });
     },
-    []
+    [activeProfileId]
   );
 
   const removeWatchProgress = (id: string, e?: React.MouseEvent) => {
@@ -862,7 +1000,11 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     setWatchProgressMap((prev) => {
       const next = { ...prev };
       delete next[id];
-      saveWatchProgressMap(next);
+      saveWatchProgressMap(next, activeProfileId, true);
+      fetch(
+        `/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}&deleteId=${encodeURIComponent(id)}`,
+        { method: 'DELETE' }
+      ).catch(() => {});
       return next;
     });
   };
@@ -936,6 +1078,153 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     },
     [watchProgressMap, preferredSubLang]
   );
+
+  // Listen to profile switch events from Header or Handoff modal
+  useEffect(() => {
+    const onProfileChange = (e: Event) => {
+      const custom = e as CustomEvent<string | { profileId?: string }>;
+      const nextId =
+        typeof custom.detail === 'string'
+          ? custom.detail
+          : custom.detail?.profileId || loadSharedActiveProfileId();
+      setActiveProfileId(nextId);
+      setProfiles(loadSharedProfiles());
+      setWatchProgressMap(loadWatchProgressMap(nextId));
+      setSavedItems(loadSavedVodItems(nextId));
+    };
+    const onProfilesUpdated = () => {
+      setProfiles(loadSharedProfiles());
+    };
+    window.addEventListener('aether:active-profile-changed', onProfileChange);
+    window.addEventListener('aether:profiles-updated', onProfilesUpdated);
+    return () => {
+      window.removeEventListener('aether:active-profile-changed', onProfileChange);
+      window.removeEventListener('aether:profiles-updated', onProfilesUpdated);
+    };
+  }, []);
+
+  // Real-time Cross-Device Continuity Sync (4s on Home Wi-Fi, 120s smart sync on Netlify / 4G / 5G)
+  useEffect(() => {
+    const syncCrossDeviceState = () => {
+      fetch('/api/tv-profiles')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((serverProfiles) => {
+          if (Array.isArray(serverProfiles) && serverProfiles.length > 0) {
+            setProfiles(serverProfiles);
+            saveSharedProfiles(serverProfiles);
+          }
+        })
+        .catch(() => {});
+
+      fetch(`/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((serverMap) => {
+          if (!serverMap || typeof serverMap !== 'object') return;
+          const localMap = loadWatchProgressMap(activeProfileId);
+          const merged: Record<string, VodWatchProgressEntry> = { ...localMap };
+          let hasNewerFromServer = false;
+          let hasNewerFromLocal = false;
+
+          for (const [k, sVal] of Object.entries(
+            serverMap as Record<string, VodWatchProgressEntry>
+          )) {
+            if (!sVal || !sVal.item || !sVal.item.id) continue;
+            const lVal = merged[k];
+            if (!lVal || (sVal.updatedAt || 0) > (lVal.updatedAt || 0)) {
+              merged[k] = {
+                ...sVal,
+                server: normalizeServerId(sVal.server),
+              };
+              hasNewerFromServer = true;
+            } else if ((lVal.updatedAt || 0) > (sVal.updatedAt || 0)) {
+              hasNewerFromLocal = true;
+            }
+          }
+          for (const k of Object.keys(localMap)) {
+            if (!serverMap[k]) hasNewerFromLocal = true;
+          }
+
+          if (hasNewerFromServer) {
+            setWatchProgressMap(merged);
+            saveWatchProgressMap(merged, activeProfileId, false);
+          }
+          if (hasNewerFromLocal) {
+            saveWatchProgressMap(merged, activeProfileId, true);
+          }
+
+          // Handle 1-click QR / URL Handoff (?profile=p1&resume=tt1234&s=1&e=2&t=120)
+          if (!handoffUrlProcessedRef.current) {
+            try {
+              const params = new URLSearchParams(window.location.search);
+              const resumeId = params.get('resume');
+              if (resumeId) {
+                const entry = merged[resumeId];
+                if (entry?.item) {
+                  handoffUrlProcessedRef.current = true;
+                  const s = Number(params.get('s')) || entry.season || 1;
+                  const e = Number(params.get('e')) || entry.episode || 1;
+                  const t =
+                    params.get('t') !== null
+                      ? Number(params.get('t'))
+                      : entry.currentTime || 0;
+                  handleOpenVodItem(entry.item, s, e, t);
+                }
+              } else {
+                handoffUrlProcessedRef.current = true;
+              }
+            } catch {
+              handoffUrlProcessedRef.current = true;
+            }
+          }
+        })
+        .catch(() => {});
+
+      fetch(`/api/tv-saved?profileId=${encodeURIComponent(activeProfileId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((serverSaved) => {
+          if (!Array.isArray(serverSaved)) return;
+          const localSaved = loadSavedVodItems(activeProfileId);
+          const byId = new Map<string, CinemetaItem>();
+          for (const item of serverSaved) {
+            if (item && item.id) byId.set(item.id, item);
+          }
+          let localHasExtra = false;
+          for (const item of localSaved) {
+            if (item && item.id) {
+              if (!byId.has(item.id)) localHasExtra = true;
+              byId.set(item.id, item);
+            }
+          }
+          const combined = Array.from(byId.values());
+          if (combined.length !== localSaved.length) {
+            setSavedItems(combined);
+            localStorage.setItem(
+              `${SAVED_VOD_STORAGE_KEY}_${activeProfileId}`,
+              JSON.stringify(combined)
+            );
+          }
+          if (localHasExtra) {
+            saveSavedVodItems(combined, activeProfileId);
+          }
+        })
+        .catch(() => {});
+    };
+
+    syncCrossDeviceState();
+    const intervalMs = isLocalHomeServer() ? 4000 : 120000;
+    const timer = window.setInterval(syncCrossDeviceState, intervalMs);
+    const onFocus = () => syncCrossDeviceState();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') syncCrossDeviceState();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [activeProfileId, handleOpenVodItem]);
 
   // Auto-hide the non-blocking resume banner after 12 seconds
   useEffect(() => {
@@ -1279,7 +1568,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           const kpRes = await searchKinopoiskByKeyword(debouncedQuery);
           if (!cancelled && kpRes.length > 0) {
             const byType = kpRes.filter((x) => x.type === mediaType);
-            setCatalogItems(byType.length > 0 ? byType : kpRes);
+            setCatalogItems(
+              sortVodItemsByProductionYear(byType.length > 0 ? byType : kpRes)
+            );
             setHasMore(false);
             setIsLoading(false);
             return;
@@ -1312,7 +1603,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           });
 
           if (cancelled) return;
-          setCatalogItems(kpData.items);
+          setCatalogItems(sortVodItemsByProductionYear(kpData.items));
           setKpPageOffset(kpData.nextPage);
           setHasMore(kpData.hasMore);
           return;
@@ -1361,8 +1652,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           }
         }
 
-        setCatalogItems(list);
-        setHasMore(!debouncedQuery && list.length >= 40);
+        const sortedList = sortVodItemsByProductionYear(list);
+        setCatalogItems(sortedList);
+        setHasMore(!debouncedQuery && sortedList.length >= 40);
       } catch {
         if (!cancelled) {
           setCatalogItems([]);
@@ -1424,7 +1716,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           setCatalogItems((prev) => {
             const existingIds = new Set(prev.map((x) => x.id));
             const unique = kpData.items.filter((x) => !existingIds.has(x.id));
-            return [...prev, ...unique];
+            return sortVodItemsByProductionYear([...prev, ...unique]);
           });
           setKpPageOffset(kpData.nextPage);
           setHasMore(kpData.hasMore);
@@ -1461,7 +1753,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         setCatalogItems((prev) => {
           const existingIds = new Set(prev.map((x) => x.id));
           const unique = more.filter((x) => !existingIds.has(x.id));
-          return [...prev, ...unique];
+          return sortVodItemsByProductionYear([...prev, ...unique]);
         });
         setSkipOffset(nextSkip);
         setHasMore(more.length >= 35);
@@ -1619,11 +1911,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       const next = exists
         ? prev.filter((x) => x.id !== item.id)
         : [item, ...prev];
-      try {
-        localStorage.setItem(SAVED_VOD_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // ignore
-      }
+      saveSavedVodItems(next, activeProfileId);
       return next;
     });
   };
@@ -1836,10 +2124,33 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 window.dispatchEvent(new Event('aether:enter-smart-tv'));
               }}
               title="Comută în Interfața Smart TV (Stil Lampa pentru Telecomandă)"
-              className="min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-colors cursor-pointer"
+              className="min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 bg-sky-600 hover:bg-sky-500 text-white shadow-xs transition-colors cursor-pointer"
             >
               <Tv className="w-4 h-4" aria-hidden="true" />
               <span>Mod Smart TV</span>
+            </button>
+
+            {/* Primary Tab 4b: Conturi, Poză de profil, PIN & Continuitate */}
+            <button
+              type="button"
+              onClick={() => setIsHandoffModalOpen(true)}
+              title="Schimbă sau creează un cont cu poză și PIN (memorat automat)"
+              className="min-h-[36px] pl-1.5 pr-3.5 py-1 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-2 whitespace-nowrap shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition-colors cursor-pointer"
+            >
+              {activeProfile?.avatarUrl ? (
+                <img
+                  src={activeProfile.avatarUrl}
+                  alt={activeProfile.name}
+                  className="w-6 h-6 rounded-full object-cover border border-white/60 shrink-0"
+                />
+              ) : (
+                <Smartphone className="w-4 h-4" aria-hidden="true" />
+              )}
+              <span>
+                {activeProfile
+                  ? `${activeProfile.name} • Conturi`
+                  : 'Conturi & PIN'}
+              </span>
             </button>
 
             {/* Primary Tab 5: Configurare TV LG / Media Station X */}
@@ -2165,6 +2476,18 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   <span>Offline</span>
                 </button>
               ) : null}
+
+              {/* 4b. Cross-Device Handoff Button (TV <-> iPad <-> Laptop) */}
+              <button
+                type="button"
+                onClick={() => setIsHandoffModalOpen(true)}
+                title="Continuă acest film de unde ai rămas pe Smart TV, iPad sau Laptop"
+                className="h-8 px-3 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+              >
+                <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">Continuă pe TV / iPad</span>
+                <span className="sm:hidden">Sync</span>
+              </button>
 
               {/* 5. Fullscreen Icon Button */}
               <button
@@ -2657,6 +2980,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               </span>
             </button>
           </div>
+
+          {/* Cast & Actors Section with Photos, Roles & Biographies */}
+          <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-800/80">
+            <CastCardsSection
+              castList={castMembers}
+              isLoading={isCastLoading}
+              uiLang="ro"
+              onSelectActor={(actor) => setSelectedActor(actor)}
+            />
+          </div>
         </section>
       )}
 
@@ -2839,23 +3172,39 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         activeTab === 'saved') &&
         continueWatchingList.length > 0 && (
           <section className="p-3.5 sm:p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800/80 shadow-xs space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <History className="w-4 h-4 text-brand-600 dark:text-brand-400" />
                 <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100">
                   Continuă vizionarea — De unde ai rămas ({continueWatchingList.length})
                 </h2>
+                {activeProfile && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                    {activeProfile.avatarEmoji || activeProfile.avatar || '🎬'}{' '}
+                    {activeProfile.name}
+                  </span>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setWatchProgressMap({});
-                  saveWatchProgressMap({});
-                }}
-                className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-slate-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
-              >
-                Șterge istoricul
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsHandoffModalOpen(true)}
+                  className="px-2.5 py-1 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <Smartphone className="w-3 h-3" />
+                  <span>Continuă pe TV / iPad / Laptop</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWatchProgressMap({});
+                    saveWatchProgressMap({}, activeProfileId, true);
+                  }}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-slate-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  Șterge istoricul
+                </button>
+              </div>
             </div>
 
             <div className="flex items-stretch gap-2.5 overflow-x-auto no-scrollbar pb-1">
@@ -2875,7 +3224,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     onClick={() =>
                       handleOpenVodItem(item, season, episode, currentTime)
                     }
-                    className="group relative w-44 sm:w-52 shrink-0 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-500 p-2 flex items-center gap-2.5 cursor-pointer transition-all"
+                    className="group relative w-48 sm:w-56 shrink-0 rounded-2xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-500 p-2 flex items-center gap-2.5 cursor-pointer transition-all"
                   >
                     <div className="relative w-12 h-16 rounded-xl overflow-hidden bg-zinc-900 shrink-0">
                       <img
@@ -2906,9 +3255,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           ? `S${season}:E${episode} • ${formatWatchSeconds(currentTime)}`
                           : `Min. ${formatWatchSeconds(currentTime)}`}
                       </p>
-                      <span className="inline-block mt-1 text-[10px] font-semibold text-brand-700 dark:text-brand-300">
-                        ▶ Reluare
-                      </span>
+                      <div className="flex items-center justify-between gap-1 mt-1">
+                        <span className="text-[10px] font-semibold text-brand-700 dark:text-brand-300">
+                          ▶ Reluare
+                        </span>
+                        {entry.deviceName && (
+                          <span className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 truncate">
+                            {entry.deviceName}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <button
@@ -3657,6 +4013,60 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       <SmartTvMsxModal
         isOpen={isSmartTvModalOpen}
         onClose={() => setIsSmartTvModalOpen(false)}
+      />
+
+      {/* Actor Full Biography & Filmography Modal (Separated into Movies & TV Series) */}
+      <ActorProfileModal
+        actor={selectedActor}
+        uiLang="ro"
+        onClose={() => setSelectedActor(null)}
+        onSelectVodItem={(filmItem) => {
+          setSelectedActor(null);
+          handleOpenVodItem({
+            id: filmItem.id,
+            kpId: filmItem.kpId,
+            type: filmItem.type,
+            name: filmItem.name,
+            releaseInfo: filmItem.releaseInfo,
+            imdbRating: filmItem.imdbRating,
+            poster: filmItem.poster,
+            description: filmItem.description,
+          });
+        }}
+      />
+
+      {/* Netflix-Style Cross-Device Continuity & QR Handoff Modal */}
+      <CrossDeviceHandoffModal
+        isOpen={isHandoffModalOpen}
+        onClose={() => setIsHandoffModalOpen(false)}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onSelectProfile={handleSelectProfile}
+        onProfilesChange={(next) => setProfiles(next)}
+        uiLang="ro"
+        activeMedia={
+          activeVodItem
+            ? {
+                id: activeVodItem.id,
+                name: activeVodItem.name,
+                type: activeVodItem.type,
+                poster: activeVodItem.poster,
+                season: selectedSeason,
+                episode: selectedEpisode,
+                currentTime: liveCurrentTime,
+              }
+            : continueWatchingList[0]
+              ? {
+                  id: continueWatchingList[0].item.id,
+                  name: continueWatchingList[0].item.name,
+                  type: continueWatchingList[0].item.type,
+                  poster: continueWatchingList[0].item.poster,
+                  season: continueWatchingList[0].season,
+                  episode: continueWatchingList[0].episode,
+                  currentTime: continueWatchingList[0].currentTime,
+                }
+              : null
+        }
       />
     </div>
   );

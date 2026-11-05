@@ -14,14 +14,50 @@ import {
   Music,
   MapPin,
   Layers,
+  Star,
+  Rewind,
 } from 'lucide-react';
-import { TvChannel } from '../../types/radio';
+import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
 import {
+  useChannelEpg,
+  useEpgRevision,
   resolveChannelEpg,
   getEpgTimingStats,
   fetchEpgForCountry,
+  fetchChannelEpgArchive,
+  formatEpgTime,
+  getEpgDayKey,
+  formatEpgDayLabel,
 } from '../../services/epgService';
+import {
+  fetchTvChannelsByCountry,
+  fetchAdultTvChannels,
+  isAdultTvChannel,
+} from '../../services/tvApi';
+
+const OSD_COUNTRY_TABS: Array<{
+  id: string;
+  label: string;
+  country: string;
+}> = [
+  { id: 'IEDEM', label: 'iEdem / Playlist M3U', country: 'IEDEM' },
+  { id: 'RO', label: 'RO • România', country: 'RO' },
+  { id: 'MD', label: 'MD • Moldova', country: 'MD' },
+  { id: 'RU', label: 'RU • Rusia', country: 'RU' },
+  { id: 'US', label: 'US • SUA', country: 'US' },
+  { id: 'GB', label: 'UK • Marea Britanie', country: 'GB' },
+  { id: 'DE', label: 'DE • Germania', country: 'DE' },
+  { id: 'FR', label: 'FR • Franța', country: 'FR' },
+  { id: 'IT', label: 'IT • Italia', country: 'IT' },
+  { id: 'ES', label: 'ES • Spania', country: 'ES' },
+  { id: 'TR', label: 'TR • Turcia', country: 'TR' },
+  { id: 'UA', label: 'UA • Ucraina', country: 'UA' },
+  { id: 'HU', label: 'HU • Ungaria', country: 'HU' },
+  { id: 'BG', label: 'BG • Bulgaria', country: 'BG' },
+  { id: 'ALL_GLOBAL', label: 'Toate Țările', country: 'ALL' },
+  { id: 'ADULT', label: '18+ Adulți', country: 'ADULT' },
+];
 
 export interface ThematicCategoryDef {
   id: string;
@@ -46,7 +82,7 @@ const THEMATIC_CATEGORIES: ThematicCategoryDef[] = [
   {
     id: 'cinema',
     title: 'Filme & Seriale',
-    shortLabel: 'Filme',
+    shortLabel: 'Filme & Seriale',
     Icon: Clapperboard,
     test: (g, n) =>
       /кино|фильм|сериал|cinema|movie|film|series|serial/i.test(g) ||
@@ -144,38 +180,70 @@ export function classifyChannelThematic(channel: TvChannel): string {
 
 type OsdSortMode = 'default' | 'az';
 
-type OsdListRow =
-  | {
-      type: 'header';
-      key: string;
-      categoryId: string;
-      title: string;
-      count: number;
-      rowNumber: number;
-    }
-  | {
-      type: 'channel';
-      key: string;
-      channel: TvChannel;
-      rowNumber: number;
-      categoryId: string;
+let lastTvPlaylistContext: {
+  countryId: string;
+  themeId: string;
+} | null = null;
+
+export function setActiveTvPlaylistContext(
+  regionId: string,
+  categoryId: string = 'ALL'
+): void {
+  if (regionId === 'FAV' || categoryId === 'FAV') {
+    lastTvPlaylistContext = {
+      countryId: lastTvPlaylistContext?.countryId || 'RO',
+      themeId: 'FAV',
     };
+    return;
+  }
+
+  const catUpper = (categoryId || 'ALL').toUpperCase();
+  let mappedTheme = 'ALL';
+  if (categoryId.startsWith('GRP:')) {
+    mappedTheme = categoryId;
+  } else if (catUpper === 'GENERAL') {
+    mappedTheme = 'general';
+  } else if (catUpper === 'MOVIES') {
+    mappedTheme = 'cinema';
+  } else if (catUpper === 'SPORT' || catUpper === 'SPORTS') {
+    mappedTheme = 'sport';
+  } else if (catUpper === 'NEWS') {
+    mappedTheme = 'news';
+  } else if (catUpper === 'DOC' || catUpper === 'DOCUMENTARY') {
+    mappedTheme = 'documentaries';
+  } else if (catUpper === 'KIDS') {
+    mappedTheme = 'kids';
+  } else if (catUpper === 'MUSIC') {
+    mappedTheme = 'music';
+  }
+
+  const normalizedCountry = regionId === 'UK' ? 'GB' : regionId;
+  lastTvPlaylistContext = {
+    countryId: normalizedCountry || 'RO',
+    themeId: mappedTheme,
+  };
+}
 
 interface TvOsdChannelListProps {
   currentChannel: TvChannel;
   channels: TvChannel[];
   isOverlayMode?: boolean;
+  initialViewMode?: 'channels' | 'epg';
   onToggleOverlayMode?: () => void;
   onToggleInfoPanel?: () => void;
   isInfoPanelOpen?: boolean;
   onCloseOverlay?: () => void;
+  onPlayArchiveProgramme?: (channel: TvChannel, prog: EpgProgramme | null) => void;
 }
 
 export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   currentChannel,
   channels,
   isOverlayMode = false,
+  initialViewMode = 'channels',
   onCloseOverlay,
+  onToggleInfoPanel,
+  onPlayArchiveProgramme,
 }) => {
   const playTvChannel = useRadioStore((state) => state.playTvChannel);
   const favoriteTvChannels = useRadioStore((state) => state.favoriteTvChannels);
@@ -183,25 +251,205 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     (state) => state.toggleFavoriteTvChannel
   );
   const recentTvChannels = useRadioStore((state) => state.recentTvChannels);
+  const customTvChannels = useRadioStore((state) => state.customTvChannels);
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
 
-  const [selectedThemeId, setSelectedThemeId] = useState<string>('ALL');
-  const [onlyWithEpg, setOnlyWithEpg] = useState<boolean>(false);
-  const [sortMode, setSortMode] = useState<OsdSortMode>('default');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [renderLimit, setRenderLimit] = useState<number>(180);
+  // Subscribe to EPG service updates so rows re-render immediately when EPG XML feeds finish loading
+  useChannelEpg(currentChannel);
+  const epgRev = useEpgRevision();
 
-  const listContainerRef = useRef<HTMLDivElement | null>(null);
-  const activeRowRef = useRef<HTMLDivElement | null>(null);
+  const [viewMode, setViewMode] = useState<'channels' | 'epg'>(initialViewMode);
+  const [isGroupPickerOpen, setIsGroupPickerOpen] = useState<boolean>(true);
+  const [isSearchBarOpen, setIsSearchBarOpen] = useState<boolean>(false);
+  const [hasSwitchedCountry, setHasSwitchedCountry] = useState<boolean>(false);
+
+  const isQueueFavorites = useMemo(() => {
+    if (favoriteTvChannels.length === 0 || channels.length === 0) return false;
+    if (channels.length > favoriteTvChannels.length) return false;
+    const favIds = new Set(favoriteTvChannels.map((f) => f.id));
+    const favUrls = new Set(favoriteTvChannels.map((f) => f.url));
+    return channels.every((c) => favIds.has(c.id) || favUrls.has(c.url));
+  }, [channels, favoriteTvChannels]);
+
+  const [selectedCountryId, setSelectedCountryId] = useState<string>(() => {
+    if (
+      lastTvPlaylistContext?.countryId &&
+      OSD_COUNTRY_TABS.some((t) => t.id === lastTvPlaylistContext?.countryId)
+    ) {
+      return lastTvPlaylistContext.countryId;
+    }
+    if (
+      customTvChannels.length > 0 &&
+      customTvChannels.some(
+        (c) => c.id === currentChannel?.id || c.url === currentChannel?.url
+      )
+    ) {
+      return 'IEDEM';
+    }
+    const code = (currentChannel?.countryCode || '').toUpperCase();
+    const mappedCode = code === 'UK' ? 'GB' : code;
+    if (OSD_COUNTRY_TABS.some((t) => t.id === mappedCode)) {
+      return mappedCode;
+    }
+    if (channels.length > 300) {
+      return 'RU';
+    }
+    return 'RO';
+  });
+  const [countryChannels, setCountryChannels] = useState<TvChannel[] | null>(
+    null
+  );
+  const [isLoadingCountry, setIsLoadingCountry] = useState<boolean>(false);
+
+  const [selectedThemeId, setSelectedThemeId] = useState<string>(() => {
+    if (lastTvPlaylistContext?.themeId === 'FAV' || isQueueFavorites) {
+      return 'FAV';
+    }
+    if (lastTvPlaylistContext?.themeId) {
+      return lastTvPlaylistContext.themeId;
+    }
+    return 'ALL';
+  });
 
   useEffect(() => {
-    if (currentChannel?.countryCode) {
-      void fetchEpgForCountry(currentChannel.countryCode);
-    }
-  }, [currentChannel?.countryCode]);
+    lastTvPlaylistContext = {
+      countryId: selectedCountryId,
+      themeId: selectedThemeId,
+    };
+  }, [selectedCountryId, selectedThemeId]);
+  const [sortMode, setSortMode] = useState<OsdSortMode>('default');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isOsdKeyboardOpen, setIsOsdKeyboardOpen] = useState<boolean>(false);
+  const [osdKeyboardLang, setOsdKeyboardLang] = useState<'LAT' | 'CYR'>('LAT');
+  const [renderLimit, setRenderLimit] = useState<number>(120);
 
-  // Ensure complete pool of channels
+  // Track which channel row is currently highlighted in the Smart IPTV single-column list
+  const [focusedRowIdx, setFocusedRowIdx] = useState<number>(0);
+
+  // Smart IPTV EPG / Catch-up Archive View State (Photo 3)
+  const [epgChannel, setEpgChannel] = useState<TvChannel>(currentChannel);
+  const [epgProgrammes, setEpgProgrammes] = useState<EpgProgramme[]>([]);
+  const [isEpgLoading, setIsEpgLoading] = useState<boolean>(false);
+  const [selectedEpgDay, setSelectedEpgDay] = useState<string>('');
+  const [focusedEpgIdx, setFocusedEpgIdx] = useState<number>(0);
+
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const epgListContainerRef = useRef<HTMLDivElement | null>(null);
+  const rowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const epgRowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const mountedAtRef = useRef<number>(Date.now());
+  const lastSelectAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode]);
+
+  useEffect(() => {
+    void fetchEpgForCountry('RO');
+    void fetchEpgForCountry('RU');
+    const epgCountry =
+      selectedCountryId === 'IEDEM' || selectedCountryId === 'ALL_GLOBAL'
+        ? currentChannel?.countryCode || 'RO'
+        : selectedCountryId;
+    if (
+      epgCountry &&
+      epgCountry !== 'ADULT' &&
+      epgCountry !== 'RO' &&
+      epgCountry !== 'RU'
+    ) {
+      void fetchEpgForCountry(epgCountry);
+    }
+  }, [selectedCountryId, currentChannel?.countryCode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingCountry(true);
+
+    if (selectedCountryId === 'ADULT') {
+      const customAdult = customTvChannels.filter((c) => isAdultTvChannel(c));
+      fetchAdultTvChannels()
+        .then((fetched) => {
+          if (cancelled) return;
+          const seen = new Set(customAdult.map((c) => c.url));
+          setCountryChannels([
+            ...customAdult,
+            ...fetched.filter((c) => !seen.has(c.url)),
+          ]);
+        })
+        .catch(() => {
+          if (!cancelled) setCountryChannels(customAdult);
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoadingCountry(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (selectedCountryId === 'IEDEM') {
+      const customList = adultContentEnabled
+        ? customTvChannels
+        : customTvChannels.filter((c) => !isAdultTvChannel(c));
+      fetchTvChannelsByCountry('RU')
+        .then((ruList) => {
+          if (cancelled) return;
+          const filteredRu = adultContentEnabled
+            ? ruList
+            : ruList.filter((c) => !isAdultTvChannel(c));
+          const seen = new Set<string>();
+          const merged: TvChannel[] = [];
+          for (const ch of [...customList, ...filteredRu]) {
+            if (!ch.url || seen.has(ch.url)) continue;
+            seen.add(ch.url);
+            merged.push(ch);
+          }
+          setCountryChannels(merged.slice(0, 1200));
+        })
+        .catch(() => {
+          if (!cancelled) setCountryChannels(customList);
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoadingCountry(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const targetCountry =
+      selectedCountryId === 'ALL_GLOBAL' ? 'ALL' : selectedCountryId;
+    fetchTvChannelsByCountry(targetCountry)
+      .then((list) => {
+        if (cancelled) return;
+        const base = list.slice(0, 1200);
+        const filtered = adultContentEnabled
+          ? base
+          : base.filter((c) => !isAdultTvChannel(c));
+        setCountryChannels(filtered);
+      })
+      .catch(() => {
+        if (!cancelled) setCountryChannels(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingCountry(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCountryId, customTvChannels, adultContentEnabled]);
+
   const pool = useMemo(() => {
-    if (channels.length > 1) return channels;
+    if (countryChannels && countryChannels.length > 0) {
+      return countryChannels;
+    }
+    if (!hasSwitchedCountry && !isQueueFavorites && channels.length > 0) {
+      return channels;
+    }
+    if (channels.length > 0) return channels;
     const combined = [
       currentChannel,
       ...favoriteTvChannels,
@@ -213,9 +461,16 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       seen.add(ch.id);
       return true;
     });
-  }, [channels, currentChannel, favoriteTvChannels, recentTvChannels]);
+  }, [
+    hasSwitchedCountry,
+    isQueueFavorites,
+    countryChannels,
+    channels,
+    currentChannel,
+    favoriteTvChannels,
+    recentTvChannels,
+  ]);
 
-  // Group all channels into Thematic Buckets + Favorites Bucket
   const thematicBuckets = useMemo(() => {
     const map = new Map<string, TvChannel[]>();
     for (const cat of THEMATIC_CATEGORIES) {
@@ -227,12 +482,20 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       const themeId = classifyChannelThematic(ch);
       const arr = map.get(themeId) || map.get('other')!;
       arr.push(ch);
+
+      const rawGroup = (ch.group || '').trim();
+      if (rawGroup) {
+        const grpKey = `GRP:${rawGroup}`;
+        if (!map.has(grpKey)) {
+          map.set(grpKey, []);
+        }
+        map.get(grpKey)!.push(ch);
+      }
     }
 
     return map;
   }, [pool]);
 
-  // Build list of available thematic tabs with counts
   const themeTabs = useMemo(() => {
     const tabs: Array<{
       id: string;
@@ -242,18 +505,18 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       count: number;
     }> = [
       {
-        id: 'ALL',
-        title: 'Toate canalele',
-        shortLabel: 'Toate',
-        Icon: Tv,
-        count: pool.length,
+        id: 'FAV',
+        title: '★ Favorite TV',
+        shortLabel: '★ Favorite',
+        Icon: Star,
+        count: favoriteTvChannels.length,
       },
       {
-        id: 'FAV',
-        title: 'Canale Favorite',
-        shortLabel: 'Favorite',
-        Icon: Heart,
-        count: favoriteTvChannels.length,
+        id: 'ALL',
+        title: 'Toate Canalele',
+        shortLabel: 'Toate Canalele',
+        Icon: Tv,
+        count: pool.length,
       },
     ];
 
@@ -270,6 +533,25 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       }
     }
 
+    // Include custom M3U playlist groups if active
+    if (customTvChannels.length > 0) {
+      for (const [key, list] of thematicBuckets.entries()) {
+        if (key.startsWith('GRP:') && list.length > 0) {
+          const grpName = key.slice(4);
+          if (!adultContentEnabled && /взросл|adult|xxx|18\+|эротик/i.test(grpName)) {
+            continue;
+          }
+          tabs.push({
+            id: key,
+            title: grpName,
+            shortLabel: grpName,
+            Icon: Layers,
+            count: list.length,
+          });
+        }
+      }
+    }
+
     const otherCount = thematicBuckets.get('other')?.length || 0;
     if (otherCount > 0) {
       tabs.push({
@@ -282,382 +564,970 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     }
 
     return tabs;
-  }, [pool.length, favoriteTvChannels.length, thematicBuckets]);
+  }, [
+    pool.length,
+    favoriteTvChannels.length,
+    thematicBuckets,
+    customTvChannels.length,
+    adultContentEnabled,
+  ]);
 
-  // Build the numbered Smart IPTV rows (including `•●★Tematică★●•` separator rows!)
-  const osdRows = useMemo<OsdListRow[]>(() => {
+  // Flat, clean single-column numbered channel list (1 .. N) just like Smart IPTV (Photo 1)
+  const flatChannels = useMemo<TvChannel[]>(() => {
     const q = searchQuery.trim().toLowerCase();
 
     const matchesFilters = (ch: TvChannel): boolean => {
+      if (!q) return true;
       const epg = resolveChannelEpg(ch);
-      if (onlyWithEpg && !epg?.now) return false;
-      if (q) {
-        const nameMatch = ch.name.toLowerCase().includes(q);
-        const groupMatch = (ch.group || '').toLowerCase().includes(q);
-        const epgMatch =
-          epg?.now?.title?.toLowerCase().includes(q) ||
-          epg?.now?.desc?.toLowerCase().includes(q);
-        if (!nameMatch && !groupMatch && !epgMatch) return false;
-      }
-      return true;
+      const nameMatch = ch.name.toLowerCase().includes(q);
+      const groupMatch = (ch.group || '').toLowerCase().includes(q);
+      const epgMatch =
+        epg?.now?.title?.toLowerCase().includes(q) ||
+        epg?.now?.desc?.toLowerCase().includes(q);
+      return Boolean(nameMatch || groupMatch || epgMatch);
     };
 
-    const sortChannelArray = (arr: TvChannel[]): TvChannel[] => {
-      if (sortMode === 'az') {
-        return [...arr].sort((a, b) => a.name.localeCompare(b.name));
-      }
-      return arr;
-    };
-
-    const rows: OsdListRow[] = [];
-    let rowCounter = 1;
-
-    // If user selected a single group or Favourite
+    let baseList: TvChannel[] = [];
     if (selectedThemeId === 'FAV') {
-      const favList = sortChannelArray(
-        favoriteTvChannels.filter(matchesFilters)
+      baseList = favoriteTvChannels.filter(matchesFilters);
+    } else if (selectedThemeId === 'ALL') {
+      baseList = pool.filter(matchesFilters);
+    } else {
+      baseList = (thematicBuckets.get(selectedThemeId) || []).filter(
+        matchesFilters
       );
-      rows.push({
-        type: 'header',
-        key: 'hdr_fav',
-        categoryId: 'FAV',
-        title: 'Canale TV Favorite',
-        count: favList.length,
-        rowNumber: rowCounter++,
-      });
-      for (const ch of favList) {
-        rows.push({
-          type: 'channel',
-          key: `fav_${ch.id}`,
-          channel: ch,
-          rowNumber: rowCounter++,
-          categoryId: 'FAV',
-        });
-      }
-      return rows;
     }
 
-    if (selectedThemeId !== 'ALL') {
-      const catDef = THEMATIC_CATEGORIES.find((c) => c.id === selectedThemeId);
-      const rawList = thematicBuckets.get(selectedThemeId) || [];
-      const filtered = sortChannelArray(rawList.filter(matchesFilters));
-
-      rows.push({
-        type: 'header',
-        key: `hdr_${selectedThemeId}`,
-        categoryId: selectedThemeId,
-        title: catDef ? catDef.title : 'Alte Canale TV',
-        count: filtered.length,
-        rowNumber: rowCounter++,
-      });
-
-      for (const ch of filtered) {
-        rows.push({
-          type: 'channel',
-          key: `${selectedThemeId}_${ch.id}`,
-          channel: ch,
-          rowNumber: rowCounter++,
-          categoryId: selectedThemeId,
-        });
-      }
-      return rows;
+    if (sortMode === 'az') {
+      return [...baseList].sort((a, b) => a.name.localeCompare(b.name));
     }
 
-    // "ALL" mode: Organized by Thematic Categories
-    // If total pool is small (<= 15 channels), show a clean flat numbered list without cluttering headers
-    if (pool.length <= 15) {
-      const flat = sortChannelArray(pool.filter(matchesFilters));
-      for (const ch of flat) {
-        rows.push({
-          type: 'channel',
-          key: `flat_${ch.id}`,
-          channel: ch,
-          rowNumber: rowCounter++,
-          categoryId: 'ALL',
-        });
+    if (selectedThemeId !== 'FAV' && !q && baseList.length > 35) {
+      const topCurated = baseList.slice(0, 35);
+      const rest = baseList.slice(35);
+      const withEpg: TvChannel[] = [];
+      const withoutEpg: TvChannel[] = [];
+      for (const ch of rest) {
+        if (resolveChannelEpg(ch)?.now) {
+          withEpg.push(ch);
+        } else {
+          withoutEpg.push(ch);
+        }
       }
-      return rows;
+      return [...topCurated, ...withEpg, ...withoutEpg];
     }
 
-    // 1. First section: Favorite TV Channels (if any exist)
-    const filteredFavs = sortChannelArray(
-      favoriteTvChannels.filter(matchesFilters)
-    );
-    if (filteredFavs.length > 0 && !q) {
-      rows.push({
-        type: 'header',
-        key: 'hdr_all_fav',
-        categoryId: 'FAV',
-        title: 'Canale Favorite',
-        count: filteredFavs.length,
-        rowNumber: rowCounter++,
-      });
-      for (const ch of filteredFavs) {
-        rows.push({
-          type: 'channel',
-          key: `all_fav_${ch.id}`,
-          channel: ch,
-          rowNumber: rowCounter++,
-          categoryId: 'FAV',
-        });
-      }
-    }
-
-    // 2. Each Thematic Category in order
-    const allCats: Array<{ id: string; title: string }> = [
-      ...THEMATIC_CATEGORIES.map((c) => ({ id: c.id, title: c.title })),
-      { id: 'other', title: 'Alte Canale TV' },
-    ];
-
-    for (const cat of allCats) {
-      const rawList = thematicBuckets.get(cat.id) || [];
-      const filtered = sortChannelArray(rawList.filter(matchesFilters));
-      if (filtered.length === 0) continue;
-
-      rows.push({
-        type: 'header',
-        key: `hdr_${cat.id}`,
-        categoryId: cat.id,
-        title: cat.title,
-        count: filtered.length,
-        rowNumber: rowCounter++,
-      });
-
-      for (const ch of filtered) {
-        rows.push({
-          type: 'channel',
-          key: `ch_${cat.id}_${ch.id}`,
-          channel: ch,
-          rowNumber: rowCounter++,
-          categoryId: cat.id,
-        });
-      }
-    }
-
-    return rows;
+    return baseList;
   }, [
     selectedThemeId,
     favoriteTvChannels,
+    pool,
     thematicBuckets,
-    onlyWithEpg,
     searchQuery,
     sortMode,
+    epgRev,
   ]);
 
-  // Find index of currently playing channel in osdRows (preferring its thematic section row)
-  const activeRowIndex = useMemo(() => {
-    // First look in the non-fav thematic section unless selectedThemeId === 'FAV'
-    const idx = osdRows.findIndex(
-      (r) =>
-        r.type === 'channel' &&
-        r.channel.id === currentChannel.id &&
-        (selectedThemeId === 'FAV' || r.categoryId !== 'FAV')
-    );
-    if (idx >= 0) return idx;
-    return osdRows.findIndex(
-      (r) => r.type === 'channel' && r.channel.id === currentChannel.id
-    );
-  }, [osdRows, currentChannel.id, selectedThemeId]);
+  // Active channel index in flatChannels
+  const currentChannelIdx = useMemo(() => {
+    const idx = flatChannels.findIndex((c) => c.id === currentChannel.id);
+    return idx >= 0 ? idx : 0;
+  }, [flatChannels, currentChannel.id]);
+
+  // Sync focusedRowIdx when currentChannel or group changes
+  useEffect(() => {
+    setFocusedRowIdx(currentChannelIdx);
+  }, [currentChannelIdx, selectedThemeId, selectedCountryId]);
 
   useEffect(() => {
-    if (activeRowIndex >= 0 && activeRowIndex + 40 > renderLimit) {
-      setRenderLimit(activeRowIndex + 90);
+    if (focusedRowIdx + 30 > renderLimit) {
+      setRenderLimit(focusedRowIdx + 100);
     }
-  }, [activeRowIndex, renderLimit]);
+  }, [focusedRowIdx, renderLimit]);
 
-  // Auto-scroll active channel row into the center of the Smart IPTV OSD list
+  // Auto-focus and center the active/focused row in Smart IPTV Channel List
   useEffect(() => {
+    if (viewMode !== 'channels') return;
     const timer = window.setTimeout(() => {
-      if (activeRowRef.current && listContainerRef.current) {
-        const container = listContainerRef.current;
-        const row = activeRowRef.current;
+      const btn = rowRefs.current.get(focusedRowIdx);
+      const container = listContainerRef.current;
+      if (btn && container) {
         const targetTop =
-          row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2;
+          btn.offsetTop - container.clientHeight / 2 + btn.clientHeight / 2;
         container.scrollTo({
           top: Math.max(0, targetTop),
-          behavior: 'smooth',
+          behavior: 'auto',
         });
+        if (!isSearchBarOpen && !isOsdKeyboardOpen) {
+          btn.focus();
+        }
       }
-    }, 60);
+    }, 25);
     return () => window.clearTimeout(timer);
-  }, [currentChannel.id, selectedThemeId, onlyWithEpg]);
+  }, [
+    focusedRowIdx,
+    viewMode,
+    selectedThemeId,
+    selectedCountryId,
+    isSearchBarOpen,
+    isOsdKeyboardOpen,
+  ]);
 
-  const visibleRows = useMemo(
-    () => osdRows.slice(0, renderLimit),
-    [osdRows, renderLimit]
+  // Load EPG Archive whenever viewMode === 'epg'
+  useEffect(() => {
+    if (viewMode !== 'epg') return;
+    let cancelled = false;
+    setIsEpgLoading(true);
+    void fetchChannelEpgArchive(epgChannel)
+      .then((list) => {
+        if (cancelled) return;
+        setEpgProgrammes(list);
+        const todayKey = getEpgDayKey(Date.now());
+        const days = Array.from(new Set(list.map((p) => getEpgDayKey(p.start)))).sort();
+        if (days.includes(todayKey)) {
+          setSelectedEpgDay(todayKey);
+        } else if (days.length > 0) {
+          setSelectedEpgDay(days[days.length - 1]);
+        } else {
+          setSelectedEpgDay('');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsEpgLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, epgChannel]);
+
+  const epgDays = useMemo(() => {
+    return Array.from(
+      new Set(epgProgrammes.map((p) => getEpgDayKey(p.start)))
+    ).sort();
+  }, [epgProgrammes]);
+
+  const dayProgrammes = useMemo(() => {
+    if (!selectedEpgDay) {
+      const chEpg = resolveChannelEpg(epgChannel);
+      const fallback: EpgProgramme[] = [];
+      if (chEpg?.now) fallback.push(chEpg.now);
+      if (chEpg?.upcoming) fallback.push(...chEpg.upcoming);
+      return fallback;
+    }
+    return epgProgrammes.filter(
+      (p) => getEpgDayKey(p.start) === selectedEpgDay
+    );
+  }, [epgProgrammes, selectedEpgDay, epgChannel]);
+
+  // Find current live programme index in dayProgrammes
+  useEffect(() => {
+    if (viewMode !== 'epg') return;
+    const nowMs = Date.now();
+    const liveIdx = dayProgrammes.findIndex(
+      (p) => p.start <= nowMs && p.stop > nowMs
+    );
+    setFocusedEpgIdx(liveIdx >= 0 ? liveIdx : Math.max(0, dayProgrammes.length - 1));
+  }, [viewMode, dayProgrammes]);
+
+  useEffect(() => {
+    if (viewMode !== 'epg') return;
+    const timer = window.setTimeout(() => {
+      const btn = epgRowRefs.current.get(focusedEpgIdx);
+      const container = epgListContainerRef.current;
+      if (btn && container) {
+        const targetTop =
+          btn.offsetTop - container.clientHeight / 2 + btn.clientHeight / 2;
+        container.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: 'auto',
+        });
+        btn.focus();
+      }
+    }, 30);
+    return () => window.clearTimeout(timer);
+  }, [focusedEpgIdx, viewMode, selectedEpgDay]);
+
+  const visibleChannels = useMemo(
+    () => flatChannels.slice(0, renderLimit),
+    [flatChannels, renderLimit]
   );
 
   const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     if (
       el.scrollTop + el.clientHeight >= el.scrollHeight - 260 &&
-      renderLimit < osdRows.length
+      renderLimit < flatChannels.length
     ) {
-      setRenderLimit((prev) => Math.min(osdRows.length, prev + 140));
+      setRenderLimit((prev) => Math.min(flatChannels.length, prev + 140));
     }
   };
 
-  return (
-    <div className="w-full h-full min-h-0 flex flex-col select-none text-white">
-      {/* Main Clean Smart IPTV Channel List Box */}
+  const activeThemeTab =
+    themeTabs.find((t) => t.id === selectedThemeId) || themeTabs[0];
+  const activeCountryTab = OSD_COUNTRY_TABS.find(
+    (c) => c.id === selectedCountryId
+  );
+
+  const cycleThemeGroup = (dir: -1 | 1) => {
+    if (themeTabs.length <= 1) return;
+    const curIdx = themeTabs.findIndex((t) => t.id === selectedThemeId);
+    const nextIdx =
+      (curIdx + dir + themeTabs.length) % themeTabs.length;
+    setSelectedThemeId(themeTabs[nextIdx].id);
+  };
+
+  const cycleEpgDay = (dir: -1 | 1) => {
+    if (epgDays.length <= 1) return;
+    const curIdx = epgDays.indexOf(selectedEpgDay);
+    const nextIdx = Math.max(
+      0,
+      Math.min(epgDays.length - 1, (curIdx >= 0 ? curIdx : 0) + dir)
+    );
+    setSelectedEpgDay(epgDays[nextIdx]);
+  };
+
+  const openEpgForFocusedChannel = () => {
+    const targetCh = flatChannels[focusedRowIdx] || currentChannel;
+    setEpgChannel(targetCh);
+    setViewMode('epg');
+  };
+
+  const toggleFavForFocusedChannel = () => {
+    const targetCh = flatChannels[focusedRowIdx] || currentChannel;
+    if (targetCh) {
+      toggleFavoriteTvChannel(targetCh);
+    }
+  };
+
+  const selectChannelRow = (targetCh: TvChannel | undefined) => {
+    if (!targetCh) return;
+    const now = Date.now();
+    if (now - mountedAtRef.current < 300) return;
+    if (now - lastSelectAtRef.current < 300) return;
+    lastSelectAtRef.current = now;
+    const activePlaylistQueue =
+      flatChannels.length > 0 ? flatChannels : pool;
+    playTvChannel(targetCh, activePlaylistQueue);
+    if (isOverlayMode && onCloseOverlay) {
+      onCloseOverlay();
+    }
+  };
+
+  // Dedicated Smart IPTV Keyboard Handler inside OSD (100% deterministic Up/Down/Left/Right/OK/Colors)
+  const handleOsdKeyEvent = (
+    e: KeyboardEvent | React.KeyboardEvent<HTMLDivElement>
+  ) => {
+    const target = e.target as HTMLElement | null;
+    const isInsideInput =
+      target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+
+    const isOkKey =
+      e.key === 'Enter' ||
+      e.key === 'Select' ||
+      e.key === 'Execute' ||
+      e.key === ' ' ||
+      e.keyCode === 13 ||
+      e.keyCode === 29443;
+
+    if (viewMode === 'epg') {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedEpgIdx((prev) =>
+          Math.min(Math.max(0, dayProgrammes.length - 1), prev + 1)
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedEpgIdx((prev) => Math.max(0, prev - 1));
+        return;
+      }
+      if (e.key === 'ArrowLeft' || e.keyCode === 405) {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleEpgDay(-1);
+        return;
+      }
+      if (e.key === 'ArrowRight' || e.keyCode === 406) {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleEpgDay(1);
+        return;
+      }
+      if (isOkKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (Date.now() - mountedAtRef.current < 300) return;
+        const prog = dayProgrammes[focusedEpgIdx];
+        if (prog) {
+          const nowMs = Date.now();
+          const isLiveNow = prog.start <= nowMs && prog.stop > nowMs;
+          if (onPlayArchiveProgramme) {
+            onPlayArchiveProgramme(epgChannel, isLiveNow ? null : prog);
+          } else {
+            playTvChannel(
+              {
+                ...epgChannel,
+                archiveProgram: isLiveNow ? undefined : prog,
+              },
+              pool
+            );
+          }
+          if (onCloseOverlay) onCloseOverlay();
+        }
+        return;
+      }
+      if (
+        e.key === 'Escape' ||
+        e.key === 'Backspace' ||
+        e.keyCode === 461 ||
+        e.keyCode === 10009 ||
+        e.keyCode === 403
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setViewMode('channels');
+        return;
+      }
+      return;
+    }
+
+    // When Search/Keyboard is open, let standard focus handle it unless pressing Escape/Back
+    if (isSearchBarOpen || isOsdKeyboardOpen) {
+      if (e.key === 'Escape' || (e.key === 'Backspace' && !isInsideInput)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSearchBarOpen(false);
+        setIsOsdKeyboardOpen(false);
+      }
+      return;
+    }
+
+    if (isOkKey) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isActionBtn =
+        activeEl?.getAttribute('data-osd-action-btn') === 'true';
+      if (!isActionBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        selectChannelRow(flatChannels[focusedRowIdx]);
+        return;
+      }
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedRowIdx((prev) =>
+        flatChannels.length > 0 ? (prev + 1) % flatChannels.length : 0
+      );
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedRowIdx((prev) =>
+        flatChannels.length > 0
+          ? (prev - 1 + flatChannels.length) % flatChannels.length
+          : 0
+      );
+      return;
+    }
+
+    if (e.key === 'PageDown' || e.keyCode === 34 || e.keyCode === 428) {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedRowIdx((prev) =>
+        Math.min(Math.max(0, flatChannels.length - 1), prev + 15)
+      );
+      return;
+    }
+
+    if (e.key === 'PageUp' || e.keyCode === 33 || e.keyCode === 427) {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusedRowIdx((prev) => Math.max(0, prev - 15));
+      return;
+    }
+
+    // Left / Right Arrow in Smart IPTV switches Category / Group immediately!
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      e.stopPropagation();
+      cycleThemeGroup(-1);
+      return;
+    }
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      e.stopPropagation();
+      cycleThemeGroup(1);
+      return;
+    }
+
+    // Color keys & shortcuts (Red = Fav, Green = EPG, Yellow = A-Z, Blue = Groups)
+    if (e.keyCode === 403 || e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleFavForFocusedChannel();
+      return;
+    }
+    if (e.keyCode === 404 || e.key === 'e' || e.key === 'E') {
+      e.preventDefault();
+      e.stopPropagation();
+      openEpgForFocusedChannel();
+      return;
+    }
+    if (e.keyCode === 405 || e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      e.stopPropagation();
+      setSortMode((prev) => (prev === 'default' ? 'az' : 'default'));
+      return;
+    }
+    if (e.keyCode === 406 || e.key === 'g' || e.key === 'G') {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsGroupPickerOpen((v) => !v);
+      return;
+    }
+  };
+
+  useEffect(() => {
+    if (!isOverlayMode) return;
+    const onWinKeyDown = (e: KeyboardEvent) => {
+      handleOsdKeyEvent(e);
+    };
+    window.addEventListener('keydown', onWinKeyDown, true);
+    return () => window.removeEventListener('keydown', onWinKeyDown, true);
+  });
+
+  const handleOsdKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isOverlayMode) return;
+    handleOsdKeyEvent(e);
+  };
+
+  // ============================================================================
+  // VIEW MODE 2: SMART IPTV EPG & CATCH-UP ARCHIVE WINDOW (PHOTO 3)
+  // ============================================================================
+  if (viewMode === 'epg') {
+    const epgChInfo = resolveChannelEpg(epgChannel);
+    const epgLogo =
+      !epgChannel.logo || /imgur\.com|wikia\.nocookie\.net/i.test(epgChannel.logo)
+        ? epgChInfo?.icon || epgChannel.logo
+        : epgChannel.logo;
+
+    return (
       <div
-        className={`relative rounded-2xl border border-zinc-700/80 shadow-xl overflow-hidden flex-1 min-h-0 flex flex-col ${
-          isOverlayMode
-            ? 'bg-zinc-950/85 backdrop-blur-md'
-            : 'bg-zinc-950'
-        }`}
+        onKeyDown={handleOsdKeyDown}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+        className="w-full h-full min-h-0 flex flex-col select-none text-white"
       >
-        {/* Row 1: Search Input + Quick Sort (A-Z) & EPG Filter */}
-        <div className="p-2 bg-zinc-900 border-b border-zinc-800 flex items-center gap-1.5 shrink-0">
-          <div className="relative flex-1 min-w-0">
-            <Search
-              className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Caută canal sau emisiune..."
-              className="w-full h-8 pl-8 pr-7 rounded-full bg-zinc-950 border border-zinc-700 focus:border-brand-500 text-xs text-white placeholder:text-zinc-400 outline-none"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                aria-label="Șterge căutarea"
-                className="w-6 h-6 rounded-full absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center text-zinc-400 hover:text-white"
-              >
-                <X className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            )}
+        {/* Top-Right Protruding Folder Tab: [Logo] Channel Name EPG (Exact match to Photo 3) */}
+        <div className="flex items-end justify-between shrink-0 px-0">
+          <div className="flex items-center gap-1.5 pb-1">
+            {epgDays.map((dayKey) => {
+              const activeDay = dayKey === selectedEpgDay;
+              return (
+                <button
+                  key={dayKey}
+                  type="button"
+                  data-osd-action-btn="true"
+                  onClick={() => setSelectedEpgDay(dayKey)}
+                  className={`px-2.5 py-0.5 text-xs font-bold border transition-none cursor-pointer ${
+                    activeDay
+                      ? 'bg-[#0284c7] text-white border-[#7dd3fc]'
+                      : 'bg-black/90 text-zinc-300 border-white/20 hover:text-white'
+                  }`}
+                >
+                  {formatEpgDayLabel(dayKey)}
+                </button>
+              );
+            })}
           </div>
 
+          <div
+            style={{
+              backgroundColor: 'rgba(10, 14, 22, 0.96)',
+              borderTop: '2px solid #7dd3fc',
+              borderLeft: '2px solid #7dd3fc',
+              borderRight: '2px solid #7dd3fc',
+            }}
+            className="bg-black/95 px-5 py-1.5 inline-flex items-center gap-2.5"
+          >
+            {epgLogo && (
+              <img
+                src={epgLogo}
+                alt=""
+                className="w-6 h-5 object-contain shrink-0"
+              />
+            )}
+            <span className="text-base sm:text-lg font-bold text-white tracking-tight">
+              {epgChannel.name} EPG
+            </span>
+          </div>
+        </div>
+
+        {/* Main Framed EPG Programme List Box */}
+        <div
+          style={{
+            flex: '1 1 0%',
+            minHeight: 0,
+            backgroundColor: 'rgba(10, 14, 22, 0.94)',
+            border: '2px solid #7dd3fc',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+          className="flex-1 min-h-0 bg-black/95 shadow-2xl flex flex-col overflow-hidden"
+        >
+          <div
+            ref={epgListContainerRef}
+            style={{
+              flex: '1 1 0%',
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+            className="flex-1 min-h-0 overflow-y-auto divide-y divide-white/[0.06]"
+          >
+            {isEpgLoading ? (
+              <div className="py-20 text-center text-sm font-semibold text-zinc-300">
+                Se încarcă programul EPG și Arhiva TV...
+              </div>
+            ) : dayProgrammes.length === 0 ? (
+              <div className="py-20 text-center text-sm text-zinc-400">
+                Nu există program EPG disponibil pentru acest canal.
+              </div>
+            ) : (
+              dayProgrammes.map((prog, idx) => {
+                const nowMs = Date.now();
+                const isPast = prog.stop <= nowMs;
+                const isLiveNow = prog.start <= nowMs && prog.stop > nowMs;
+                const isFocused = idx === focusedEpgIdx;
+
+                return (
+                  <button
+                    key={`${prog.start}_${idx}`}
+                    type="button"
+                    ref={(el) => {
+                      if (el) epgRowRefs.current.set(idx, el);
+                      else epgRowRefs.current.delete(idx);
+                    }}
+                    onFocus={() => setFocusedEpgIdx(idx)}
+                    onClick={() => {
+                      if (onPlayArchiveProgramme) {
+                        onPlayArchiveProgramme(
+                          epgChannel,
+                          isLiveNow ? null : prog
+                        );
+                      } else {
+                        playTvChannel(
+                          {
+                            ...epgChannel,
+                            archiveProgram: isLiveNow ? undefined : prog,
+                          },
+                          pool
+                        );
+                      }
+                      if (onCloseOverlay) onCloseOverlay();
+                    }}
+                    className={`w-full h-[40px] px-4 flex items-center justify-between gap-4 text-left transition-none cursor-pointer outline-none ${
+                      isFocused
+                        ? 'bg-[#0284c7]/45 border-y-2 border-[#38bdf8] text-white'
+                        : isLiveNow
+                          ? 'bg-white/10 text-white'
+                          : 'hover:bg-white/[0.06] text-zinc-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                      <span className="w-32 shrink-0 text-[15px] sm:text-base font-bold text-zinc-200 tabular-nums">
+                        {formatEpgTime(prog.start)} - {formatEpgTime(prog.stop)}
+                      </span>
+                      <span className="text-[15px] sm:text-base font-semibold text-white truncate">
+                        {prog.title}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isLiveNow && (
+                        <span className="px-2 py-0.5 text-[11px] font-extrabold bg-emerald-500 text-zinc-950 uppercase">
+                          LIVE
+                        </span>
+                      )}
+                      {(isPast || isLiveNow) && (
+                        <span
+                          title="Disponibil în Arhiva Catch-up"
+                          className="px-1.5 py-0.5 border border-[#7dd3fc]/70 bg-white/10 text-sky-200 inline-flex items-center justify-center"
+                        >
+                          <Rewind className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Bottom-Right Protruding Legend Tab: [ • Canale | • Day - | • Day + ] (Exact match to Photo 3) */}
+        <div className="self-end border-2 border-t-0 border-[#7dd3fc]/85 bg-black/90 px-4 py-1 flex items-center gap-5 text-xs sm:text-[13px] font-bold text-white shrink-0">
           <button
             type="button"
-            onClick={() =>
-              setSortMode((prev) => (prev === 'default' ? 'az' : 'default'))
-            }
-            className={`h-8 px-2.5 rounded-full text-xs font-semibold shrink-0 transition-colors border ${
-              sortMode === 'az'
-                ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
-                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
-            }`}
-            title="Sortează alfabetic A–Z"
+            onClick={() => setViewMode('channels')}
+            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
           >
-            A–Z
+            <span className="w-2.5 h-2.5 rounded-xs bg-rose-500 inline-block" />
+            <span>Canale</span>
           </button>
-
           <button
             type="button"
-            onClick={() => setOnlyWithEpg((v) => !v)}
-            className={`h-8 px-2.5 rounded-full text-xs font-semibold shrink-0 transition-colors border ${
-              onlyWithEpg
-                ? 'bg-emerald-600 text-white border-emerald-500 font-bold'
-                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
-            }`}
-            title="Filtrează doar canalele cu EPG activ"
+            onClick={() => cycleEpgDay(-1)}
+            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
           >
-            EPG
+            <span className="w-2.5 h-2.5 rounded-xs bg-amber-400 inline-block" />
+            <span>Day -</span>
           </button>
+          <button
+            type="button"
+            onClick={() => cycleEpgDay(1)}
+            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          >
+            <span className="w-2.5 h-2.5 rounded-xs bg-blue-500 inline-block" />
+            <span>Day +</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
+  // ============================================================================
+  // VIEW MODE 1: SMART IPTV SINGLE-COLUMN CHANNEL LIST WINDOW (PHOTO 1)
+  // ============================================================================
+  return (
+    <div
+      onKeyDown={handleOsdKeyDown}
+      style={{
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+      className="w-full h-full min-h-0 flex flex-col select-none text-white"
+    >
+      {/* Top Row: Protruding Folder Tab on the Left (Exact match to `[ ★ Favourites ]` in Photo 1) */}
+      <div className="flex items-end justify-between gap-2 shrink-0">
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={() => setIsGroupPickerOpen((v) => !v)}
+          style={{
+            backgroundColor: 'rgba(10, 14, 22, 0.96)',
+            borderTop: '2px solid #7dd3fc',
+            borderLeft: '2px solid #7dd3fc',
+            borderRight: '2px solid #7dd3fc',
+          }}
+          className="bg-black/95 px-5 py-1.5 inline-flex items-center gap-2.5 text-white hover:bg-zinc-900 focus:bg-[#0284c7] focus:outline-none cursor-pointer"
+          title="Schimbă Playlist-ul / Categoria (Săgeți Stânga / Dreapta)"
+        >
+          {selectedThemeId === 'FAV' ? (
+            <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
+          ) : (
+            <Tv className="w-4 h-4 text-[#7dd3fc] shrink-0" />
+          )}
+          <span className="text-base sm:text-lg font-bold tracking-tight">
+            {selectedThemeId === 'FAV'
+              ? '★ Favorite TV'
+              : activeThemeTab.shortLabel}
+          </span>
+          <span className="text-xs font-semibold text-zinc-300">
+            {selectedThemeId === 'FAV'
+              ? `• Lista ta (${flatChannels.length} canale)`
+              : `• ${activeCountryTab?.label || selectedCountryId} (${flatChannels.length})`}
+          </span>
+          {isLoadingCountry && selectedThemeId !== 'FAV' && (
+            <span className="text-[11px] text-sky-300 font-normal">
+              (Se încarcă...)
+            </span>
+          )}
+        </button>
+
+        {/* Subtle Right-Side Quick Controls */}
+        <div className="flex items-center gap-1.5 pb-1">
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={() => cycleThemeGroup(-1)}
+            className="px-2.5 py-1 bg-black/90 border border-white/20 hover:border-[#7dd3fc] text-xs font-bold text-zinc-200 cursor-pointer"
+            title="Playlist-ul anterior (Săgeată Stânga)"
+          >
+            ◀ Playlist
+          </button>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={() => cycleThemeGroup(1)}
+            className="px-2.5 py-1 bg-black/90 border border-white/20 hover:border-[#7dd3fc] text-xs font-bold text-zinc-200 cursor-pointer"
+            title="Playlist-ul următor (Săgeată Dreapta)"
+          >
+            Playlist ▶
+          </button>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={() => setIsSearchBarOpen((v) => !v)}
+            className={`px-2.5 py-1 border text-xs font-bold inline-flex items-center gap-1 cursor-pointer ${
+              isSearchBarOpen || searchQuery
+                ? 'bg-[#0284c7] border-[#7dd3fc] text-white'
+                : 'bg-black/90 border-white/20 text-zinc-200 hover:border-[#7dd3fc]'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Caută</span>
+          </button>
           {isOverlayMode && onCloseOverlay && (
             <button
               type="button"
+              data-osd-action-btn="true"
               onClick={onCloseOverlay}
               aria-label="Închide lista"
-              className="w-8 h-8 rounded-full bg-zinc-800 hover:bg-rose-600 text-zinc-200 hover:text-white flex items-center justify-center shrink-0 transition-colors"
+              className="px-2.5 py-1 bg-black/90 border border-white/20 hover:bg-rose-600 text-xs font-bold text-zinc-200 hover:text-white cursor-pointer"
             >
-              <X className="w-4 h-4" aria-hidden="true" />
+              ✕
             </button>
           )}
         </div>
+      </div>
 
-        {/* Row 2: Single Clean Horizontal Category Strip with SVG Icons (Zero Emojis) */}
-        <div className="px-2 py-1.5 bg-zinc-900/95 border-b border-zinc-800 flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
-          {themeTabs.map((tab) => {
-            const active = selectedThemeId === tab.id;
-            const TabIcon = tab.Icon;
-            return (
+      {/* Main Framed Smart IPTV Box */}
+      <div
+        style={{
+          flex: '1 1 0%',
+          minHeight: 0,
+          backgroundColor: 'rgba(10, 14, 22, 0.94)',
+          border: '2px solid #7dd3fc',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+        className="flex-1 min-h-0 bg-black/95 shadow-2xl flex flex-col overflow-hidden"
+      >
+        {/* Always-Visible Playlists, Countries & Categories Bar */}
+        {isGroupPickerOpen && (
+          <div className="p-2.5 bg-zinc-950/95 border-b border-[#7dd3fc]/40 space-y-2 shrink-0">
+            {/* Row 1: Favorite + M3U + Country Playlists */}
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               <button
-                key={tab.id}
                 type="button"
-                onClick={() => setSelectedThemeId(tab.id)}
-                title={`${tab.title} (${tab.count})`}
-                className={`h-7 px-2.5 rounded-full text-[11px] font-semibold whitespace-nowrap inline-flex items-center gap-1 shrink-0 transition-colors ${
-                  active
-                    ? 'bg-brand-600 text-white font-bold shadow-xs'
-                    : tab.id === 'FAV'
-                      ? 'bg-rose-950/60 text-rose-300 border border-rose-800/60 hover:bg-rose-900/60'
-                      : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
+                data-osd-action-btn="true"
+                onClick={() => {
+                  setSelectedThemeId('FAV');
+                }}
+                className={`h-7 px-3 text-xs font-extrabold whitespace-nowrap shrink-0 border transition-none cursor-pointer inline-flex items-center gap-1.5 focus:bg-white focus:text-black ${
+                  selectedThemeId === 'FAV'
+                    ? 'bg-amber-400 text-zinc-950 border-amber-200 shadow-sm'
+                    : 'bg-zinc-900 text-amber-300 border-amber-400/35 hover:bg-zinc-800'
                 }`}
               >
-                <TabIcon className="w-3 h-3 shrink-0" />
-                <span>{tab.shortLabel}</span>
-                <span className="opacity-70 text-[10px]">({tab.count})</span>
+                <Star className="w-3.5 h-3.5 fill-current shrink-0" />
+                <span>Favorite ({favoriteTvChannels.length})</span>
               </button>
-            );
-          })}
-        </div>
 
-        {/* Scrollable Channel List */}
+              {OSD_COUNTRY_TABS.filter(
+                (reg) => adultContentEnabled || reg.id !== 'ADULT'
+              ).map((reg) => {
+                const active =
+                  selectedThemeId !== 'FAV' && selectedCountryId === reg.id;
+                return (
+                  <button
+                    key={`osd_country_${reg.id}`}
+                    type="button"
+                    data-osd-action-btn="true"
+                    onClick={() => {
+                      setHasSwitchedCountry(true);
+                      setSelectedCountryId(reg.id);
+                      setSelectedThemeId('ALL');
+                    }}
+                    className={`h-7 px-3 text-xs font-bold whitespace-nowrap shrink-0 border transition-none cursor-pointer focus:bg-white focus:text-black ${
+                      active
+                        ? 'bg-[#0284c7] text-white border-[#7dd3fc]'
+                        : 'bg-zinc-900 text-zinc-300 border-white/15 hover:text-white'
+                    }`}
+                  >
+                    {reg.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Row 2: Thematic Category Playlists */}
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {themeTabs.map((tab) => {
+                const active = selectedThemeId === tab.id;
+                const isFavTab = tab.id === 'FAV';
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    data-osd-action-btn="true"
+                    onClick={() => {
+                      setSelectedThemeId(tab.id);
+                    }}
+                    className={`h-7 px-3 text-xs font-bold whitespace-nowrap shrink-0 border transition-none cursor-pointer focus:bg-white focus:text-black ${
+                      active
+                        ? isFavTab
+                          ? 'bg-amber-400 text-zinc-950 border-amber-200 font-extrabold'
+                          : 'bg-[#0284c7] text-white border-[#7dd3fc]'
+                        : isFavTab
+                          ? 'bg-zinc-900 text-amber-300 border-amber-400/30 hover:text-amber-200'
+                          : 'bg-zinc-900 text-zinc-300 border-white/15 hover:text-white'
+                    }`}
+                  >
+                    {tab.shortLabel} ({tab.count})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Optional Expandable Search & TV Keyboard Bar */}
+        {isSearchBarOpen && (
+          <div className="p-2.5 bg-zinc-950/95 border-b border-[#7dd3fc]/40 space-y-2 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 min-w-0">
+                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="search"
+                  tabIndex={-1}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Caută canal sau emisiune EPG..."
+                  className="w-full h-8 pl-8 pr-8 bg-black border border-white/25 text-xs font-bold text-white placeholder:text-zinc-500 outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="w-6 h-6 absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center text-zinc-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOsdKeyboardOpen((v) => !v)}
+                className="h-8 px-3 bg-zinc-900 border border-white/20 text-xs font-bold text-white focus:bg-white focus:text-black cursor-pointer"
+              >
+                Tastatură TV
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSearchBarOpen(false);
+                  setIsOsdKeyboardOpen(false);
+                }}
+                className="h-8 px-3 bg-zinc-900 border border-white/20 text-xs font-bold text-zinc-300 focus:bg-white focus:text-black cursor-pointer"
+              >
+                Închide
+              </button>
+            </div>
+
+            {isOsdKeyboardOpen && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOsdKeyboardLang((l) => (l === 'LAT' ? 'CYR' : 'LAT'))
+                    }
+                    className="h-7 px-2.5 bg-zinc-800 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
+                  >
+                    {osdKeyboardLang === 'LAT' ? 'АБВ (RU)' : 'ABC (RO/EN)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery((q) => q + ' ')}
+                    className="h-7 px-3 bg-zinc-800 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
+                  >
+                    Spațiu
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery((q) => q.slice(0, -1))}
+                    className="h-7 px-2.5 bg-zinc-800 focus:bg-rose-600 text-[11px] font-bold text-rose-300 focus:text-white cursor-pointer"
+                  >
+                    ⌫ Șterge
+                  </button>
+                </div>
+                <div className="grid grid-cols-12 gap-1">
+                  {(osdKeyboardLang === 'LAT'
+                    ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('')
+                    : 'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯ0123456789'.split('')
+                  ).map((ch) => (
+                    <button
+                      key={`osd_kb_${ch}`}
+                      type="button"
+                      onClick={() => setSearchQuery((q) => q + ch)}
+                      className="h-7 bg-zinc-900 focus:bg-white focus:text-black text-white font-bold text-xs border border-white/10 cursor-pointer"
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* STRICT SINGLE-COLUMN NUMBERED CHANNEL LIST (1..15 visible per view, exact match to Photo 1) */}
         <div
           ref={listContainerRef}
           onScroll={handleListScroll}
           role="listbox"
-          aria-label="Canale TV"
-          className={`${
-            isOverlayMode
-              ? 'max-h-[36vh] sm:max-h-[42vh] lg:max-h-[48vh]'
-              : 'flex-1 min-h-0'
-          } overflow-y-auto divide-y divide-zinc-800/40`}
+          aria-label="Canale TV Smart IPTV"
+          style={{
+            flex: '1 1 0%',
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+          }}
+          className="flex-1 min-h-0 overflow-y-auto divide-y divide-white/[0.06]"
         >
-          {visibleRows.length === 0 ? (
-            <div className="py-8 px-4 text-center text-xs sm:text-sm text-zinc-400 space-y-2">
+          {visibleChannels.length === 0 ? (
+            <div className="py-16 px-4 text-center text-sm text-zinc-400 space-y-3">
               <p>
                 {selectedThemeId === 'FAV'
-                  ? 'Nu ai încă niciun canal TV la Favorite. Apasă pe ♥ lângă orice canal!'
-                  : 'Niciun canal găsit pentru filtrul selectat.'}
+                  ? 'Nu ai încă niciun canal TV la Favourites. Apasă butonul Roșu (Fav) pe orice canal!'
+                  : 'Niciun canal găsit în această categorie.'}
               </p>
               <button
                 type="button"
                 onClick={() => {
                   setSelectedThemeId('ALL');
-                  setOnlyWithEpg(false);
                   setSearchQuery('');
                 }}
-                className="px-4 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs font-semibold"
+                className="px-4 py-1.5 bg-white text-black text-xs font-bold cursor-pointer"
               >
-                Afișează toate canalele
+                Afișează Toate Canalele
               </button>
             </div>
           ) : (
-            visibleRows.map((row, idx) => {
-              if (row.type === 'header') {
-                return (
-                  <div
-                    key={row.key}
-                    onClick={() =>
-                      setSelectedThemeId(
-                        selectedThemeId === row.categoryId
-                          ? 'ALL'
-                          : row.categoryId
-                      )
-                    }
-                    className="flex items-center justify-between gap-2 px-3 py-1.5 bg-zinc-900/90 hover:bg-zinc-800 border-y border-zinc-800 cursor-pointer transition-colors"
-                  >
-                    <span className="text-xs font-bold text-amber-300 uppercase tracking-wider truncate">
-                      {row.title}
-                    </span>
-                    <span className="text-[11px] text-zinc-400 font-mono">
-                      {row.count} canale
-                    </span>
-                  </div>
-                );
-              }
-
-              const ch = row.channel;
-              const isSelectedRow = idx === activeRowIndex;
+            visibleChannels.map((ch, idx) => {
+              const isFocused = idx === focusedRowIdx;
               const isCurrent = ch.id === currentChannel.id;
               const isFav = favoriteTvChannels.some((f) => f.id === ch.id);
               const chEpg = resolveChannelEpg(ch);
@@ -675,106 +1545,303 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                 .toUpperCase();
 
               return (
-                <div
-                  key={row.key}
-                  ref={isSelectedRow ? activeRowRef : undefined}
+                <button
+                  key={`${ch.id}_${idx}`}
+                  type="button"
+                  data-osd-channel-row="true"
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(idx, el);
+                    else rowRefs.current.delete(idx);
+                  }}
                   role="option"
                   aria-selected={isCurrent}
-                  onClick={() => {
-                    if (isCurrent && isOverlayMode && onCloseOverlay) {
-                      onCloseOverlay();
-                    } else {
-                      playTvChannel(ch, pool);
-                    }
+                  onFocus={() => setFocusedRowIdx(idx)}
+                  onClick={() => selectChannelRow(ch)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    height: '40px',
+                    minHeight: '40px',
+                    maxHeight: '40px',
+                    paddingLeft: '12px',
+                    paddingRight: '12px',
+                    backgroundColor: isFocused
+                      ? 'rgba(2, 132, 199, 0.65)'
+                      : isCurrent
+                        ? 'rgba(255, 255, 255, 0.14)'
+                        : 'transparent',
+                    borderTop: isFocused
+                      ? '2px solid #38bdf8'
+                      : '1px solid transparent',
+                    borderBottom: isFocused
+                      ? '2px solid #38bdf8'
+                      : '1px solid rgba(255, 255, 255, 0.07)',
                   }}
-                  className={`group flex items-center gap-2.5 px-3 py-2 cursor-pointer transition-colors ${
-                    isCurrent
-                      ? 'bg-brand-950/70 border-l-4 border-l-brand-500'
-                      : 'hover:bg-zinc-900/80'
-                  }`}
+                  className="w-full text-left transition-none cursor-pointer outline-none"
                 >
-                  {/* 1. Channel Number */}
-                  <span
-                    className={`w-6 text-right font-mono text-xs tabular-nums shrink-0 ${
-                      isCurrent ? 'text-brand-300 font-bold' : 'text-zinc-400'
-                    }`}
+                  <div
+                    style={{
+                      display: 'table',
+                      tableLayout: 'fixed',
+                      width: '100%',
+                      height: '36px',
+                    }}
                   >
-                    {row.rowNumber}
-                  </span>
-
-                  {/* 2. Channel Logo */}
-                  <div className="w-7 h-6 rounded bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0 text-zinc-200 font-bold text-[10px]">
-                    {effectiveLogo ? (
-                      <img
-                        src={effectiveLogo}
-                        alt=""
-                        loading="lazy"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
+                    {/* COLUMN 1 (36%): Channel Number + Logo + Channel Name */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '36%',
+                        verticalAlign: 'middle',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        paddingRight: '8px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          width: '30px',
+                          textAlign: 'right',
+                          marginRight: '10px',
+                          fontSize: '16px',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          verticalAlign: 'middle',
                         }}
-                        className="w-full h-full object-contain p-0.5"
-                      />
-                    ) : (
-                      <span>{shortBadge || 'TV'}</span>
-                    )}
-                  </div>
+                      >
+                        {idx + 1}
+                      </span>
 
-                  {/* 3. Channel Name + Live EPG Title */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xs sm:text-sm font-bold text-white truncate">
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          width: '28px',
+                          height: '22px',
+                          marginRight: '10px',
+                          backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                          textAlign: 'center',
+                          lineHeight: '20px',
+                          verticalAlign: 'middle',
+                          overflow: 'hidden',
+                          fontSize: '10px',
+                          fontWeight: 800,
+                          color: '#7dd3fc',
+                        }}
+                      >
+                        {effectiveLogo ? (
+                          <img
+                            src={effectiveLogo}
+                            alt=""
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'contain',
+                              display: 'block',
+                            }}
+                          />
+                        ) : (
+                          <span>{shortBadge || 'TV'}</span>
+                        )}
+                      </span>
+
+                      {isFav && (
+                        <span
+                          style={{
+                            color: '#fbbf24',
+                            marginRight: '6px',
+                            fontSize: '14px',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          ★
+                        </span>
+                      )}
+
+                      <span
+                        style={{
+                          fontSize: '16px',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          verticalAlign: 'middle',
+                        }}
+                      >
                         {ch.name}
                       </span>
                     </div>
-                    {nowProg && (
-                      <p className="text-[11px] text-amber-200/90 truncate mt-0.5">
-                        {nowProg.title}
-                      </p>
-                    )}
-                  </div>
 
-                  {/* 4. Right Side: Remaining Minutes + Progress + Favorite Heart */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    {nowProg && (
-                      <div className="flex flex-col items-end gap-0.5">
-                        <span className="text-[10px] font-mono text-zinc-400 tabular-nums">
-                          +{stats.remainingMin}m
-                        </span>
-                        <div className="w-10 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                          <div
-                            className="h-full bg-brand-400 rounded-full"
-                            style={{ width: `${stats.progress}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleFavoriteTvChannel(ch);
+                    {/* COLUMN 2 (50%): Green EPG Dot + Live Programme Title (What is playing right now) */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '50%',
+                        verticalAlign: 'middle',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        paddingLeft: '6px',
+                        paddingRight: '8px',
                       }}
-                      aria-label={
-                        isFav ? 'Elimină de la Favorite' : 'Adaugă la Favorite'
-                      }
-                      className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
-                        isFav
-                          ? 'text-rose-500'
-                          : 'text-zinc-500 hover:text-rose-400'
-                      }`}
                     >
-                      <Heart
-                        className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`}
-                        aria-hidden="true"
-                      />
-                    </button>
+                      {nowProg ? (
+                        <>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '8px',
+                              height: '8px',
+                              borderRadius: '9999px',
+                              backgroundColor: '#34d399',
+                              verticalAlign: 'middle',
+                              marginRight: '8px',
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: '15px',
+                              fontWeight: 600,
+                              color: isFocused ? '#fef08a' : '#f1f5f9',
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            {nowProg.title}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+
+                    {/* COLUMN 3 (14%): +Remaining Minutes + Compact Progress Bar */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '14%',
+                        verticalAlign: 'middle',
+                        textAlign: 'right',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {nowProg ? (
+                        <>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              verticalAlign: 'middle',
+                              marginRight: '6px',
+                              fontSize: '14px',
+                              fontWeight: 600,
+                              color: '#e2e8f0',
+                            }}
+                          >
+                            +{stats.remainingMin}
+                          </span>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              verticalAlign: 'middle',
+                              width: '28px',
+                              height: '8px',
+                              backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                              border: '1px solid rgba(255, 255, 255, 0.6)',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <span
+                              style={{
+                                display: 'block',
+                                height: '100%',
+                                backgroundColor: '#ffffff',
+                                width: `${stats.progress}%`,
+                              }}
+                            />
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
+                </button>
               );
             })
           )}
         </div>
+      </div>
+
+      {/* Bottom-Right Protruding Legend Tab: [ i Info | • Edit | • EPG | • A-Z | • Groups ] (Exact match to Photo 1) */}
+      <div
+        style={{
+          backgroundColor: 'rgba(10, 14, 22, 0.96)',
+          borderBottom: '2px solid #7dd3fc',
+          borderLeft: '2px solid #7dd3fc',
+          borderRight: '2px solid #7dd3fc',
+        }}
+        className="self-end bg-black/95 px-4 py-1 flex items-center gap-4 sm:gap-5 text-xs sm:text-[13px] font-bold text-white shrink-0"
+      >
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={() => {
+            if (onToggleInfoPanel) onToggleInfoPanel();
+            if (onCloseOverlay) onCloseOverlay();
+          }}
+          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          title="Afișează bara Info jos"
+        >
+          <span className="px-1 py-0.2 bg-sky-200 text-black text-[10px] font-black">
+            i
+          </span>
+          <span>Info</span>
+        </button>
+
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={toggleFavForFocusedChannel}
+          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          title="Adaugă / Elimină canalul selectat la Favorite (Tasta Roșie / F)"
+        >
+          <span className="w-2.5 h-2.5 bg-rose-500 inline-block" />
+          <span>Fav</span>
+        </button>
+
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={openEpgForFocusedChannel}
+          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          title="Deschide EPG și Arhiva Catch-up (Tasta Verde / E)"
+        >
+          <span className="w-2.5 h-2.5 bg-emerald-400 inline-block" />
+          <span>EPG</span>
+        </button>
+
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={() =>
+            setSortMode((prev) => (prev === 'default' ? 'az' : 'default'))
+          }
+          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          title="Sortează alfabetic A-Z (Tasta Galbenă / S)"
+        >
+          <span className="w-2.5 h-2.5 bg-amber-400 inline-block" />
+          <span>{sortMode === 'az' ? 'A-Z ✓' : 'A-Z'}</span>
+        </button>
+
+        <button
+          type="button"
+          data-osd-action-btn="true"
+          onClick={() => setIsGroupPickerOpen((v) => !v)}
+          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+          title="Alege Categoria sau Țara (Tasta Albastră / G / Săgeți Stânga-Dreapta)"
+        >
+          <span className="w-2.5 h-2.5 bg-blue-500 inline-block" />
+          <span>Groups</span>
+        </button>
       </div>
     </div>
   );

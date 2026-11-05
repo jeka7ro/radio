@@ -1,14 +1,14 @@
 {
-  "name": "AetherRadio — Radio Online Global",
-  "short_name": "AetherRadio",
-  "description": "Ascultă mii de posturi de radio live din toată lumea, organizate pe țări și genuri muzicale.",
+  "name": "SmartCinema — Filme, Seriale, TV Live & Radio",
+  "short_name": "SmartCinema",
+  "description": "Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#09090b",
-  "theme_color": "#6d28d9",
-  "categories": ["music", "entertainment", "news"],
+  "background_color": "#060a08",
+  "theme_color": "#10b981",
+  "categories": ["entertainment", "video", "music"],
   "icons": [
     {
       "src": "/icons/favicon.svg",

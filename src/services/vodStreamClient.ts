@@ -5,6 +5,8 @@ export interface ResolvedDirectVodStream {
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
+  proxyHlsUrl?: string;
+  rawHlsUrl?: string;
   title?: string;
   duration?: number;
   audioNames?: string[];
@@ -286,7 +288,58 @@ export async function resolveDirectVodStreamClient(params: {
     episode = 1,
   } = params;
 
-  // 1. Try direct browser resolution first (binds HLS stream token to the user's own IP!)
+  const isLocalLan =
+    typeof window !== 'undefined' &&
+    (window.location.hostname.startsWith('192.168.') ||
+      window.location.hostname.startsWith('10.') ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1');
+
+  const isSmartTvUa =
+    typeof navigator !== 'undefined' &&
+    /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+      navigator.userAgent
+    );
+
+  const fetchFromBackend = async (): Promise<ResolvedDirectVodStream | null> => {
+    try {
+      const qs = new URLSearchParams({
+        kp,
+        imdb,
+        title,
+        type: mediaType,
+        year,
+        season: String(season),
+        episode: String(episode),
+      });
+      const res = await fetch(`/api/vod-stream?${qs.toString()}`);
+      if (res.ok) {
+        const data = (await res.json()) as ResolvedDirectVodStream;
+        if (data?.ok && data.hlsUrl) {
+          if (isLocalLan && data.proxyHlsUrl) {
+            return {
+              ...data,
+              rawHlsUrl: data.hlsUrl,
+              hlsUrl: data.proxyHlsUrl,
+            };
+          }
+          return data;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  // On Local LAN or Smart TV WebViews (where Let's Encrypt root CAs on older WebOS/Tizen fail direct browser fetches),
+  // resolve immediately via `/api/vod-stream` first!
+  if (isLocalLan || isSmartTvUa) {
+    const backendFirst = await fetchFromBackend();
+    if (backendFirst) return backendFirst;
+  }
+
+  // 1. Try direct browser resolution (binds HLS stream token to the user's own IP!)
   const candidates: string[] = [];
   if (kp && /^\d+$/.test(kp.trim())) {
     candidates.push(`kp/${kp.trim()}`);
@@ -321,23 +374,9 @@ export async function resolveDirectVodStreamClient(params: {
   }
 
   // 2. Fallback to backend `/api/vod-stream`
-  try {
-    const qs = new URLSearchParams({
-      kp,
-      imdb,
-      title,
-      type: mediaType,
-      year,
-      season: String(season),
-      episode: String(episode),
-    });
-    const res = await fetch(`/api/vod-stream?${qs.toString()}`);
-    if (res.ok) {
-      const data = (await res.json()) as ResolvedDirectVodStream;
-      if (data?.ok && data.hlsUrl) return data;
-    }
-  } catch {
-    // ignore
+  if (!isLocalLan && !isSmartTvUa) {
+    const backendFallback = await fetchFromBackend();
+    if (backendFallback) return backendFallback;
   }
 
   return { ok: false };

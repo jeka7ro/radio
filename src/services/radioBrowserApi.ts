@@ -52,11 +52,22 @@ async function fetchWithTimeout(
 async function requestWithFallback<T>(path: string, options: RequestInit = {}): Promise<T> {
   const totalServers = RADIO_BROWSER_SERVERS.length;
   let lastError: unknown = null;
+  const isSmartTvOrLan =
+    typeof window !== 'undefined' &&
+    (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
+      window.location.hostname
+    ) ||
+      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+        navigator.userAgent
+      ));
 
   for (let attempt = 0; attempt < totalServers; attempt++) {
     const serverIdx = (preferredServerIndex + attempt) % totalServers;
     const baseUrl = RADIO_BROWSER_SERVERS[serverIdx];
-    const url = `${baseUrl}${path}`;
+    const directUrl = `${baseUrl}${path}`;
+    const url = isSmartTvOrLan
+      ? `/api/tv-proxy?url=${encodeURIComponent(directUrl)}`
+      : directUrl;
 
     try {
       const response = await fetchWithTimeout(url, {
@@ -76,6 +87,23 @@ async function requestWithFallback<T>(path: string, options: RequestInit = {}): 
       return data;
     } catch (err) {
       lastError = err;
+    }
+  }
+
+  // Final fallback via /api/tv-proxy if direct browser fetch failed (e.g. Let's Encrypt root CA on older devices)
+  if (!isSmartTvOrLan) {
+    try {
+      const fallbackUrl = `/api/tv-proxy?url=${encodeURIComponent(
+        `${RADIO_BROWSER_SERVERS[0]}${path}`
+      )}`;
+      const res = await fetchWithTimeout(fallbackUrl, {
+        headers: { Accept: 'application/json' },
+      });
+      if (res.ok) {
+        return (await res.json()) as T;
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -158,11 +186,11 @@ function normalizeStationsList(
     const domain = extractDomainFromUrl(homepage);
     let favicon = (st.favicon || '').trim();
 
-    if (!favicon || isLowResIcoUrl(favicon)) {
-      const highResOfficial = getHighResOfficialLogo(st.name || '', homepage);
-      if (highResOfficial) {
-        favicon = highResOfficial;
-      } else if (domain && domainFaviconMap.has(domain)) {
+    const highResOfficial = getHighResOfficialLogo(st.name || '', homepage);
+    if (highResOfficial) {
+      favicon = highResOfficial;
+    } else if (!favicon || isLowResIcoUrl(favicon)) {
+      if (domain && domainFaviconMap.has(domain)) {
         favicon = domainFaviconMap.get(domain)!;
       }
     }
@@ -214,7 +242,7 @@ export async function fetchStationsByCountry(
     hidebroken: 'true',
     order: 'votes',
     reverse: 'true',
-    limit: isGlobal ? '1500' : '10000',
+    limit: isGlobal ? '600' : '800',
   });
 
   if (!isGlobal) {

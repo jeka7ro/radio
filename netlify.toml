@@ -34,6 +34,24 @@
   force = true
 
 [[redirects]]
+  from = "/api/tv-profiles"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/tv-progress"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/tv-saved"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/tv/msx/*"
   to = "/msx/:splat"
   status = 200

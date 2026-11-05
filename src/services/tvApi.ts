@@ -19,6 +19,8 @@ const LOGANETTV_KIDS_M3U =
   'https://raw.githubusercontent.com/loganettv/playlists/main/kids.m3u';
 const LOGANETTV_LEISURE_M3U =
   'https://raw.githubusercontent.com/loganettv/playlists/main/leisure.m3u';
+const LOGANETTV_STRAWBERRY_M3U =
+  'https://raw.githubusercontent.com/loganettv/playlists/main/strawberry.m3u';
 const SMOLNP_RU_M3U =
   'https://raw.githubusercontent.com/smolnp/IPTVru/master/IPTVru.m3u';
 const FREETV_RU_M3U =
@@ -606,7 +608,7 @@ export async function fetchTvChannelsByCountry(
     return all.slice(0, 2500);
   }
 
-  const cacheKey = `tv_channels_v5_${upperCode}`;
+  const cacheKey = `tv_channels_v6_${upperCode}`;
   if (!forceRefresh) {
     const cached = getCachedData<TvChannel[]>(cacheKey);
     if (cached) {
@@ -615,7 +617,7 @@ export async function fetchTvChannelsByCountry(
   }
 
   // For Russia (RU): combine ngrch/iptv (ru.m3u + music.m3u + cartoons.m3u),
-  // loganettv/playlists (movie.m3u + mega.m3u + all.m3u + sport.m3u + kids.m3u + leisure.m3u),
+  // loganettv/playlists (movie.m3u + mega.m3u + all.m3u + sport.m3u + kids.m3u + leisure.m3u + strawberry.m3u),
   // Free-TV Russia, smolnp/IPTVru, and iptv-org (rus.m3u + ru.m3u)
   if (upperCode === 'RU') {
     const results = await Promise.allSettled([
@@ -626,6 +628,7 @@ export async function fetchTvChannelsByCountry(
       fetch(LOGANETTV_SPORT_M3U).then((r) => (r.ok ? r.text() : '')),
       fetch(LOGANETTV_KIDS_M3U).then((r) => (r.ok ? r.text() : '')),
       fetch(LOGANETTV_LEISURE_M3U).then((r) => (r.ok ? r.text() : '')),
+      fetch(LOGANETTV_STRAWBERRY_M3U).then((r) => (r.ok ? r.text() : '')),
       fetch(FREETV_RU_M3U).then((r) => (r.ok ? r.text() : '')),
       fetch(SMOLNP_RU_M3U).then((r) => (r.ok ? r.text() : '')),
       fetch(NGRCH_MUSIC_M3U).then((r) => (r.ok ? r.text() : '')),
@@ -641,6 +644,7 @@ export async function fetchTvChannelsByCountry(
     const combinedText = [
       CURATED_RUSSIAN_TOP_HD_M3U,
       ...results.map((r) => (r.status === 'fulfilled' ? r.value : '')),
+      CURATED_ADULT_18_M3U,
     ]
       .filter(Boolean)
       .join('\n');
@@ -834,36 +838,156 @@ export function downloadM3uFile(content: string, filename: string): void {
 }
 
 /**
- * Checks whether a TV channel belongs to the 18+ / Adult / iEdem "Для взрослых" / "взрослые" category.
+ * Curated verified working 18+ / Adult / iEdem "Для взрослых / Эротика" HD channels.
+ */
+const CURATED_ADULT_18_M3U = `
+#EXTM3U
+#EXTINF:-1 group-title="Для взрослых (18+)",Brazzers TV Europe HD (1080p)
+http://193.239.187.102/BRAZZERS/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Brazzers TV Europe (2)
+http://185.23.80.23:8080/BrazzersTV/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Русская Ночь / Russian Night HD
+http://stream.mcquack.net/60/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Русская Ночь (2) / Russkaya Noch
+http://185.23.80.23:8080/RusskayaNoch/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Babes TV HD (1080p)
+http://stream.mcquack.net/55/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Redlight HD (1080p)
+http://stream.mcquack.net/56/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Exxxotica HD (1080p)
+http://stream.mcquack.net/57/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Erox HD (1080p)
+http://stream.mcquack.net/58/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Hustler HD (1080p)
+http://stream.mcquack.net/59/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Vivid Red HD (1080p)
+http://stream.mcquack.net/284/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Blue Hustler
+http://185.23.80.23:8080/BlueHustler/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Barely Legal
+http://185.23.80.23:8080/BarelyLegal/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Playboy TV
+http://185.23.80.23:8080/PlayboyTV/index.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Porn Classic
+http://200.194.238.229:8383/live/pornclassic/playlist.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Russian / Русское 18+ HD
+http://cdn.adultiptv.net/russian.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Russian (2) HD
+http://live.redtraffic.xyz/russian.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Pornstar HD
+http://cdn.adultiptv.net/pornstar.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Pornstar (2) HD
+http://live.redtraffic.xyz/pornstar.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Hardcore HD
+http://live.redtraffic.xyz/hardcore.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Big Tits HD
+http://live.redtraffic.xyz/bigtits.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Big Ass HD
+http://cdn.adultiptv.net/bigass.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Big Ass (2) HD
+http://live.redtraffic.xyz/bigass.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Blonde HD
+http://cdn.adultiptv.net/blonde.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Brunette HD
+http://cdn.adultiptv.net/brunette.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Latina HD
+http://cdn.adultiptv.net/latina.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Milf HD
+http://cdn.adultiptv.net/milf.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Teen 18+ HD
+http://cdn.adultiptv.net/teen.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Amateur HD
+http://cdn.adultiptv.net/amateur.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Lesbian HD
+http://cdn.adultiptv.net/lesbian.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Threesome HD
+http://cdn.adultiptv.net/threesome.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Anal HD
+http://cdn.adultiptv.net/anal.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Blowjob HD
+http://cdn.adultiptv.net/blowjob.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV POV HD
+http://cdn.adultiptv.net/pov.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Asian HD
+http://cdn.adultiptv.net/asian.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Interracial HD
+http://cdn.adultiptv.net/interracial.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Cuckold HD
+http://live.redtraffic.xyz/cuckold.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Fetish HD
+http://cdn.adultiptv.net/fetish.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Rough HD
+http://cdn.adultiptv.net/rough.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Gangbang HD
+http://cdn.adultiptv.net/gangbang.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Compilation HD
+http://cdn.adultiptv.net/compilation.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Live Cams HD
+http://cdn.adultiptv.net/livecams.m3u8
+#EXTINF:-1 group-title="Для взрослых (18+)",Adult IPTV Big Dick HD
+http://cdn.adultiptv.net/bigdick.m3u8
+`;
+
+/**
+ * Checks whether a TV channel belongs to the 18+ / Adult / iEdem "Для взрослых" / "взрослые" / "Эротика" category.
  */
 export function isAdultTvChannel(ch: TvChannel): boolean {
   const combined = `${ch.group || ''} ${ch.name || ''}`;
-  return /(?:взросл|для взрослых|эротик|шалун|русская ночь|искушение|ночной клуб|brazzers|hustler|redlight|dorcel|penthouse|playboy|private\s*tv|vivid|babes|barely\s*legal|extasy|passion\s*xxx|pink\s*o|blue\s*hustler|erox|cento\s*x\s*cento|superone|babestation|visit-x|\bxxx\b|\badult\b|\b18\+)/i.test(
+  if (/adult\s*swim|stingray\s*pop\s*adult|adult\s*animation/i.test(combined)) {
+    return false;
+  }
+  return /(?:взросл|для взрослых|эротик|клубнич|шалун|русская ночь|искушение|ночной клуб|brazzers|hustler|redlight|dorcel|penthouse|playboy|private\s*tv|vivid|babes|barely\s*legal|extasy|exxxotica|passion\s*xxx|pink\s*o|blue\s*hustler|erox|cento\s*x\s*cento|superone|babestation|visit-x|porn|milf|fetish|lesbian|hardcore|blowjob|cuckold|threesome|gangbang|interracial|candyman|o-la-la|olala|nuart|xxx|\badult\b|\b18\+)/i.test(
     combined
   );
 }
 
 /**
- * Fetches 18+ Adult TV channels from iptv-org categories/xxx.m3u to supplement iEdem "Для взрослых" channels.
+ * Fetches 18+ Adult TV channels from Curated iEdem 18+, loganettv/strawberry.m3u, and mega.m3u.
  */
 export async function fetchAdultTvChannels(): Promise<TvChannel[]> {
-  const cacheKey = 'tv_channels_v5_ADULT_XXX';
+  const cacheKey = 'tv_channels_v6_ADULT_XXX';
   const cached = getCachedData<TvChannel[]>(cacheKey);
-  if (cached && cached.length > 0) {
+  if (cached && cached.length > 5) {
     return cached;
   }
   try {
-    const res = await fetch(`${IPTV_BASE_URL}/categories/xxx.m3u`);
-    if (!res.ok) return [];
-    const text = await res.text();
-    const parsed = parseM3uPlaylist(text, 'INT').map((ch) => ({
-      ...ch,
-      group: 'Для взрослых (18+)',
-    }));
-    setCachedData(cacheKey, parsed, DEFAULT_TTL_MS);
-    return parsed;
+    const [strawberryRes, megaRes] = await Promise.allSettled([
+      fetch(LOGANETTV_STRAWBERRY_M3U).then((r) => (r.ok ? r.text() : '')),
+      fetch(LOGANETTV_MEGA_M3U).then((r) => (r.ok ? r.text() : '')),
+    ]);
+    const strawberryText =
+      strawberryRes.status === 'fulfilled' ? strawberryRes.value : '';
+    const megaText = megaRes.status === 'fulfilled' ? megaRes.value : '';
+
+    const curatedList = parseM3uPlaylist(CURATED_ADULT_18_M3U, 'RU');
+    const strawberryList = parseM3uPlaylist(strawberryText, 'RU').filter(
+      (ch) =>
+        isAdultTvChannel(ch) &&
+        !/penthouse1\/index\.m3u8\?token=test|DiemaSport/i.test(ch.url)
+    );
+    const megaAdultList = parseM3uPlaylist(megaText, 'RU').filter(
+      (ch) =>
+        isAdultTvChannel(ch) &&
+        !/penthouse1\/index\.m3u8\?token=test|DiemaSport/i.test(ch.url)
+    );
+
+    const seen = new Set<string>();
+    const merged: TvChannel[] = [];
+    for (const ch of [...curatedList, ...strawberryList, ...megaAdultList]) {
+      if (!ch.url || seen.has(ch.url)) continue;
+      seen.add(ch.url);
+      merged.push({
+        ...ch,
+        group: 'Для взрослых (18+)',
+      });
+    }
+
+    if (merged.length > 0) {
+      setCachedData(cacheKey, merged, DEFAULT_TTL_MS);
+    }
+    return merged;
   } catch {
-    return [];
+    return parseM3uPlaylist(CURATED_ADULT_18_M3U, 'RU');
   }
 }
 

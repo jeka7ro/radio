@@ -1,9 +1,10 @@
 import React from 'react';
-import { Home, Tv, Film, Globe, Heart, Settings, Radio, ChevronRight } from 'lucide-react';
+import { Home, Tv, Film, Globe, Heart, Settings, ChevronRight } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { EnrichedCountry } from '../../hooks/useCountries';
 import { NavigationTab } from '../../types/radio';
+import { SmartCinemaLogo } from '../common/SmartCinemaLogo';
 
 interface SidebarProps {
   selectedCountry: EnrichedCountry;
@@ -36,20 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
     <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 bg-white dark:bg-zinc-900 border-r border-slate-200/80 dark:border-zinc-800/80 z-30 pb-24">
       {/* Brand Header (aligned to exact 64px / h-16 height to match Header border-b) */}
       <div className="flex items-center gap-3 px-6 h-16 border-b border-slate-200/80 dark:border-zinc-800/80 shrink-0">
-        <div
-          aria-hidden="true"
-          className="w-9 h-9 rounded-full bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm shrink-0"
-        >
-          <Radio className="w-4 h-4" />
-        </div>
-        <div>
-          <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-zinc-100 block leading-none">
-            AetherRadio
-          </span>
-          <span className="text-xs text-slate-600 dark:text-zinc-400 font-medium mt-1 block">
-            Global Stream Tuner
-          </span>
-        </div>
+        <SmartCinemaLogo size="md" subtitle="4K Cinema • TV • Radio" />
       </div>
 
       {/* Primary Desktop Navigation */}

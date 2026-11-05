@@ -249,12 +249,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                   key={channel.id}
                   type="button"
                   onClick={() =>
-                    playTvChannel(
-                      channel,
-                      filteredChannels.length > 0
-                        ? filteredChannels
-                        : favoriteTvChannels
-                    )
+                    playTvChannel(channel, favoriteTvChannels)
                   }
                   aria-label={format(t.tv.watchChannel, { name: channel.name })}
                   className={`group flex-shrink-0 flex items-center gap-2 max-w-[165px] sm:max-w-none sm:w-44 px-2.5 py-1.5 sm:p-2.5 rounded-full sm:rounded-2xl border text-left transition-all ${

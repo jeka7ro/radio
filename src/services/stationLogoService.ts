@@ -221,7 +221,96 @@ export function getHighResOfficialLogo(
     return 'https://radiozu.ro/favicon-96x96.png';
   }
   if (domain.includes('dfm.ru') || /\bdfm\b/i.test(n)) {
-    return 'https://dfm.ru/apple-icon.png';
+    return 'https://top-radio.ru/assets/image/radio/180/radio-dfm.webp';
+  }
+
+  // 12. Major Russian Radio Stations (Радио 7 на семи холмах, Радио Ваня, Русское Радио, Европа Плюс, Ретро FM, etc.)
+  if (
+    domain.includes('radio7.ru') ||
+    /радио\s*7|на\s*семи\s*холмах|radio\s*7\b/i.test(n)
+  ) {
+    return 'https://top-radio.ru/assets/image/radio/180/radio7-na7holmah.png';
+  }
+  if (domain.includes('radiovanya.ru') || /радио\s*ваня|radio\s*vanya/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radio-vanya.png';
+  }
+  if (domain.includes('rusradio.ru') || /русское\s*радио|russkoe\s*radio/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/rusradio.png';
+  }
+  if (domain.includes('europaplus.ru') || /европа\s*плюс|europa\s*plus/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/europa-plus.png';
+  }
+  if (domain.includes('retrofm.ru') || /ретро\s*fm|ретро\s*фм|retro\s*fm/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/retro_fm.png';
+  }
+  if (domain.includes('dorognoe.ru') || /дорожное\s*радио|dorozhnoe/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/dorojnoe.png';
+  }
+  if (domain.includes('avtoradio.ru') || /авторадио|avtoradio/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/auto.png';
+  }
+  if (/дискотека\s*90|супердискотека\s*90|superdiskoteka/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radiorecod.png';
+  }
+  if (domain.includes('radiorecord.ru') || /радио\s*рекорд|radio\s*record/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radiorecod.png';
+  }
+  if (domain.includes('radiodacha.ru') || /радио\s*дача|radio\s*dacha/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radio-dacha.png';
+  }
+  if (domain.includes('novoeradio.ru') || /новое\s*радио|novoe\s*radio/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/novoe-v2.png';
+  }
+  if (domain.includes('loveradio.ru') || /love\s*radio|лав\s*радио/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/loveradio2.png';
+  }
+  if (domain.includes('veseloeradio.ru') || /юмор\s*fm|юмор\s*фм|yumor\s*fm/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/yumor-fm.png';
+  }
+  if (domain.includes('radioshanson.ru') || /радио\s*шансон|shanson/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/shanson.png';
+  }
+  if (domain.includes('hitfm.ru') || /хит\s*fm|хит\s*фм/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/hit-fm.png';
+  }
+  if (domain.includes('energyfm.ru') || /радио\s*энерджи|energy\s*fm|\bnrg\b/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/nrg-energy.webp';
+  }
+  if (domain.includes('comedy-radio.ru') || /comedy\s*radio|камеди\s*радио/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/comedyradio.png';
+  }
+  if (domain.includes('relax-fm.ru') || /relax\s*fm|релакс\s*фм/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/relaxfmru.png';
+  }
+  if (domain.includes('nashe.ru') || /наше\s*радио|nashe\s*radio/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/nase-radio.png';
+  }
+  if (domain.includes('radiomayak.ru') || /радио\s*маяк|mayak/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radiomayak.png';
+  }
+  if (domain.includes('maximum.ru') || /радио\s*maximum|радио\s*максимум/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/mamimum2.jpg';
+  }
+  if (domain.includes('zharafm.ru') || /жара\s*fm|zhara\s*fm/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/Zhara-fm.jpg';
+  }
+  if (domain.includes('russkijhit.ru') || /русский\s*хит/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/ruhitnew.png';
+  }
+  if (domain.includes('likefm.ru') || /\blike\s*fm\b|лайк\s*фм/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/likefm.png';
+  }
+  if (/калина\s*красная/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/kalina-krasnaya.png';
+  }
+  if (/милицейская\s*волна/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/radiomv.jpg';
+  }
+  if (/эльдорадио|eldoradio/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/eldo-radio.jpg';
+  }
+  if (/питер\s*fm|piter\s*fm/i.test(n)) {
+    return 'https://top-radio.ru/assets/image/radio/180/piterfm.png';
   }
 
   void h;
@@ -250,7 +339,16 @@ export function buildStationLogoCandidates(
   const trimmedFav = favicon?.trim() || '';
   const hasHighResFavicon = trimmedFav && !isLowResIcoUrl(trimmedFav);
 
-  // 1. If the station already has a specific high-res artwork URL in Radio Browser or M3U, use it first
+  // 1. Check our verified high-res official station/channel logo registry FIRST
+  const officialHighRes = getHighResOfficialLogo(name, homepage);
+  if (officialHighRes) {
+    add(officialHighRes);
+    if (/^https?:\/\//i.test(officialHighRes)) {
+      add(`/api/tv-proxy?url=${encodeURIComponent(officialHighRes)}`);
+    }
+  }
+
+  // 2. If the station already has a specific high-res artwork URL in Radio Browser or M3U, use it next
   if (hasHighResFavicon) {
     add(trimmedFav);
     if (trimmedFav.startsWith('http://')) {
@@ -258,15 +356,6 @@ export function buildStationLogoCandidates(
     }
     if (/^https?:\/\//i.test(trimmedFav)) {
       add(`/api/tv-proxy?url=${encodeURIComponent(trimmedFav)}`);
-    }
-  }
-
-  // 2. Check our verified high-res official station/channel logo registry
-  const officialHighRes = getHighResOfficialLogo(name, homepage);
-  if (officialHighRes) {
-    add(officialHighRes);
-    if (/^https?:\/\//i.test(officialHighRes)) {
-      add(`/api/tv-proxy?url=${encodeURIComponent(officialHighRes)}`);
     }
   }
 

@@ -63,15 +63,28 @@ export function useAudioPlayer() {
     audio.muted = isMuted;
   }, [volume, isMuted]);
 
-  // Handle pause / resume when playerStatus is toggled by UI
+  // Handle pause / stop / idle when playerStatus or currentStation is updated by UI
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentStation) return;
+    if (!audio) return;
 
-    if (playerStatus === 'paused') {
+    if (!currentStation || playerStatus === 'idle' || playerStatus === 'paused') {
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
       audio.pause();
+      if (!currentStation || playerStatus === 'idle') {
+        audio.removeAttribute('src');
+        audio.load();
+      }
       if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'paused';
+        navigator.mediaSession.playbackState =
+          playerStatus === 'paused' ? 'paused' : 'none';
       }
     }
   }, [playerStatus, currentStation]);
@@ -103,15 +116,38 @@ export function useAudioPlayer() {
     const rawUrl = (currentStation.url_resolved || currentStation.url || '').trim();
     const isPageHttps =
       typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const isSmartTvOrLan =
+      typeof window !== 'undefined' &&
+      (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
+        window.location.hostname
+      ) ||
+        /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+          navigator.userAgent
+        ) ||
+        document.documentElement.classList.contains('smart-tv-mode'));
+
+    const buildAudioProxyUrl = (target: string) =>
+      `/api/tv-proxy?url=${encodeURIComponent(target)}&skipAd=1`;
 
     const getEffectiveStreamUrl = (attempt: number, forceHttps: boolean) => {
-      if (
-        (forceHttps || (isPageHttps && attempt > 0)) &&
-        isInsecureHttpStream(rawUrl)
-      ) {
-        return toHttpsStreamUrl(rawUrl);
+      // Always prefer local proxy with automatic 2x Preroll Ad-Skipper on attempt 0
+      if (attempt === 0) {
+        return buildAudioProxyUrl(rawUrl);
       }
-      return rawUrl;
+
+      if (attempt === 1) {
+        if (
+          (forceHttps || isPageHttps) &&
+          isInsecureHttpStream(rawUrl)
+        ) {
+          return toHttpsStreamUrl(rawUrl);
+        }
+        return rawUrl;
+      }
+
+      return isInsecureHttpStream(rawUrl)
+        ? buildAudioProxyUrl(toHttpsStreamUrl(rawUrl))
+        : buildAudioProxyUrl(rawUrl);
     };
 
     const scheduleRetryOrError = () => {
@@ -280,6 +316,11 @@ export function useAudioPlayer() {
         window.clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      audio.pause();
       audio.removeEventListener('playing', handlePlaying);
       audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('error', handleError);

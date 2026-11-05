@@ -22,6 +22,7 @@ const mergedEpgState: EpgApiResponse = {
   keyMap: {},
 };
 
+const countryEpgMap = new Map<string, EpgApiResponse>();
 const loadedCountries = new Map<string, number>();
 const inflightCountries = new Map<string, Promise<EpgApiResponse>>();
 const listeners = new Set<() => void>();
@@ -34,52 +35,55 @@ function notifyListeners() {
   }
 }
 
-if (typeof window !== 'undefined') {
-  window.setInterval(() => {
-    if (listeners.size > 0) {
-      notifyListeners();
-    }
-  }, 30_000);
-}
-
 export function normalizeEpgLookupKey(
   raw: string,
   stripGenericWords = false
 ): string {
-  let s = (raw || '')
+  const base = (raw || '')
     .toLowerCase()
-    .split('/')[0]
-    .replace(/\.(ro|ru|md|uk|gb|us|de|fr|it|es|ua|by|kz)(@\w+)?$/i, '')
+    .replace(/[ăâäàá]/g, 'a')
+    .replace(/[îïìí]/g, 'i')
+    .replace(/[șşš]/g, 's')
+    .replace(/[țţ]/g, 't')
+    .replace(/[éèêë]/g, 'e')
+    .replace(/[óòôö]/g, 'o')
+    .replace(/[úùûü]/g, 'u')
+    .replace(/\[[^\]]*\]/g, ' ')
     .replace(
       /\(\s*(1080[pi]?|720[pi]?|576[pi]?|480[pi]?|4k|uhd|hd|sd|russia|romania|moldova|архив|live|\d+)\s*\)/gi,
       ' '
     )
     .replace(/\([^+)]*\)/g, ' ')
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(
-      /\b(hd|fhd|uhd|4k|sd|live|orig|50fps|romania|russia|архив)\b/gi,
-      ' '
-    );
+    .split('/')[0]
+    .replace(/\.(ro|ru|md|uk|gb|us|de|fr|it|es|ua|by|kz)(@\w+)?$/i, '')
+    .replace(/\b(hd|fhd|uhd|4k|sd|live|orig|50fps|архив)\b/gi, ' ');
 
-  if (stripGenericWords) {
-    s = s.replace(/\b(tv|тв|канал|channel|телеканал)\b/gi, ' ');
+  const cleanBase = base.replace(/[^a-z0-9а-яё+]+/gi, '').trim();
+  if (!stripGenericWords) {
+    return cleanBase;
   }
 
-  return s.replace(/[^a-z0-9а-яё+]+/gi, '').trim();
+  const stripped = base
+    .replace(/\b(tv|тв|канал|channel|телеканал|romania|russia|moldova)\b/gi, ' ')
+    .replace(/[^a-z0-9а-яё+]+/gi, '')
+    .trim();
+
+  return stripped.length >= 3 ? stripped : cleanBase;
 }
 
 export async function fetchEpgForCountry(
   countryCode: string
 ): Promise<EpgApiResponse> {
   const upper = (countryCode || 'RO').trim().toUpperCase();
+  const normalizedCountry = upper === 'MD' ? 'RO' : upper;
   const now = Date.now();
-  const lastLoaded = loadedCountries.get(upper) || 0;
+  const lastLoaded = loadedCountries.get(normalizedCountry) || 0;
 
   if (now - lastLoaded < 10 * 60 * 1000) {
     return mergedEpgState;
   }
 
-  const existingPromise = inflightCountries.get(upper);
+  const existingPromise = inflightCountries.get(normalizedCountry);
   if (existingPromise) {
     return existingPromise;
   }
@@ -87,13 +91,17 @@ export async function fetchEpgForCountry(
   const promise = (async () => {
     try {
       const res = await fetch(
-        `/api/tv-epg?country=${encodeURIComponent(upper)}`
+        `/api/tv-epg?country=${encodeURIComponent(normalizedCountry)}`
       );
       if (!res.ok) {
         return mergedEpgState;
       }
       const data = (await res.json()) as EpgApiResponse;
       if (data && data.channels) {
+        countryEpgMap.set(normalizedCountry, {
+          channels: data.channels || {},
+          keyMap: data.keyMap || {},
+        });
         Object.assign(mergedEpgState.channels, data.channels);
       }
       if (data && data.keyMap) {
@@ -103,52 +111,81 @@ export async function fetchEpgForCountry(
           }
         }
       }
-      loadedCountries.set(upper, Date.now());
+      loadedCountries.set(normalizedCountry, Date.now());
       notifyListeners();
       return mergedEpgState;
     } catch {
       return mergedEpgState;
     } finally {
-      inflightCountries.delete(upper);
+      inflightCountries.delete(normalizedCountry);
     }
   })();
 
-  inflightCountries.set(upper, promise);
+  inflightCountries.set(normalizedCountry, promise);
   return promise;
 }
 
-function findRawEpgEntry(channel: TvChannel): RawEpgChannelEntry | null {
-  const { channels, keyMap } = mergedEpgState;
+if (typeof window !== 'undefined') {
+  window.setInterval(() => {
+    if (listeners.size > 0) {
+      notifyListeners();
+    }
+  }, 30_000);
+
+  window.setTimeout(() => {
+    void fetchEpgForCountry('RO');
+    void fetchEpgForCountry('RU');
+  }, 150);
+}
+
+function findRawEpgEntryInStore(
+  channel: TvChannel,
+  store: EpgApiResponse
+): RawEpgChannelEntry | null {
+  const { channels, keyMap } = store;
+  const candidates: RawEpgChannelEntry[] = [];
+
+  const pushIfFound = (entry?: RawEpgChannelEntry) => {
+    if (entry && !candidates.includes(entry)) {
+      candidates.push(entry);
+    }
+  };
 
   if (channel.tvgId) {
-    if (channels[channel.tvgId]) {
-      return channels[channel.tvgId];
-    }
+    pushIfFound(channels[channel.tvgId]);
     const cleanTvgId = channel.tvgId.replace(/@\w+$/, '');
-    if (channels[cleanTvgId]) {
-      return channels[cleanTvgId];
-    }
+    pushIfFound(channels[cleanTvgId]);
     const tk1 = normalizeEpgLookupKey(cleanTvgId, false);
-    if (tk1 && keyMap[tk1] && channels[keyMap[tk1]]) {
-      return channels[keyMap[tk1]];
-    }
+    if (tk1 && keyMap[tk1]) pushIfFound(channels[keyMap[tk1]]);
     const tk2 = normalizeEpgLookupKey(cleanTvgId, true);
-    if (tk2 && keyMap[tk2] && channels[keyMap[tk2]]) {
-      return channels[keyMap[tk2]];
-    }
+    if (tk2 && keyMap[tk2]) pushIfFound(channels[keyMap[tk2]]);
   }
 
   const nk1 = normalizeEpgLookupKey(channel.name, false);
-  if (nk1 && keyMap[nk1] && channels[keyMap[nk1]]) {
-    return channels[keyMap[nk1]];
-  }
+  if (nk1 && keyMap[nk1]) pushIfFound(channels[keyMap[nk1]]);
 
   const nk2 = normalizeEpgLookupKey(channel.name, true);
-  if (nk2 && keyMap[nk2] && channels[keyMap[nk2]]) {
-    return channels[keyMap[nk2]];
-  }
+  if (nk2 && keyMap[nk2]) pushIfFound(channels[keyMap[nk2]]);
+  if (nk2 && keyMap[`${nk2}tv`]) pushIfFound(channels[keyMap[`${nk2}tv`]]);
+  if (nk2 && keyMap[`${nk2}ro`]) pushIfFound(channels[keyMap[`${nk2}ro`]]);
 
-  return null;
+  const withProg = candidates.find(
+    (c) => c.programmes && c.programmes.length > 0
+  );
+  return withProg || candidates[0] || null;
+}
+
+function findRawEpgEntry(channel: TvChannel): RawEpgChannelEntry | null {
+  const rawCountry = (channel.countryCode || 'RO').trim().toUpperCase();
+  const primaryCountry = rawCountry === 'MD' ? 'RO' : rawCountry;
+  const countryStore = countryEpgMap.get(primaryCountry);
+  if (countryStore) {
+    const match = findRawEpgEntryInStore(channel, countryStore);
+    if (match && match.programmes && match.programmes.length > 0) {
+      return match;
+    }
+  }
+  return findRawEpgEntryInStore(channel, mergedEpgState);
 }
 
 export function resolveChannelEpg(channel: TvChannel | null): ChannelEpgData | null {
@@ -228,16 +265,22 @@ export function enrichChannelsWithEpgLogos(channels: TvChannel[]): TvChannel[] {
   return changed ? next : channels;
 }
 
-export function useChannelEpg(channel: TvChannel | null): ChannelEpgData | null {
-  const [, setTick] = useState(epgRevision);
+export function useEpgRevision(): number {
+  const [rev, setRev] = useState(epgRevision);
 
   useEffect(() => {
-    const onUpdate = () => setTick((t) => t + 1);
+    const onUpdate = () => setRev(epgRevision);
     listeners.add(onUpdate);
     return () => {
       listeners.delete(onUpdate);
     };
   }, []);
+
+  return rev;
+}
+
+export function useChannelEpg(channel: TvChannel | null): ChannelEpgData | null {
+  useEpgRevision();
 
   useEffect(() => {
     if (!channel?.countryCode) return;

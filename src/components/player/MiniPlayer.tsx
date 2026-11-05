@@ -167,30 +167,22 @@ export const MiniPlayer: React.FC = () => {
           aria-label={`${t.player.expandPlayer}: ${currentStation.name}`}
           className="flex-1 min-w-0 flex items-center gap-2.5 sm:gap-3 text-left py-1 pr-1 rounded-xl hover:bg-slate-100/70 dark:hover:bg-zinc-800/50 transition-colors"
         >
-          <div className="relative flex-shrink-0">
-            {displayTrack?.coverUrl ? (
-              <div className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl overflow-hidden shadow-md border border-slate-200 dark:border-zinc-700 bg-zinc-900">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <StationAvatar
+              name={currentStation.name}
+              favicon={currentStation.favicon}
+              homepage={currentStation.homepage}
+              size="sm"
+              isPlaying={false}
+            />
+            {displayTrack?.coverUrl && (
+              <div className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl overflow-hidden shadow-md border border-slate-200 dark:border-zinc-700 bg-zinc-900 shrink-0">
                 <img
                   src={displayTrack.coverUrl}
                   alt={displayTrack.title}
                   className="w-full h-full object-cover"
                 />
-                {isPlaying && (
-                  <div className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/75 backdrop-blur-sm flex items-end justify-center gap-0.5 shadow-sm">
-                    <span className="eq-bar w-0.5 bg-emerald-400 rounded-full h-2" />
-                    <span className="eq-bar eq-bar-2 w-0.5 bg-emerald-400 rounded-full h-3" />
-                    <span className="eq-bar eq-bar-3 w-0.5 bg-emerald-400 rounded-full h-2.5" />
-                  </div>
-                )}
               </div>
-            ) : (
-              <StationAvatar
-                name={currentStation.name}
-                favicon={currentStation.favicon}
-                homepage={currentStation.homepage}
-                size="sm"
-                isPlaying={isPlaying}
-              />
             )}
           </div>
 

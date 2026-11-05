@@ -257,7 +257,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         {/* Modal Header */}
         <div className="px-4 py-3 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0">
               <Subtitles className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -295,7 +295,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Numele filmului sau serialului (ex: Dune, Nocturne, Gladiator)..."
-                className="w-full h-9 pl-9 pr-3.5 rounded-full bg-zinc-950 border border-zinc-700 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500"
+                className="w-full h-9 pl-9 pr-3.5 rounded-full bg-zinc-950 border border-zinc-700 text-xs text-white placeholder:text-zinc-500 focus:outline-none focus:border-blue-500"
               />
             </div>
 
@@ -308,7 +308,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                 }}
                 className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
                   mediaType === 'movie'
-                    ? 'bg-emerald-600 text-white'
+                    ? 'bg-blue-600 text-white'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -323,7 +323,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                 }}
                 className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-colors ${
                   mediaType === 'series'
-                    ? 'bg-emerald-600 text-white'
+                    ? 'bg-blue-600 text-white'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -366,7 +366,7 @@ export const OnlineSubtitleFinderModal: React.FC<
             <button
               type="submit"
               disabled={isSearchingMedia}
-              className="h-9 px-4 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+              className="h-9 px-4 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
             >
               {isSearchingMedia ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -422,7 +422,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                   onClick={() => setLangFilter(opt.id)}
                   className={`min-h-[26px] px-2.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
                     active
-                      ? 'bg-emerald-500 text-zinc-950 font-bold'
+                      ? 'bg-blue-500 text-zinc-950 font-bold'
                       : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                   }`}
                 >
@@ -445,7 +445,7 @@ export const OnlineSubtitleFinderModal: React.FC<
 
           {isLoadingSubs ? (
             <div className="py-12 flex flex-col items-center justify-center gap-2 text-zinc-400">
-              <Loader2 className="w-7 h-7 text-emerald-400 animate-spin" />
+              <Loader2 className="w-7 h-7 text-blue-400 animate-spin" />
               <span className="text-xs font-semibold">
                 Se caută subtitrări pe OpenSubtitles pentru{' '}
                 {activeMediaTitle || activeImdbId}...
@@ -462,7 +462,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                 <button
                   type="button"
                   onClick={() => setLangFilter('all')}
-                  className="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs font-semibold"
+                  className="px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-blue-300 text-xs font-semibold"
                 >
                   Arată toate cele {subtitles.length} subtitrări disponibile
                 </button>
@@ -476,7 +476,7 @@ export const OnlineSubtitleFinderModal: React.FC<
               >
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold uppercase shrink-0">
+                    <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[11px] font-bold uppercase shrink-0">
                       {sub.langCode2}
                     </span>
                     <span className="text-xs sm:text-sm font-bold text-white truncate">
@@ -496,7 +496,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     type="button"
                     disabled={applyingId === sub.id}
                     onClick={() => void handleApplyTrack(sub)}
-                    className="min-h-[32px] px-3.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="min-h-[32px] px-3.5 py-1 rounded-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     {applyingId === sub.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -516,7 +516,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     {downloadingId === sub.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
-                      <Download className="w-3.5 h-3.5 text-emerald-400" />
+                      <Download className="w-3.5 h-3.5 text-blue-400" />
                     )}
                     <span>.SRT</span>
                   </button>

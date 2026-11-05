@@ -28,4 +28,10 @@ dist-ssr
 .env
 .env.*
 !.env.example
+.filelist-session.json
+.tv-profiles.json
+.tv-watch-progress*.json
+.tv-saved*.json
+
+
 

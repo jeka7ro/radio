@@ -1,9 +1,20 @@
-import React from 'react';
-import { Radio, ChevronDown, Sun, Moon, Monitor, Globe } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ChevronDown, Sun, Moon, Monitor, Globe } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { EnrichedCountry } from '../../hooks/useCountries';
 import { ThemeMode } from '../../types/radio';
+import { SmartCinemaLogo } from '../common/SmartCinemaLogo';
+import {
+  TvUserProfile,
+  loadSharedProfiles,
+  saveSharedProfiles,
+  loadSharedActiveProfileId,
+  saveSharedActiveProfileId,
+  isProfileRememberedOnDevice,
+  rememberProfileOnDevice,
+} from '../../services/deviceContinuityService';
+import { CrossDeviceHandoffModal } from '../tv/CrossDeviceHandoffModal';
 
 interface HeaderProps {
   selectedCountry: EnrichedCountry;
@@ -16,6 +27,78 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
   const setCountryModalOpen = useRadioStore((state) => state.setCountryModalOpen);
   const activeTab = useRadioStore((state) => state.activeTab);
   const setActiveTab = useRadioStore((state) => state.setActiveTab);
+
+  const [profiles, setProfiles] = useState<TvUserProfile[]>(() => loadSharedProfiles());
+  const [activeProfileId, setActiveProfileId] = useState<string>(() => loadSharedActiveProfileId());
+  const [isHandoffModalOpen, setIsHandoffModalOpen] = useState(false);
+  const [unlockedPinProfileKey, setUnlockedPinProfileKey] = useState<string>('');
+
+  const activeProfile =
+    profiles.find((p) => p.id === activeProfileId) || profiles[0];
+
+  const isPinLockRequired = Boolean(
+    activeProfile?.pin &&
+      activeProfile.pin.trim() &&
+      !isProfileRememberedOnDevice(activeProfile) &&
+      unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}`
+  );
+
+  useEffect(() => {
+    // Check if URL has ?profile=p1
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlProfile = params.get('profile');
+      if (urlProfile && profiles.some((p) => p.id === urlProfile)) {
+        saveSharedActiveProfileId(urlProfile);
+        setActiveProfileId(urlProfile);
+      }
+    } catch {
+      // ignore
+    }
+
+    fetch('/api/tv-profiles')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((serverProfiles) => {
+        if (Array.isArray(serverProfiles) && serverProfiles.length > 0) {
+          setProfiles(serverProfiles);
+          saveSharedProfiles(serverProfiles);
+        }
+      })
+      .catch(() => {});
+
+    const onProfileChange = (e: Event) => {
+      const custom = e as CustomEvent<string | { profileId?: string }>;
+      const nextId =
+        typeof custom.detail === 'string'
+          ? custom.detail
+          : custom.detail?.profileId || loadSharedActiveProfileId();
+      setActiveProfileId(nextId);
+      setProfiles(loadSharedProfiles());
+    };
+    const onProfilesUpdated = () => {
+      setProfiles(loadSharedProfiles());
+    };
+    window.addEventListener('aether:active-profile-changed', onProfileChange);
+    window.addEventListener('aether:profiles-updated', onProfilesUpdated);
+    return () => {
+      window.removeEventListener('aether:active-profile-changed', onProfileChange);
+      window.removeEventListener('aether:profiles-updated', onProfilesUpdated);
+    };
+  }, []);
+
+  const handleSelectProfile = (id: string) => {
+    const target = profiles.find((p) => p.id === id);
+    if (target) {
+      rememberProfileOnDevice(target);
+    }
+    if (target?.pin && target.pin.trim()) {
+      setUnlockedPinProfileKey(`${id}:${target.pin.trim()}`);
+    } else {
+      setUnlockedPinProfileKey('');
+    }
+    setActiveProfileId(id);
+    saveSharedActiveProfileId(id);
+  };
 
   const showCountrySelector =
     activeTab === 'home' || activeTab === 'tv' || activeTab === 'countries';
@@ -52,18 +135,10 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           <button
             type="button"
             onClick={() => setActiveTab('home')}
-            aria-label="AetherRadio Home"
+            aria-label="SmartCinema Home"
             className="lg:hidden flex items-center gap-1.5 text-left rounded-xl py-0.5 pr-1 shrink-0"
           >
-            <div
-              aria-hidden="true"
-              className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-gradient-to-br from-brand-600 to-brand-900 text-white flex items-center justify-center shadow-sm flex-shrink-0"
-            >
-              <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
-            <span className="text-xs sm:text-base font-bold tracking-tight text-slate-900 dark:text-zinc-100 hidden xs:inline">
-              AetherRadio
-            </span>
+            <SmartCinemaLogo size="sm" />
           </button>
 
           {/* Country selector pill button (only on Radio / TV / Countries views, hidden on Mediatecă) */}
@@ -94,8 +169,33 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           )}
         </div>
 
-        {/* Right: Smart TV Mode + Language & Theme controls */}
+        {/* Right: Profile & Continuity + Smart TV Mode + Language & Theme controls */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {activeProfile && (
+            <button
+              type="button"
+              onClick={() => setIsHandoffModalOpen(true)}
+              title="Conturi, Poză de profil, PIN & Continuitate între Smart TV, iPad și Laptop"
+              className="min-h-[32px] sm:min-h-[40px] pl-1.5 pr-2.5 sm:pl-2 sm:pr-3.5 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-[11px] sm:text-xs font-extrabold inline-flex items-center gap-2 shadow-2xs transition-colors cursor-pointer"
+            >
+              {activeProfile.avatarUrl ? (
+                <img
+                  src={activeProfile.avatarUrl}
+                  alt={activeProfile.name}
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full object-cover border border-emerald-400 shrink-0"
+                />
+              ) : (
+                <span className="text-sm leading-none">
+                  {activeProfile.avatarEmoji || activeProfile.avatar || '🎬'}
+                </span>
+              )}
+              <span className="max-w-[78px] sm:max-w-[110px] truncate">
+                {activeProfile.name}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
@@ -103,10 +203,11 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
               window.dispatchEvent(new Event('aether:enter-smart-tv'));
             }}
             title="Comută în Interfața Smart TV (Stil Lampa)"
-            className="min-h-[32px] sm:min-h-[40px] px-3 sm:px-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] sm:text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+            className="min-h-[32px] sm:min-h-[40px] px-3 sm:px-4 rounded-full bg-sky-600 hover:bg-sky-500 text-white text-[11px] sm:text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
           >
             <Monitor className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
-            <span>Mod Smart TV</span>
+            <span className="hidden sm:inline">Mod Smart TV</span>
+            <span className="sm:hidden">TV</span>
           </button>
 
           <button
@@ -132,6 +233,21 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           </button>
         </div>
       </div>
+
+      <CrossDeviceHandoffModal
+        isOpen={Boolean(isHandoffModalOpen || isPinLockRequired)}
+        isPinLockRequired={Boolean(isPinLockRequired)}
+        onClose={() => {
+          if (!isPinLockRequired) {
+            setIsHandoffModalOpen(false);
+          }
+        }}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onSelectProfile={handleSelectProfile}
+        onProfilesChange={(next) => setProfiles(next)}
+        uiLang={language === 'en' ? 'en' : 'ro'}
+      />
     </header>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type Hls from 'hls.js';
+import Hls from 'hls.js';
 import {
   X,
   Heart,
@@ -45,6 +45,9 @@ import {
 import { buildCatchupStreamCandidates } from '../../services/tvApi';
 
 function resolveWorkingStreamUrl(rawUrl: string): string {
+  if (/rdsnet\.ro\/.*digi24/i.test(rawUrl)) {
+    return 'https://edge-ar.rcs-rds.ro/digi24ar/index.m3u8';
+  }
   if (/rpprod\.hbbtv\.cdn\.cra\.cz:8080\/hbbTV\/cme-ro-protv/i.test(rawUrl)) {
     return 'https://cmero-ott-live.ssl.cdn.cra.cz/channels/cme-ro-voyo-news/playlist.m3u8?offsetSeconds=0&url=0';
   }
@@ -295,11 +298,15 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     return catchupUrls;
   }, [currentTvChannel, tvQueue, activeArchiveProg]);
 
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const liveSurfaceBtnRef = useRef<HTMLButtonElement | null>(null);
+  const osdClosedAtRef = useRef<number>(0);
   const hlsRef = useRef<Hls | null>(null);
   const subFileInputRef = useRef<HTMLInputElement | null>(null);
+  const channelGridBtnRef = useRef<HTMLButtonElement | null>(null);
+  const osdTimerRef = useRef<number | null>(null);
 
   const [videoStatus, setVideoStatus] = useState<
     'loading' | 'playing' | 'error'
@@ -308,6 +315,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const [reloadCount, setReloadCount] = useState(0);
   const [streamIndex, setStreamIndex] = useState(0);
   const [isOsdOverlayOpen, setIsOsdOverlayOpen] = useState(false);
+  const [osdViewMode, setOsdViewMode] = useState<'channels' | 'epg'>('channels');
+  const [videoResolution, setVideoResolution] = useState<string>('');
+  const [isTvOsdVisible, setIsTvOsdVisible] = useState(true);
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(() =>
     effectiveTvFullMode
       ? false
@@ -321,6 +331,24 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(
     () => !effectiveTvFullMode
   );
+
+  const wakeTvOsd = () => {
+    setIsTvOsdVisible(true);
+    if (osdTimerRef.current) {
+      window.clearTimeout(osdTimerRef.current);
+    }
+    osdTimerRef.current = window.setTimeout(() => {
+      setIsTvOsdVisible(false);
+    }, 4500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (osdTimerRef.current) {
+        window.clearTimeout(osdTimerRef.current);
+      }
+    };
+  }, []);
 
   const [audioTracks, setAudioTracks] = useState<HlsTrackItem[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
@@ -338,6 +366,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   useEffect(() => {
     setStreamIndex(0);
     setIsAutoMuted(false);
+    setVideoResolution('');
     setAudioTracks([]);
     setActiveAudioTrack(0);
     setSubtitleTracks([]);
@@ -346,8 +375,216 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     if (effectiveTvFullMode) {
       setIsSidePanelOpen(false);
       setIsInfoPanelOpen(false);
+      setIsOsdOverlayOpen(false);
+      wakeTvOsd();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTvChannel?.id, currentTvChannel?.archiveProgram, effectiveTvFullMode]);
+
+  useEffect(() => {
+    if (!currentTvChannel) return;
+    const onBackEvent = () => {
+      if (isOnlineSubFinderOpen) {
+        setIsOnlineSubFinderOpen(false);
+        return;
+      }
+      if (isOsdOverlayOpen) {
+        osdClosedAtRef.current = Date.now();
+        setIsOsdOverlayOpen(false);
+        return;
+      }
+      if (isSidePanelOpen) {
+        setIsSidePanelOpen(false);
+        return;
+      }
+      if (isInfoPanelOpen) {
+        setIsInfoPanelOpen(false);
+        return;
+      }
+      if (isTvOsdVisible) {
+        if (osdTimerRef.current) {
+          window.clearTimeout(osdTimerRef.current);
+          osdTimerRef.current = null;
+        }
+        setIsTvOsdVisible(false);
+        return;
+      }
+      closeTvPlayer();
+    };
+    const onWakeEvent = () => {
+      wakeTvOsd();
+    };
+    window.addEventListener('aether:tv-player-back', onBackEvent);
+    window.addEventListener('aether:tv-player-wake-osd', onWakeEvent);
+    return () => {
+      window.removeEventListener('aether:tv-player-back', onBackEvent);
+      window.removeEventListener('aether:tv-player-wake-osd', onWakeEvent);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentTvChannel,
+    isTvOsdVisible,
+    isOnlineSubFinderOpen,
+    isOsdOverlayOpen,
+    isSidePanelOpen,
+    isInfoPanelOpen,
+    closeTvPlayer,
+  ]);
+
+  // Ensure focus moves into TvPlayerModal (and off background SmartTvLampaView cards) whenever watching fullscreen Live TV
+  useEffect(() => {
+    if (
+      !currentTvChannel ||
+      isOsdOverlayOpen ||
+      isOnlineSubFinderOpen ||
+      isSidePanelOpen
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      liveSurfaceBtnRef.current?.focus();
+    }, 35);
+    return () => window.clearTimeout(timer);
+  }, [
+    currentTvChannel?.id,
+    isOsdOverlayOpen,
+    isOnlineSubFinderOpen,
+    isSidePanelOpen,
+  ]);
+
+  // Smart IPTV Remote Control Listener when watching fullscreen Live TV (OSD closed)
+  useEffect(() => {
+    if (
+      !currentTvChannel ||
+      isOsdOverlayOpen ||
+      isOnlineSubFinderOpen ||
+      isSidePanelOpen
+    ) {
+      return;
+    }
+    const onTvRemoteKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'SELECT' ||
+        target?.tagName === 'TEXTAREA'
+      ) {
+        return;
+      }
+
+      const isOkKey =
+        e.key === 'Enter' ||
+        e.key === 'Select' ||
+        e.key === 'Execute' ||
+        e.key === ' ' ||
+        e.keyCode === 13 ||
+        e.keyCode === 29443;
+
+      // OK (Enter) or ArrowDown or ArrowUp -> Opens Smart IPTV Single-Column Channel List OSD (Photo 1)
+      if (isOkKey || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (Date.now() - osdClosedAtRef.current < 320) {
+          return;
+        }
+        if (videoRef.current && videoRef.current.muted) {
+          videoRef.current.muted = false;
+          setIsAutoMuted(false);
+        }
+        setOsdViewMode('channels');
+        setIsOsdOverlayOpen(true);
+        return;
+      }
+
+      // ArrowRight or Green Button (404) -> Opens Smart IPTV EPG & Catchup Archive Window (Photo 3)
+      if (e.key === 'ArrowRight' || e.keyCode === 404) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOsdViewMode('epg');
+        setIsOsdOverlayOpen(true);
+        return;
+      }
+
+      // ArrowLeft or Info Button (457 / 'i') -> Wakes Smart IPTV Bottom Info Banner (Photo 2)
+      if (
+        e.key === 'ArrowLeft' ||
+        e.key === 'i' ||
+        e.key === 'I' ||
+        e.keyCode === 457
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        wakeTvOsd();
+        return;
+      }
+
+      // ChannelUp / PageUp -> Next TV Channel + Bottom Info Banner
+      if (e.key === 'PageUp' || e.keyCode === 33 || e.keyCode === 427) {
+        e.preventDefault();
+        e.stopPropagation();
+        playNextTvChannel();
+        wakeTvOsd();
+        return;
+      }
+
+      // ChannelDown / PageDown -> Previous TV Channel + Bottom Info Banner
+      if (e.key === 'PageDown' || e.keyCode === 34 || e.keyCode === 428) {
+        e.preventDefault();
+        e.stopPropagation();
+        playPreviousTvChannel();
+        wakeTvOsd();
+        return;
+      }
+
+      // Red Button (403) -> Toggle Favorite
+      if (e.keyCode === 403) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFavoriteTvChannel(currentTvChannel);
+        wakeTvOsd();
+        return;
+      }
+
+      // Play / Pause / PlayPause Buttons on Smart TV Remote (415, 19, 179, 250, MediaPlay, MediaPause, MediaPlayPause)
+      if (
+        e.keyCode === 415 ||
+        e.keyCode === 19 ||
+        e.keyCode === 179 ||
+        e.keyCode === 250 ||
+        e.key === 'MediaPlay' ||
+        e.key === 'MediaPause' ||
+        e.key === 'MediaPlayPause' ||
+        e.key === 'Play' ||
+        e.key === 'Pause'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        const v = videoRef.current;
+        if (v) {
+          if (v.paused) {
+            v.play().catch(() => {});
+            setVideoStatus('playing');
+          } else {
+            v.pause();
+          }
+        }
+        wakeTvOsd();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', onTvRemoteKeyDown, true);
+    return () => window.removeEventListener('keydown', onTvRemoteKeyDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentTvChannel,
+    isOsdOverlayOpen,
+    isOnlineSubFinderOpen,
+    isSidePanelOpen,
+    playNextTvChannel,
+    playPreviousTvChannel,
+    toggleFavoriteTvChannel,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -388,31 +625,15 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   }, [archiveProgrammes, selectedArchiveDay]);
 
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    if (isOpen && !dialog.open) {
-      try {
-        dialog.showModal();
-      } catch {
-        // ignore if already open
+    if (!isOpen || effectiveTvFullMode) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeTvPlayer();
       }
-    } else if (!isOpen && dialog.open) {
-      dialog.close();
-    }
-  }, [isOpen, currentTvChannel]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-
-    const handleClose = () => {
-      closeTvPlayer();
     };
-
-    dialog.addEventListener('close', handleClose);
-    return () => dialog.removeEventListener('close', handleClose);
-  }, [isOpen, currentTvChannel, closeTvPlayer]);
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isOpen, effectiveTvFullMode, closeTvPlayer]);
 
   // Attach HLS stream whenever currentTvChannel, streamIndex, or reloadCount changes
   useEffect(() => {
@@ -435,6 +656,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
     cleanupHls();
     video.pause();
+    video.removeAttribute('src');
 
     const activeRawUrl =
       candidateStreams[streamIndex] ||
@@ -478,23 +700,22 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           return;
         }
 
-        const HlsModule = await import('hls.js');
-        const HlsClass = HlsModule.default;
-
         if (cancelled) return;
 
-        if (HlsClass.isSupported()) {
+        if (Hls.isSupported()) {
           let triedDirectFallback = false;
           let mediaRecoveryCount = 0;
 
-          const hls = new HlsClass({
-            enableWorker: true,
-            lowLatencyMode: true,
+          const hls = new Hls({
+            enableWorker: !effectiveTvFullMode,
+            lowLatencyMode: false,
             backBufferLength: 30,
-            manifestLoadingTimeOut: 12000,
-            manifestLoadingMaxRetry: 2,
-            levelLoadingTimeOut: 12000,
-            fragLoadingTimeOut: 15000,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 60,
+            manifestLoadingTimeOut: 15000,
+            manifestLoadingMaxRetry: 3,
+            levelLoadingTimeOut: 15000,
+            fragLoadingTimeOut: 20000,
           });
           hlsRef.current = hls;
 
@@ -521,26 +742,26 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
           hls.attachMedia(video);
 
-          hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
+          hls.on(Hls.Events.MEDIA_ATTACHED, () => {
             if (cancelled) return;
             // Use local Vite CORS/Referer proxy first so streams like Digi 24 work without CORS blocks
             hls.loadSource(proxiedUrl);
           });
 
-          hls.on(HlsClass.Events.MANIFEST_PARSED, () => {
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (cancelled) return;
             syncTracks();
             void safeAutoPlay();
           });
 
-          hls.on(HlsClass.Events.AUDIO_TRACKS_UPDATED, syncTracks);
-          hls.on(HlsClass.Events.SUBTITLE_TRACKS_UPDATED, syncTracks);
+          hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncTracks);
+          hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, syncTracks);
 
-          hls.on(HlsClass.Events.ERROR, (_event, data) => {
+          hls.on(Hls.Events.ERROR, (_event, data) => {
             if (cancelled) return;
             if (data.fatal) {
               if (
-                data.type === HlsClass.ErrorTypes.NETWORK_ERROR &&
+                data.type === Hls.ErrorTypes.NETWORK_ERROR &&
                 !triedDirectFallback
               ) {
                 triedDirectFallback = true;
@@ -548,7 +769,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 return;
               }
               if (
-                data.type === HlsClass.ErrorTypes.MEDIA_ERROR &&
+                data.type === Hls.ErrorTypes.MEDIA_ERROR &&
                 mediaRecoveryCount < 2
               ) {
                 mediaRecoveryCount += 1;
@@ -567,7 +788,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           return;
         }
 
-        // Native HLS fallback (iOS Safari)
+        // Native HLS fallback (iOS Safari / Smart TV WebKit)
         video.src = proxiedUrl;
         await safeAutoPlay();
       } catch {
@@ -584,7 +805,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       cleanupHls();
       video.pause();
     };
-  }, [currentTvChannel, candidateStreams, streamIndex, reloadCount]);
+  }, [
+    currentTvChannel,
+    candidateStreams,
+    streamIndex,
+    reloadCount,
+    effectiveTvFullMode,
+  ]);
 
   if (!currentTvChannel) return null;
 
@@ -773,113 +1000,131 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const showSideColumn = isSidePanelOpen && !isOsdOverlayOpen;
 
   return (
-    <dialog
+    <div
+      id="aether-tv-player-modal"
       ref={dialogRef}
-      closedby="any"
+      role="dialog"
+      aria-modal="true"
+      data-osd-visible={isTvOsdVisible ? 'true' : 'false'}
+      data-osd-overlay={isOsdOverlayOpen ? 'true' : 'false'}
       aria-label={currentTvChannel.name}
-      onClose={closeTvPlayer}
-      onCancel={closeTvPlayer}
+      onMouseMove={() => {
+        if (effectiveTvFullMode) wakeTvOsd();
+      }}
+      onKeyDown={() => {
+        if (effectiveTvFullMode) wakeTvOsd();
+      }}
       onClick={(e) => {
-        if (e.target === dialogRef.current) {
+        if (e.target === dialogRef.current && !effectiveTvFullMode) {
           closeTvPlayer();
         }
       }}
       className={
         effectiveTvFullMode
-          ? 'fixed inset-0 m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden backdrop:bg-black'
-          : 'mx-auto mt-11 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl p-0 overflow-hidden backdrop:bg-slate-950/85 backdrop:backdrop-blur-md'
+          ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+          : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-1 sm:p-3 overflow-y-auto'
       }
     >
       <div
         className={
           effectiveTvFullMode
-            ? 'flex flex-col w-screen h-screen overflow-hidden'
-            : 'flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
+            ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-black'
+            : 'mx-auto mt-10 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
         }
       >
-        {/* Top bar — Single Clean Row (Channel Info on Left, Source/Fav/Close on Right) */}
-        <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-5 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <StationAvatar
-              name={currentTvChannel.name}
-              favicon={effectiveLogo}
-              size="sm"
-              isPlaying={videoStatus === 'playing'}
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <h2 className="text-sm sm:text-lg font-bold text-white truncate">
-                  {currentTvChannel.name}
-                </h2>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] sm:text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                  {currentTvChannel.resolution || 'LIVE'}
-                </span>
-              </div>
-              <p className="text-[11px] sm:text-xs text-zinc-400 flex items-center gap-1.5 truncate">
-                {currentTvChannel.countryCode && (
-                  <span className="shrink-0">
-                    {getCountryFlagEmoji(currentTvChannel.countryCode)}{' '}
-                    {getLocalizedCountryName(
-                      currentTvChannel.countryCode,
-                      currentTvChannel.countryCode,
-                      language
-                    )}
+        {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}
+        {!effectiveTvFullMode && (
+          <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-5 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+              <StationAvatar
+                name={currentTvChannel.name}
+                favicon={effectiveLogo}
+                size="sm"
+                isPlaying={videoStatus === 'playing'}
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <h2 className="text-sm sm:text-lg font-bold text-white truncate">
+                    {currentTvChannel.name}
+                  </h2>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] sm:text-[11px] font-bold rounded-full bg-rose-600 text-white shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                    {currentTvChannel.resolution || 'LIVE'}
                   </span>
-                )}
-                <span>•</span>
-                <span className="truncate">{displayGroup}</span>
-              </p>
+                </div>
+                <p className="text-[11px] sm:text-xs text-zinc-300 flex items-center gap-1.5 truncate">
+                  {currentTvChannel.countryCode && (
+                    <span className="shrink-0">
+                      {getCountryFlagEmoji(currentTvChannel.countryCode)}{' '}
+                      {getLocalizedCountryName(
+                        currentTvChannel.countryCode,
+                        currentTvChannel.countryCode,
+                        language
+                      )}
+                    </span>
+                  )}
+                  <span>•</span>
+                  <span className="truncate">{displayGroup}</span>
+                  {epg?.now?.title && (
+                    <>
+                      <span>•</span>
+                      <span className="text-amber-300 font-semibold truncate">
+                        {epg.now.title}
+                      </span>
+                    </>
+                  )}
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {candidateStreams.length > 1 && (
+            <div className="flex items-center gap-2 shrink-0">
+              {candidateStreams.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setStreamIndex((prev) => (prev + 1) % candidateStreams.length)
+                  }
+                  title="Schimbă sursa streamului (Backup)"
+                  className="min-h-[36px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
+                >
+                  <Layers className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
+                  <span>
+                    Sursa {streamIndex + 1}/{candidateStreams.length}
+                  </span>
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={() =>
-                  setStreamIndex((prev) => (prev + 1) % candidateStreams.length)
-                }
-                title="Schimbă sursa streamului (Backup)"
-                className="min-h-[34px] px-2.5 sm:px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
+                aria-pressed={isFavorite}
+                aria-label={format(
+                  isFavorite ? t.favorites.removeFav : t.favorites.addFav,
+                  { name: currentTvChannel.name }
+                )}
+                className={`min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-all focus:outline-none focus:ring-4 focus:ring-white ${
+                  isFavorite
+                    ? 'text-rose-400 bg-rose-950/60 hover:bg-rose-950/90'
+                    : 'text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700'
+                }`}
               >
-                <Layers className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
-                <span>
-                  Sursa {streamIndex + 1}/{candidateStreams.length}
-                </span>
+                <Heart
+                  aria-hidden="true"
+                  className={`w-4 h-4 sm:w-5 sm:h-5 ${isFavorite ? 'fill-current' : ''}`}
+                />
               </button>
-            )}
 
-            <button
-              type="button"
-              onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
-              aria-pressed={isFavorite}
-              aria-label={format(
-                isFavorite ? t.favorites.removeFav : t.favorites.addFav,
-                { name: currentTvChannel.name }
-              )}
-              className={`min-w-[36px] min-h-[36px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-colors ${
-                isFavorite
-                  ? 'text-rose-400 bg-rose-950/50 hover:bg-rose-950/80'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-              }`}
-            >
-              <Heart
-                aria-hidden="true"
-                className={`w-4 h-4 sm:w-5 sm:h-5 ${isFavorite ? 'fill-current' : ''}`}
-              />
-            </button>
-
-            <button
-              type="button"
-              onClick={closeTvPlayer}
-              aria-label={t.tv.closeTvPlayer}
-              className="min-w-[36px] min-h-[36px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700 transition-colors"
-            >
-              <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                onClick={closeTvPlayer}
+                aria-label={t.tv.closeTvPlayer}
+                className="min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/90 hover:text-white hover:bg-rose-600 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-rose-600"
+              >
+                <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Active Catch-up / TV Archive Playback Banner */}
         {activeArchiveProg && (
@@ -932,12 +1177,29 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             >
               <video
                 ref={videoRef}
-                controls
+                controls={!effectiveTvFullMode}
                 playsInline
                 autoPlay
-                crossOrigin="anonymous"
-                onPlaying={() => setVideoStatus('playing')}
-                onLoadedData={() => setVideoStatus('playing')}
+                onClick={() => {
+                  if (effectiveTvFullMode) {
+                    setOsdViewMode('channels');
+                    setIsOsdOverlayOpen(true);
+                  }
+                }}
+                onPlaying={(e) => {
+                  setVideoStatus('playing');
+                  const vid = e.currentTarget;
+                  if (vid.videoWidth > 0 && vid.videoHeight > 0) {
+                    setVideoResolution(`${vid.videoWidth}x${vid.videoHeight}`);
+                  }
+                }}
+                onLoadedData={(e) => {
+                  setVideoStatus('playing');
+                  const vid = e.currentTarget;
+                  if (vid.videoWidth > 0 && vid.videoHeight > 0) {
+                    setVideoResolution(`${vid.videoWidth}x${vid.videoHeight}`);
+                  }
+                }}
                 onVolumeChange={(e) => {
                   if (!e.currentTarget.muted && isAutoMuted) {
                     setIsAutoMuted(false);
@@ -945,6 +1207,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 }}
                 onLoadedMetadata={(e) => {
                   const vid = e.currentTarget;
+                  if (vid.videoWidth > 0 && vid.videoHeight > 0) {
+                    setVideoResolution(`${vid.videoWidth}x${vid.videoHeight}`);
+                  }
                   if (!currentTvChannel?.url || !Number.isFinite(vid.duration) || vid.duration <= 90) return;
                   try {
                     const raw = localStorage.getItem('aether_native_video_progress_v1');
@@ -1007,29 +1272,365 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 </button>
               )}
 
-              {/* Floating Smart TV OSD Channel List Overlay (when triggered) */}
+              {/* Focusable TV Remote Surface when watching fullscreen Live TV (captures OK/Enter on all Smart TV browsers) */}
+              {effectiveTvFullMode && !isOsdOverlayOpen && (
+                <button
+                  ref={liveSurfaceBtnRef}
+                  type="button"
+                  aria-label="Deschide Lista de Canale Smart IPTV (OK)"
+                  onClick={() => {
+                    if (Date.now() - osdClosedAtRef.current < 320) return;
+                    if (videoRef.current && videoRef.current.muted) {
+                      videoRef.current.muted = false;
+                      setIsAutoMuted(false);
+                    }
+                    setOsdViewMode('channels');
+                    setIsOsdOverlayOpen(true);
+                  }}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    left: 0,
+                    zIndex: 20,
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                />
+              )}
+
+              {/* Smart IPTV Bottom Info Banner (Exact match to Photo 2: Channel No + Name | Current & Next EPG + Mins | Clock + Logo + Resolution) */}
+              {effectiveTvFullMode && isTvOsdVisible && !isOsdOverlayOpen && (
+                <div
+                  onClick={() => {
+                    if (Date.now() - osdClosedAtRef.current < 320) return;
+                    setOsdViewMode('channels');
+                    setIsOsdOverlayOpen(true);
+                  }}
+                  style={{
+                    backgroundColor: 'rgba(10, 14, 22, 0.94)',
+                    border: '2px solid #7dd3fc',
+                  }}
+                  className="absolute bottom-5 inset-x-6 z-30 bg-black/95 shadow-2xl overflow-hidden cursor-pointer select-none"
+                >
+                  {/* Top Edge Full-Width EPG Progress Line */}
+                  <div className="w-full h-1 bg-white/15 overflow-hidden">
+                    <div
+                      className="h-full bg-[#38bdf8]"
+                      style={{
+                        width: `${epg?.now ? epgStats.progress : 100}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'table',
+                      tableLayout: 'fixed',
+                      width: '100%',
+                      padding: '12px 22px',
+                    }}
+                  >
+                    {/* Left (26%): Channel Number + Favorite Star + Channel Name */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '26%',
+                        verticalAlign: 'middle',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        paddingRight: '16px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '22px',
+                          fontWeight: 800,
+                          color: '#ffffff',
+                          marginRight: '10px',
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        {Math.max(
+                          1,
+                          tvQueue.findIndex(
+                            (c) => c.id === currentTvChannel.id
+                          ) + 1
+                        )}
+                      </span>
+                      {isFavorite && (
+                        <span
+                          style={{
+                            color: '#fbbf24',
+                            fontSize: '18px',
+                            marginRight: '8px',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          ★
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: '20px',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        {currentTvChannel.name}
+                      </span>
+                    </div>
+
+                    {/* Center (60%): Now Playing & Next EPG Programmes */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '60%',
+                        verticalAlign: 'middle',
+                        paddingRight: '16px',
+                      }}
+                    >
+                      {/* Row 1: Current Programme */}
+                      <div
+                        style={{
+                          display: 'table',
+                          tableLayout: 'fixed',
+                          width: '100%',
+                          marginBottom: '4px',
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            width: '135px',
+                            fontSize: '16px',
+                            color: '#e4e4e7',
+                            whiteSpace: 'nowrap',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {activeArchiveProg
+                            ? `${formatEpgTime(activeArchiveProg.start)} - ${formatEpgTime(activeArchiveProg.stop)}`
+                            : epg?.now
+                              ? `${formatEpgTime(epg.now.start)} - ${formatEpgTime(epg.now.stop)}`
+                              : ''}
+                        </span>
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            fontSize: '17px',
+                            fontWeight: 700,
+                            color: '#ffffff',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            verticalAlign: 'middle',
+                            paddingRight: '10px',
+                          }}
+                        >
+                          {activeArchiveProg
+                            ? `[ARHIVĂ] ${activeArchiveProg.title}`
+                            : epg?.now?.title || ''}
+                        </span>
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            width: '64px',
+                            textAlign: 'right',
+                            fontSize: '16px',
+                            color: '#e4e4e7',
+                            whiteSpace: 'nowrap',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {epg?.now && !activeArchiveProg
+                            ? `+${epgStats.remainingMin}`
+                            : ''}
+                        </span>
+                      </div>
+
+                      {/* Row 2: Next Programme */}
+                      <div
+                        style={{
+                          display: 'table',
+                          tableLayout: 'fixed',
+                          width: '100%',
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            width: '135px',
+                            fontSize: '15px',
+                            color: '#a1a1aa',
+                            whiteSpace: 'nowrap',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {epg?.upcoming?.[0]
+                            ? `${formatEpgTime(epg.upcoming[0].start)} - ${formatEpgTime(epg.upcoming[0].stop)}`
+                            : ''}
+                        </span>
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            fontSize: '15px',
+                            fontWeight: 400,
+                            color: '#d4d4d8',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            verticalAlign: 'middle',
+                            paddingRight: '10px',
+                          }}
+                        >
+                          {epg?.upcoming?.[0]?.title || ''}
+                        </span>
+                        <span
+                          style={{
+                            display: 'table-cell',
+                            width: '64px',
+                            textAlign: 'right',
+                            fontSize: '15px',
+                            color: '#a1a1aa',
+                            whiteSpace: 'nowrap',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {epg?.upcoming?.[0]
+                            ? `+${Math.max(1, Math.round((epg.upcoming[0].stop - epg.upcoming[0].start) / 60000))}`
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Right (14%): Wall Clock + Channel Logo + Video Resolution */}
+                    <div
+                      style={{
+                        display: 'table-cell',
+                        width: '14%',
+                        verticalAlign: 'middle',
+                        textAlign: 'right',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: '17px',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {new Date().toLocaleTimeString('ro-RO', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
+                      {effectiveLogo && (
+                        <div style={{ margin: '3px 0' }}>
+                          <img
+                            src={effectiveLogo}
+                            alt=""
+                            style={{
+                              height: '22px',
+                              maxWidth: '80px',
+                              objectFit: 'contain',
+                              display: 'inline-block',
+                            }}
+                          />
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          color: '#38bdf8',
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        {videoResolution ||
+                          currentTvChannel.resolution ||
+                          '1920x1080'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Floating Smart IPTV OSD Channel List / EPG Overlay (when triggered by OK or Arrows) */}
               {isOsdOverlayOpen && (
                 <div
+                  id="aether-tv-osd-overlay"
                   onClick={(e) => {
                     if (e.target === e.currentTarget) {
+                      osdClosedAtRef.current = Date.now();
                       setIsOsdOverlayOpen(false);
                     }
                   }}
-                  className="absolute inset-0 z-20 bg-black/40 flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    left: 0,
+                    zIndex: 45,
+                    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  }}
                 >
-                  <div className="w-full max-w-4xl max-h-full flex flex-col justify-center">
+                  <div
+                    style={{
+                      width: '86vw',
+                      maxWidth: '880px',
+                      height: '78vh',
+                      maxHeight: '600px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      overflow: 'hidden',
+                    }}
+                  >
                     <TvOsdChannelList
                       currentChannel={currentTvChannel}
                       channels={tvQueue}
                       isOverlayMode
+                      initialViewMode={osdViewMode}
                       onToggleOverlayMode={() => {
+                        osdClosedAtRef.current = Date.now();
                         setIsOsdOverlayOpen(false);
                         setIsSidePanelOpen(true);
                         setSidePanelTab('channels');
                       }}
-                      onCloseOverlay={() => setIsOsdOverlayOpen(false)}
-                      onToggleInfoPanel={() => setIsInfoPanelOpen((v) => !v)}
+                      onCloseOverlay={() => {
+                        osdClosedAtRef.current = Date.now();
+                        setIsOsdOverlayOpen(false);
+                        wakeTvOsd();
+                      }}
+                      onToggleInfoPanel={() => {
+                        osdClosedAtRef.current = Date.now();
+                        setIsOsdOverlayOpen(false);
+                        wakeTvOsd();
+                      }}
                       isInfoPanelOpen={isInfoPanelOpen}
+                      onPlayArchiveProgramme={(ch, prog) => {
+                        if (ch.id !== currentTvChannel.id) {
+                          useRadioStore.getState().playTvChannel(
+                            { ...ch, archiveProgram: prog || undefined },
+                            tvQueue
+                          );
+                        } else {
+                          setActiveArchiveProg(prog);
+                          setStreamIndex(0);
+                        }
+                      }}
                     />
                   </div>
                 </div>
@@ -1087,16 +1688,17 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               )}
             </div>
 
-            {/* Unified Single-Row Compact Controls Bar (Immediately below the 16:9 video, shrink-0) */}
-            <div className="shrink-0 flex items-center justify-between gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-zinc-900 border-t border-b border-zinc-800 overflow-x-auto no-scrollbar">
-              {/* Left Group: Icon Nav + Channels + Archive */}
-              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            {/* Unified Single-Row Compact Controls Bar — Normal Web Mode only */}
+            {!effectiveTvFullMode && (
+              <div className="shrink-0 flex items-center justify-between gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-zinc-900 border-t border-b border-zinc-800 overflow-x-auto no-scrollbar">
+                {/* Left Group: Icon Nav + Channels + Archive */}
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={playPreviousTvChannel}
                   aria-label={t.player.prevStation}
                   title={t.player.prevStation}
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 inline-flex items-center justify-center shrink-0 transition-colors"
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-100 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
                 >
                   <SkipBack className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -1106,7 +1708,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   onClick={playNextTvChannel}
                   aria-label={t.player.nextStation}
                   title={t.player.nextStation}
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 inline-flex items-center justify-center shrink-0 transition-colors"
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-100 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
                 >
                   <SkipForward className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -1116,13 +1718,14 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   onClick={() => setReloadCount((c) => c + 1)}
                   aria-label={t.player.retryStream}
                   title={t.player.retryStream}
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 inline-flex items-center justify-center shrink-0 transition-colors"
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-200 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <RotateCcw className="w-4 h-4" aria-hidden="true" />
                 </button>
 
-                {/* Toggle Channel List */}
+                {/* Toggle Channel List / Grid */}
                 <button
+                  ref={channelGridBtnRef}
                   type="button"
                   onClick={() => {
                     if (effectiveTvFullMode) {
@@ -1145,16 +1748,17 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     isOsdOverlayOpen ||
                     (showSideColumn && sidePanelTab === 'channels')
                   }
-                  title="Deschide / închide lista de canale"
-                  className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
+                  title="Deschide / închide grila de canale"
+                  className={`h-9 sm:h-10 px-3.5 sm:px-4 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shrink-0 transition-all border focus:outline-none focus:ring-4 focus:ring-white ${
                     isOsdOverlayOpen ||
-                    (showSideColumn && sidePanelTab === 'channels')
-                      ? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
+                    (showSideColumn && sidePanelTab === 'channels') ||
+                    effectiveTvFullMode
+                      ? 'bg-amber-500 hover:bg-amber-400 text-zinc-950 border-amber-400 shadow-lg'
                       : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
                   }`}
                 >
-                  <Tv className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  <span>Canale ({tvQueue.length || 1})</span>
+                  <Tv className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>Grilă Canale ({tvQueue.length || 1})</span>
                 </button>
 
                 {/* Toggle 7-Day TV Archive */}
@@ -1175,8 +1779,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
                       (showSideColumn && sidePanelTab === 'archive') ||
                       activeArchiveProg
-                        ? 'bg-emerald-500 text-zinc-950 border-emerald-400 font-bold'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border-zinc-700'
+                        ? 'bg-blue-500 text-zinc-950 border-blue-400 font-bold'
+                        : 'bg-zinc-800 hover:bg-zinc-700 text-blue-300 border-zinc-700'
                     }`}
                   >
                     <History className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -1230,7 +1834,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   className="h-8 sm:h-9 inline-flex items-center gap-1 px-2.5 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 shrink-0"
                 >
                   <Subtitles
-                    className="w-3.5 h-3.5 text-emerald-400 shrink-0"
+                    className="w-3.5 h-3.5 text-blue-400 shrink-0"
                     aria-hidden="true"
                   />
                   <select
@@ -1255,11 +1859,11 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                       </option>
                     ))}
                     {customSubtitleUrl && (
-                      <option value={999} className="bg-zinc-900 text-emerald-300">
+                      <option value={999} className="bg-zinc-900 text-blue-300">
                         {customSubtitleName || '.SRT'}
                       </option>
                     )}
-                    <option value={-98} className="bg-zinc-900 text-emerald-300">
+                    <option value={-98} className="bg-zinc-900 text-blue-300">
                       Caută pe Net (.SRT)...
                     </option>
                     <option value={-99} className="bg-zinc-900 text-amber-300">
@@ -1274,7 +1878,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   onClick={() => setIsOnlineSubFinderOpen(true)}
                   aria-label="Caută și descarcă subtitrări de pe net (.SRT)"
                   title="Caută și descarcă subtitrări de pe net (OpenSubtitles .SRT)"
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-emerald-400 inline-flex items-center justify-center border border-zinc-700 shrink-0 transition-colors"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-blue-400 inline-flex items-center justify-center border border-zinc-700 shrink-0 transition-colors"
                 >
                   <Globe className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
@@ -1322,6 +1926,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 </button>
               </div>
             </div>
+            )}
 
             {/* Compact Live EPG Program Guide Section (Below Controls) */}
             {isInfoPanelOpen &&
@@ -1331,8 +1936,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-700/50 text-emerald-300 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-950/90 border border-blue-700/50 text-blue-300 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                             EPG ACUM
                           </span>
                           <span className="inline-flex items-center gap-1 text-xs font-bold text-zinc-200 tabular-nums shrink-0">
@@ -1349,7 +1954,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <span className="text-xs font-bold text-emerald-400 tabular-nums">
+                        <span className="text-xs font-bold text-blue-400 tabular-nums">
                           {epgStats.remainingShort} ({epgStats.progress}%)
                         </span>
                       </div>
@@ -1368,7 +1973,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
                       <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden shadow-inner">
                         <div
-                          className="h-full bg-gradient-to-r from-brand-500 to-emerald-400 rounded-full transition-all duration-300"
+                          className="h-full bg-gradient-to-r from-brand-500 to-blue-400 rounded-full transition-all duration-300"
                           style={{ width: `${epgStats.progress}%` }}
                         />
                       </div>
@@ -1433,7 +2038,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <History
-                          className="w-4 h-4 text-emerald-400"
+                          className="w-4 h-4 text-blue-400"
                           aria-hidden="true"
                         />
                         <h3 className="text-xs sm:text-sm font-bold text-white truncate">
@@ -1456,7 +2061,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                             onClick={() => setSelectedArchiveDay(dayKey)}
                             className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
                               isSelected
-                                ? 'bg-emerald-500 text-zinc-950 font-bold shadow-xs'
+                                ? 'bg-blue-500 text-zinc-950 font-bold shadow-xs'
                                 : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
                             }`}
                           >
@@ -1484,7 +2089,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                             isSelectedArchive
                               ? 'bg-amber-950/60 border border-amber-500/70'
                               : isLiveNow
-                                ? 'bg-emerald-950/40 border border-emerald-700/50'
+                                ? 'bg-blue-950/40 border border-blue-700/50'
                                 : 'bg-zinc-900/60 hover:bg-zinc-900'
                           }`}
                         >
@@ -1496,7 +2101,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                               </span>
 
                               {isLiveNow ? (
-                                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold shrink-0">
+                                <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-bold shrink-0">
                                   ACUM
                                 </span>
                               ) : isPast ? (
@@ -1535,7 +2140,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                                 isSelectedArchive
                                   ? 'bg-amber-500 text-zinc-950'
                                   : isLiveNow
-                                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
                                     : 'bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 border border-amber-500/40'
                               }`}
                             >
@@ -1585,6 +2190,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           }, 150);
         }}
       />
-    </dialog>
+    </div>
   );
 };

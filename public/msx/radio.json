@@ -13,55 +13,55 @@
       "titleFooter": "Căutare, Țări, Favorite & Metadate Piese Live",
       "icon": "msx-white:apps",
       "color": "teal",
-      "action": "link:https://radiotv-jk.netlify.app/?tab=home&tvmode=1"
+      "action": "link:{PREFIX}/tv"
     },
     {
       "title": "Europa FM",
       "titleFooter": "România • Pop / Știri",
       "playerLabel": "Europa FM",
-      "action": "audio:https://astreaming.edi.ro:8443/EuropaFM_aac"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Fastreaming.edi.ro%3A8443%2FEuropaFM_aac"
     },
     {
       "title": "Radio ZU",
       "titleFooter": "România • Top 40 / Hits",
       "playerLabel": "Radio ZU",
-      "action": "audio:https://live4ro.antenaplay.ro/radiozu/radiozu-48000.m3u8"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Flive4ro.antenaplay.ro%2Fradiozu%2Fradiozu-48000.m3u8"
     },
     {
       "title": "Kiss FM România",
       "titleFooter": "România • Hit Radio",
       "playerLabel": "Kiss FM",
-      "action": "audio:https://live.kissfm.ro/kissfm.aacp"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Flive.kissfm.ro%2Fkissfm.aacp"
     },
     {
       "title": "Magic FM",
       "titleFooter": "România • Soft Pop & Classic Hits",
       "playerLabel": "Magic FM",
-      "action": "audio:https://live.magicfm.ro/magicfm.aacp"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Flive.magicfm.ro%2Fmagicfm.aacp"
     },
     {
       "title": "Rock FM",
       "titleFooter": "România • Classic Rock",
       "playerLabel": "Rock FM",
-      "action": "audio:https://live.rockfm.ro/rockfm.aacp"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Flive.rockfm.ro%2Frockfm.aacp"
     },
     {
       "title": "Digi FM",
       "titleFooter": "România • Știri & Muzică",
       "playerLabel": "Digi FM",
-      "action": "audio:https://edge76.rcs-rds.ro/digifm/digifm.mp3"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Fedge76.rcs-rds.ro%2Fdigifm%2Fdigifm.mp3"
     },
     {
       "title": "Radio România Actualități",
       "titleFooter": "România • Postul Național",
       "playerLabel": "Radio România Actualități",
-      "action": "audio:http://stream2.srr.ro:8002/"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=http%3A%2F%2Fstream2.srr.ro%3A8002%2F"
     },
     {
       "title": "Virgin Radio Romania",
       "titleFooter": "România • Urban /CHR",
       "playerLabel": "Virgin Radio",
-      "action": "audio:https://astreaming.edi.ro:8443/VirginRadio_aac"
+      "action": "audio:{PREFIX}/api/tv-proxy?url=https%3A%2F%2Fastreaming.edi.ro%3A8443%2FVirginRadio_aac"
     }
   ]
 }

@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { handleFileListRequest } from './src/server/filelistServer';
+import { handleYouTubeRequest } from './src/server/youtubeServer';
 
 interface EpgProgrammeItem {
   t: string;
@@ -36,19 +39,33 @@ const epgFeedCache = new Map<string, ParsedEpgFeed>();
 const EPG_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 function normalizeEpgKey(raw: string, stripGenericWords = false): string {
-  let s = (raw || '')
+  const base = (raw || '')
     .toLowerCase()
+    .replace(/[ăâäàá]/g, 'a')
+    .replace(/[îïìí]/g, 'i')
+    .replace(/[șşš]/g, 's')
+    .replace(/[țţ]/g, 't')
+    .replace(/[éèêë]/g, 'e')
+    .replace(/[óòôö]/g, 'o')
+    .replace(/[úùûü]/g, 'u')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\(\s*(1080[pi]?|720[pi]?|576[pi]?|480[pi]?|4k|uhd|hd|sd|russia|romania|moldova|архив|live|\d+)\s*\)/gi, ' ')
+    .replace(/\([^+)]*\)/g, ' ')
     .split('/')[0]
     .replace(/\.(ro|ru|md|uk|gb|us|de|fr|it|es|ua|by|kz)(@\w+)?$/i, '')
-    .replace(/\(\s*(1080[pi]?|720[pi]?|576[pi]?|480[pi]?|4k|uhd|hd|sd|russia|romania|moldova|\d+)\s*\)/gi, ' ')
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/\b(hd|fhd|uhd|4k|sd|live|orig|50fps|romania|russia)\b/gi, ' ');
+    .replace(/\b(hd|fhd|uhd|4k|sd|live|orig|50fps|архив)\b/gi, ' ');
 
-  if (stripGenericWords) {
-    s = s.replace(/\b(tv|тв|канал|channel|телеканал)\b/gi, ' ');
+  const cleanBase = base.replace(/[^a-z0-9а-яё+]+/gi, '').trim();
+  if (!stripGenericWords) {
+    return cleanBase;
   }
 
-  return s.replace(/[^a-z0-9а-яё+]+/gi, '').trim();
+  const stripped = base
+    .replace(/\b(tv|тв|канал|channel|телеканал|romania|russia|moldova)\b/gi, ' ')
+    .replace(/[^a-z0-9а-яё+]+/gi, '')
+    .trim();
+
+  return stripped.length >= 3 ? stripped : cleanBase;
 }
 
 function parseXmltvTimestamp(raw: string): number {
@@ -242,6 +259,34 @@ const latestStreamTitleByUrl = new Map<
   { rawTitle: string; maxIso: string; updatedAt: number }
 >();
 
+const radioSessionCookies = new Map<string, string>();
+
+function getRadioDomainKey(urlStr: string): string {
+  try {
+    const host = new URL(urlStr).hostname.toLowerCase();
+    const parts = host.split('.');
+    return parts.length >= 2 ? parts.slice(-2).join('.') : host;
+  } catch {
+    return '';
+  }
+}
+
+function saveRadioResponseCookies(urlStr: string, resHeaders: Headers): void {
+  const key = getRadioDomainKey(urlStr);
+  if (!key) return;
+  const rawSetCookie = resHeaders.get('set-cookie');
+  if (!rawSetCookie) return;
+  const pair = rawSetCookie.split(';')[0]?.trim();
+  if (pair && pair.includes('=')) {
+    radioSessionCookies.set(key, pair);
+  }
+}
+
+function getRadioCookieHeader(urlStr: string): string {
+  const key = getRadioDomainKey(urlStr);
+  return (key && radioSessionCookies.get(key)) || '';
+}
+
 function extractMaxIsoTimestamp(raw: string): string {
   const matches = raw.match(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\b/g);
   if (!matches || matches.length === 0) return '';
@@ -254,15 +299,18 @@ async function probeSingleIcyStreamTitle(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 3000);
   try {
+    const savedCookie = getRadioCookieHeader(streamUrl);
     const res = await fetch(streamUrl, {
       headers: {
         'Icy-MetaData': '1',
         'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
         Connection: 'close',
+        ...(savedCookie ? { Cookie: savedCookie } : {}),
       },
       redirect: 'follow',
       signal: controller.signal,
     });
+    saveRadioResponseCookies(streamUrl, res.headers);
 
     const metaintStr = res.headers.get('icy-metaint');
     if (!metaintStr || !res.body) {
@@ -416,16 +464,16 @@ async function readIcecastStatusTitle(streamUrl: string): Promise<string | null>
     const data = (await res.json()) as {
       icestats?: {
         source?:
-          | Array<{
-              listenurl?: string;
-              title?: string;
-              yp_currently_playing?: string;
-            }>
-          | {
-              listenurl?: string;
-              title?: string;
-              yp_currently_playing?: string;
-            };
+        | Array<{
+          listenurl?: string;
+          title?: string;
+          yp_currently_playing?: string;
+        }>
+        | {
+          listenurl?: string;
+          title?: string;
+          yp_currently_playing?: string;
+        };
       };
     };
 
@@ -458,14 +506,19 @@ function isStationOrJingleFieldServer(val: string, stationName = ''): boolean {
   const s = (val || '').trim().toLowerCase();
   if (!s) return true;
   if (
-    /^(?:rmc|rmc hits|rmc 80|rmc 90|radio monte carlo.*|virgin radio.*|radio 105.*|r101.*|autopromo.*|promo.*|spot.*|jingle.*|liner.*|sigla.*|notiziario.*|meteo.*|oroscopo.*|traffico.*|commercial.*|publicitate.*|reclama.*)$/i.test(
+    /^(?:rmc|rmc hits|rmc 80|rmc 90|radio monte carlo.*|virgin radio.*|radio 105.*|r101.*|kiss\s*fm.*|#1\s*hit\s*radio.*|hit\s*radio.*|magic\s*fm.*|rock\s*fm.*|radio\s*zu.*|europa\s*fm.*|digi\s*fm.*|pro\s*fm.*|autopromo.*|promo.*|spot.*|jingle.*|liner.*|sigla.*|notiziario.*|meteo.*|oroscopo.*|traffico.*|commercial.*|publicitate.*|reclama.*)$/i.test(
       s
     )
   ) {
     return true;
   }
-  const normStation = stationName.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const normVal = s.replace(/[^a-z0-9]/g, '');
+  const normStation = stationName
+    .toLowerCase()
+    .replace(/\b(?:romania|moldova|russia|live|online|fm|radio)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  const normVal = s
+    .replace(/\b(?:romania|moldova|russia|live|online|fm|radio)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
   if (normStation && normVal && normVal === normStation) {
     return true;
   }
@@ -589,9 +642,9 @@ function parseRawStreamMetadataServer(
     const rawArtistField = !isTechnicalToken(tildeParts[1] || '') ? tildeParts[1] : '';
     const rawAlbumField =
       tildeParts[2] &&
-      !isTechnicalToken(tildeParts[2]) &&
-      !isStationOrJingleFieldServer(tildeParts[2], stationName) &&
-      tildeParts[2].length > 1
+        !isTechnicalToken(tildeParts[2]) &&
+        !isStationOrJingleFieldServer(tildeParts[2], stationName) &&
+        tildeParts[2].length > 1
         ? tildeParts[2]
         : undefined;
 
@@ -679,14 +732,16 @@ function isGenericStationSlogan(raw: string, stationName: string): boolean {
   const s = raw.trim().toLowerCase();
   if (!s || s.length < 2) return true;
   if (
-    /^(unknown|stream|offline|live|on air|reclama|publicitate|commercial|jingle|spot|реклама|новости)$/i.test(
+    /^(unknown|stream|offline|live|on air|reclama|publicitate|commercial|jingle|spot|реклама|новости|#1 hit radio|hit radio)$/i.test(
       s
     )
   ) {
     return true;
   }
   if (
-    /\b(publicitate|reclama|commercial break|рекламная пауза|реклама)\b/i.test(s)
+    /\b(publicitate|reclama|commercial break|рекламная пауза|реклама|#1 hit radio|kissfm\s+live)\b/i.test(
+      s
+    )
   ) {
     return true;
   }
@@ -701,6 +756,210 @@ function isGenericStationSlogan(raw: string, stationName: string): boolean {
   const cleanRaw = s.replace(/[^a-z0-9а-яё]/gi, '');
   if (cleanStation && cleanRaw === cleanStation) return true;
   return false;
+}
+
+const orbAliasCache = new Map<string, string>();
+const KNOWN_ORB_ALIASES: Array<{ pattern: RegExp; alias: string }> = [
+  { pattern: /kissfm\.ro|kiss\s*fm/i, alias: 'ro.kiss' },
+  { pattern: /magicfm\.ro|magic\s*fm/i, alias: 'ro.magic' },
+  { pattern: /rockfm\.ro|rock\s*fm/i, alias: 'ro.rockfmromania' },
+  { pattern: /onefm\.ro|one\s*fm/i, alias: 'ro.one1006' },
+  { pattern: /zuicast|radio\s*zu/i, alias: 'ro.radiozu' },
+  { pattern: /virginradio\.ro|virgin\s*radio\s*romania|VirginRadio_aac/i, alias: 'ro.radio21' },
+  { pattern: /europafm\.ro|europa\s*fm/i, alias: 'ro.europafm' },
+  { pattern: /digifm|digi\s*fm/i, alias: 'ro.digifm' },
+  { pattern: /dancefm|dance\s*fm/i, alias: 'ro.dancefm' },
+  { pattern: /profm|pro\s*fm/i, alias: 'ro.infopro' },
+  { pattern: /radio-impuls|radio\s*impuls/i, alias: 'ro.impuls' },
+  { pattern: /dancemusic\.ro|deep\s*house\s*radio/i, alias: 'ro.deephouse' },
+  { pattern: /playradio\.org.*90|play\s*90/i, alias: 'ro.playhit90s' },
+  { pattern: /radiocafe\.ro|radio\s*cafe/i, alias: 'ro.radiocafe' },
+  { pattern: /jurnalfm|jurnal\s*fm/i, alias: 'md.1001jurnalfm' },
+  { pattern: /radiorecordmoldova|record\s*moldova/i, alias: 'md.radiorecordmoldova' },
+  { pattern: /radiozum|radio\s*zum/i, alias: 'md.radiozum' },
+  { pattern: /hitfm\.md|hit\s*fm\s*moldova/i, alias: 'md.hitfm' },
+  { pattern: /noroc/i, alias: 'md.noroc' },
+  { pattern: /plai/i, alias: 'md.plai' },
+];
+
+const KNOWN_TOP_RADIO_RU_SLUGS: Array<{ pattern: RegExp; slug: string }> = [
+  { pattern: /radio7|радио\s*7|семи\s*холмах/i, slug: '7-na-semi-xolmax' },
+  { pattern: /radiovanya|радио\s*ваня|radio\s*vanya/i, slug: 'vanya' },
+  { pattern: /rusradio|русское\s*радио|russkoe/i, slug: 'russkoe' },
+  { pattern: /europaplus|европа\s*плюс|europa\s*plus/i, slug: 'evropa-plyus' },
+  { pattern: /retrofm|ретро\s*fm|ретро\s*фм|retro\s*fm/i, slug: 'retro-fm' },
+  { pattern: /dorognoe|дорожное|dorozhnoe/i, slug: 'dorozhnoe' },
+  { pattern: /avtoradio|авторадио/i, slug: 'avtoradio' },
+  { pattern: /radiorecord|радио\s*рекорд|radio\s*record|дискотека\s*90|superdiskoteka/i, slug: 'rekord' },
+  { pattern: /novoeradio|новое\s*радио|novoe\s*radio/i, slug: 'novoe' },
+  { pattern: /veseloeradio|юмор\s*fm|юмор\s*фм|yumor/i, slug: 'yumor-fm' },
+  { pattern: /dfm\.ru|\bdfm\b/i, slug: 'dfm' },
+  { pattern: /montecarlo\.ru|монте[\s-]*карло/i, slug: 'monte-karlo' },
+  { pattern: /hitfm\.ru|хит\s*fm|хит\s*фм/i, slug: 'xit-fm' },
+  { pattern: /energyfm|радио\s*энерджи|energy\s*fm|\bnrg\b/i, slug: 'energy' },
+  { pattern: /relax-fm|relax\s*fm|релакс\s*фм/i, slug: 'relax-fm' },
+  { pattern: /nashe\.ru|наше\s*радио|nashe\s*radio/i, slug: 'nashe' },
+  { pattern: /maximum\.ru|радио\s*maximum|радио\s*максимум/i, slug: 'maximum' },
+  { pattern: /zharafm|жара\s*fm|zhara\s*fm/i, slug: 'zhara-fm' },
+  { pattern: /russkijhit|русский\s*хит/i, slug: 'russkij-xit' },
+  { pattern: /likefm|like\s*fm|лайк\s*фм/i, slug: 'like-fm' },
+  { pattern: /калина\s*красная/i, slug: 'kalina-krasnaya' },
+  { pattern: /эльдорадио|eldoradio/i, slug: 'eldoradio' },
+  { pattern: /питер\s*fm|piter\s*fm/i, slug: 'piter-fm' },
+];
+
+async function readTopRadioRuTrack(
+  streamUrl: string,
+  stationName: string
+): Promise<{ rawTitle: string; coverUrl?: string } | null> {
+  const combined = `${streamUrl} ${stationName}`.trim();
+
+  // 1. Direct SSR playlist for Радио 7 на семи холмах (provides both live Artist/Title + 600x600 cover on meta.hostingradio.ru)
+  if (/radio7|радио\s*7|семи\s*холмах/i.test(combined)) {
+    try {
+      const ctrl = new AbortController();
+      const tId = setTimeout(() => ctrl.abort(), 3200);
+      const res = await fetch('https://radio7.ru/playlist', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(tId);
+      if (res.ok) {
+        const html = await res.text();
+        const cardMatch = html.match(
+          /playlist-track-card-info-image[\s\S]{0,260}?data-src="([^"]+)"[\s\S]{0,260}?playlist-track-card-info-content[^>]*>\s*<p[^>]*>([^<]+)<\/p>\s*<p[^>]*>([^<]+)<\/p>/i
+        );
+        if (cardMatch) {
+          const coverUrl = cardMatch[1]?.trim() || undefined;
+          const artist = decodeXmlEntities(cardMatch[2].trim());
+          const song = decodeXmlEntities(cardMatch[3].trim());
+          if (artist && song) {
+            return { rawTitle: `${artist} - ${song}`, coverUrl };
+          }
+        }
+      }
+    } catch {
+      // fall through to top-radio.ru/playlist/7-na-semi-xolmax
+    }
+  }
+
+  // 2. Match known Russian station slug on top-radio.ru/playlist/<slug>
+  let slug = '';
+  for (const entry of KNOWN_TOP_RADIO_RU_SLUGS) {
+    if (entry.pattern.test(combined)) {
+      slug = entry.slug;
+      break;
+    }
+  }
+  if (!slug) return null;
+
+  try {
+    const ctrl = new AbortController();
+    const tId = setTimeout(() => ctrl.abort(), 3200);
+    const res = await fetch(`https://top-radio.ru/playlist/${slug}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(tId);
+    if (!res.ok) return null;
+    const html = await res.text();
+    const m = html.match(
+      /<div class="name_track">\s*<span class="artist">([^<]+)<\/span>\s*-\s*<span class="song">([^<]+)<\/span>/i
+    );
+    if (m?.[1] && m?.[2]) {
+      const artist = decodeXmlEntities(m[1].trim());
+      const song = decodeXmlEntities(m[2].trim());
+      if (artist && song) {
+        return { rawTitle: `${artist} - ${song}` };
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function readOnlineRadioBoxTrack(
+  streamUrl: string,
+  stationName: string
+): Promise<{ rawTitle: string; coverUrl?: string } | null> {
+  try {
+    const ruTrack = await readTopRadioRuTrack(streamUrl, stationName);
+    if (ruTrack?.rawTitle) {
+      return ruTrack;
+    }
+
+    const combined = `${streamUrl} ${stationName}`.trim();
+    let alias = orbAliasCache.get(combined.toLowerCase()) || '';
+
+    if (!alias) {
+      for (const entry of KNOWN_ORB_ALIASES) {
+        if (entry.pattern.test(combined)) {
+          alias = entry.alias;
+          break;
+        }
+      }
+    }
+
+    if (!alias && stationName && stationName.length >= 3) {
+      const ctrl = new AbortController();
+      const tId = setTimeout(() => ctrl.abort(), 2500);
+      try {
+        const searchRes = await fetch(
+          `https://onlineradiobox.com/search?q=${encodeURIComponent(stationName)}`,
+          {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: ctrl.signal,
+          }
+        );
+        clearTimeout(tId);
+        if (searchRes.ok) {
+          const html = await searchRes.text();
+          const m = html.match(
+            /streamType="[^"]*"[^>]*radioId="([a-z]{2}\.[a-z0-9_-]+)"/i
+          );
+          if (m?.[1]) {
+            alias = m[1].toLowerCase();
+          }
+        }
+      } catch {
+        clearTimeout(tId);
+      }
+    }
+
+    if (!alias) return null;
+    orbAliasCache.set(combined.toLowerCase(), alias);
+
+    const ctrl = new AbortController();
+    const tId = setTimeout(() => ctrl.abort(), 2500);
+    const res = await fetch(`https://scraper2.onlineradiobox.com/${alias}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(tId);
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as {
+      title?: string;
+      iArtist?: string;
+      iName?: string;
+      iImg?: string;
+      updated?: number;
+    };
+    const rawTitle = (
+      data?.iArtist && data?.iName
+        ? `${data.iArtist} - ${data.iName}`
+        : data?.title || ''
+    ).trim();
+    if (!rawTitle) return null;
+
+    const coverUrl = data?.iImg
+      ? data.iImg.replace(/\d+x\d+bb/, '600x600bb')
+      : undefined;
+    return { rawTitle, coverUrl };
+  } catch {
+    return null;
+  }
 }
 
 async function resolveRichTrackMetadata(
@@ -943,6 +1202,25 @@ async function resolveRichTrackMetadata(
 function tvStreamProxyPlugin(): Plugin {
   return {
     name: 'tv-stream-proxy',
+    closeBundle() {
+      const assetsDir = path.resolve(process.cwd(), 'dist/assets');
+      if (!fs.existsSync(assetsDir)) return;
+      for (const fileName of fs.readdirSync(assetsDir)) {
+        if (fileName.endsWith('.css')) {
+          const fullPath = path.join(assetsDir, fileName);
+          const raw = fs.readFileSync(fullPath, 'utf8');
+          const patched = raw
+            // Remove :where() around input[type=button/reset/submit] so Chrome < 88 on Smart TVs never drops the button reset rule
+            .replace(/:where\(\[type=(button|reset|submit)\]\)/g, '[type=$1]')
+            // Convert CSS Color 4 `rgb(R G B / A)` to classic `rgba(R, G, B, A)` for Smart TV WebViews
+            .replace(
+              /rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([^)]+)\)/g,
+              'rgba($1, $2, $3, $4)'
+            );
+          fs.writeFileSync(fullPath, patched, 'utf8');
+        }
+      }
+    },
     transformIndexHtml(html, ctx) {
       if (ctx.bundle) {
         // Replace <script type="module" crossorigin src="/assets/..."> with classic <script defer src="/assets/...">
@@ -998,12 +1276,12 @@ function tvStreamProxyPlugin(): Plugin {
                 ext === '.js'
                   ? 'application/javascript; charset=utf-8'
                   : ext === '.css'
-                  ? 'text/css; charset=utf-8'
-                  : ext === '.svg'
-                  ? 'image/svg+xml'
-                  : ext === '.json' || ext === '.webmanifest'
-                  ? 'application/json; charset=utf-8'
-                  : 'application/octet-stream';
+                    ? 'text/css; charset=utf-8'
+                    : ext === '.svg'
+                      ? 'image/svg+xml'
+                      : ext === '.json' || ext === '.webmanifest'
+                        ? 'application/json; charset=utf-8'
+                        : 'application/octet-stream';
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': mime,
@@ -1030,21 +1308,326 @@ function tvStreamProxyPlugin(): Plugin {
         next();
       });
 
+      const getPrimaryLanIp = (): string => {
+        try {
+          const nets = os.networkInterfaces();
+          for (const name of Object.keys(nets)) {
+            for (const net of nets[name] || []) {
+              if (net.family === 'IPv4' && !net.internal) {
+                if (
+                  net.address.startsWith('192.168.') ||
+                  net.address.startsWith('10.') ||
+                  net.address.startsWith('172.')
+                ) {
+                  return net.address;
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+        return '192.168.2.57';
+      };
+
+      server.middlewares.use('/api/lan-info', (_req, res) => {
+        const lanIp = getPrimaryLanIp();
+        res.writeHead(200, {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(
+          JSON.stringify({
+            lanIp,
+            port: 8769,
+            lanOrigin: `http://${lanIp}:8769`,
+          })
+        );
+      });
+
+      const legacyTvProgressFile = path.resolve(
+        __dirname,
+        '.tv-watch-progress.json'
+      );
+      const getTvProgressFileForProfile = (profileId: string) => {
+        const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        if (cleanId === 'p1') {
+          return legacyTvProgressFile;
+        }
+        return path.resolve(__dirname, `.tv-watch-progress-${cleanId}.json`);
+      };
+
+      server.middlewares.use('/api/tv-progress', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const reqUrl = new URL(req.url || '', 'http://localhost');
+        const profileId = reqUrl.searchParams.get('profileId') || 'p1';
+        const deleteId = reqUrl.searchParams.get('deleteId') || '';
+        const targetProgressFile = getTvProgressFileForProfile(profileId);
+
+        const readDiskProgress = (): Record<string, unknown> => {
+          try {
+            if (fs.existsSync(targetProgressFile)) {
+              const parsed = JSON.parse(
+                fs.readFileSync(targetProgressFile, 'utf-8')
+              );
+              return parsed && typeof parsed === 'object' ? parsed : {};
+            }
+          } catch {
+            // ignore
+          }
+          return {};
+        };
+
+        if (req.method === 'DELETE' || deleteId) {
+          const current = readDiskProgress();
+          if (deleteId && deleteId in current) {
+            delete current[deleteId];
+            try {
+              fs.writeFileSync(
+                targetProgressFile,
+                JSON.stringify(current),
+                'utf-8'
+              );
+            } catch {
+              // ignore
+            }
+          }
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store',
+          });
+          res.end(JSON.stringify(current));
+          return;
+        }
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || '{}') as Record<
+                string,
+                { updatedAt?: number }
+              >;
+              const current = readDiskProgress() as Record<
+                string,
+                { updatedAt?: number }
+              >;
+              const merged = { ...current };
+              for (const [k, v] of Object.entries(incoming)) {
+                if (!v || typeof v !== 'object') continue;
+                const prev = merged[k];
+                if (
+                  !prev ||
+                  (v.updatedAt || 0) >= (prev.updatedAt || 0)
+                ) {
+                  merged[k] = v;
+                }
+              }
+              fs.writeFileSync(
+                targetProgressFile,
+                JSON.stringify(merged),
+                'utf-8'
+              );
+              res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store',
+              });
+              res.end(JSON.stringify(merged));
+            } catch {
+              res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+              });
+              res.end(JSON.stringify(readDiskProgress()));
+            }
+          });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(JSON.stringify(readDiskProgress()));
+      });
+
+      const getTvSavedFileForProfile = (profileId: string) => {
+        const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        return path.resolve(__dirname, `.tv-saved-${cleanId}.json`);
+      };
+
+      server.middlewares.use('/api/tv-saved', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const reqUrl = new URL(req.url || '', 'http://localhost');
+        const profileId = reqUrl.searchParams.get('profileId') || 'p1';
+        const targetSavedFile = getTvSavedFileForProfile(profileId);
+
+        const readDiskSaved = (): unknown[] => {
+          try {
+            if (fs.existsSync(targetSavedFile)) {
+              const parsed = JSON.parse(
+                fs.readFileSync(targetSavedFile, 'utf-8')
+              );
+              return Array.isArray(parsed) ? parsed : [];
+            }
+          } catch {
+            // ignore
+          }
+          return [];
+        };
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || '[]');
+              if (Array.isArray(incoming)) {
+                fs.writeFileSync(
+                  targetSavedFile,
+                  JSON.stringify(incoming),
+                  'utf-8'
+                );
+              }
+            } catch {
+              // ignore
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(readDiskSaved()));
+          });
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(JSON.stringify(readDiskSaved()));
+      });
+
+      const tvProfilesFile = path.resolve(__dirname, '.tv-profiles.json');
+      server.middlewares.use('/api/tv-profiles', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const readProfiles = (): unknown => {
+          try {
+            if (fs.existsSync(tvProfilesFile)) {
+              return JSON.parse(fs.readFileSync(tvProfilesFile, 'utf-8'));
+            }
+          } catch {
+            // ignore
+          }
+          return null;
+        };
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || 'null');
+              if (Array.isArray(incoming) && incoming.length > 0) {
+                fs.writeFileSync(
+                  tvProfilesFile,
+                  JSON.stringify(incoming),
+                  'utf-8'
+                );
+              }
+            } catch {
+              // ignore
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(readProfiles()));
+          });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(JSON.stringify(readProfiles()));
+      });
+
+      // FileList.io Live Torrent Catalog, Resolver & Remux Streaming Engine
+      server.middlewares.use(async (req, res, next) => {
+        if (req.url && req.url.startsWith('/api/filelist')) {
+          const handled = await handleFileListRequest(req, res);
+          if (handled) return;
+        }
+        if (req.url && req.url.startsWith('/api/youtube')) {
+          const handled = await handleYouTubeRequest(req, res);
+          if (handled) return;
+        }
+        next();
+      });
+
       server.middlewares.use('/api/radio-meta', async (req, res) => {
         try {
           const reqUrl = new URL(req.url || '', 'http://localhost');
           const streamUrl = reqUrl.searchParams.get('url') || '';
           const stationName = reqUrl.searchParams.get('name') || '';
           let rawTitle = (reqUrl.searchParams.get('rawTitle') || '').trim();
+          let fallbackOrbCoverUrl: string | undefined;
+
+          const isValidSongCandidate = (cand: string | null | undefined) => {
+            if (!cand || isGenericStationSlogan(cand, stationName)) return false;
+            const parsed = parseRawStreamMetadataServer(cand, stationName);
+            return Boolean(parsed && (parsed.title || parsed.artist));
+          };
 
           if (!rawTitle && streamUrl && /^https?:\/\//i.test(streamUrl)) {
             const icyTitle = await readIcyStreamTitle(streamUrl);
-            if (icyTitle) {
+            if (icyTitle && isValidSongCandidate(icyTitle)) {
               rawTitle = icyTitle;
-            } else {
+            }
+            if (!rawTitle) {
               const icecastTitle = await readIcecastStatusTitle(streamUrl);
-              if (icecastTitle) {
+              if (icecastTitle && isValidSongCandidate(icecastTitle)) {
                 rawTitle = icecastTitle;
+              }
+            }
+            if (!rawTitle) {
+              const orbTrack = await readOnlineRadioBoxTrack(
+                streamUrl,
+                stationName
+              );
+              if (
+                orbTrack?.rawTitle &&
+                isValidSongCandidate(orbTrack.rawTitle)
+              ) {
+                rawTitle = orbTrack.rawTitle;
+                fallbackOrbCoverUrl = orbTrack.coverUrl;
               }
             }
           }
@@ -1060,12 +1643,33 @@ function tvStreamProxyPlugin(): Plugin {
           }
 
           const rich = await resolveRichTrackMetadata(rawTitle, stationName);
+          if (rich) {
+            const rawCover = rich.coverUrl || fallbackOrbCoverUrl;
+            const rawAvatar = rich.artistAvatarUrl || rawCover;
+            const toTvSafeImg = (u?: string) =>
+              u && /^https?:\/\//i.test(u)
+                ? `/api/tv-proxy?url=${encodeURIComponent(u)}`
+                : u;
+            const tvSafeRich: RichTrackInfo = {
+              ...rich,
+              coverUrl: toTvSafeImg(rawCover),
+              artistAvatarUrl: toTvSafeImg(rawAvatar),
+            };
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache',
+            });
+            res.end(JSON.stringify({ track: tvSafeRich }));
+            return;
+          }
+
           res.writeHead(200, {
             'Access-Control-Allow-Origin': '*',
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'no-cache',
           });
-          res.end(JSON.stringify({ track: rich }));
+          res.end(JSON.stringify({ track: null }));
         } catch {
           res.writeHead(200, {
             'Access-Control-Allow-Origin': '*',
@@ -1100,10 +1704,10 @@ function tvStreamProxyPlugin(): Plugin {
 
           let matchedEntry:
             | {
-                icon: string;
-                displayName: string;
-                programmes: EpgProgrammeItem[];
-              }
+              icon: string;
+              displayName: string;
+              programmes: EpgProgrammeItem[];
+            }
             | undefined;
 
           if (tvgId) {
@@ -1160,6 +1764,7 @@ function tvStreamProxyPlugin(): Plugin {
           const year = reqUrl.searchParams.get('year') || '';
           const season = Number(reqUrl.searchParams.get('season')) || 1;
           const episode = Number(reqUrl.searchParams.get('episode')) || 1;
+          const reqUa = String(req.headers['user-agent'] || '');
           // @ts-expect-error .mjs dynamic import
           const mod = await import('./netlify/functions/vod-stream.mjs');
           const result = await mod.resolveVodStreamData({
@@ -1170,7 +1775,21 @@ function tvStreamProxyPlugin(): Plugin {
             year,
             season,
             episode,
+            userAgent: reqUa,
           });
+          if (result.ok && result.hlsUrl) {
+            const safeDesktopUa =
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+            result.proxyHlsUrl = `/api/tv-proxy?url=${encodeURIComponent(
+              result.hlsUrl
+            )}&ref=${encodeURIComponent(
+              'https://api.kinogram.best/'
+            )}&ua=${encodeURIComponent(safeDesktopUa)}`;
+          }
+          console.log(
+            `[VOD-STREAM] ${title || imdb || kp} -> ok=${result.ok} source=${result.sourcePath || 'none'
+            }`
+          );
           res.writeHead(result.ok ? 200 : 404, {
             'Access-Control-Allow-Origin': '*',
             'Content-Type': 'application/json; charset=utf-8',
@@ -1255,6 +1874,12 @@ function tvStreamProxyPlugin(): Plugin {
           const customRef = reqUrl.searchParams.get('ref') || '';
           const customUa = reqUrl.searchParams.get('ua') || '';
           const rawMode = reqUrl.searchParams.get('raw') === '1';
+          const skipAd = reqUrl.searchParams.get('skipAd') === '1';
+          const audioIdxParam = reqUrl.searchParams.get('audioIdx');
+          const requestedAudioIdx =
+            audioIdxParam !== null && /^\d+$/.test(audioIdxParam)
+              ? Number(audioIdxParam)
+              : -1;
 
           if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
             res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -1273,22 +1898,67 @@ function tvStreamProxyPlugin(): Plugin {
             }
           }
 
+          const effectiveUa =
+            customUa ||
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+          const isLikelyDirectRadioStream =
+            skipAd &&
+            !/\.(?:ts|m4s|mp4|jpg|jpeg|png|webp|vtt|srt)(\?|$)/i.test(
+              parsedTarget.pathname
+            ) &&
+            !/\.m3u8?(\?|$)/i.test(parsedTarget.pathname);
+
+          // Automatic 2x Pre-Connect Handshake to skip 30-second preroll ads (Icecast hss7 / Adswizz / HostingRadio / Streamr)
+          if (isLikelyDirectRadioStream) {
+            for (let warmIdx = 0; warmIdx < 2; warmIdx++) {
+              const warmCtrl = new AbortController();
+              const warmTimer = setTimeout(() => warmCtrl.abort(), 1400);
+              try {
+                const warmCookie = getRadioCookieHeader(targetUrl);
+                const warmRes = await fetch(targetUrl, {
+                  method: 'GET',
+                  headers: {
+                    'User-Agent': effectiveUa,
+                    Referer: refererHeader,
+                    Origin: originHeader,
+                    Accept: '*/*',
+                    ...(warmCookie ? { Cookie: warmCookie } : {}),
+                  },
+                  redirect: 'follow',
+                  signal: warmCtrl.signal,
+                });
+                saveRadioResponseCookies(targetUrl, warmRes.headers);
+                if (warmRes.body) {
+                  const warmReader = warmRes.body.getReader();
+                  await warmReader.read().catch(() => {});
+                }
+              } catch {
+                // ignore warm probe abort
+              } finally {
+                clearTimeout(warmTimer);
+                warmCtrl.abort();
+              }
+            }
+          }
+
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 12000);
 
+          const activeCookie = getRadioCookieHeader(targetUrl);
           const upstreamRes = await fetch(targetUrl, {
             method: 'GET',
             headers: {
-              'User-Agent':
-                customUa ||
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              'User-Agent': effectiveUa,
               Referer: refererHeader,
               Origin: originHeader,
               Accept: '*/*',
+              ...(activeCookie ? { Cookie: activeCookie } : {}),
             },
             redirect: 'follow',
             signal: controller.signal,
           });
+          saveRadioResponseCookies(targetUrl, upstreamRes.headers);
 
           clearTimeout(timeoutId);
 
@@ -1306,14 +1976,15 @@ function tvStreamProxyPlugin(): Plugin {
             upstreamRes.headers.get('content-type') || ''
           ).toLowerCase();
 
+          const isPls =
+            contentType.includes('scpls') || /\.pls(\?|$)/i.test(finalUrl);
           const isM3u8 =
             contentType.includes('mpegurl') ||
             contentType.includes('m3u') ||
-            /\.m3u8(\?|$)/i.test(finalUrl);
+            /\.m3u8?(\?|$)/i.test(finalUrl);
 
-          const extraParams = `${
-            customRef ? `&ref=${encodeURIComponent(customRef)}` : ''
-          }${customUa ? `&ua=${encodeURIComponent(customUa)}` : ''}`;
+          const extraParams = `${customRef ? `&ref=${encodeURIComponent(customRef)}` : ''
+            }${effectiveUa ? `&ua=${encodeURIComponent(effectiveUa)}` : ''}${skipAd ? '&skipAd=1' : ''}`;
 
           const buildProxyUrl = (rawUri: string) => {
             try {
@@ -1324,8 +1995,122 @@ function tvStreamProxyPlugin(): Plugin {
             }
           };
 
-          if (isM3u8) {
+          if (isPls) {
             const text = await upstreamRes.text();
+            const fileMatch = text.match(/^File\d+=(https?:\/\/[^\r\n]+)/im);
+            if (fileMatch?.[1]) {
+              res.writeHead(302, {
+                'Access-Control-Allow-Origin': '*',
+                Location: buildProxyUrl(fileMatch[1].trim()),
+              });
+              res.end();
+              return;
+            }
+          }
+
+          if (isM3u8) {
+            let text = await upstreamRes.text();
+
+            // Automatic HLS Radio Preroll Ad-Skipper:
+            // If this is a radio HLS master playlist (e.g. hls-01-rusradio.hostingradio.ru/rusradio/playlist.m3u8)
+            // or sub-playlist containing preroll ad segments (a0403699_*.ts), cycle the hlssid session 2x until clean l0_*.ts segments appear
+            if (skipAd) {
+              if (text.includes('#EXT-X-STREAM-INF')) {
+                const subRel = text
+                  .split(/\r?\n/)
+                  .map((l) => l.trim())
+                  .find((l) => l && !l.startsWith('#'));
+                if (subRel) {
+                  for (let cycle = 0; cycle < 3; cycle++) {
+                    try {
+                      const subUrl = new URL(subRel, finalUrl).toString();
+                      const cHeader = getRadioCookieHeader(finalUrl);
+                      const subCheck = await fetch(subUrl, {
+                        headers: {
+                          'User-Agent': effectiveUa,
+                          ...(cHeader ? { Cookie: cHeader } : {}),
+                        },
+                      });
+                      saveRadioResponseCookies(finalUrl, subCheck.headers);
+                      const subTxt = await subCheck.text();
+                      if (!/\ba\d+_[0-9a-f]+\.ts\b/i.test(subTxt)) {
+                        break;
+                      }
+                      // Sub-playlist had preroll ad segments -> request a fresh master playlist with our cookie
+                      const nextCookie = getRadioCookieHeader(finalUrl);
+                      const nextMaster = await fetch(targetUrl, {
+                        headers: {
+                          'User-Agent': effectiveUa,
+                          ...(nextCookie ? { Cookie: nextCookie } : {}),
+                        },
+                      });
+                      saveRadioResponseCookies(finalUrl, nextMaster.headers);
+                      if (nextMaster.ok) {
+                        text = await nextMaster.text();
+                      }
+                    } catch {
+                      break;
+                    }
+                  }
+                }
+              } else if (/\ba\d+_[0-9a-f]+\.ts\b/i.test(text)) {
+                // Direct media playlist contains ad segments (a0..._*.ts): re-request parent master playlist to advance past preroll
+                const masterUrl = finalUrl.replace(
+                  /\/\d+\/playlist\.m3u8.*$/i,
+                  '/playlist.m3u8'
+                );
+                for (let cycle = 0; cycle < 3; cycle++) {
+                  try {
+                    const cHeader = getRadioCookieHeader(finalUrl);
+                    const mRes = await fetch(masterUrl, {
+                      headers: {
+                        'User-Agent': effectiveUa,
+                        ...(cHeader ? { Cookie: cHeader } : {}),
+                      },
+                    });
+                    saveRadioResponseCookies(finalUrl, mRes.headers);
+                    const mTxt = await mRes.text();
+                    const freshSubRel = mTxt
+                      .split(/\r?\n/)
+                      .map((l) => l.trim())
+                      .find((l) => l && !l.startsWith('#'));
+                    if (!freshSubRel) break;
+                    const freshSubUrl = new URL(freshSubRel, masterUrl).toString();
+                    const sRes = await fetch(freshSubUrl, {
+                      headers: {
+                        'User-Agent': effectiveUa,
+                        ...(getRadioCookieHeader(finalUrl)
+                          ? { Cookie: getRadioCookieHeader(finalUrl) }
+                          : {}),
+                      },
+                    });
+                    saveRadioResponseCookies(finalUrl, sRes.headers);
+                    const sTxt = await sRes.text();
+                    if (!/\ba\d+_[0-9a-f]+\.ts\b/i.test(sTxt)) {
+                      text = sTxt;
+                      break;
+                    }
+                  } catch {
+                    break;
+                  }
+                }
+              }
+            }
+            // If this is a simple Icecast/Shoutcast .m3u redirect file (no #EXT-X- HLS tags), redirect to the underlying audio stream
+            if (!text.includes('#EXT-X-')) {
+              const firstStreamLine = text
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .find((l) => /^https?:\/\//i.test(l));
+              if (firstStreamLine && !/\.m3u8(\?|$)/i.test(firstStreamLine)) {
+                res.writeHead(302, {
+                  'Access-Control-Allow-Origin': '*',
+                  Location: buildProxyUrl(firstStreamLine),
+                });
+                res.end();
+                return;
+              }
+            }
             if (rawMode) {
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
@@ -1335,13 +2120,74 @@ function tvStreamProxyPlugin(): Plugin {
               res.end(text);
               return;
             }
-            const rewritten = text
-              .split(/\r?\n/)
+            const rawLines = text.split(/\r?\n/);
+            const filteredLines: string[] = [];
+            let skipNextUriLine = false;
+            for (const line of rawLines) {
+              const trimmed = line.trim();
+              if (skipNextUriLine && trimmed && !trimmed.startsWith('#')) {
+                skipNextUriLine = false;
+                continue;
+              }
+              if (
+                trimmed.startsWith('#EXT-X-MEDIA:') &&
+                trimmed.includes('GROUP-ID="failover-')
+              ) {
+                continue;
+              }
+              if (
+                trimmed.startsWith('#EXT-X-STREAM-INF:') &&
+                trimmed.includes('AUDIO="failover-')
+              ) {
+                skipNextUriLine = true;
+                continue;
+              }
+              filteredLines.push(line);
+            }
+            const audioLinesCount = filteredLines.filter(
+              (l) =>
+                l.trim().startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(l)
+            ).length;
+            const useExplicitAudioIdx =
+              requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
+            const hasOriginalAudioTrack = filteredLines.some(
+              (l) =>
+                l.trim().startsWith('#EXT-X-MEDIA:') &&
+                /TYPE=AUDIO/i.test(l) &&
+                (/LANGUAGE="en"/i.test(l) ||
+                  /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(l))
+            );
+            let promotedOriginalAudio = false;
+            let currentAudioLineIdx = 0;
+            const rewritten = filteredLines
               .map((line) => {
-                const trimmed = line.trim();
-                if (!trimmed) return line;
+                let currentLine = line;
+                const trimmed = currentLine.trim();
+                if (!trimmed) return currentLine;
+                if (
+                  (useExplicitAudioIdx || hasOriginalAudioTrack) &&
+                  trimmed.startsWith('#EXT-X-MEDIA:') &&
+                  /TYPE=AUDIO/i.test(trimmed)
+                ) {
+                  const thisAudioIdx = currentAudioLineIdx++;
+                  const shouldPromote = useExplicitAudioIdx
+                    ? thisAudioIdx === requestedAudioIdx
+                    : !promotedOriginalAudio &&
+                    (/LANGUAGE="en"/i.test(trimmed) ||
+                      /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(trimmed));
+                  if (shouldPromote) {
+                    promotedOriginalAudio = true;
+                    currentLine = currentLine
+                      .replace(/DEFAULT=NO/gi, 'DEFAULT=YES')
+                      .replace(/AUTOSELECT=NO/gi, 'AUTOSELECT=YES');
+                  } else {
+                    currentLine = currentLine
+                      .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
+                      .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
+                  }
+                }
                 if (trimmed.startsWith('#')) {
-                  return line.replace(/URI="([^"]+)"/gi, (_m, uri) => {
+                  return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
                     return `URI="${buildProxyUrl(uri)}"`;
                   });
                 }
@@ -1355,6 +2201,44 @@ function tvStreamProxyPlugin(): Plugin {
               'Cache-Control': 'no-cache, no-store',
             });
             res.end(rewritten);
+            return;
+          }
+
+          const isLiveAudioStream =
+            contentType.startsWith('audio/') ||
+            contentType.includes('aac') ||
+            contentType.includes('mpeg') ||
+            contentType.includes('ogg') ||
+            contentType.includes('octet-stream');
+
+          if (isLiveAudioStream && upstreamRes.body) {
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type':
+                upstreamRes.headers.get('content-type') || 'audio/mpeg',
+              'Cache-Control': 'no-cache, no-store',
+              Connection: 'keep-alive',
+            });
+            const reader = upstreamRes.body.getReader();
+            const onClose = () => {
+              reader.cancel().catch(() => { });
+              controller.abort();
+            };
+            req.on('close', onClose);
+            res.on('close', onClose);
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done || res.writableEnded) break;
+                if (value) {
+                  res.write(Buffer.from(value));
+                }
+              }
+            } catch {
+              // client closed connection or upstream ended
+            } finally {
+              if (!res.writableEnded) res.end();
+            }
             return;
           }
 

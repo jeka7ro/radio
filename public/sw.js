@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v3';
+const CACHE_NAME = 'aether-radio-v5';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
   '/icons/favicon.svg',
@@ -30,6 +30,9 @@ self.addEventListener('fetch', (event) => {
   // Never intercept live audio/video streams, local API endpoints, Vite dev modules, or non-GET requests
   if (request.method !== 'GET') return;
   if (
+    url.hostname === 'localhost' ||
+    url.hostname === '127.0.0.1' ||
+    url.hostname.startsWith('192.168.') ||
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/msx/') ||
     url.pathname === '/start.json' ||

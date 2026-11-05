@@ -1,10 +1,27 @@
 @tailwind base;
+
+/* Smart TV Chromium (< 88) fallback: Tailwind preflight uses `input:where([type=button])` in the same selector list as `button`,
+   causing older Chromium engines without `:where()` support to drop the entire rule and leave buttons with a solid white (`buttonface`) background! */
+@layer base {
+  button,
+  input[type='button'],
+  input[type='reset'],
+  input[type='submit'] {
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: transparent;
+    background-image: none;
+    color: inherit;
+    border: 0 solid transparent;
+  }
+}
+
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --brand-accent-light: #6d28d9;
-  --brand-accent-dark: #a78bfa;
+  --brand-accent-light: #1e3a8a;
+  --brand-accent-dark: #1d4ed8;
   --brand-color: var(--brand-accent-light);
 
   /* MANDATORY: Fallback for browsers without light-dark support */
@@ -71,16 +88,88 @@ body {
   white-space: nowrap !important;
 }
 
-/* High contrast focus indicators (Normal Web Mode only; Smart TV Lampa mode uses native Lampa silver/white focus) */
-html:not(.smart-tv-mode) :where(a:any-link, button, input, select):focus-visible {
-  outline: 3px solid var(--brand-color);
-  outline-offset: 3px;
-  box-shadow: 0 0 0 5px rgba(139, 92, 246, 0.35);
+*,
+*::before,
+*::after {
+  -webkit-tap-highlight-color: transparent;
 }
 
-html.smart-tv-mode :where(a:any-link, button, input, select):focus,
-html.smart-tv-mode :where(a:any-link, button, input, select):focus-visible {
+*:focus,
+*:focus-visible,
+a:focus,
+button:focus,
+input:focus,
+select:focus,
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
   outline: none !important;
+  outline-width: 0 !important;
+  outline-style: none !important;
+  outline-color: transparent !important;
+}
+
+/* ============================================================================
+   APPLE macOS TAHOE (LIQUID GLASS TRANSLUCENCY + PILL BUTTONS + SQUIRCLES)
+   ============================================================================ */
+.tahoe-glass {
+  background: linear-gradient(
+    145deg,
+    rgba(28, 30, 38, 0.68) 0%,
+    rgba(18, 20, 26, 0.74) 100%
+  );
+  backdrop-filter: blur(40px) saturate(190%);
+  -webkit-backdrop-filter: blur(40px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 24px 60px rgba(0, 0, 0, 0.65);
+}
+
+.tahoe-emerald-osd {
+  background: linear-gradient(
+    145deg,
+    rgba(26, 28, 36, 0.66) 0%,
+    rgba(16, 18, 24, 0.74) 100%
+  );
+  backdrop-filter: blur(44px) saturate(200%);
+  -webkit-backdrop-filter: blur(44px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 28px 70px rgba(0, 0, 0, 0.72);
+}
+
+.tahoe-emerald-card {
+  background: rgba(255, 255, 255, 0.09);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
+    0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.tahoe-pill {
+  border-radius: 9999px !important;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+    0 6px 18px rgba(0, 0, 0, 0.32);
+}
+
+/* Global macOS Tahoe refinement for Smart TV & Web containers and buttons */
+button.rounded-lg,
+button.rounded-xl {
+  border-radius: 9999px;
+}
+
+div.rounded-2xl,
+section.rounded-2xl,
+article.rounded-2xl {
+  border-radius: 26px;
 }
 
 /* Defer rendering for off-screen station cards below the initial fold */
@@ -200,4 +289,96 @@ input[type="search"]::-webkit-search-decoration {
     border-radius: 4px;
   }
 }
+
+/* Clean focus handling for poster cards without overriding button widths or flex layouts */
+button[data-vod-card="true"] {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+button.cast-person-card {
+  display: inline-flex !important;
+  width: 285px !important;
+  flex-shrink: 0 !important;
+}
+
+.aspect-\[2\/3\] {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+}
+
+.aspect-\[2\/3\] > img {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* SmartCinema Animated Black & Emerald Logo Keyframes */
+@keyframes scLogoOrbit {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes scLogoOrbitReverse {
+  0% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes scLogoAura {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes scLogoPlayPulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.45));
+  }
+  50% {
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 9px rgba(96, 165, 250, 0.85));
+  }
+}
+
+.sc-logo-orbit {
+  transform-origin: 32px 32px;
+  animation: scLogoOrbit 6.5s linear infinite;
+}
+
+.sc-logo-orbit-reverse {
+  transform-origin: 32px 32px;
+  animation: scLogoOrbitReverse 11s linear infinite;
+}
+
+.sc-logo-aura {
+  animation: scLogoAura 3.4s ease-in-out infinite;
+}
+
+.sc-logo-play {
+  transform-origin: 33px 31px;
+  animation: scLogoPlayPulse 3.4s ease-in-out infinite;
+}
+
+
 

@@ -13,7 +13,7 @@
       "titleFooter": "Toate canalele RO / MD / RU + Filme & Seriale",
       "icon": "msx-white:apps",
       "color": "amber",
-      "action": "link:https://radiotv-jk.netlify.app/?tvmode=1"
+      "action": "link:{PREFIX}/tv"
     },
     {
       "title": "Pro TV HD",

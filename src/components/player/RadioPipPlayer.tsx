@@ -10,7 +10,6 @@ import {
   Volume2,
   VolumeX,
   X,
-  Radio,
   Maximize2,
 } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
@@ -150,7 +149,11 @@ export const RadioPipPlayer: React.FC = () => {
 
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(artX, artY, artSize, artSize, 24);
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(artX, artY, artSize, artSize, 24);
+    } else {
+      ctx.rect(artX, artY, artSize, artSize);
+    }
     ctx.clip();
 
     if (
@@ -393,14 +396,21 @@ export const RadioPipPlayer: React.FC = () => {
       {/* Interactive Floating MiniPlayer rendered inside Document Picture-in-Picture */}
       {pipContainer &&
         createPortal(
-          <div className="w-full h-full flex flex-col justify-between p-3.5 bg-zinc-950 text-zinc-100 select-none">
-            {/* Top Strip: Station badge + Restore to Normal Player + Close PiP button */}
+          <div className="w-full h-full flex flex-col justify-between p-3.5 bg-[#090d16] text-zinc-100 select-none">
+            {/* Top Strip: Station Logo + Station badge + Restore to Normal Player + Close PiP button */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 min-w-0">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-brand-950/90 border border-brand-700/50 text-brand-300 text-[11px] font-semibold truncate">
-                  <Radio className="w-3 h-3 text-brand-400 flex-shrink-0" />
+                <span className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-0.5 rounded-full bg-[#1e3a8a]/40 border border-[#3b82f6]/40 text-blue-200 text-[11px] font-bold truncate">
+                  <StationAvatar
+                    name={currentStation.name}
+                    favicon={currentStation.favicon}
+                    homepage={currentStation.homepage}
+                    size="sm"
+                    isPlaying={false}
+                    className="!w-5 !h-5 !rounded-md shrink-0"
+                  />
                   <span>{getCountryFlagEmoji(currentStation.countrycode)}</span>
-                  <span className="truncate">{currentStation.name}</span>
+                  <span className="truncate text-white">{currentStation.name}</span>
                 </span>
               </div>
 
@@ -409,7 +419,7 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={() => void restoreToNormalPlayer()}
                   title="Înapoi în playerul normal"
-                  className="px-2.5 py-1 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-[11px] font-semibold inline-flex items-center gap-1 shadow-sm transition-colors"
+                  className="px-2.5 py-1 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] border border-[#3b82f6]/50 text-white text-[11px] font-semibold inline-flex items-center gap-1 shadow-sm transition-colors cursor-pointer"
                 >
                   <Maximize2 className="w-3 h-3" />
                   <span>Player normal</span>
@@ -418,54 +428,99 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={() => void closePip()}
                   title="Închide fereastra flotantă"
-                  className="w-6 h-6 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors flex-shrink-0"
+                  className="w-6 h-6 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
-            {/* Middle Row: Cover Art + Song Title + Artist Avatar & Name (Click to restore normal player) */}
+            {/* Middle Row: Original Radio Logo + Song Cover Art + Song Title + Artist Avatar & Name */}
             <button
               type="button"
               onClick={() => void restoreToNormalPlayer()}
               title="Apasă pentru a deschide în playerul normal"
-              className="flex items-center gap-3 my-1.5 min-w-0 text-left rounded-2xl p-1 -m-1 hover:bg-zinc-900/80 transition-colors"
+              className="flex items-center gap-2.5 my-1.5 min-w-0 text-left rounded-2xl p-1 -m-1 hover:bg-white/[0.05] transition-colors cursor-pointer"
             >
-              <div className="relative flex-shrink-0">
-                {displayTrack?.coverUrl ? (
-                  <div className="relative w-16 h-16 rounded-2xl overflow-hidden shadow-lg border border-zinc-700/80 bg-zinc-900">
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <StationAvatar
+                  name={currentStation.name}
+                  favicon={currentStation.favicon}
+                  homepage={currentStation.homepage}
+                  size="md"
+                  isPlaying={false}
+                  className="!w-14 !h-14 !rounded-2xl shrink-0 shadow-lg border border-white/15"
+                />
+                {displayTrack?.coverUrl && (
+                  <div className="relative w-14 h-14 rounded-2xl overflow-hidden shadow-lg border border-white/20 bg-zinc-900 shrink-0">
                     <img
                       src={displayTrack.coverUrl}
                       alt={displayTrack.title}
                       className="w-full h-full object-cover"
                     />
                   </div>
-                ) : (
-                  <StationAvatar
-                    name={currentStation.name}
-                    favicon={currentStation.favicon}
-                    homepage={currentStation.homepage}
-                    size="md"
-                    isPlaying={isPlaying}
-                  />
                 )}
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-white truncate leading-snug">
+                <p
+                  onClick={(e) => {
+                    if (!displayTrack?.title) return;
+                    e.stopPropagation();
+                    const q = displayTrack.artist
+                      ? `${displayTrack.artist} ${displayTrack.title}`
+                      : displayTrack.title;
+                    window.dispatchEvent(
+                      new CustomEvent('smartcinema:open-music-query', {
+                        detail: {
+                          query: q,
+                          label: displayTrack.artist
+                            ? `${displayTrack.title} — ${displayTrack.artist}`
+                            : displayTrack.title,
+                        },
+                      })
+                    );
+                    window.focus();
+                  }}
+                  title={
+                    displayTrack?.title
+                      ? `Deschide „${displayTrack.title}” în Muzică`
+                      : undefined
+                  }
+                  className="text-sm font-bold text-white hover:text-amber-300 hover:underline truncate leading-snug cursor-pointer"
+                >
                   {displayTrack?.title || currentStation.name}
                 </p>
 
-                <div className="flex items-center gap-1.5 mt-1 min-w-0">
+                <div
+                  onClick={(e) => {
+                    if (!displayTrack?.artist) return;
+                    e.stopPropagation();
+                    window.dispatchEvent(
+                      new CustomEvent('smartcinema:open-music-query', {
+                        detail: {
+                          query: displayTrack.artist,
+                          label: displayTrack.artist,
+                        },
+                      })
+                    );
+                    window.focus();
+                  }}
+                  title={
+                    displayTrack?.artist
+                      ? `Vezi toate piesele lui „${displayTrack.artist}” în Muzică`
+                      : undefined
+                  }
+                  className="flex items-center gap-1.5 mt-1 min-w-0 cursor-pointer group/pipartist"
+                >
                   {displayTrack?.artistAvatarUrl && (
                     <img
                       src={displayTrack.artistAvatarUrl}
                       alt={displayTrack.artist}
-                      className="w-5 h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-brand-400/60"
+                      className="w-5 h-5 rounded-full object-cover flex-shrink-0 ring-1 ring-blue-400/60"
                     />
                   )}
-                  <p className="text-xs font-semibold text-brand-300 truncate">
+                  <p className="text-xs font-semibold text-blue-300 group-hover/pipartist:text-amber-300 group-hover/pipartist:underline truncate">
                     {displayTrack?.artist ||
                       (isPlaying ? t.player.playing : t.player.paused)}
                   </p>
@@ -486,7 +541,7 @@ export const RadioPipPlayer: React.FC = () => {
                   type="button"
                   onClick={playPreviousStation}
                   aria-label={t.player.prevStation}
-                  className="w-9 h-9 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors"
+                  className="w-9 h-9 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 flex items-center justify-center transition-colors cursor-pointer"
                 >
                   <SkipBack className="w-4 h-4" />
                 </button>
@@ -498,7 +553,7 @@ export const RadioPipPlayer: React.FC = () => {
                     isPlaying ? t.player.pause : t.player.play,
                     { name: currentStation.name }
                   )}
-                  className="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-md transition-colors"
+                  className="w-10 h-10 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] border border-[#3b82f6]/50 text-white flex items-center justify-center shadow-md transition-colors cursor-pointer"
                 >
                   {isLoading ? (
                     <Loader2 className="w-5 h-5 animate-spin" />

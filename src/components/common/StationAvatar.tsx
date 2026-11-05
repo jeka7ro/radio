@@ -23,7 +23,9 @@ const AVATAR_PALETTES = [
 ];
 
 function getInitials(name: string): string {
-  const cleaned = name.replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
+  const cleaned = name
+    .replace(/[^A-Za-z0-9\u00C0-\u024F\u0400-\u04FF\s]/g, ' ')
+    .trim();
   if (!cleaned) return 'FM';
   const words = cleaned.split(/\s+/).filter(Boolean);
   if (words.length === 1) {
@@ -67,8 +69,25 @@ export const StationAvatar: React.FC<StationAvatarProps> = ({
     setCandidateIndex(0);
   }, [candidateUrls]);
 
-  const activeImageUrl =
+  const rawImageUrl =
     candidateIndex < candidateUrls.length ? candidateUrls[candidateIndex] : null;
+  const activeImageUrl = useMemo(() => {
+    if (!rawImageUrl) return null;
+    if (!/^https?:\/\//i.test(rawImageUrl)) return rawImageUrl;
+    const isTvOrLan =
+      typeof window !== 'undefined' &&
+      (document.documentElement.classList.contains('smart-tv-mode') ||
+        window.location.pathname.toLowerCase().startsWith('/tv') ||
+        /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
+          window.location.hostname
+        ) ||
+        /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+          navigator.userAgent
+        ));
+    return isTvOrLan
+      ? `/api/tv-proxy?url=${encodeURIComponent(rawImageUrl)}`
+      : rawImageUrl;
+  }, [rawImageUrl]);
   const initials = getInitials(name);
   const palette = getPaletteClass(name);
 
