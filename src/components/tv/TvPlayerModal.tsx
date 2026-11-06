@@ -1328,28 +1328,61 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       : 'General';
 
   const handleFullscreen = () => {
-    const container = videoContainerRef.current;
+    const container = videoContainerRef.current as
+      | (HTMLElement & {
+          webkitRequestFullscreen?: () => Promise<void> | void;
+        })
+      | null;
+    const vid = videoRef.current as
+      | (HTMLVideoElement & {
+          webkitEnterFullscreen?: () => void;
+          webkitExitFullscreen?: () => void;
+          webkitDisplayingFullscreen?: boolean;
+        })
+      | null;
     const doc = document as Document & {
       webkitFullscreenElement?: Element | null;
       webkitExitFullscreen?: () => Promise<void> | void;
     };
 
-    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+    if (
+      doc.fullscreenElement ||
+      doc.webkitFullscreenElement ||
+      vid?.webkitDisplayingFullscreen
+    ) {
       if (doc.exitFullscreen) {
-        void doc.exitFullscreen().catch(() => { });
+        void doc.exitFullscreen().catch(() => {});
       } else if (doc.webkitExitFullscreen) {
         void doc.webkitExitFullscreen();
+      } else if (vid?.webkitExitFullscreen) {
+        try {
+          vid.webkitExitFullscreen();
+        } catch {
+          // ignore
+        }
       }
+      exitTvFullMode();
       return;
     }
 
-    if (container && typeof container.requestFullscreen === 'function') {
-      container
-        .requestFullscreen()
+    const reqFs =
+      container?.requestFullscreen?.bind(container) ||
+      container?.webkitRequestFullscreen?.bind(container);
+
+    if (reqFs) {
+      Promise.resolve(reqFs())
         .then(() => {
           enterTvFullMode();
         })
         .catch(() => {
+          if (typeof vid?.webkitEnterFullscreen === 'function') {
+            try {
+              vid.webkitEnterFullscreen();
+              return;
+            } catch {
+              // ignore
+            }
+          }
           if (effectiveTvFullMode) {
             exitTvFullMode();
           } else {
@@ -1357,6 +1390,19 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           }
         });
       return;
+    }
+
+    const isStandalone =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      window.matchMedia?.('(display-mode: fullscreen)').matches ||
+      Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
+    if (!isStandalone && typeof vid?.webkitEnterFullscreen === 'function') {
+      try {
+        vid.webkitEnterFullscreen();
+        return;
+      } catch {
+        // ignore
+      }
     }
 
     if (effectiveTvFullMode) {

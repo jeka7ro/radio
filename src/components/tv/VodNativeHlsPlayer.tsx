@@ -3114,8 +3114,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const [isCustomFullscreen, setIsCustomFullscreen] = useState<boolean>(false);
+  const [isIosNativeFullscreen, setIsIosNativeFullscreen] = useState<boolean>(false);
+  const [isLandscapeMobile, setIsLandscapeMobile] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth > window.innerHeight : false
+  );
+  const hasInitialPlayWokenOsdRef = useRef<boolean>(false);
 
   useEffect(() => {
+    hasInitialPlayWokenOsdRef.current = false;
+  }, [hlsUrl, dashUrl]);
+
+  useEffect(() => {
+    const syncOrientation = () => {
+      setIsLandscapeMobile(window.innerWidth > window.innerHeight);
+    };
     const onCustomFs = (ev: Event) => {
       const customEv = ev as CustomEvent<{ force?: boolean }>;
       if (typeof customEv.detail?.force === 'boolean') {
@@ -3131,10 +3143,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         setIsCustomFullscreen(true);
       }
     };
+    window.addEventListener('resize', syncOrientation);
+    window.addEventListener('orientationchange', syncOrientation);
     window.addEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
     document.addEventListener('fullscreenchange', onNativeFsChange);
     document.addEventListener('webkitfullscreenchange', onNativeFsChange);
     return () => {
+      window.removeEventListener('resize', syncOrientation);
+      window.removeEventListener('orientationchange', syncOrientation);
       window.removeEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
       document.removeEventListener('fullscreenchange', onNativeFsChange);
       document.removeEventListener('webkitfullscreenchange', onNativeFsChange);
@@ -3142,7 +3158,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   }, []);
 
   const handleToggleVodFullscreen = () => {
-    const v = videoRef.current;
+    setOpenMenu('none');
+    onHideOsd?.();
+
+    const v = videoRef.current as
+      | (HTMLVideoElement & {
+          webkitEnterFullscreen?: () => void;
+          webkitEnterFullScreen?: () => void;
+          webkitDisplayingFullscreen?: boolean;
+          webkitExitFullscreen?: () => void;
+        })
+      | null;
     if (v && v.muted && isAutoMuted) {
       v.muted = false;
       v.volume = 1;
@@ -3180,6 +3206,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       return;
     }
 
+    if (v?.webkitDisplayingFullscreen && typeof v.webkitExitFullscreen === 'function') {
+      try {
+        v.webkitExitFullscreen();
+      } catch {
+        // ignore
+      }
+      window.dispatchEvent(
+        new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+          detail: { force: false },
+        })
+      );
+      return;
+    }
+
     const nextForce = !isCustomFullscreen;
     window.dispatchEvent(
       new CustomEvent('aether:vod-custom-fullscreen-toggle', {
@@ -3187,25 +3227,44 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       })
     );
 
-    if (nextForce && rootTarget) {
+    if (rootTarget) {
       const reqFn =
         rootTarget.requestFullscreen || rootTarget.webkitRequestFullscreen;
       if (typeof reqFn === 'function') {
-        Promise.resolve(reqFn.call(rootTarget))
-          .then(() => {
-            try {
-              (
-                screen.orientation as unknown as {
-                  lock?: (mode: string) => Promise<void>;
-                }
-              )
-                ?.lock?.('landscape')
-                ?.catch(() => {});
-            } catch {
-              // ignore
-            }
-          })
-          .catch(() => {});
+        if (nextForce) {
+          Promise.resolve(reqFn.call(rootTarget))
+            .then(() => {
+              try {
+                (
+                  screen.orientation as unknown as {
+                    lock?: (mode: string) => Promise<void>;
+                  }
+                )
+                  ?.lock?.('landscape')
+                  ?.catch(() => {});
+              } catch {
+                // ignore
+              }
+            })
+            .catch(() => {});
+        }
+        return;
+      }
+    }
+
+    const isStandalone =
+      Boolean((window.navigator as { standalone?: boolean }).standalone) ||
+      Boolean(window.matchMedia?.('(display-mode: standalone)').matches) ||
+      Boolean(window.matchMedia?.('(display-mode: fullscreen)').matches);
+
+    if (!isStandalone && v) {
+      const enterIosFs = v.webkitEnterFullscreen || v.webkitEnterFullScreen;
+      if (typeof enterIosFs === 'function') {
+        try {
+          enterIosFs.call(v);
+        } catch {
+          // ignore
+        }
       }
     }
   };
@@ -3256,36 +3315,60 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     };
   }, []);
 
-  // Always keep native <video> textTracks disabled so only the custom Filmio subtitle box renders (never double subtitles)
+  // Keep native <video> textTracks disabled during inline playback so only the custom Filmio subtitle box renders (never double subtitles).
+  // Only enable our custom Romanian <track> while iOS native fullscreen (webkitDisplayingFullscreen) is active.
   useEffect(() => {
-    const v = videoRef.current;
+    const v = videoRef.current as
+      | (HTMLVideoElement & { webkitDisplayingFullscreen?: boolean })
+      | null;
     if (!v) return;
-    const disableAllNativeTracks = () => {
-      if (v.textTracks) {
-        for (let i = 0; i < v.textTracks.length; i++) {
-          try {
-            if (v.textTracks[i].mode !== 'disabled') {
-              v.textTracks[i].mode = 'disabled';
-            }
-          } catch {
-            // ignore
+    const syncNativeTracks = () => {
+      const inIosFs = Boolean(v.webkitDisplayingFullscreen);
+      setIsIosNativeFullscreen(inIosFs);
+      if (!v.textTracks) return;
+      for (let i = 0; i < v.textTracks.length; i++) {
+        try {
+          const track = v.textTracks[i];
+          const isOurRoTrack =
+            inIosFs &&
+            Boolean(subtitleVttUrl && hasActiveSubtitle) &&
+            (track.language === 'ro' ||
+              track.label === (subtitleLabel || 'Română'));
+          const desiredMode = isOurRoTrack ? 'showing' : 'disabled';
+          if (track.mode !== desiredMode) {
+            track.mode = desiredMode;
           }
+        } catch {
+          // ignore
         }
       }
     };
-    disableAllNativeTracks();
-    const tt = v.textTracks;
-    tt?.addEventListener?.('addtrack', disableAllNativeTracks);
-    tt?.addEventListener?.('change', disableAllNativeTracks);
-    v.addEventListener('loadedmetadata', disableAllNativeTracks);
-    v.addEventListener('canplay', disableAllNativeTracks);
-    return () => {
-      tt?.removeEventListener?.('addtrack', disableAllNativeTracks);
-      tt?.removeEventListener?.('change', disableAllNativeTracks);
-      v.removeEventListener('loadedmetadata', disableAllNativeTracks);
-      v.removeEventListener('canplay', disableAllNativeTracks);
+    const onWebkitBeginFs = () => {
+      setIsIosNativeFullscreen(true);
+      onHideOsd?.();
+      syncNativeTracks();
     };
-  }, [hlsUrl, subtitleVttUrl, hasActiveSubtitle]);
+    const onWebkitEndFs = () => {
+      setIsIosNativeFullscreen(false);
+      syncNativeTracks();
+    };
+    syncNativeTracks();
+    const tt = v.textTracks;
+    tt?.addEventListener?.('addtrack', syncNativeTracks);
+    tt?.addEventListener?.('change', syncNativeTracks);
+    v.addEventListener('loadedmetadata', syncNativeTracks);
+    v.addEventListener('canplay', syncNativeTracks);
+    v.addEventListener('webkitbeginfullscreen', onWebkitBeginFs);
+    v.addEventListener('webkitendfullscreen', onWebkitEndFs);
+    return () => {
+      tt?.removeEventListener?.('addtrack', syncNativeTracks);
+      tt?.removeEventListener?.('change', syncNativeTracks);
+      v.removeEventListener('loadedmetadata', syncNativeTracks);
+      v.removeEventListener('canplay', syncNativeTracks);
+      v.removeEventListener('webkitbeginfullscreen', onWebkitBeginFs);
+      v.removeEventListener('webkitendfullscreen', onWebkitEndFs);
+    };
+  }, [hlsUrl, subtitleVttUrl, hasActiveSubtitle, subtitleLabel, onHideOsd]);
 
   // Ensure that whenever the OSD is visible, a button on the OSD has focus so the white highlight is always visible and ready for Left/Right arrows
   useEffect(() => {
@@ -3338,18 +3421,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       className="relative z-10 w-full h-full bg-[#090b10] flex flex-col select-none"
     >
       <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
-        {/* AMBIENT CINEMA GLOW BACKDROP (Eliminates dead pitch-black 21:9 letterbox bars) */}
-        {(backdropUrl || poster) && (
-          <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-            <img
-              src={backdropUrl || poster}
-              alt=""
-              aria-hidden="true"
-              className="w-full h-full object-cover blur-3xl opacity-55 scale-115 saturate-150"
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/45 via-zinc-950/20 to-zinc-950/55" />
-          </div>
-        )}
+        {/* AMBIENT CINEMA GLOW BACKDROP (Hidden on mobile landscape/fullscreen so video fills 100% edge-to-edge without side glow) */}
+        {(backdropUrl || poster) &&
+          !(isMobilePhone && (isCustomFullscreen || isLandscapeMobile)) && (
+            <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+              <img
+                src={backdropUrl || poster}
+                alt=""
+                aria-hidden="true"
+                className="w-full h-full object-cover blur-3xl opacity-55 scale-115 saturate-150"
+              />
+              <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/45 via-zinc-950/20 to-zinc-950/55" />
+            </div>
+          )}
         <video
           ref={videoRef}
           playsInline
@@ -3502,7 +3586,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               setIsAutoMuted(false);
             }
             setStatus('playing');
-            onWakeOsd?.();
+            if (!isMobilePhone || !hasInitialPlayWokenOsdRef.current) {
+              hasInitialPlayWokenOsdRef.current = true;
+              onWakeOsd?.();
+            }
             if (
               typeof window !== 'undefined' &&
               (document.documentElement.classList.contains('smart-tv-mode') ||
@@ -3519,8 +3606,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onTimeUpdate={(e) => {
-            const vid = e.currentTarget;
-            if (vid.textTracks && vid.textTracks.length > 0) {
+            const vid = e.currentTarget as HTMLVideoElement & {
+              webkitDisplayingFullscreen?: boolean;
+            };
+            if (
+              !vid.webkitDisplayingFullscreen &&
+              vid.textTracks &&
+              vid.textTracks.length > 0
+            ) {
               for (let i = 0; i < vid.textTracks.length; i++) {
                 if (vid.textTracks[i].mode !== 'disabled') {
                   try {
@@ -3611,29 +3704,41 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           className={`relative z-10 w-full h-full ${
-            isCustomFullscreen && isMobilePhone
+            isMobilePhone && (isCustomFullscreen || isLandscapeMobile)
               ? 'object-cover'
               : 'object-contain'
           } bg-transparent`}
-        />
-        <style>{`
-          video::-webkit-media-text-track-container,
-          video::-webkit-media-text-track-display,
-          video::-webkit-media-text-track-background,
-          video::-webkit-media-text-track-region,
-          video::-webkit-media-text-track-region-container,
-          video::cue {
-            display: none !important;
-            opacity: 0 !important;
-            visibility: hidden !important;
-            color: transparent !important;
-            background: transparent !important;
-            font-size: 0 !important;
-            line-height: 0 !important;
-            max-height: 0 !important;
-            pointer-events: none !important;
-          }
-        `}</style>
+        >
+          {subtitleVttUrl && hasActiveSubtitle && (
+            <track
+              key={subtitleVttUrl}
+              kind="subtitles"
+              src={subtitleVttUrl}
+              srcLang="ro"
+              label={subtitleLabel || 'Română'}
+            />
+          )}
+        </video>
+        {!isIosNativeFullscreen && (
+          <style>{`
+            video::-webkit-media-text-track-container,
+            video::-webkit-media-text-track-display,
+            video::-webkit-media-text-track-background,
+            video::-webkit-media-text-track-region,
+            video::-webkit-media-text-track-region-container,
+            video::cue {
+              display: none !important;
+              opacity: 0 !important;
+              visibility: hidden !important;
+              color: transparent !important;
+              background: transparent !important;
+              font-size: 0 !important;
+              line-height: 0 !important;
+              max-height: 0 !important;
+              pointer-events: none !important;
+            }
+          `}</style>
+        )}
 
         {/* CLEAN FRAMELESS SKIP INTRO / RECAP PILL BUTTON ("Sari peste Recapitulare" / "Sari peste Intro") */}
         {isSkipIntroVisible &&
@@ -3845,8 +3950,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               : 'inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 rounded-2xl sm:rounded-[28px] px-3 sm:px-6 py-2 sm:py-4 gap-1.5 sm:gap-3'
           } z-30 overflow-visible tahoe-emerald-osd flex flex-col transition-all duration-300 ${
             isOsdVisible || openMenu !== 'none'
-              ? 'opacity-100 translate-y-0 pointer-events-auto'
-              : 'opacity-0 translate-y-2 pointer-events-none'
+              ? 'opacity-100 translate-y-0 pointer-events-auto visible'
+              : 'opacity-0 translate-y-2 pointer-events-none invisible'
           }`}
         >
           {/* ROW 1: POSTER & TITLE + APPLE LIQUID GLASS TIMELINE SCRUBBER */}

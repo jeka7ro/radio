@@ -1388,10 +1388,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     if (osdTimerRef.current) {
       window.clearTimeout(osdTimerRef.current);
     }
-    if (tvSettings.osdAutoHideSec <= 0) {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const isMobileTouch =
+      /iPhone|iPod|iPad|Android|Mobile/i.test(ua) ||
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1);
+    if (!isMobileTouch && tvSettings.osdAutoHideSec <= 0) {
       return;
     }
-    const timeoutMs = Math.max(8, tvSettings.osdAutoHideSec) * 1000;
+    const timeoutMs = isMobileTouch
+      ? 3000
+      : Math.max(8, tvSettings.osdAutoHideSec) * 1000;
     osdTimerRef.current = window.setTimeout(() => {
       const hasOpenOverlay = Boolean(
         playerBoxRef.current?.querySelector(
@@ -1801,9 +1807,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const requestTvFullscreen = useCallback(() => {
     try {
+      hideVodOsd();
       const box = playerBoxRef.current as
         | (HTMLDivElement & {
             webkitRequestFullscreen?: () => Promise<void> | void;
+          })
+        | null;
+      const vid = box?.querySelector('video') as
+        | (HTMLVideoElement & {
+            webkitEnterFullscreen?: () => void;
+            webkitEnterFullScreen?: () => void;
+            webkitDisplayingFullscreen?: boolean;
+            webkitExitFullscreen?: () => void;
           })
         | null;
       const doc = document as Document & {
@@ -1819,6 +1834,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           void doc.exitFullscreen().catch(() => {});
         } else if (typeof doc.webkitExitFullscreen === 'function') {
           void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
+        }
+        window.dispatchEvent(
+          new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+            detail: { force: false },
+          })
+        );
+        return;
+      }
+
+      if (vid?.webkitDisplayingFullscreen && typeof vid.webkitExitFullscreen === 'function') {
+        try {
+          vid.webkitExitFullscreen();
+        } catch {
+          // ignore
         }
         window.dispatchEvent(
           new CustomEvent('aether:vod-custom-fullscreen-toggle', {
@@ -1853,11 +1882,28 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
           })
           .catch(() => {});
+        return;
+      }
+
+      const isStandalone =
+        Boolean((window.navigator as { standalone?: boolean }).standalone) ||
+        Boolean(window.matchMedia?.('(display-mode: standalone)').matches) ||
+        Boolean(window.matchMedia?.('(display-mode: fullscreen)').matches);
+
+      if (!isStandalone && vid) {
+        const enterIosFs = vid.webkitEnterFullscreen || vid.webkitEnterFullScreen;
+        if (typeof enterIosFs === 'function') {
+          try {
+            enterIosFs.call(vid);
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch {
       // ignore
     }
-  }, []);
+  }, [hideVodOsd]);
 
   const handleFocusVodItem = useCallback(
     (item: CinemetaItem, isHeroBannerPreload = false) => {
@@ -4573,7 +4619,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handlePlayYouTubeVideo = useCallback(
     (ytVideo: YouTubeVideoCardItem) => {
-      if (tvSettings.autoFullscreenOnPlay) {
+      if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
         requestTvFullscreen();
       }
       setYtUseEmbedFallback(!isLocalHomeServer());
@@ -4596,7 +4642,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsPlayingVod(true);
       wakeVodOsd();
     },
-    [tvSettings.autoFullscreenOnPlay, requestTvFullscreen, wakeVodOsd]
+    [tvSettings.autoFullscreenOnPlay, isMobilePhone, requestTvFullscreen, wakeVodOsd]
   );
 
   // Open Movie/Series in Lampa Full Detail Card (Карточка фильма)
@@ -4610,8 +4656,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (
         autoPlayImmediately &&
         tvSettings.autoFullscreenOnPlay &&
-        typeof window !== 'undefined' &&
-        window.innerWidth >= 640
+        !isMobilePhone
       ) {
         requestTvFullscreen();
       }
@@ -4730,6 +4775,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     [
       watchProgressMap,
       section,
+      isMobilePhone,
       requestTvFullscreen,
       wakeVodOsd,
       tvSettings.autoFullscreenOnPlay,
@@ -4740,11 +4786,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handleStartVodPlayback = useCallback(
     (customStartSec?: number, openAudioSheet = false) => {
-      if (
-        tvSettings.autoFullscreenOnPlay &&
-        typeof window !== 'undefined' &&
-        window.innerWidth >= 640
-      ) {
+      if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
         requestTvFullscreen();
       }
       if (typeof customStartSec === 'number') {
@@ -5841,7 +5883,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
       }
       if (autoPlay) {
-        if (tvSettings.autoFullscreenOnPlay) {
+        if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
           requestTvFullscreen();
         }
         setIsPlayingVod(true);
@@ -7556,6 +7598,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               <div
                 ref={playerBoxRef}
                 onMouseMove={() => {
+                  if (isMobilePhone) return;
                   if (Date.now() - lastBackHideOsdAtRef.current < 700) {
                     return;
                   }
@@ -7575,38 +7618,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   }
                   wakeVodOsd();
                 }}
-                onClick={wakeVodOsd}
+                onClick={() => {
+                  if (!isMobilePhone) {
+                    wakeVodOsd();
+                  }
+                }}
                 data-vod-full-player="true"
-                style={
-                  isMobileCustomFullscreen && isPortraitViewport
-                    ? {
-                        position: 'fixed',
-                        top: '50%',
-                        left: '50%',
-                        width: '100dvh',
-                        height: '100vw',
-                        transform: 'translate(-50%, -50%) rotate(90deg)',
-                        zIndex: 9999,
-                      }
-                    : {
-                        height: '100dvh',
-                        maxHeight: '100dvh',
-                      }
-                }
-                className={
-                  isMobileCustomFullscreen && isPortraitViewport
-                    ? "fixed bg-black flex flex-col overflow-hidden"
-                    : "fixed inset-0 z-[200] w-full h-full bg-[#090b10] flex flex-col overflow-hidden"
-                }
+                style={{
+                  height: '100dvh',
+                  maxHeight: '100dvh',
+                }}
+                className="fixed inset-0 z-[200] w-full h-full bg-black flex flex-col overflow-hidden"
               >
                 {/* MINIMAL FLOATING TOP CONTROLS (No duplicated title/poster — Cinema Card is in Bottom Dock) */}
                 <div
-                  onMouseEnter={wakeVodOsd}
+                  onMouseEnter={() => {
+                    if (!isMobilePhone) {
+                      wakeVodOsd();
+                    }
+                  }}
                   className={`absolute ${
                     isMobilePhone
                       ? 'top-2 inset-x-3'
                       : 'top-3 sm:top-5 inset-x-3 sm:inset-x-7'
-                  } z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 pointer-events-none ${isVodOsdVisible ||
+                  } z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible ||
                     isEpisodesDrawerOpen ||
                     isInfoSheetOpen ||
                     (!activeVodItem.id.startsWith('yt_') &&
@@ -7627,12 +7662,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         resolvedFileListStream?.ok &&
                         resolvedFileListStream.streamUrl
                       ))
-                    ? 'opacity-100 translate-y-0'
-                    : 'opacity-0 -translate-y-2'
+                    ? 'opacity-100 translate-y-0 pointer-events-auto'
+                    : 'opacity-0 -translate-y-2 pointer-events-none invisible'
                     }`}
                 >
                   {/* Left: Clean Floating Back Button + Mobile Title */}
-                  <div className="flex items-center gap-2 min-w-0 pointer-events-auto">
+                  <div className="flex items-center gap-2 min-w-0">
                     <button
                       type="button"
                       data-vod-top-back-btn="true"
@@ -7823,10 +7858,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           sourceQualityBadge="YT PREMIUM • 1080p • FĂRĂ RECLAME"
                           onResolutionChange={setLiveVodResolution}
                           onWakeOsd={wakeVodOsd}
-                        onHideOsd={() => {
-                          lastBackHideOsdAtRef.current = Date.now();
-                          setIsVodOsdVisible(false);
-                        }}
+                        onHideOsd={hideVodOsd}
                           prevEpisodeLabel={prevYt ? '◀ Clip Anterior' : undefined}
                           nextEpisodeLabel={nextYt ? 'Clip Următor ▶' : undefined}
                           onPrevEpisode={
@@ -7954,10 +7986,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         externalQualityOptions={flQualityOptions}
                         onResolutionChange={setLiveVodResolution}
                         onWakeOsd={wakeVodOsd}
-                        onHideOsd={() => {
-                          lastBackHideOsdAtRef.current = Date.now();
-                          setIsVodOsdVisible(false);
-                        }}
+                        onHideOsd={hideVodOsd}
                         prevEpisodeLabel={
                           activeVodItem.type === 'series' && selectedEpisode > 1
                             ? `Ep. ${selectedEpisode - 1}`
@@ -8208,10 +8237,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         externalQualityOptions={flQualityOptions}
                         onResolutionChange={setLiveVodResolution}
                         onWakeOsd={wakeVodOsd}
-                        onHideOsd={() => {
-                          lastBackHideOsdAtRef.current = Date.now();
-                          setIsVodOsdVisible(false);
-                        }}
+                        onHideOsd={hideVodOsd}
                         prevEpisodeLabel={
                           activeVodItem.type === 'series' && selectedEpisode > 1
                             ? `Ep. ${selectedEpisode - 1}`
