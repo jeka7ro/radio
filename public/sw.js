@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v7';
+const CACHE_NAME = 'aether-radio-v8';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
   '/icons/favicon.svg',

@@ -3113,6 +3113,33 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   }, []);
 
   const playerRootRef = useRef<HTMLDivElement | null>(null);
+  const [isCustomFullscreen, setIsCustomFullscreen] = useState<boolean>(false);
+
+  useEffect(() => {
+    const onCustomFs = (ev: Event) => {
+      const customEv = ev as CustomEvent<{ force?: boolean }>;
+      if (typeof customEv.detail?.force === 'boolean') {
+        setIsCustomFullscreen(customEv.detail.force);
+      } else {
+        setIsCustomFullscreen((prev) => !prev);
+      }
+    };
+    const onNativeFsChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      const inFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+      if (inFs) {
+        setIsCustomFullscreen(true);
+      }
+    };
+    window.addEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
+    document.addEventListener('fullscreenchange', onNativeFsChange);
+    document.addEventListener('webkitfullscreenchange', onNativeFsChange);
+    return () => {
+      window.removeEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
+      document.removeEventListener('fullscreenchange', onNativeFsChange);
+      document.removeEventListener('webkitfullscreenchange', onNativeFsChange);
+    };
+  }, []);
 
   const handleToggleVodFullscreen = () => {
     const v = videoRef.current;
@@ -3125,10 +3152,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const rootTarget =
       (playerRootRef.current?.closest(
         '[data-vod-full-player="true"]'
-      ) as HTMLElement | null) || playerRootRef.current;
+      ) as (HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      }) | null) ||
+      (playerRootRef.current as
+        | (HTMLElement & {
+            webkitRequestFullscreen?: () => Promise<void> | void;
+          })
+        | null);
 
-    if (typeof document !== 'undefined' && document.fullscreenElement) {
-      void document.exitFullscreen?.().catch(() => {});
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+
+    if (typeof document !== 'undefined' && (doc.fullscreenElement || doc.webkitFullscreenElement)) {
+      if (typeof doc.exitFullscreen === 'function') {
+        void doc.exitFullscreen().catch(() => {});
+      } else if (typeof doc.webkitExitFullscreen === 'function') {
+        void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
+      }
       window.dispatchEvent(
         new CustomEvent('aether:vod-custom-fullscreen-toggle', {
           detail: { force: false },
@@ -3137,33 +3180,34 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       return;
     }
 
-    if (rootTarget && typeof rootTarget.requestFullscreen === 'function') {
-      rootTarget
-        .requestFullscreen()
-        .then(() => {
-          try {
-            (
-              screen.orientation as unknown as {
-                lock?: (mode: string) => Promise<void>;
-              }
-            )
-              ?.lock?.('landscape')
-              ?.catch(() => {});
-          } catch {
-            // ignore
-          }
-        })
-        .catch(() => {
-          window.dispatchEvent(
-            new CustomEvent('aether:vod-custom-fullscreen-toggle')
-          );
-        });
-      return;
-    }
-
+    const nextForce = !isCustomFullscreen;
     window.dispatchEvent(
-      new CustomEvent('aether:vod-custom-fullscreen-toggle')
+      new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+        detail: { force: nextForce },
+      })
     );
+
+    if (nextForce && rootTarget) {
+      const reqFn =
+        rootTarget.requestFullscreen || rootTarget.webkitRequestFullscreen;
+      if (typeof reqFn === 'function') {
+        Promise.resolve(reqFn.call(rootTarget))
+          .then(() => {
+            try {
+              (
+                screen.orientation as unknown as {
+                  lock?: (mode: string) => Promise<void>;
+                }
+              )
+                ?.lock?.('landscape')
+                ?.catch(() => {});
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => {});
+      }
+    }
   };
 
   const handleTriggerAirPlay = () => {
@@ -3566,7 +3610,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               onNextEpisode();
             }
           }}
-          className="relative z-10 w-full h-full object-contain bg-transparent"
+          className={`relative z-10 w-full h-full ${
+            isCustomFullscreen && isMobilePhone
+              ? 'object-cover'
+              : 'object-contain'
+          } bg-transparent`}
         />
         <style>{`
           video::-webkit-media-text-track-container,
@@ -3705,15 +3753,25 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         {activeSubtitleText && (
           <div
             className={`pointer-events-none absolute inset-x-4 z-20 flex justify-center transition-all duration-300 ${
-              isOsdVisible || openMenu !== 'none'
-                ? 'bottom-44 sm:bottom-48'
-                : 'bottom-14 sm:bottom-16'
+              isMobilePhone
+                ? isOsdVisible || openMenu !== 'none'
+                  ? 'bottom-16'
+                  : 'bottom-3'
+                : isOsdVisible || openMenu !== 'none'
+                  ? 'bottom-44 sm:bottom-48'
+                  : 'bottom-14 sm:bottom-16'
             }`}
           >
             <div
-              className={`max-w-4xl rounded-2xl bg-black/80 text-white text-center font-extrabold leading-snug whitespace-pre-line shadow-2xl border border-white/10 ${subFontClass}`}
+              className={`${
+                isMobilePhone
+                  ? 'max-w-[86vw] px-2.5 py-0.5 rounded-lg bg-black/65 font-semibold'
+                  : `max-w-4xl rounded-2xl bg-black/80 font-extrabold ${subFontClass}`
+              } text-white text-center leading-snug whitespace-pre-line shadow-2xl border border-white/10`}
               style={{
-                fontSize: `${subFontPx}px`,
+                fontSize: isMobilePhone
+                  ? `${Math.max(13, Math.round(subFontPx * 0.62))}px`
+                  : `${subFontPx}px`,
                 textShadow:
                   '0 2px 4px rgba(0,0,0,0.95), 0 0 10px rgba(0,0,0,0.95)',
               }}
@@ -3737,10 +3795,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   setIsAutoMuted(false);
                 }
               }}
-              className="absolute top-14 left-1/2 -translate-x-1/2 z-30 px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-2xl cursor-pointer"
+              className={
+                isMobilePhone
+                  ? 'absolute top-2 right-3 z-30 h-8 px-3 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-[11px] font-extrabold inline-flex items-center gap-1.5 shadow-xl cursor-pointer'
+                  : 'absolute top-14 left-1/2 -translate-x-1/2 z-30 px-5 py-2.5 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-2xl cursor-pointer'
+              }
             >
-              <VolumeX className="w-4 h-4" />
-              <span>Sunet oprit de browser — Apasă pentru Sunet</span>
+              <VolumeX className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                {isMobilePhone
+                  ? 'Apasă pentru Sunet'
+                  : 'Sunet oprit de browser — Apasă pentru Sunet'}
+              </span>
             </button>
           )}
 
@@ -3768,9 +3834,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         <div
           data-vod-bottom-dock="true"
           onClick={(e) => e.stopPropagation()}
+          style={
+            isMobilePhone
+              ? { bottom: 'max(8px, env(safe-area-inset-bottom, 8px))' }
+              : undefined
+          }
           className={`absolute ${
             isMobilePhone
-              ? 'inset-x-2 bottom-2 rounded-2xl px-3 py-2 gap-1.5'
+              ? 'inset-x-3 rounded-2xl px-3 py-1.5 gap-1'
               : 'inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 rounded-2xl sm:rounded-[28px] px-3 sm:px-6 py-2 sm:py-4 gap-1.5 sm:gap-3'
           } z-30 overflow-visible tahoe-emerald-osd flex flex-col transition-all duration-300 ${
             isOsdVisible || openMenu !== 'none'
@@ -3781,7 +3852,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           {/* ROW 1: POSTER & TITLE + APPLE LIQUID GLASS TIMELINE SCRUBBER */}
           <div
             className={`w-full flex items-center ${
-              isMobilePhone ? 'gap-2 mb-0.5' : 'gap-2 sm:gap-5 mb-0.5 sm:mb-4'
+              isMobilePhone ? 'gap-2 mb-0' : 'gap-2 sm:gap-5 mb-0.5 sm:mb-4'
             }`}
           >
             {/* Clean Apple TV+ Large Pop-Out Poster & Title + Episode Name (Desktop & Smart TV only) */}
@@ -3885,7 +3956,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   triggerSeek(15);
                 }
               }}
-              className="relative flex-1 h-7 flex items-center group cursor-pointer bg-transparent focus:outline-none"
+              className={`relative flex-1 ${
+                isMobilePhone ? 'h-5' : 'h-7'
+              } flex items-center group cursor-pointer bg-transparent focus:outline-none`}
             >
               {/* Floating Liquid Glass Scrub Preview Bubble */}
               {(hoverPreview !== null || scrubPreviewSec !== null) && (
@@ -4233,7 +4306,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       data-vod-menu-popover="true"
                       className={`${
                         isMobilePhone
-                          ? 'fixed inset-x-3 bottom-20 w-auto max-h-[65dvh]'
+                          ? 'absolute right-0 bottom-full mb-2 w-60 max-h-[60dvh]'
                           : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-64 max-h-72'
                       } overflow-y-auto rounded-2xl tahoe-emerald-osd p-2.5 shadow-2xl space-y-1 z-50`}
                     >
@@ -4490,7 +4563,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       data-vod-menu-popover="true"
                       className={`${
                         isMobilePhone
-                          ? 'fixed inset-x-3 bottom-20 w-auto max-h-[68dvh]'
+                          ? 'absolute right-0 bottom-full mb-2 w-72 max-h-[62dvh]'
                           : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-[340px] max-h-[70vh] sm:max-h-[78vh]'
                       } overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2 z-50`}
                     >

@@ -1801,18 +1801,44 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const requestTvFullscreen = useCallback(() => {
     try {
-      const box = playerBoxRef.current;
+      const box = playerBoxRef.current as
+        | (HTMLDivElement & {
+            webkitRequestFullscreen?: () => Promise<void> | void;
+          })
+        | null;
+      const doc = document as Document & {
+        webkitFullscreenElement?: Element | null;
+        webkitExitFullscreen?: () => Promise<void> | void;
+      };
 
-      if (typeof document !== 'undefined' && document.fullscreenElement) {
-        void document.exitFullscreen?.().catch(() => { });
-        setIsMobileCustomFullscreen(false);
+      if (
+        typeof document !== 'undefined' &&
+        (doc.fullscreenElement || doc.webkitFullscreenElement)
+      ) {
+        if (typeof doc.exitFullscreen === 'function') {
+          void doc.exitFullscreen().catch(() => {});
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
+        }
+        window.dispatchEvent(
+          new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+            detail: { force: false },
+          })
+        );
         return;
       }
 
-      const fsTarget = box || document.documentElement;
-      if (fsTarget && typeof fsTarget.requestFullscreen === 'function') {
-        fsTarget
-          .requestFullscreen()
+      window.dispatchEvent(
+        new CustomEvent('aether:vod-custom-fullscreen-toggle')
+      );
+
+      const fsTarget = (box || document.documentElement) as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      };
+      const reqFn =
+        fsTarget?.requestFullscreen || fsTarget?.webkitRequestFullscreen;
+      if (typeof reqFn === 'function') {
+        Promise.resolve(reqFn.call(fsTarget))
           .then(() => {
             try {
               (
@@ -1821,18 +1847,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 }
               )
                 ?.lock?.('landscape')
-                ?.catch(() => { });
+                ?.catch(() => {});
             } catch {
               // ignore
             }
           })
-          .catch(() => {
-            setIsMobileCustomFullscreen((prev) => !prev);
-          });
-        return;
+          .catch(() => {});
       }
-
-      setIsMobileCustomFullscreen((prev) => !prev);
     } catch {
       // ignore
     }
@@ -7556,16 +7577,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 }}
                 onClick={wakeVodOsd}
                 data-vod-full-player="true"
+                style={
+                  isMobileCustomFullscreen && isPortraitViewport
+                    ? {
+                        position: 'fixed',
+                        top: '50%',
+                        left: '50%',
+                        width: '100dvh',
+                        height: '100vw',
+                        transform: 'translate(-50%, -50%) rotate(90deg)',
+                        zIndex: 9999,
+                      }
+                    : {
+                        height: '100dvh',
+                        maxHeight: '100dvh',
+                      }
+                }
                 className={
                   isMobileCustomFullscreen && isPortraitViewport
-                    ? "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[100dvh] h-[100vw] rotate-90 z-[9999] bg-black flex flex-col overflow-hidden"
-                    : "fixed inset-0 z-[200] w-full h-[100dvh] sm:w-screen sm:h-screen bg-[#090b10] flex flex-col overflow-hidden"
+                    ? "fixed bg-black flex flex-col overflow-hidden"
+                    : "fixed inset-0 z-[200] w-full h-full bg-[#090b10] flex flex-col overflow-hidden"
                 }
               >
                 {/* MINIMAL FLOATING TOP CONTROLS (No duplicated title/poster — Cinema Card is in Bottom Dock) */}
                 <div
                   onMouseEnter={wakeVodOsd}
-                  className={`absolute top-3 sm:top-5 inset-x-3 sm:inset-x-7 z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 pointer-events-none ${isVodOsdVisible ||
+                  className={`absolute ${
+                    isMobilePhone
+                      ? 'top-2 inset-x-3'
+                      : 'top-3 sm:top-5 inset-x-3 sm:inset-x-7'
+                  } z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 pointer-events-none ${isVodOsdVisible ||
                     isEpisodesDrawerOpen ||
                     isInfoSheetOpen ||
                     (!activeVodItem.id.startsWith('yt_') &&
@@ -7602,7 +7643,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           setIsSidebarOpen(true);
                         }
                       }}
-                      className="h-9 sm:h-11 px-3.5 sm:px-5 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold text-xs sm:text-sm inline-flex items-center gap-1.5 sm:gap-2 transition-all shrink-0 cursor-pointer group"
+                      className={`${
+                        isMobilePhone
+                          ? 'h-8 px-3 text-xs gap-1'
+                          : 'h-9 sm:h-11 px-3.5 sm:px-5 text-xs sm:text-sm gap-1.5 sm:gap-2'
+                      } rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold inline-flex items-center transition-all shrink-0 cursor-pointer group`}
                     >
                       <ArrowLeft className="w-4 h-4 text-[#60a5fa] group-focus:text-[#081220]" />
                       <span>
@@ -7693,14 +7738,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       </button>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={requestTvFullscreen}
-                      title={tr('Ecran Complet', 'Fullscreen', 'Полный экран')}
-                      className={`${isMobilePhone ? 'inline-flex h-9 w-9' : 'hidden sm:inline-flex h-10 w-10'} rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer`}
-                    >
-                      <Maximize2 className="w-4 h-4" />
-                    </button>
+                    {!isMobilePhone && (
+                      <button
+                        type="button"
+                        onClick={requestTvFullscreen}
+                        title={tr('Ecran Complet', 'Fullscreen', 'Полный экран')}
+                        className="hidden sm:inline-flex h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer"
+                      >
+                        <Maximize2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
