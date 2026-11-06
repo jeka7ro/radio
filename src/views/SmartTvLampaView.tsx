@@ -1710,49 +1710,60 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   );
   const [isMobilePhone, setIsMobilePhone] = useState(() => {
     if (typeof window === 'undefined') return false;
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
     if (
-      document.documentElement.classList.contains('smart-tv-mode') ||
-      window.location.pathname.toLowerCase().startsWith('/tv')
+      /Web0S|WebOS|Tizen|SMART-TV|SmartTV|NetCast|VIDAA|HbbTV|AFTB|AFTT|AFTM|AFTS|BRAVIA|CrKey/i.test(
+        ua
+      )
     ) {
       return false;
     }
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    const isIpadOs =
-      /iPad/i.test(ua) ||
-      (typeof navigator !== 'undefined' &&
-        navigator.platform === 'MacIntel' &&
-        navigator.maxTouchPoints > 1);
-    if (/iPhone|iPod|Android.*Mobile/i.test(ua) || isIpadOs) return true;
+    const isTouchDevice =
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
+      Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+    if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) return true;
+    if (
+      isTouchDevice &&
+      (window.innerWidth <= 1366 || window.innerHeight <= 1024)
+    ) {
+      return true;
+    }
     return (
       window.innerWidth < 640 ||
-      (window.innerHeight < 540 && window.innerWidth < 1024)
+      (window.innerHeight < 560 && window.innerWidth < 1024)
     );
   });
 
   useEffect(() => {
     const syncViewportFlags = () => {
       setIsPortraitViewport(window.innerHeight > window.innerWidth);
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
       if (
-        document.documentElement.classList.contains('smart-tv-mode') ||
-        window.location.pathname.toLowerCase().startsWith('/tv')
+        /Web0S|WebOS|Tizen|SMART-TV|SmartTV|NetCast|VIDAA|HbbTV|AFTB|AFTT|AFTM|AFTS|BRAVIA|CrKey/i.test(
+          ua
+        )
       ) {
         setIsMobilePhone(false);
         return;
       }
-      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-      const isIpadOs =
-        /iPad/i.test(ua) ||
-        (typeof navigator !== 'undefined' &&
-          navigator.platform === 'MacIntel' &&
-          navigator.maxTouchPoints > 1);
-      if (/iPhone|iPod|Android.*Mobile/i.test(ua) || isIpadOs) {
+      const isTouchDevice =
+        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
+        Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+      if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) {
         setIsMobilePhone(true);
-      } else {
-        setIsMobilePhone(
-          window.innerWidth < 640 ||
-            (window.innerHeight < 540 && window.innerWidth < 1024)
-        );
+        return;
       }
+      if (
+        isTouchDevice &&
+        (window.innerWidth <= 1366 || window.innerHeight <= 1024)
+      ) {
+        setIsMobilePhone(true);
+        return;
+      }
+      setIsMobilePhone(
+        window.innerWidth < 640 ||
+          (window.innerHeight < 560 && window.innerWidth < 1024)
+      );
     };
     const onOpenHandoff = () => setIsHandoffModalOpen(true);
     window.addEventListener('resize', syncViewportFlags);
