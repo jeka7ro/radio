@@ -240,19 +240,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     ) {
       return false;
     }
+    if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
     const isTouchDevice =
       (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-      Boolean(window.matchMedia?.('(pointer: coarse)').matches);
-    if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) return true;
-    if (
-      isTouchDevice &&
-      (window.innerWidth <= 1366 || window.innerHeight <= 1024)
-    ) {
-      return true;
-    }
+      'ontouchstart' in window ||
+      Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
+      Boolean(window.matchMedia?.('(hover: none)').matches);
+    if (isTouchDevice) return true;
     return (
-      window.innerWidth < 640 ||
-      (window.innerHeight < 560 && window.innerWidth < 1024)
+      window.innerWidth < 768 ||
+      (window.innerHeight < 600 && window.innerWidth < 1024)
     );
   });
 
@@ -267,23 +264,22 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         setIsMobilePhone(false);
         return;
       }
-      const isTouchDevice =
-        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-        Boolean(window.matchMedia?.('(pointer: coarse)').matches);
-      if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) {
+      if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) {
         setIsMobilePhone(true);
         return;
       }
-      if (
-        isTouchDevice &&
-        (window.innerWidth <= 1366 || window.innerHeight <= 1024)
-      ) {
+      const isTouchDevice =
+        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
+        'ontouchstart' in window ||
+        Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
+        Boolean(window.matchMedia?.('(hover: none)').matches);
+      if (isTouchDevice) {
         setIsMobilePhone(true);
         return;
       }
       setIsMobilePhone(
-        window.innerWidth < 640 ||
-          (window.innerHeight < 560 && window.innerWidth < 1024)
+        window.innerWidth < 768 ||
+          (window.innerHeight < 600 && window.innerWidth < 1024)
       );
     };
     window.addEventListener('resize', syncIsMobilePhone);
@@ -1648,9 +1644,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         } catch {
           // ignore
         }
-        const hlsConfig: Partial<ConstructorParameters<typeof Hls>[0]> = {
+        const hlsConfig: NonNullable<ConstructorParameters<typeof Hls>[0]> = {
           enableWorker: !isHardwareSmartTv,
           capLevelToPlayerSize: false,
+          enableCEA708Captions: false,
+          enableWebVTT: false,
+          enableIMSC1: false,
           startPosition:
             startAtSecondsRef.current > 5 ? startAtSecondsRef.current : -1,
           maxBufferLength: isHardwareSmartTv ? 25 : 45,
@@ -1660,6 +1659,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           hlsConfig.loader = createOfflineAwareHlsLoader();
         }
         const hls = new Hls(hlsConfig);
+        hls.subtitleDisplay = false;
+        hls.subtitleTrack = -1;
         hlsRef.current = hls;
         let errorRetries = 0;
 
@@ -1699,6 +1700,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             return;
           }
           logTvVod('manifest_parsed', `levels=${data.levels.length}`);
+          hls.subtitleDisplay = false;
+          hls.subtitleTrack = -1;
 
           // Filter out duplicate failover-audio levels so audio0 track switches never drop video quality
           const hasPrimaryLevels = data.levels.some(
@@ -3209,46 +3212,36 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     };
   }, []);
 
-  // Keep native <track> hidden during inline playback (so custom HTML subtitle box renders) and enable it automatically inside iOS native fullscreen
+  // Always keep native <video> textTracks disabled so only the custom Filmio subtitle box renders (never double subtitles)
   useEffect(() => {
-    const v = videoRef.current as
-      | (HTMLVideoElement & { webkitDisplayingFullscreen?: boolean })
-      | null;
+    const v = videoRef.current;
     if (!v) return;
-    const syncNativeTrackMode = () => {
-      const inIosFs = Boolean(v.webkitDisplayingFullscreen);
+    const disableAllNativeTracks = () => {
       if (v.textTracks) {
         for (let i = 0; i < v.textTracks.length; i++) {
-          v.textTracks[i].mode =
-            inIosFs && hasActiveSubtitle ? 'showing' : 'hidden';
+          try {
+            if (v.textTracks[i].mode !== 'disabled') {
+              v.textTracks[i].mode = 'disabled';
+            }
+          } catch {
+            // ignore
+          }
         }
       }
     };
-    const onBeginIosFs = () => {
-      if (v.textTracks) {
-        for (let i = 0; i < v.textTracks.length; i++) {
-          v.textTracks[i].mode = hasActiveSubtitle ? 'showing' : 'disabled';
-        }
-      }
-    };
-    const onEndIosFs = () => {
-      if (v.textTracks) {
-        for (let i = 0; i < v.textTracks.length; i++) {
-          v.textTracks[i].mode = 'hidden';
-        }
-      }
-      if (!userIntentionallyPausedRef.current && v.paused) {
-        v.play().catch(() => {});
-      }
-    };
-    syncNativeTrackMode();
-    v.addEventListener('webkitbeginfullscreen', onBeginIosFs);
-    v.addEventListener('webkitendfullscreen', onEndIosFs);
+    disableAllNativeTracks();
+    const tt = v.textTracks;
+    tt?.addEventListener?.('addtrack', disableAllNativeTracks);
+    tt?.addEventListener?.('change', disableAllNativeTracks);
+    v.addEventListener('loadedmetadata', disableAllNativeTracks);
+    v.addEventListener('canplay', disableAllNativeTracks);
     return () => {
-      v.removeEventListener('webkitbeginfullscreen', onBeginIosFs);
-      v.removeEventListener('webkitendfullscreen', onEndIosFs);
+      tt?.removeEventListener?.('addtrack', disableAllNativeTracks);
+      tt?.removeEventListener?.('change', disableAllNativeTracks);
+      v.removeEventListener('loadedmetadata', disableAllNativeTracks);
+      v.removeEventListener('canplay', disableAllNativeTracks);
     };
-  }, [subtitleVttUrl, hasActiveSubtitle]);
+  }, [hlsUrl, subtitleVttUrl, hasActiveSubtitle]);
 
   // Ensure that whenever the OSD is visible, a button on the OSD has focus so the white highlight is always visible and ready for Left/Right arrows
   useEffect(() => {
@@ -3483,6 +3476,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }}
           onTimeUpdate={(e) => {
             const vid = e.currentTarget;
+            if (vid.textTracks && vid.textTracks.length > 0) {
+              for (let i = 0; i < vid.textTracks.length; i++) {
+                if (vid.textTracks[i].mode !== 'disabled') {
+                  try {
+                    vid.textTracks[i].mode = 'disabled';
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+            }
             if (!vid.muted && vid.volume > 0 && isAutoMuted) {
               setIsAutoMuted(false);
             }
@@ -3563,18 +3567,25 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           className="relative z-10 w-full h-full object-contain bg-transparent"
-        >
-          {subtitleVttUrl && (
-            <track
-              key={subtitleVttUrl}
-              kind="subtitles"
-              src={subtitleVttUrl}
-              srcLang={preferredSubLang || 'ro'}
-              label={subtitleLabel || 'Română'}
-              default
-            />
-          )}
-        </video>
+        />
+        <style>{`
+          video::-webkit-media-text-track-container,
+          video::-webkit-media-text-track-display,
+          video::-webkit-media-text-track-background,
+          video::-webkit-media-text-track-region,
+          video::-webkit-media-text-track-region-container,
+          video::cue {
+            display: none !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+            color: transparent !important;
+            background: transparent !important;
+            font-size: 0 !important;
+            line-height: 0 !important;
+            max-height: 0 !important;
+            pointer-events: none !important;
+          }
+        `}</style>
 
         {/* CLEAN FRAMELESS SKIP INTRO / RECAP PILL BUTTON ("Sari peste Recapitulare" / "Sari peste Intro") */}
         {isSkipIntroVisible &&

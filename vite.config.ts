@@ -2264,7 +2264,8 @@ function tvStreamProxyPlugin(): Plugin {
               }
               if (
                 trimmed.startsWith('#EXT-X-MEDIA:') &&
-                trimmed.includes('GROUP-ID="failover-')
+                (trimmed.includes('GROUP-ID="failover-') ||
+                  /TYPE=(SUBTITLES|CLOSED-CAPTIONS)/i.test(trimmed))
               ) {
                 continue;
               }
@@ -2318,6 +2319,11 @@ function tvStreamProxyPlugin(): Plugin {
                       .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
                       .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
                   }
+                }
+                if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+                  currentLine = currentLine
+                    .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
+                    .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
                 }
                 if (trimmed.startsWith('#')) {
                   return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {

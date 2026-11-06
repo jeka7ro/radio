@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v5';
+const CACHE_NAME = 'aether-radio-v7';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
   '/icons/favicon.svg',
@@ -76,7 +76,9 @@ self.addEventListener('fetch', (event) => {
     url.pathname === '/index.html'
   ) {
     event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html'))
+      fetch(request, { cache: 'no-store' }).catch(() =>
+        caches.match('/index.html')
+      )
     );
     return;
   }

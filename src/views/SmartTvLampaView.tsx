@@ -1718,19 +1718,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ) {
       return false;
     }
+    if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
     const isTouchDevice =
       (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-      Boolean(window.matchMedia?.('(pointer: coarse)').matches);
-    if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) return true;
-    if (
-      isTouchDevice &&
-      (window.innerWidth <= 1366 || window.innerHeight <= 1024)
-    ) {
-      return true;
-    }
+      'ontouchstart' in window ||
+      Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
+      Boolean(window.matchMedia?.('(hover: none)').matches);
+    if (isTouchDevice) return true;
     return (
-      window.innerWidth < 640 ||
-      (window.innerHeight < 560 && window.innerWidth < 1024)
+      window.innerWidth < 768 ||
+      (window.innerHeight < 600 && window.innerWidth < 1024)
     );
   });
 
@@ -1746,23 +1743,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         setIsMobilePhone(false);
         return;
       }
-      const isTouchDevice =
-        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-        Boolean(window.matchMedia?.('(pointer: coarse)').matches);
-      if (/iPhone|iPod|iPad|Android.*Mobile|Mobile/i.test(ua)) {
+      if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) {
         setIsMobilePhone(true);
         return;
       }
-      if (
-        isTouchDevice &&
-        (window.innerWidth <= 1366 || window.innerHeight <= 1024)
-      ) {
+      const isTouchDevice =
+        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
+        'ontouchstart' in window ||
+        Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
+        Boolean(window.matchMedia?.('(hover: none)').matches);
+      if (isTouchDevice) {
         setIsMobilePhone(true);
         return;
       }
       setIsMobilePhone(
-        window.innerWidth < 640 ||
-          (window.innerHeight < 560 && window.innerWidth < 1024)
+        window.innerWidth < 768 ||
+          (window.innerHeight < 600 && window.innerWidth < 1024)
       );
     };
     const onOpenHandoff = () => setIsHandoffModalOpen(true);

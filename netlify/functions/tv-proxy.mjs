@@ -134,7 +134,16 @@ export default async (req) => {
         }
       }
 
-      const rawLines = text.split(/\r?\n/);
+      const rawLines = text.split(/\r?\n/).filter((l) => {
+        const t = l.trim();
+        if (
+          t.startsWith('#EXT-X-MEDIA:') &&
+          /TYPE=(SUBTITLES|CLOSED-CAPTIONS)/i.test(t)
+        ) {
+          return false;
+        }
+        return true;
+      });
       const hasOriginalAudioTrack = rawLines.some(
         (l) =>
           l.trim().startsWith('#EXT-X-MEDIA:') &&
@@ -168,6 +177,11 @@ export default async (req) => {
                 .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
                 .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
             }
+          }
+          if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+            currentLine = currentLine
+              .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
+              .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
           }
           if (trimmed.startsWith('#')) {
             return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
