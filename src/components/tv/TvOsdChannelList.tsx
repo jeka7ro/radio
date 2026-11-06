@@ -45,17 +45,6 @@ const OSD_COUNTRY_TABS: Array<{
   { id: 'RO', label: 'RO • România', country: 'RO' },
   { id: 'MD', label: 'MD • Moldova', country: 'MD' },
   { id: 'RU', label: 'RU • Rusia', country: 'RU' },
-  { id: 'US', label: 'US • SUA', country: 'US' },
-  { id: 'GB', label: 'UK • Marea Britanie', country: 'GB' },
-  { id: 'DE', label: 'DE • Germania', country: 'DE' },
-  { id: 'FR', label: 'FR • Franța', country: 'FR' },
-  { id: 'IT', label: 'IT • Italia', country: 'IT' },
-  { id: 'ES', label: 'ES • Spania', country: 'ES' },
-  { id: 'TR', label: 'TR • Turcia', country: 'TR' },
-  { id: 'UA', label: 'UA • Ucraina', country: 'UA' },
-  { id: 'HU', label: 'HU • Ungaria', country: 'HU' },
-  { id: 'BG', label: 'BG • Bulgaria', country: 'BG' },
-  { id: 'ALL_GLOBAL', label: 'Toate Țările', country: 'ALL' },
   { id: 'ADULT', label: '18+ Adulți', country: 'ADULT' },
 ];
 
@@ -228,11 +217,12 @@ interface TvOsdChannelListProps {
   currentChannel: TvChannel;
   channels: TvChannel[];
   isOverlayMode?: boolean;
-  initialViewMode?: 'channels' | 'epg';
+  initialViewMode?: 'channels' | 'groups' | 'epg_detail' | 'epg';
   onToggleOverlayMode?: () => void;
   onToggleInfoPanel?: () => void;
   isInfoPanelOpen?: boolean;
   onCloseOverlay?: () => void;
+  onSelectChannel?: (channel: TvChannel) => void;
   onPlayArchiveProgramme?: (channel: TvChannel, prog: EpgProgramme | null) => void;
 }
 
@@ -242,6 +232,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   isOverlayMode = false,
   initialViewMode = 'channels',
   onCloseOverlay,
+  onSelectChannel,
   onToggleInfoPanel,
   onPlayArchiveProgramme,
 }) => {
@@ -260,8 +251,17 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   useChannelEpg(currentChannel);
   const epgRev = useEpgRevision();
 
-  const [viewMode, setViewMode] = useState<'channels' | 'epg'>(initialViewMode);
-  const [isGroupPickerOpen, setIsGroupPickerOpen] = useState<boolean>(true);
+  const [viewMode, setViewMode] = useState<
+    'channels' | 'groups' | 'epg_detail' | 'epg'
+  >(initialViewMode);
+  const [, setIsGroupPickerOpen] = useState<boolean>(false);
+  const [enteredFromGroups, setEnteredFromGroups] = useState<boolean>(false);
+  const [focusedGroupIdx, setFocusedGroupIdx] = useState<number>(0);
+  const [pendingDeleteFavChannel, setPendingDeleteFavChannel] =
+    useState<TvChannel | null>(null);
+  const [confirmFavBtnFocus, setConfirmFavBtnFocus] = useState<
+    'confirm' | 'cancel'
+  >('confirm');
   const [isSearchBarOpen, setIsSearchBarOpen] = useState<boolean>(false);
   const [hasSwitchedCountry, setHasSwitchedCountry] = useState<boolean>(false);
 
@@ -314,6 +314,12 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   });
 
   useEffect(() => {
+    if (isQueueFavorites) {
+      setSelectedThemeId('FAV');
+    }
+  }, [isQueueFavorites]);
+
+  useEffect(() => {
     lastTvPlaylistContext = {
       countryId: selectedCountryId,
       themeId: selectedThemeId,
@@ -323,9 +329,16 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isOsdKeyboardOpen, setIsOsdKeyboardOpen] = useState<boolean>(false);
   const [osdKeyboardLang, setOsdKeyboardLang] = useState<'LAT' | 'CYR'>('LAT');
-  const [renderLimit, setRenderLimit] = useState<number>(120);
+  const [renderLimit, setRenderLimit] = useState<number>(45);
+  const favoriteIdSet = useMemo(
+    () => new Set(favoriteTvChannels.map((f) => f.id)),
+    [favoriteTvChannels]
+  );
 
-  // Track which channel row is currently highlighted in the Smart IPTV single-column list
+  // Track which zone and channel row is currently highlighted in the Smart IPTV OSD
+  const [focusZone, setFocusZone] = useState<
+    'channels' | 'themes' | 'countries'
+  >('channels');
   const [focusedRowIdx, setFocusedRowIdx] = useState<number>(0);
 
   // Smart IPTV EPG / Catch-up Archive View State (Photo 3)
@@ -335,12 +348,24 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   const [selectedEpgDay, setSelectedEpgDay] = useState<string>('');
   const [focusedEpgIdx, setFocusedEpgIdx] = useState<number>(0);
 
+  const countryRowRef = useRef<HTMLDivElement | null>(null);
+  const themeRowRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const groupListContainerRef = useRef<HTMLDivElement | null>(null);
   const epgListContainerRef = useRef<HTMLDivElement | null>(null);
+  const epgDetailContainerRef = useRef<HTMLDivElement | null>(null);
+  const osdRootRef = useRef<HTMLDivElement | null>(null);
+  const lastWheelStepAtRef = useRef<number>(0);
   const rowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const groupRowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const epgRowRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const confirmDeleteBtnRef = useRef<HTMLButtonElement | null>(null);
+  const cancelDeleteBtnRef = useRef<HTMLButtonElement | null>(null);
   const mountedAtRef = useRef<number>(Date.now());
   const lastSelectAtRef = useRef<number>(0);
+  const shouldAutoScrollRef = useRef<boolean>(true);
+  const forceInitialFocusRef = useRef<boolean>(true);
+  const clickedChannelIdRef = useRef<string>('');
 
   useEffect(() => {
     setViewMode(initialViewMode);
@@ -406,7 +431,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
             seen.add(ch.url);
             merged.push(ch);
           }
-          setCountryChannels(merged.slice(0, 1200));
+          setCountryChannels(merged.slice(0, 4500));
         })
         .catch(() => {
           if (!cancelled) setCountryChannels(customList);
@@ -424,7 +449,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     fetchTvChannelsByCountry(targetCountry)
       .then((list) => {
         if (cancelled) return;
-        const base = list.slice(0, 1200);
+        const base = list.slice(0, 4500);
         const filtered = adultContentEnabled
           ? base
           : base.filter((c) => !isAdultTvChannel(c));
@@ -491,6 +516,16 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         }
         map.get(grpKey)!.push(ch);
       }
+      if (
+        (ch.countryCode === 'RO' || ch.countryCode === 'MD') &&
+        /rossteleccom\.net|iedem\.com/i.test(ch.url)
+      ) {
+        const roMdKey = 'GRP:RO / MD (moldovenească)';
+        if (!map.has(roMdKey)) {
+          map.set(roMdKey, []);
+        }
+        map.get(roMdKey)!.push(ch);
+      }
     }
 
     return map;
@@ -506,8 +541,8 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     }> = [
       {
         id: 'FAV',
-        title: '★ Favorite TV',
-        shortLabel: '★ Favorite',
+        title: '★ Favourites',
+        shortLabel: '★ Favourites',
         Icon: Star,
         count: favoriteTvChannels.length,
       },
@@ -520,23 +555,49 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       },
     ];
 
-    for (const cat of THEMATIC_CATEGORIES) {
-      const count = thematicBuckets.get(cat.id)?.length || 0;
-      if (count > 0) {
-        tabs.push({
-          id: cat.id,
-          title: cat.title,
-          shortLabel: cat.shortLabel,
-          Icon: cat.Icon,
-          count,
-        });
-      }
-    }
+    const IEDEM_GROUP_ORDER = [
+      'HD Orig',
+      'новости',
+      'кино',
+      'музыка',
+      'познавательные',
+      'детские',
+      'развлекательные',
+      'спорт',
+      'HD',
+      '4K',
+      'moldovenească',
+      'другие',
+      'взрослые',
+    ];
 
-    // Include custom M3U playlist groups if active
-    if (customTvChannels.length > 0) {
+    // Show official iEdem channel groups first when in IEDEM / RU / ALL_GLOBAL
+    if (
+      selectedCountryId === 'IEDEM' ||
+      selectedCountryId === 'RU' ||
+      selectedCountryId === 'ALL_GLOBAL' ||
+      customTvChannels.length > 0
+    ) {
+      const addedGrpKeys = new Set<string>();
+      for (const grpName of IEDEM_GROUP_ORDER) {
+        const key = `GRP:${grpName}`;
+        const list = thematicBuckets.get(key);
+        if (list && list.length > 0) {
+          if (!adultContentEnabled && /взросл|adult|xxx|18\+|эротик/i.test(grpName)) {
+            continue;
+          }
+          addedGrpKeys.add(key);
+          tabs.push({
+            id: key,
+            title: grpName,
+            shortLabel: grpName,
+            Icon: Layers,
+            count: list.length,
+          });
+        }
+      }
       for (const [key, list] of thematicBuckets.entries()) {
-        if (key.startsWith('GRP:') && list.length > 0) {
+        if (key.startsWith('GRP:') && !addedGrpKeys.has(key) && list.length > 0) {
           const grpName = key.slice(4);
           if (!adultContentEnabled && /взросл|adult|xxx|18\+|эротик/i.test(grpName)) {
             continue;
@@ -550,17 +611,29 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
           });
         }
       }
-    }
-
-    const otherCount = thematicBuckets.get('other')?.length || 0;
-    if (otherCount > 0) {
-      tabs.push({
-        id: 'other',
-        title: 'Alte Canale TV',
-        shortLabel: 'Altele',
-        Icon: Layers,
-        count: otherCount,
-      });
+    } else {
+      for (const cat of THEMATIC_CATEGORIES) {
+        const count = thematicBuckets.get(cat.id)?.length || 0;
+        if (count > 0) {
+          tabs.push({
+            id: cat.id,
+            title: cat.title,
+            shortLabel: cat.shortLabel,
+            Icon: cat.Icon,
+            count,
+          });
+        }
+      }
+      const otherCount = thematicBuckets.get('other')?.length || 0;
+      if (otherCount > 0) {
+        tabs.push({
+          id: 'other',
+          title: 'Alte Canale TV',
+          shortLabel: 'Altele',
+          Icon: Layers,
+          count: otherCount,
+        });
+      }
     }
 
     return tabs;
@@ -568,6 +641,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     pool.length,
     favoriteTvChannels.length,
     thematicBuckets,
+    selectedCountryId,
     customTvChannels.length,
     adultContentEnabled,
   ]);
@@ -602,19 +676,10 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       return [...baseList].sort((a, b) => a.name.localeCompare(b.name));
     }
 
-    if (selectedThemeId !== 'FAV' && !q && baseList.length > 35) {
-      const topCurated = baseList.slice(0, 35);
-      const rest = baseList.slice(35);
-      const withEpg: TvChannel[] = [];
-      const withoutEpg: TvChannel[] = [];
-      for (const ch of rest) {
-        if (resolveChannelEpg(ch)?.now) {
-          withEpg.push(ch);
-        } else {
-          withoutEpg.push(ch);
-        }
-      }
-      return [...topCurated, ...withEpg, ...withoutEpg];
+    if (selectedThemeId !== 'FAV') {
+      return [...baseList].sort(
+        (a, b) => (b.resolutionHeight || 0) - (a.resolutionHeight || 0)
+      );
     }
 
     return baseList;
@@ -634,10 +699,36 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     return idx >= 0 ? idx : 0;
   }, [flatChannels, currentChannel.id]);
 
-  // Sync focusedRowIdx when currentChannel or group changes
+  // Sync focusedRowIdx when currentChannel or group changes (without yanking scroll position on click!)
   useEffect(() => {
+    if (clickedChannelIdRef.current === currentChannel.id) {
+      clickedChannelIdRef.current = '';
+      shouldAutoScrollRef.current = false;
+    } else {
+      shouldAutoScrollRef.current = true;
+    }
     setFocusedRowIdx(currentChannelIdx);
-  }, [currentChannelIdx, selectedThemeId, selectedCountryId]);
+  }, [currentChannel.id, selectedThemeId, selectedCountryId]);
+
+  useEffect(() => {
+    const onFocusFirstChannel = () => {
+      forceInitialFocusRef.current = true;
+      shouldAutoScrollRef.current = true;
+      setViewMode('channels');
+      setFocusZone('channels');
+      setFocusedRowIdx(0);
+      window.setTimeout(() => {
+        const btn = rowRefs.current.get(0);
+        btn?.focus({ preventScroll: true });
+      }, 30);
+    };
+    window.addEventListener('aether:tv-enter-full-mode', onFocusFirstChannel);
+    return () =>
+      window.removeEventListener(
+        'aether:tv-enter-full-mode',
+        onFocusFirstChannel
+      );
+  }, []);
 
   useEffect(() => {
     if (focusedRowIdx + 30 > renderLimit) {
@@ -645,26 +736,70 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     }
   }, [focusedRowIdx, renderLimit]);
 
-  // Auto-focus and center the active/focused row in Smart IPTV Channel List
+  // Auto-focus and keep focused row visible ONLY if it goes outside the visible viewport (never center-yank the list!)
   useEffect(() => {
     if (viewMode !== 'channels') return;
     const timer = window.setTimeout(() => {
+      if (focusZone === 'countries' && countryRowRef.current) {
+        const activeBtn = countryRowRef.current.querySelector<HTMLElement>(
+          '[data-osd-country-active="true"]'
+        );
+        if (activeBtn) {
+          activeBtn.scrollIntoView({ inline: 'center', block: 'nearest' });
+          if (!isSearchBarOpen && !isOsdKeyboardOpen) {
+            activeBtn.focus({ preventScroll: true });
+          }
+        }
+        return;
+      }
+      if (focusZone === 'themes' && themeRowRef.current) {
+        const activeBtn = themeRowRef.current.querySelector<HTMLElement>(
+          '[data-osd-theme-active="true"]'
+        );
+        if (activeBtn) {
+          activeBtn.scrollIntoView({ inline: 'center', block: 'nearest' });
+          if (!isSearchBarOpen && !isOsdKeyboardOpen) {
+            activeBtn.focus({ preventScroll: true });
+          }
+        }
+        return;
+      }
+      if (!shouldAutoScrollRef.current) {
+        return;
+      }
+      shouldAutoScrollRef.current = false;
       const btn = rowRefs.current.get(focusedRowIdx);
       const container = listContainerRef.current;
       if (btn && container) {
-        const targetTop =
-          btn.offsetTop - container.clientHeight / 2 + btn.clientHeight / 2;
-        container.scrollTo({
-          top: Math.max(0, targetTop),
-          behavior: 'auto',
-        });
-        if (!isSearchBarOpen && !isOsdKeyboardOpen) {
-          btn.focus();
+        const btnTop = btn.offsetTop;
+        const btnBottom = btnTop + btn.offsetHeight;
+        const viewTop = container.scrollTop;
+        const viewBottom = viewTop + container.clientHeight;
+        if (btnTop < viewTop + 4) {
+          container.scrollTop = Math.max(0, btnTop - 6);
+        } else if (btnBottom > viewBottom - 4) {
+          container.scrollTop = btnBottom - container.clientHeight + 6;
+        }
+        const activeEl = document.activeElement as HTMLElement | null;
+        const isInSidebarOrHeader = Boolean(
+          !isOverlayMode &&
+            !forceInitialFocusRef.current &&
+            (activeEl?.closest('aside') || activeEl?.closest('header'))
+        );
+        if (
+          !isSearchBarOpen &&
+          !isOsdKeyboardOpen &&
+          focusZone === 'channels' &&
+          !isInSidebarOrHeader
+        ) {
+          forceInitialFocusRef.current = false;
+          btn.focus({ preventScroll: true });
         }
       }
     }, 25);
     return () => window.clearTimeout(timer);
   }, [
+    focusZone,
     focusedRowIdx,
     viewMode,
     selectedThemeId,
@@ -673,9 +808,9 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     isOsdKeyboardOpen,
   ]);
 
-  // Load EPG Archive whenever viewMode === 'epg'
+  // Load EPG Archive whenever viewMode === 'epg' or 'epg_detail'
   useEffect(() => {
-    if (viewMode !== 'epg') return;
+    if (viewMode !== 'epg' && viewMode !== 'epg_detail') return;
     let cancelled = false;
     setIsEpgLoading(true);
     void fetchChannelEpgArchive(epgChannel)
@@ -699,6 +834,101 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       cancelled = true;
     };
   }, [viewMode, epgChannel]);
+
+  // Keep focusedGroupIdx synced when opening 'groups' viewMode
+  useEffect(() => {
+    if (viewMode !== 'groups') return;
+    const idx = themeTabs.findIndex((t) => t.id === selectedThemeId);
+    setFocusedGroupIdx(idx >= 0 ? idx : 0);
+  }, [viewMode, themeTabs, selectedThemeId]);
+
+  // Auto-scroll and focus active group row + active country pill when in 'groups' viewMode
+  useEffect(() => {
+    if (viewMode !== 'groups') return;
+    const timer = window.setTimeout(() => {
+      if (countryRowRef.current) {
+        const activeCountryBtn =
+          countryRowRef.current.querySelector<HTMLElement>(
+            '[data-osd-country-active="true"]'
+          );
+        activeCountryBtn?.scrollIntoView({
+          inline: 'center',
+          block: 'nearest',
+        });
+      }
+      const btn = groupRowRefs.current.get(focusedGroupIdx);
+      const container = groupListContainerRef.current;
+      if (btn && container) {
+        const targetTop =
+          btn.offsetTop - container.clientHeight / 2 + btn.clientHeight / 2;
+        container.scrollTo({
+          top: Math.max(0, targetTop),
+          behavior: 'auto',
+        });
+        btn.focus();
+      }
+    }, 25);
+    return () => window.clearTimeout(timer);
+  }, [focusedGroupIdx, viewMode, selectedCountryId]);
+
+  // Focus confirm/cancel button when Favorite Deletion Confirmation Modal is open
+  useEffect(() => {
+    if (!pendingDeleteFavChannel) return;
+    const timer = window.setTimeout(() => {
+      if (confirmFavBtnFocus === 'confirm') {
+        confirmDeleteBtnRef.current?.focus();
+      } else {
+        cancelDeleteBtnRef.current?.focus();
+      }
+    }, 25);
+    return () => window.clearTimeout(timer);
+  }, [pendingDeleteFavChannel, confirmFavBtnFocus]);
+
+  // Intercept TV Remote Back ('aether:tv-player-back') when inside modal / sub-view / group channels
+  useEffect(() => {
+    const onTvPlayerBackCapture = (e: Event) => {
+      if (pendingDeleteFavChannel) {
+        e.stopImmediatePropagation();
+        setPendingDeleteFavChannel(null);
+        return;
+      }
+      if (isSearchBarOpen || isOsdKeyboardOpen) {
+        e.stopImmediatePropagation();
+        setIsSearchBarOpen(false);
+        setIsOsdKeyboardOpen(false);
+        return;
+      }
+      if (viewMode === 'epg_detail' || viewMode === 'epg') {
+        e.stopImmediatePropagation();
+        setViewMode('channels');
+        return;
+      }
+      if (viewMode === 'groups') {
+        e.stopImmediatePropagation();
+        setEnteredFromGroups(false);
+        setViewMode('channels');
+        return;
+      }
+      if (viewMode === 'channels' && enteredFromGroups) {
+        e.stopImmediatePropagation();
+        setViewMode('groups');
+        return;
+      }
+    };
+    window.addEventListener('aether:tv-player-back', onTvPlayerBackCapture, true);
+    return () =>
+      window.removeEventListener(
+        'aether:tv-player-back',
+        onTvPlayerBackCapture,
+        true
+      );
+  }, [
+    pendingDeleteFavChannel,
+    isSearchBarOpen,
+    isOsdKeyboardOpen,
+    viewMode,
+    enteredFromGroups,
+  ]);
 
   const epgDays = useMemo(() => {
     return Array.from(
@@ -768,12 +998,59 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     (c) => c.id === selectedCountryId
   );
 
-  const cycleThemeGroup = (dir: -1 | 1) => {
-    if (themeTabs.length <= 1) return;
-    const curIdx = themeTabs.findIndex((t) => t.id === selectedThemeId);
+  const visibleCountryTabs = useMemo(
+    () =>
+      OSD_COUNTRY_TABS.filter(
+        (reg) => adultContentEnabled || reg.id !== 'ADULT'
+      ),
+    [adultContentEnabled]
+  );
+
+  const cycleCountrySource = (dir: -1 | 1) => {
+    if (visibleCountryTabs.length <= 1) return;
+    const curIdx = Math.max(
+      0,
+      visibleCountryTabs.findIndex((c) => c.id === selectedCountryId)
+    );
     const nextIdx =
-      (curIdx + dir + themeTabs.length) % themeTabs.length;
-    setSelectedThemeId(themeTabs[nextIdx].id);
+      (curIdx + dir + visibleCountryTabs.length) % visibleCountryTabs.length;
+    setHasSwitchedCountry(true);
+    setSelectedCountryId(visibleCountryTabs[nextIdx].id);
+  };
+
+  const pageSize = 10;
+  const totalGroupPages = Math.max(1, Math.ceil(flatChannels.length / pageSize));
+  const currentGroupPage = Math.min(
+    totalGroupPages,
+    Math.floor(focusedRowIdx / pageSize) + 1
+  );
+
+  const changeGroupPage = (dir: -1 | 1) => {
+    if (flatChannels.length === 0) return;
+    shouldAutoScrollRef.current = true;
+    setFocusZone('channels');
+    setFocusedRowIdx((prev) => {
+      let nextIdx = prev + dir * pageSize;
+      if (dir > 0) {
+        if (prev >= flatChannels.length - 1) {
+          nextIdx = 0;
+        } else if (nextIdx >= flatChannels.length) {
+          nextIdx = flatChannels.length - 1;
+        }
+      } else {
+        if (prev <= 0) {
+          nextIdx = flatChannels.length - 1;
+        } else if (nextIdx < 0) {
+          nextIdx = 0;
+        }
+      }
+      if (nextIdx + 30 > renderLimit && renderLimit < flatChannels.length) {
+        setRenderLimit((lim) =>
+          Math.min(flatChannels.length, Math.max(lim + 140, nextIdx + 100))
+        );
+      }
+      return nextIdx;
+    });
   };
 
   const cycleEpgDay = (dir: -1 | 1) => {
@@ -786,28 +1063,63 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     setSelectedEpgDay(epgDays[nextIdx]);
   };
 
-  const openEpgForFocusedChannel = () => {
+  // Green Button (404 / E): Detailed EPG for focused channel
+  const openDetailedEpgForFocusedChannel = () => {
+    const targetCh = flatChannels[focusedRowIdx] || currentChannel;
+    setEpgChannel(targetCh);
+    setViewMode('epg_detail');
+  };
+
+  // Yellow Button (405 / Y / A): 7-Day Catch-Up TV Archive for focused channel
+  const openArchiveForFocusedChannel = () => {
     const targetCh = flatChannels[focusedRowIdx] || currentChannel;
     setEpgChannel(targetCh);
     setViewMode('epg');
   };
 
-  const toggleFavForFocusedChannel = () => {
+  // Blue Button (406 / G / B): Open Playlists & Groups list
+  const openGroupsView = () => {
+    const idx = themeTabs.findIndex((t) => t.id === selectedThemeId);
+    setFocusedGroupIdx(idx >= 0 ? idx : 0);
+    setViewMode((prev) => (prev === 'groups' ? 'channels' : 'groups'));
+  };
+
+  // Red Button (403 / R / F): Remove from Favorites with Confirmation (or Add to Favorites if not favorite)
+  const triggerRedFavActionForFocusedChannel = () => {
     const targetCh = flatChannels[focusedRowIdx] || currentChannel;
-    if (targetCh) {
+    if (!targetCh) return;
+    const isFav = favoriteTvChannels.some(
+      (f) => f.id === targetCh.id || f.url === targetCh.url
+    );
+    if (isFav) {
+      setConfirmFavBtnFocus('confirm');
+      setPendingDeleteFavChannel(targetCh);
+    } else {
       toggleFavoriteTvChannel(targetCh);
     }
   };
 
-  const selectChannelRow = (targetCh: TvChannel | undefined) => {
+  const selectChannelRow = (
+    targetCh: TvChannel | undefined,
+    fromMouseClick = false
+  ) => {
     if (!targetCh) return;
     const now = Date.now();
-    if (now - mountedAtRef.current < 300) return;
-    if (now - lastSelectAtRef.current < 300) return;
+    if (isOverlayMode && !fromMouseClick && now - mountedAtRef.current < 300) return;
+    if (!fromMouseClick && now - lastSelectAtRef.current < 250) return;
     lastSelectAtRef.current = now;
-    const activePlaylistQueue =
-      flatChannels.length > 0 ? flatChannels : pool;
-    playTvChannel(targetCh, activePlaylistQueue);
+    const isSameLiveChannel =
+      targetCh.id === currentChannel.id &&
+      !targetCh.archiveProgram &&
+      !currentChannel.archiveProgram;
+    if (!isSameLiveChannel) {
+      const activePlaylistQueue =
+        flatChannels.length > 0 ? flatChannels : pool;
+      playTvChannel(targetCh, activePlaylistQueue);
+    }
+    if (onSelectChannel) {
+      onSelectChannel(targetCh);
+    }
     if (isOverlayMode && onCloseOverlay) {
       onCloseOverlay();
     }
@@ -821,6 +1133,15 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     const isInsideInput =
       target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
 
+    // In fixed split-view mode, let sidebar and top header handle their own navigation when focused
+    if (
+      !isOverlayMode &&
+      !pendingDeleteFavChannel &&
+      (target?.closest('aside') || target?.closest('header'))
+    ) {
+      return;
+    }
+
     const isOkKey =
       e.key === 'Enter' ||
       e.key === 'Select' ||
@@ -829,6 +1150,81 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
       e.keyCode === 13 ||
       e.keyCode === 29443;
 
+    const isBackKey =
+      e.key === 'Escape' ||
+      (e.key === 'Backspace' && !isInsideInput) ||
+      e.keyCode === 461 ||
+      e.keyCode === 10009;
+
+    // 0. Favorite Deletion Confirmation Modal Intercept
+    if (pendingDeleteFavChannel) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        e.stopPropagation();
+        setConfirmFavBtnFocus((prev) =>
+          prev === 'confirm' ? 'cancel' : 'confirm'
+        );
+        return;
+      }
+      if (isOkKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (confirmFavBtnFocus === 'confirm') {
+          toggleFavoriteTvChannel(pendingDeleteFavChannel);
+        }
+        setPendingDeleteFavChannel(null);
+        return;
+      }
+      if (isBackKey || e.keyCode === 403) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPendingDeleteFavChannel(null);
+        return;
+      }
+      return;
+    }
+
+    // 1. EPG DETAIL VIEW (Green Button)
+    if (viewMode === 'epg_detail') {
+      if (
+        isBackKey ||
+        e.keyCode === 404 ||
+        e.key === 'e' ||
+        e.key === 'E'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setViewMode('channels');
+        return;
+      }
+      if (
+        e.keyCode === 405 ||
+        e.key === 'y' ||
+        e.key === 'Y' ||
+        e.key === 'a' ||
+        e.key === 'A'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setViewMode('epg');
+        return;
+      }
+      if (
+        e.keyCode === 406 ||
+        e.key === 'g' ||
+        e.key === 'G' ||
+        e.key === 'b' ||
+        e.key === 'B'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        openGroupsView();
+        return;
+      }
+      return;
+    }
+
+    // 2. ARCHIVE EPG VIEW (Yellow Button)
     if (viewMode === 'epg') {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -844,13 +1240,13 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         setFocusedEpgIdx((prev) => Math.max(0, prev - 1));
         return;
       }
-      if (e.key === 'ArrowLeft' || e.keyCode === 405) {
+      if (e.key === 'ArrowLeft') {
         e.preventDefault();
         e.stopPropagation();
         cycleEpgDay(-1);
         return;
       }
-      if (e.key === 'ArrowRight' || e.keyCode === 406) {
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
         e.stopPropagation();
         cycleEpgDay(1);
@@ -880,14 +1276,84 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         return;
       }
       if (
-        e.key === 'Escape' ||
-        e.key === 'Backspace' ||
-        e.keyCode === 461 ||
-        e.keyCode === 10009 ||
-        e.keyCode === 403
+        isBackKey ||
+        e.keyCode === 405 ||
+        e.key === 'y' ||
+        e.key === 'Y' ||
+        e.key === 'a' ||
+        e.key === 'A'
       ) {
         e.preventDefault();
         e.stopPropagation();
+        setViewMode('channels');
+        return;
+      }
+      if (e.keyCode === 404 || e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        e.stopPropagation();
+        setViewMode('epg_detail');
+        return;
+      }
+      return;
+    }
+
+    // 3. GROUPS / PLAYLISTS VIEW (Blue Button)
+    if (viewMode === 'groups') {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedGroupIdx((prev) =>
+          themeTabs.length > 0 ? (prev + 1) % themeTabs.length : 0
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusedGroupIdx((prev) =>
+          themeTabs.length > 0
+            ? (prev - 1 + themeTabs.length) % themeTabs.length
+            : 0
+        );
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleCountrySource(-1);
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        e.stopPropagation();
+        cycleCountrySource(1);
+        return;
+      }
+      if (isOkKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const targetGroup = themeTabs[focusedGroupIdx];
+        if (targetGroup) {
+          setSelectedThemeId(targetGroup.id);
+          setEnteredFromGroups(true);
+          setFocusZone('channels');
+          setFocusedRowIdx(0);
+          shouldAutoScrollRef.current = true;
+          setViewMode('channels');
+        }
+        return;
+      }
+      if (
+        isBackKey ||
+        e.keyCode === 406 ||
+        e.key === 'g' ||
+        e.key === 'G' ||
+        e.key === 'b' ||
+        e.key === 'B'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setEnteredFromGroups(false);
         setViewMode('channels');
         return;
       }
@@ -896,12 +1362,20 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
 
     // When Search/Keyboard is open, let standard focus handle it unless pressing Escape/Back
     if (isSearchBarOpen || isOsdKeyboardOpen) {
-      if (e.key === 'Escape' || (e.key === 'Backspace' && !isInsideInput)) {
+      if (isBackKey) {
         e.preventDefault();
         e.stopPropagation();
         setIsSearchBarOpen(false);
         setIsOsdKeyboardOpen(false);
       }
+      return;
+    }
+
+    // Back key inside channel list when entered from a Group -> return to Groups list!
+    if (isBackKey && enteredFromGroups) {
+      e.preventDefault();
+      e.stopPropagation();
+      setViewMode('groups');
       return;
     }
 
@@ -920,6 +1394,8 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       e.stopPropagation();
+      shouldAutoScrollRef.current = true;
+      setFocusZone('channels');
       setFocusedRowIdx((prev) =>
         flatChannels.length > 0 ? (prev + 1) % flatChannels.length : 0
       );
@@ -929,6 +1405,22 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       e.stopPropagation();
+      if (!isOverlayMode && focusedRowIdx === 0) {
+        const headerBtn =
+          document.querySelector<HTMLElement>(
+            'header [data-header-lang-btn="true"]'
+          ) ||
+          document.querySelector<HTMLElement>(
+            'header [data-header-search-btn="true"]'
+          ) ||
+          document.querySelector<HTMLElement>('header button');
+        if (headerBtn) {
+          headerBtn.focus({ preventScroll: true });
+          return;
+        }
+      }
+      shouldAutoScrollRef.current = true;
+      setFocusZone('channels');
       setFocusedRowIdx((prev) =>
         flatChannels.length > 0
           ? (prev - 1 + flatChannels.length) % flatChannels.length
@@ -940,77 +1432,552 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     if (e.key === 'PageDown' || e.keyCode === 34 || e.keyCode === 428) {
       e.preventDefault();
       e.stopPropagation();
-      setFocusedRowIdx((prev) =>
-        Math.min(Math.max(0, flatChannels.length - 1), prev + 15)
-      );
+      changeGroupPage(1);
       return;
     }
 
     if (e.key === 'PageUp' || e.keyCode === 33 || e.keyCode === 427) {
       e.preventDefault();
       e.stopPropagation();
-      setFocusedRowIdx((prev) => Math.max(0, prev - 15));
+      changeGroupPage(-1);
       return;
     }
 
-    // Left / Right Arrow in Smart IPTV switches Category / Group immediately!
+    // Left / Right Arrow changes Page within the current Group (never switches the group itself)
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       e.stopPropagation();
-      cycleThemeGroup(-1);
+      changeGroupPage(-1);
       return;
     }
 
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       e.stopPropagation();
-      cycleThemeGroup(1);
+      changeGroupPage(1);
       return;
     }
 
-    // Color keys & shortcuts (Red = Fav, Green = EPG, Yellow = A-Z, Blue = Groups)
-    if (e.keyCode === 403 || e.key === 'f' || e.key === 'F') {
+    // Color keys & shortcuts:
+    // RED (403 / R / F) = Delete from Favorites with confirmation (or Add to Favorites)
+    if (
+      e.keyCode === 403 ||
+      e.key === 'f' ||
+      e.key === 'F' ||
+      e.key === 'r' ||
+      e.key === 'R'
+    ) {
       e.preventDefault();
       e.stopPropagation();
-      toggleFavForFocusedChannel();
+      triggerRedFavActionForFocusedChannel();
       return;
     }
+    // GREEN (404 / E) = Detailed EPG
     if (e.keyCode === 404 || e.key === 'e' || e.key === 'E') {
       e.preventDefault();
       e.stopPropagation();
-      openEpgForFocusedChannel();
+      openDetailedEpgForFocusedChannel();
       return;
     }
-    if (e.keyCode === 405 || e.key === 's' || e.key === 'S') {
+    // YELLOW (405 / Y / A) = 7-Day Catch-Up TV Archive
+    if (
+      e.keyCode === 405 ||
+      e.key === 'y' ||
+      e.key === 'Y' ||
+      e.key === 'a' ||
+      e.key === 'A'
+    ) {
       e.preventDefault();
       e.stopPropagation();
-      setSortMode((prev) => (prev === 'default' ? 'az' : 'default'));
+      openArchiveForFocusedChannel();
       return;
     }
-    if (e.keyCode === 406 || e.key === 'g' || e.key === 'G') {
+    // BLUE (406 / G / B) = Groups / Playlists
+    if (
+      e.keyCode === 406 ||
+      e.key === 'g' ||
+      e.key === 'G' ||
+      e.key === 'b' ||
+      e.key === 'B'
+    ) {
       e.preventDefault();
       e.stopPropagation();
-      setIsGroupPickerOpen((v) => !v);
+      openGroupsView();
       return;
     }
   };
 
+  const handleOsdWheelEvent = (e: WheelEvent) => {
+    if (pendingDeleteFavChannel) return;
+    const target = e.target as HTMLElement | null;
+    const isTvFullModeActive = Boolean(
+      document.querySelector('#aether-tv-player-modal[data-full-mode="true"]')
+    );
+    const isInsideOsd = Boolean(
+      osdRootRef.current && target && osdRootRef.current.contains(target)
+    );
+    const isInsideTvModal = Boolean(
+      target?.closest('#aether-tv-player-modal')
+    );
+
+    if (!isInsideOsd && !isInsideTvModal && !isTvFullModeActive && !isOverlayMode) {
+      return;
+    }
+    if (
+      !isTvFullModeActive &&
+      !isOverlayMode &&
+      (target?.closest('aside') || target?.closest('header'))
+    ) {
+      return;
+    }
+
+    const legacyWheelDelta = (e as unknown as { wheelDelta?: number }).wheelDelta;
+    const rawDelta =
+      Math.abs(e.deltaY) >= Math.abs(e.deltaX) && e.deltaY !== 0
+        ? e.deltaY
+        : e.deltaX !== 0
+          ? e.deltaX
+          : typeof legacyWheelDelta === 'number'
+            ? -legacyWheelDelta
+            : 0;
+
+    if (rawDelta === 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const now = Date.now();
+    if (now - lastWheelStepAtRef.current < 28) {
+      return;
+    }
+    lastWheelStepAtRef.current = now;
+
+    const dir: 1 | -1 = rawDelta > 0 ? 1 : -1;
+    const step = Math.abs(rawDelta) > 150 ? 2 : 1;
+
+    if (viewMode === 'epg_detail') {
+      if (epgDetailContainerRef.current) {
+        epgDetailContainerRef.current.scrollTop += dir * 96;
+      }
+      return;
+    }
+
+    if (viewMode === 'groups') {
+      if (themeTabs.length > 0) {
+        setFocusedGroupIdx((prev) =>
+          Math.max(0, Math.min(themeTabs.length - 1, prev + dir * step))
+        );
+      }
+      return;
+    }
+
+    if (viewMode === 'epg') {
+      if (dayProgrammes.length > 0) {
+        setFocusedEpgIdx((prev) =>
+          Math.max(0, Math.min(dayProgrammes.length - 1, prev + dir * step))
+        );
+      }
+      return;
+    }
+
+    // Default viewMode === 'channels'
+    if (flatChannels.length > 0) {
+      shouldAutoScrollRef.current = true;
+      setFocusZone('channels');
+      setFocusedRowIdx((prev) => {
+        const next = Math.max(
+          0,
+          Math.min(flatChannels.length - 1, prev + dir * step)
+        );
+        if (next + 30 > renderLimit && renderLimit < flatChannels.length) {
+          setRenderLimit((lim) =>
+            Math.min(flatChannels.length, Math.max(lim + 140, next + 100))
+          );
+        }
+        return next;
+      });
+    }
+  };
+
+  const osdHandlersRef = useRef<{
+    key: (e: KeyboardEvent) => void;
+    wheel: (e: WheelEvent) => void;
+  }>({
+    key: () => {},
+    wheel: () => {},
+  });
+  osdHandlersRef.current.key = handleOsdKeyEvent;
+  osdHandlersRef.current.wheel = handleOsdWheelEvent;
+
   useEffect(() => {
-    if (!isOverlayMode) return;
     const onWinKeyDown = (e: KeyboardEvent) => {
-      handleOsdKeyEvent(e);
+      osdHandlersRef.current.key(e);
+    };
+    const onWinWheel = (e: WheelEvent) => {
+      osdHandlersRef.current.wheel(e);
     };
     window.addEventListener('keydown', onWinKeyDown, true);
-    return () => window.removeEventListener('keydown', onWinKeyDown, true);
-  });
+    window.addEventListener('wheel', onWinWheel, {
+      passive: false,
+      capture: true,
+    });
+    return () => {
+      window.removeEventListener('keydown', onWinKeyDown, true);
+      window.removeEventListener('wheel', onWinWheel, true);
+    };
+  }, []);
 
-  const handleOsdKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isOverlayMode) return;
-    handleOsdKeyEvent(e);
+  const handleOsdKeyDown = (_e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Handled via window capture listener above for both overlay and fixed split-view
   };
 
   // ============================================================================
-  // VIEW MODE 2: SMART IPTV EPG & CATCH-UP ARCHIVE WINDOW (PHOTO 3)
+  // VIEW MODE 4: DETAILED EPG VIEW (GREEN BUTTON)
+  // ============================================================================
+  if (viewMode === 'epg_detail') {
+    const epgChInfo = resolveChannelEpg(epgChannel);
+    const epgLogo =
+      !epgChannel.logo || /imgur\.com|wikia\.nocookie\.net/i.test(epgChannel.logo)
+        ? epgChInfo?.icon || epgChannel.logo
+        : epgChannel.logo;
+    const nowProg = epgChInfo?.now;
+    const stats = getEpgTimingStats(nowProg);
+    const upcomingList = epgChInfo?.upcoming || [];
+
+    return (
+      <div
+        ref={osdRootRef}
+        data-osd-subview="true"
+        onKeyDown={handleOsdKeyDown}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          borderRadius: isOverlayMode ? '24px' : '0px',
+          backgroundColor: isOverlayMode ? 'rgba(10, 15, 28, 0.94)' : '#090d16',
+          border: isOverlayMode ? '1px solid rgba(148, 163, 184, 0.22)' : 'none',
+          boxShadow: isOverlayMode ? '0 28px 80px rgba(0, 0, 0, 0.85)' : 'none',
+        }}
+        className={`w-full h-full min-h-0 ${
+          isOverlayMode ? 'rounded-3xl backdrop-blur-2xl' : 'rounded-none'
+        } flex flex-col select-none text-white overflow-hidden`}
+      >
+        {/* Top Header */}
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 bg-white/[0.04] border-b border-white/10 shrink-0">
+          <div className="inline-flex items-center gap-3 min-w-0">
+            {epgLogo && (
+              <div className="w-9 h-7 rounded-lg bg-white/10 border border-white/15 p-1 flex items-center justify-center shrink-0">
+                <img
+                  src={epgLogo}
+                  alt=""
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="text-base font-extrabold text-white tracking-tight truncate">
+                {epgChannel.name}
+              </div>
+              <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                🟢 EPG Detaliat • Informații Emisiune
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('channels')}
+            className="px-3.5 py-1.5 rounded-full bg-white/[0.08] hover:bg-white/15 border border-white/15 text-xs font-bold text-white whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            ← Înapoi
+          </button>
+        </div>
+
+        {/* Detailed Current Show & Upcoming Schedule */}
+        <div
+          ref={epgDetailContainerRef}
+          className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-5 space-y-5"
+        >
+          {nowProg ? (
+            <div className="rounded-2xl bg-gradient-to-br from-emerald-500/15 via-sky-500/10 to-white/[0.03] border border-emerald-400/30 p-5 space-y-3.5 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-500 text-zinc-950 uppercase">
+                  ● ACUM ÎN DIRECT
+                </span>
+                <span className="text-xs sm:text-sm font-extrabold text-sky-300 tabular-nums">
+                  {formatEpgTime(nowProg.start)} – {formatEpgTime(nowProg.stop)}{' '}
+                  <span className="text-emerald-300 ml-1">
+                    (+{stats.remainingMin} min rămase)
+                  </span>
+                </span>
+              </div>
+
+              <h3 className="text-lg sm:text-xl font-extrabold text-white leading-snug">
+                {nowProg.title}
+              </h3>
+
+              {nowProg.category && (
+                <div className="inline-block px-2.5 py-0.5 rounded-md bg-white/10 text-zinc-200 text-xs font-semibold">
+                  {nowProg.category}
+                </div>
+              )}
+
+              {/* Progress Bar */}
+              <div className="w-full h-2 rounded-full bg-white/15 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-sky-400 transition-all"
+                  style={{ width: `${stats.progress}%` }}
+                />
+              </div>
+
+              {nowProg.desc ? (
+                <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-line pt-1">
+                  {nowProg.desc}
+                </p>
+              ) : (
+                <p className="text-xs italic text-zinc-400 pt-1">
+                  Nu există descriere suplimentară pentru această emisiune în grila EPG.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-white/[0.04] border border-white/10 p-6 text-center text-sm text-zinc-400">
+              Nu există informații EPG pentru emisiunea curentă pe acest canal.
+            </div>
+          )}
+
+          {/* Upcoming Today */}
+          {upcomingList.length > 0 && (
+            <div className="space-y-2.5">
+              <h4 className="text-xs font-extrabold uppercase tracking-wider text-zinc-400 px-1">
+                Urmează în program ({upcomingList.length})
+              </h4>
+              <div className="space-y-2">
+                {upcomingList.map((prog, idx) => (
+                  <div
+                    key={`${prog.start}_${idx}`}
+                    className="rounded-xl bg-white/[0.04] border border-white/10 p-3.5 space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-sky-300 tabular-nums">
+                        {formatEpgTime(prog.start)} – {formatEpgTime(prog.stop)}
+                      </span>
+                      {prog.category && (
+                        <span className="text-[11px] font-semibold text-zinc-400">
+                          {prog.category}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm font-bold text-white">
+                      {prog.title}
+                    </div>
+                    {prog.desc && (
+                      <p className="text-xs text-zinc-300/90 leading-relaxed">
+                        {prog.desc}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom Legend Bar */}
+        <div className="border-t border-white/10 bg-black/40 px-4 py-2.5 flex items-center justify-between gap-2 text-xs font-bold text-zinc-200 shrink-0">
+          <button
+            type="button"
+            onClick={() => setViewMode('channels')}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 text-white whitespace-nowrap cursor-pointer"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+            <span>Înapoi la Canale</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('epg')}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 text-white whitespace-nowrap cursor-pointer"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+            <span>Deschide Arhiva TV</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // VIEW MODE 3: GROUPS / PLAYLISTS MODAL VIEW (BLUE BUTTON)
+  // ============================================================================
+  if (viewMode === 'groups') {
+    return (
+      <div
+        ref={osdRootRef}
+        data-osd-subview="true"
+        onKeyDown={handleOsdKeyDown}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          borderRadius: isOverlayMode ? '24px' : '0px',
+          backgroundColor: isOverlayMode ? 'rgba(10, 15, 28, 0.94)' : '#090d16',
+          border: isOverlayMode ? '1px solid rgba(148, 163, 184, 0.22)' : 'none',
+          boxShadow: isOverlayMode ? '0 28px 80px rgba(0, 0, 0, 0.85)' : 'none',
+        }}
+        className={`w-full h-full min-h-0 ${
+          isOverlayMode ? 'rounded-3xl backdrop-blur-2xl' : 'rounded-none'
+        } flex flex-col select-none text-white overflow-hidden`}
+      >
+        {/* Top Header */}
+        <div className="flex items-center justify-between gap-2 px-4 py-3 bg-white/[0.04] border-b border-white/10 shrink-0">
+          <div className="inline-flex items-center gap-2.5 min-w-0">
+            <span className="w-3 h-3 rounded-full bg-blue-500 shrink-0 shadow-[0_0_10px_rgba(59,130,246,0.8)]" />
+            <span className="text-sm sm:text-base font-extrabold text-white truncate">
+              Grupuri & Playlist-uri TV
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setEnteredFromGroups(false);
+              setViewMode('channels');
+            }}
+            className="px-3 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 border border-white/15 text-xs font-bold text-white whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            ← Înapoi
+          </button>
+        </div>
+
+        {/* Country / Source Row (Switchable with Left / Right Arrows or Click) */}
+        <div className="px-4 py-2.5 bg-black/30 border-b border-white/10 shrink-0">
+          <div className="text-[11px] font-bold text-zinc-400 mb-1.5 flex items-center justify-between">
+            <span>Sursa / Țara (Săgeți ◀ ▶):</span>
+            {isLoadingCountry && (
+              <span className="text-sky-400">Se încarcă...</span>
+            )}
+          </div>
+          <div
+            ref={countryRowRef}
+            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar"
+          >
+            {visibleCountryTabs.map((reg) => {
+              const active = selectedCountryId === reg.id;
+              return (
+                <button
+                  key={`grp_country_${reg.id}`}
+                  type="button"
+                  data-osd-country-active={active ? 'true' : undefined}
+                  onClick={() => {
+                    setHasSwitchedCountry(true);
+                    setSelectedCountryId(reg.id);
+                    setFocusedGroupIdx(0);
+                  }}
+                  className={`h-8 px-3.5 rounded-full text-xs font-bold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
+                    active
+                      ? 'bg-gradient-to-r from-blue-600 to-sky-500 text-white border-sky-300/60 shadow-[0_0_14px_rgba(56,189,248,0.35)]'
+                      : 'bg-white/[0.06] text-zinc-300 border-white/10 hover:bg-white/[0.12] hover:text-white'
+                  }`}
+                >
+                  {reg.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Scrollable Numbered List of Groups / Categories */}
+        <div
+          ref={groupListContainerRef}
+          className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-2 space-y-1"
+        >
+          {themeTabs.map((grp, idx) => {
+            const isFocused = idx === focusedGroupIdx;
+            const isSelected = grp.id === selectedThemeId;
+            const isFavGrp = grp.id === 'FAV';
+
+            return (
+              <button
+                key={`group_item_${grp.id}`}
+                type="button"
+                ref={(el) => {
+                  if (el) groupRowRefs.current.set(idx, el);
+                  else groupRowRefs.current.delete(idx);
+                }}
+                onFocus={() => setFocusedGroupIdx(idx)}
+                onClick={() => {
+                  setSelectedThemeId(grp.id);
+                  setEnteredFromGroups(true);
+                  setFocusZone('channels');
+                  setFocusedRowIdx(0);
+                  shouldAutoScrollRef.current = true;
+                  setViewMode('channels');
+                }}
+                className={`w-full h-[44px] px-4 rounded-xl flex items-center justify-between gap-3 text-left transition-all cursor-pointer outline-none border ${
+                  isFocused
+                    ? 'bg-gradient-to-r from-blue-600/85 to-sky-500/75 border-sky-300/80 text-white shadow-[0_6px_20px_rgba(14,165,233,0.3)]'
+                    : isSelected
+                      ? 'bg-white/10 border-white/20 text-white'
+                      : 'bg-transparent border-transparent hover:bg-white/[0.06] text-zinc-200'
+                }`}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="w-6 text-right text-xs font-bold text-zinc-400 tabular-nums shrink-0">
+                    {idx + 1}
+                  </span>
+                  {isFavGrp ? (
+                    <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
+                  ) : (
+                    <Tv className="w-4 h-4 text-sky-400 shrink-0" />
+                  )}
+                  <span className="text-[15px] font-bold truncate">
+                    {grp.shortLabel}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold tabular-nums ${
+                      isFocused
+                        ? 'bg-white/25 text-white'
+                        : 'bg-white/[0.08] text-sky-300'
+                    }`}
+                  >
+                    {grp.count} canale
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Bottom Footer */}
+        <div className="border-t border-white/10 bg-black/40 px-4 py-2.5 flex items-center justify-between gap-2 text-xs font-bold text-zinc-300 shrink-0">
+          <span className="text-[11px] text-zinc-400 truncate">
+            ▲▼ Alege grupul • OK intră în canale • Back iese înapoi
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setEnteredFromGroups(false);
+              setViewMode('channels');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.08] hover:bg-white/15 text-white whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
+            <span>Închide Grupuri</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // VIEW MODE 2: MODERN ROUNDED LIQUID GLASS EPG & CATCH-UP ARCHIVE WINDOW (YELLOW BUTTON)
   // ============================================================================
   if (viewMode === 'epg') {
     const epgChInfo = resolveChannelEpg(epgChannel);
@@ -1021,6 +1988,8 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
 
     return (
       <div
+        ref={osdRootRef}
+        data-osd-subview="true"
         onKeyDown={handleOsdKeyDown}
         style={{
           width: '100%',
@@ -1029,12 +1998,33 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          borderRadius: isOverlayMode ? '24px' : '0px',
+          backgroundColor: isOverlayMode ? 'rgba(10, 15, 28, 0.94)' : '#090d16',
+          border: isOverlayMode ? '1px solid rgba(148, 163, 184, 0.22)' : 'none',
+          boxShadow: isOverlayMode ? '0 28px 80px rgba(0, 0, 0, 0.85)' : 'none',
         }}
-        className="w-full h-full min-h-0 flex flex-col select-none text-white"
+        className={`w-full h-full min-h-0 ${
+          isOverlayMode ? 'rounded-3xl backdrop-blur-2xl' : 'rounded-none'
+        } flex flex-col select-none text-white overflow-hidden`}
       >
-        {/* Top-Right Protruding Folder Tab: [Logo] Channel Name EPG (Exact match to Photo 3) */}
-        <div className="flex items-end justify-between shrink-0 px-0">
-          <div className="flex items-center gap-1.5 pb-1">
+        {/* Top Header Bar: Channel Name + Day Pills */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 bg-white/[0.04] border-b border-white/10 shrink-0">
+          <div className="inline-flex items-center gap-3 min-w-0">
+            {epgLogo && (
+              <div className="w-9 h-7 rounded-lg bg-white/10 border border-white/15 p-1 flex items-center justify-center shrink-0">
+                <img
+                  src={epgLogo}
+                  alt=""
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
+            <span className="text-base sm:text-lg font-extrabold text-white tracking-tight truncate">
+              {epgChannel.name} • 🟡 Arhivă TV
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {epgDays.map((dayKey) => {
               const activeDay = dayKey === selectedEpgDay;
               return (
@@ -1043,10 +2033,10 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                   type="button"
                   data-osd-action-btn="true"
                   onClick={() => setSelectedEpgDay(dayKey)}
-                  className={`px-2.5 py-0.5 text-xs font-bold border transition-none cursor-pointer ${
+                  className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 border transition-all cursor-pointer ${
                     activeDay
-                      ? 'bg-[#0284c7] text-white border-[#7dd3fc]'
-                      : 'bg-black/90 text-zinc-300 border-white/20 hover:text-white'
+                      ? 'bg-gradient-to-r from-blue-600 to-sky-500 text-white border-sky-300/60 shadow-[0_0_14px_rgba(56,189,248,0.35)]'
+                      : 'bg-white/[0.06] text-zinc-300 border-white/10 hover:bg-white/[0.12] hover:text-white'
                   }`}
                 >
                   {formatEpgDayLabel(dayKey)}
@@ -1054,168 +2044,154 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
               );
             })}
           </div>
-
-          <div
-            style={{
-              backgroundColor: 'rgba(10, 14, 22, 0.96)',
-              borderTop: '2px solid #7dd3fc',
-              borderLeft: '2px solid #7dd3fc',
-              borderRight: '2px solid #7dd3fc',
-            }}
-            className="bg-black/95 px-5 py-1.5 inline-flex items-center gap-2.5"
-          >
-            {epgLogo && (
-              <img
-                src={epgLogo}
-                alt=""
-                className="w-6 h-5 object-contain shrink-0"
-              />
-            )}
-            <span className="text-base sm:text-lg font-bold text-white tracking-tight">
-              {epgChannel.name} EPG
-            </span>
-          </div>
         </div>
 
-        {/* Main Framed EPG Programme List Box */}
+        {/* Main EPG Programme List */}
         <div
+          ref={epgListContainerRef}
           style={{
             flex: '1 1 0%',
             minHeight: 0,
-            backgroundColor: 'rgba(10, 14, 22, 0.94)',
-            border: '2px solid #7dd3fc',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '8px',
           }}
-          className="flex-1 min-h-0 bg-black/95 shadow-2xl flex flex-col overflow-hidden"
+          className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-1"
         >
-          <div
-            ref={epgListContainerRef}
-            style={{
-              flex: '1 1 0%',
-              minHeight: 0,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-            }}
-            className="flex-1 min-h-0 overflow-y-auto divide-y divide-white/[0.06]"
-          >
-            {isEpgLoading ? (
-              <div className="py-20 text-center text-sm font-semibold text-zinc-300">
-                Se încarcă programul EPG și Arhiva TV...
-              </div>
-            ) : dayProgrammes.length === 0 ? (
-              <div className="py-20 text-center text-sm text-zinc-400">
-                Nu există program EPG disponibil pentru acest canal.
-              </div>
-            ) : (
-              dayProgrammes.map((prog, idx) => {
-                const nowMs = Date.now();
-                const isPast = prog.stop <= nowMs;
-                const isLiveNow = prog.start <= nowMs && prog.stop > nowMs;
-                const isFocused = idx === focusedEpgIdx;
+          {isEpgLoading ? (
+            <div className="py-20 text-center text-sm font-semibold text-zinc-300">
+              Se încarcă programul EPG și Arhiva TV...
+            </div>
+          ) : dayProgrammes.length === 0 ? (
+            <div className="py-20 text-center text-sm text-zinc-400">
+              Nu există arhivă disponibilă pentru acest canal.
+            </div>
+          ) : (
+            dayProgrammes.map((prog, idx) => {
+              const nowMs = Date.now();
+              const isPast = prog.stop <= nowMs;
+              const isLiveNow = prog.start <= nowMs && prog.stop > nowMs;
+              const isFocused = idx === focusedEpgIdx;
 
-                return (
-                  <button
-                    key={`${prog.start}_${idx}`}
-                    type="button"
-                    ref={(el) => {
-                      if (el) epgRowRefs.current.set(idx, el);
-                      else epgRowRefs.current.delete(idx);
-                    }}
-                    onFocus={() => setFocusedEpgIdx(idx)}
-                    onClick={() => {
-                      if (onPlayArchiveProgramme) {
-                        onPlayArchiveProgramme(
-                          epgChannel,
-                          isLiveNow ? null : prog
-                        );
-                      } else {
-                        playTvChannel(
-                          {
-                            ...epgChannel,
-                            archiveProgram: isLiveNow ? undefined : prog,
-                          },
-                          pool
-                        );
-                      }
-                      if (onCloseOverlay) onCloseOverlay();
-                    }}
-                    className={`w-full h-[40px] px-4 flex items-center justify-between gap-4 text-left transition-none cursor-pointer outline-none ${
-                      isFocused
-                        ? 'bg-[#0284c7]/45 border-y-2 border-[#38bdf8] text-white'
-                        : isLiveNow
-                          ? 'bg-white/10 text-white'
-                          : 'hover:bg-white/[0.06] text-zinc-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-4 min-w-0 flex-1">
-                      <span className="w-32 shrink-0 text-[15px] sm:text-base font-bold text-zinc-200 tabular-nums">
-                        {formatEpgTime(prog.start)} - {formatEpgTime(prog.stop)}
-                      </span>
-                      <span className="text-[15px] sm:text-base font-semibold text-white truncate">
-                        {prog.title}
-                      </span>
-                    </div>
+              return (
+                <button
+                  key={`${prog.start}_${idx}`}
+                  type="button"
+                  ref={(el) => {
+                    if (el) epgRowRefs.current.set(idx, el);
+                    else epgRowRefs.current.delete(idx);
+                  }}
+                  onFocus={() => setFocusedEpgIdx(idx)}
+                  onClick={() => {
+                    if (onPlayArchiveProgramme) {
+                      onPlayArchiveProgramme(
+                        epgChannel,
+                        isLiveNow ? null : prog
+                      );
+                    } else {
+                      playTvChannel(
+                        {
+                          ...epgChannel,
+                          archiveProgram: isLiveNow ? undefined : prog,
+                        },
+                        pool
+                      );
+                    }
+                    if (onCloseOverlay) onCloseOverlay();
+                  }}
+                  className={`w-full h-[42px] px-4 rounded-xl flex items-center justify-between gap-4 text-left transition-all cursor-pointer outline-none border ${
+                    isFocused
+                      ? 'bg-gradient-to-r from-blue-600/80 to-sky-500/70 border-sky-300/70 text-white shadow-[0_4px_16px_rgba(14,165,233,0.3)]'
+                      : isLiveNow
+                        ? 'bg-white/10 border-white/15 text-white'
+                        : 'bg-transparent border-transparent hover:bg-white/[0.06] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <span className="w-32 shrink-0 text-[14px] sm:text-[15px] font-bold text-sky-200/90 tabular-nums">
+                      {formatEpgTime(prog.start)} - {formatEpgTime(prog.stop)}
+                    </span>
+                    <span className="text-[15px] sm:text-base font-semibold text-white truncate">
+                      {prog.title}
+                    </span>
+                  </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {isLiveNow && (
-                        <span className="px-2 py-0.5 text-[11px] font-extrabold bg-emerald-500 text-zinc-950 uppercase">
-                          LIVE
-                        </span>
-                      )}
-                      {(isPast || isLiveNow) && (
-                        <span
-                          title="Disponibil în Arhiva Catch-up"
-                          className="px-1.5 py-0.5 border border-[#7dd3fc]/70 bg-white/10 text-sky-200 inline-flex items-center justify-center"
-                        >
-                          <Rewind className="w-3.5 h-3.5" />
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {isLiveNow && (
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-500 text-zinc-950 uppercase">
+                        LIVE
+                      </span>
+                    )}
+                    {(isPast || isLiveNow) && (
+                      <span
+                        title="Disponibil în Arhiva Catch-up"
+                        className="px-2 py-1 rounded-full border border-sky-400/40 bg-sky-500/15 text-sky-200 inline-flex items-center justify-center"
+                      >
+                        <Rewind className="w-3.5 h-3.5" />
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })
+          )}
         </div>
 
-        {/* Bottom-Right Protruding Legend Tab: [ • Canale | • Day - | • Day + ] (Exact match to Photo 3) */}
-        <div className="self-end border-2 border-t-0 border-[#7dd3fc]/85 bg-black/90 px-4 py-1 flex items-center gap-5 text-xs sm:text-[13px] font-bold text-white shrink-0">
+        {/* Bottom Footer Bar */}
+        <div className="border-t border-white/10 bg-black/40 px-5 py-2.5 flex items-center justify-end gap-4 text-xs sm:text-[13px] font-bold text-zinc-200 shrink-0">
           <button
             type="button"
             onClick={() => setViewMode('channels')}
-            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+            className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap cursor-pointer"
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-rose-500 inline-block" />
-            <span>Canale</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+            <span>Înapoi la Canale</span>
           </button>
           <button
             type="button"
             onClick={() => cycleEpgDay(-1)}
-            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+            className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap cursor-pointer"
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-amber-400 inline-block" />
-            <span>Day -</span>
+            <span>◀ Ziua -</span>
           </button>
           <button
             type="button"
             onClick={() => cycleEpgDay(1)}
-            className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
+            className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap cursor-pointer"
           >
-            <span className="w-2.5 h-2.5 rounded-xs bg-blue-500 inline-block" />
-            <span>Day +</span>
+            <span>Ziua + ▶</span>
           </button>
         </div>
       </div>
     );
   }
 
+  // Determine focused channel favorite state for the bottom Red button label
+  const focusedChannelObj = flatChannels[focusedRowIdx] || currentChannel;
+  const isFocusedChannelFav = Boolean(
+    focusedChannelObj &&
+      favoriteTvChannels.some(
+        (f) => f.id === focusedChannelObj.id || f.url === focusedChannelObj.url
+      )
+  );
+
   // ============================================================================
-  // VIEW MODE 1: SMART IPTV SINGLE-COLUMN CHANNEL LIST WINDOW (PHOTO 1)
+  // VIEW MODE 1: MODERN ROUNDED LIQUID GLASS CHANNEL LIST WINDOW
   // ============================================================================
   return (
     <div
+      ref={osdRootRef}
+      data-osd-subview={
+        pendingDeleteFavChannel ||
+        isSearchBarOpen ||
+        isOsdKeyboardOpen ||
+        enteredFromGroups
+          ? 'true'
+          : 'false'
+      }
+      data-tv-osd-search-open={
+        isSearchBarOpen || isOsdKeyboardOpen ? 'true' : 'false'
+      }
       onKeyDown={handleOsdKeyDown}
       style={{
         width: '100%',
@@ -1224,77 +2200,88 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        borderRadius: isOverlayMode ? '24px' : '0px',
+        backgroundColor: isOverlayMode ? 'rgba(10, 15, 28, 0.94)' : '#090d16',
+        border: isOverlayMode ? '1px solid rgba(148, 163, 184, 0.22)' : 'none',
+        boxShadow: isOverlayMode ? '0 28px 80px rgba(0, 0, 0, 0.85)' : 'none',
+        position: 'relative',
       }}
-      className="w-full h-full min-h-0 flex flex-col select-none text-white"
+      className={`w-full h-full min-h-0 ${
+        isOverlayMode ? 'rounded-3xl backdrop-blur-2xl' : 'rounded-none'
+      } flex flex-col select-none text-white overflow-hidden relative`}
     >
-      {/* Top Row: Protruding Folder Tab on the Left (Exact match to `[ ★ Favourites ]` in Photo 1) */}
-      <div className="flex items-end justify-between gap-2 shrink-0">
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={() => setIsGroupPickerOpen((v) => !v)}
-          style={{
-            backgroundColor: 'rgba(10, 14, 22, 0.96)',
-            borderTop: '2px solid #7dd3fc',
-            borderLeft: '2px solid #7dd3fc',
-            borderRight: '2px solid #7dd3fc',
-          }}
-          className="bg-black/95 px-5 py-1.5 inline-flex items-center gap-2.5 text-white hover:bg-zinc-900 focus:bg-[#0284c7] focus:outline-none cursor-pointer"
-          title="Schimbă Playlist-ul / Categoria (Săgeți Stânga / Dreapta)"
-        >
-          {selectedThemeId === 'FAV' ? (
-            <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
-          ) : (
-            <Tv className="w-4 h-4 text-[#7dd3fc] shrink-0" />
+      {/* Top Integrated Single-Row Header Bar */}
+      <div className="flex items-center justify-between gap-1.5 px-3.5 py-2.5 bg-white/[0.04] border-b border-white/10 shrink-0 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1.5 min-w-0 shrink-0">
+          {enteredFromGroups && (
+            <button
+              type="button"
+              data-osd-action-btn="true"
+              onClick={() => setViewMode('groups')}
+              className="h-8 px-2.5 rounded-full bg-blue-500/20 hover:bg-blue-500/35 border border-blue-400/40 text-xs font-extrabold text-blue-200 whitespace-nowrap shrink-0 inline-flex items-center gap-1 transition-all cursor-pointer"
+              title="Înapoi la Grupuri (Back)"
+            >
+              <span>← Grupuri</span>
+            </button>
           )}
-          <span className="text-base sm:text-lg font-bold tracking-tight">
-            {selectedThemeId === 'FAV'
-              ? '★ Favorite TV'
-              : activeThemeTab.shortLabel}
-          </span>
-          <span className="text-xs font-semibold text-zinc-300">
-            {selectedThemeId === 'FAV'
-              ? `• Lista ta (${flatChannels.length} canale)`
-              : `• ${activeCountryTab?.label || selectedCountryId} (${flatChannels.length})`}
-          </span>
-          {isLoadingCountry && selectedThemeId !== 'FAV' && (
-            <span className="text-[11px] text-sky-300 font-normal">
-              (Se încarcă...)
-            </span>
-          )}
-        </button>
 
-        {/* Subtle Right-Side Quick Controls */}
-        <div className="flex items-center gap-1.5 pb-1">
           <button
             type="button"
             data-osd-action-btn="true"
-            onClick={() => cycleThemeGroup(-1)}
-            className="px-2.5 py-1 bg-black/90 border border-white/20 hover:border-[#7dd3fc] text-xs font-bold text-zinc-200 cursor-pointer"
-            title="Playlist-ul anterior (Săgeată Stânga)"
+            onClick={openGroupsView}
+            className="h-8 px-3 rounded-full bg-white/[0.07] hover:bg-white/[0.14] border border-white/15 inline-flex items-center gap-2 text-white whitespace-nowrap shrink-0 focus:bg-blue-600 focus:outline-none transition-all cursor-pointer"
+            title="Deschide Grupuri & Playlist-uri (Butonul Albastru)"
           >
-            ◀ Playlist
+            {selectedThemeId === 'FAV' ? (
+              <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
+            ) : (
+              <Tv className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            )}
+            <span className="text-xs sm:text-sm font-extrabold tracking-tight whitespace-nowrap">
+              {selectedThemeId === 'FAV'
+                ? 'Favorite TV'
+                : activeThemeTab.shortLabel.replace(/^★\s*/, '')}
+            </span>
+            <span className="text-[11px] font-bold text-sky-300/90 whitespace-nowrap">
+              • {flatChannels.length}
+            </span>
           </button>
+        </div>
+
+        {/* Right-Side Single-Row Controls */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             data-osd-action-btn="true"
-            onClick={() => cycleThemeGroup(1)}
-            className="px-2.5 py-1 bg-black/90 border border-white/20 hover:border-[#7dd3fc] text-xs font-bold text-zinc-200 cursor-pointer"
-            title="Playlist-ul următor (Săgeată Dreapta)"
+            onClick={() => changeGroupPage(-1)}
+            className="h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
+            title="Pagina anterioară din grup (Săgeată Stânga)"
           >
-            Playlist ▶
+            ◀ Pag
+          </button>
+          <span className="h-8 px-2.5 rounded-full bg-white/[0.04] border border-white/10 text-[11px] font-extrabold text-sky-300 tabular-nums whitespace-nowrap shrink-0 inline-flex items-center justify-center">
+            {currentGroupPage}/{totalGroupPages}
+          </span>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={() => changeGroupPage(1)}
+            className="h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
+            title="Pagina următoare din grup (Săgeată Dreapta)"
+          >
+            Pag ▶
           </button>
           <button
             type="button"
             data-osd-action-btn="true"
             onClick={() => setIsSearchBarOpen((v) => !v)}
-            className={`px-2.5 py-1 border text-xs font-bold inline-flex items-center gap-1 cursor-pointer ${
+            className={`h-8 px-3 rounded-full border text-xs font-bold whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 transition-all cursor-pointer ${
               isSearchBarOpen || searchQuery
-                ? 'bg-[#0284c7] border-[#7dd3fc] text-white'
-                : 'bg-black/90 border-white/20 text-zinc-200 hover:border-[#7dd3fc]'
+                ? 'bg-gradient-to-r from-blue-600 to-sky-500 border-sky-300/60 text-white shadow-[0_0_14px_rgba(56,189,248,0.35)]'
+                : 'bg-white/[0.06] border-white/10 text-zinc-200 hover:bg-white/[0.14]'
             }`}
           >
-            <Search className="w-3.5 h-3.5" />
+            <Search className="w-3.5 h-3.5 shrink-0" />
             <span>Caută</span>
           </button>
           {isOverlayMode && onCloseOverlay && (
@@ -1303,7 +2290,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
               data-osd-action-btn="true"
               onClick={onCloseOverlay}
               aria-label="Închide lista"
-              className="px-2.5 py-1 bg-black/90 border border-white/20 hover:bg-rose-600 text-xs font-bold text-zinc-200 hover:text-white cursor-pointer"
+              className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 hover:bg-rose-600 text-xs font-bold text-zinc-200 hover:text-white shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
             >
               ✕
             </button>
@@ -1311,117 +2298,36 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         </div>
       </div>
 
-      {/* Main Framed Smart IPTV Box */}
+      {/* Main Content Container */}
       <div
         style={{
           flex: '1 1 0%',
           minHeight: 0,
-          backgroundColor: 'rgba(10, 14, 22, 0.94)',
-          border: '2px solid #7dd3fc',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
         }}
-        className="flex-1 min-h-0 bg-black/95 shadow-2xl flex flex-col overflow-hidden"
+        className="flex-1 min-h-0 flex flex-col overflow-hidden"
       >
-        {/* Always-Visible Playlists, Countries & Categories Bar */}
-        {isGroupPickerOpen && (
-          <div className="p-2.5 bg-zinc-950/95 border-b border-[#7dd3fc]/40 space-y-2 shrink-0">
-            {/* Row 1: Favorite + M3U + Country Playlists */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-              <button
-                type="button"
-                data-osd-action-btn="true"
-                onClick={() => {
-                  setSelectedThemeId('FAV');
-                }}
-                className={`h-7 px-3 text-xs font-extrabold whitespace-nowrap shrink-0 border transition-none cursor-pointer inline-flex items-center gap-1.5 focus:bg-white focus:text-black ${
-                  selectedThemeId === 'FAV'
-                    ? 'bg-amber-400 text-zinc-950 border-amber-200 shadow-sm'
-                    : 'bg-zinc-900 text-amber-300 border-amber-400/35 hover:bg-zinc-800'
-                }`}
-              >
-                <Star className="w-3.5 h-3.5 fill-current shrink-0" />
-                <span>Favorite ({favoriteTvChannels.length})</span>
-              </button>
-
-              {OSD_COUNTRY_TABS.filter(
-                (reg) => adultContentEnabled || reg.id !== 'ADULT'
-              ).map((reg) => {
-                const active =
-                  selectedThemeId !== 'FAV' && selectedCountryId === reg.id;
-                return (
-                  <button
-                    key={`osd_country_${reg.id}`}
-                    type="button"
-                    data-osd-action-btn="true"
-                    onClick={() => {
-                      setHasSwitchedCountry(true);
-                      setSelectedCountryId(reg.id);
-                      setSelectedThemeId('ALL');
-                    }}
-                    className={`h-7 px-3 text-xs font-bold whitespace-nowrap shrink-0 border transition-none cursor-pointer focus:bg-white focus:text-black ${
-                      active
-                        ? 'bg-[#0284c7] text-white border-[#7dd3fc]'
-                        : 'bg-zinc-900 text-zinc-300 border-white/15 hover:text-white'
-                    }`}
-                  >
-                    {reg.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Row 2: Thematic Category Playlists */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-              {themeTabs.map((tab) => {
-                const active = selectedThemeId === tab.id;
-                const isFavTab = tab.id === 'FAV';
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    data-osd-action-btn="true"
-                    onClick={() => {
-                      setSelectedThemeId(tab.id);
-                    }}
-                    className={`h-7 px-3 text-xs font-bold whitespace-nowrap shrink-0 border transition-none cursor-pointer focus:bg-white focus:text-black ${
-                      active
-                        ? isFavTab
-                          ? 'bg-amber-400 text-zinc-950 border-amber-200 font-extrabold'
-                          : 'bg-[#0284c7] text-white border-[#7dd3fc]'
-                        : isFavTab
-                          ? 'bg-zinc-900 text-amber-300 border-amber-400/30 hover:text-amber-200'
-                          : 'bg-zinc-900 text-zinc-300 border-white/15 hover:text-white'
-                    }`}
-                  >
-                    {tab.shortLabel} ({tab.count})
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Optional Expandable Search & TV Keyboard Bar */}
         {isSearchBarOpen && (
-          <div className="p-2.5 bg-zinc-950/95 border-b border-[#7dd3fc]/40 space-y-2 shrink-0">
+          <div className="px-4 py-3 bg-black/40 border-b border-white/10 space-y-2.5 shrink-0">
             <div className="flex items-center gap-2">
               <div className="relative flex-1 min-w-0">
-                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="search"
                   tabIndex={-1}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Caută canal sau emisiune EPG..."
-                  className="w-full h-8 pl-8 pr-8 bg-black border border-white/25 text-xs font-bold text-white placeholder:text-zinc-500 outline-none"
+                  className="w-full h-9 pl-9 pr-8 rounded-full bg-white/[0.07] border border-white/15 focus:border-sky-400 text-xs font-bold text-white placeholder:text-zinc-400 outline-none"
                 />
                 {searchQuery && (
                   <button
                     type="button"
                     onClick={() => setSearchQuery('')}
-                    className="w-6 h-6 absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center text-zinc-400 hover:text-white"
+                    className="w-6 h-6 rounded-full absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-zinc-400 hover:text-white"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -1430,7 +2336,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
               <button
                 type="button"
                 onClick={() => setIsOsdKeyboardOpen((v) => !v)}
-                className="h-8 px-3 bg-zinc-900 border border-white/20 text-xs font-bold text-white focus:bg-white focus:text-black cursor-pointer"
+                className="h-9 px-3.5 rounded-full bg-white/[0.08] border border-white/15 text-xs font-bold text-white whitespace-nowrap shrink-0 focus:bg-white focus:text-black cursor-pointer"
               >
                 Tastatură TV
               </button>
@@ -1440,7 +2346,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                   setIsSearchBarOpen(false);
                   setIsOsdKeyboardOpen(false);
                 }}
-                className="h-8 px-3 bg-zinc-900 border border-white/20 text-xs font-bold text-zinc-300 focus:bg-white focus:text-black cursor-pointer"
+                className="h-9 px-3.5 rounded-full bg-white/[0.08] border border-white/15 text-xs font-bold text-zinc-300 whitespace-nowrap shrink-0 focus:bg-white focus:text-black cursor-pointer"
               >
                 Închide
               </button>
@@ -1454,21 +2360,21 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                     onClick={() =>
                       setOsdKeyboardLang((l) => (l === 'LAT' ? 'CYR' : 'LAT'))
                     }
-                    className="h-7 px-2.5 bg-zinc-800 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
+                    className="h-7 px-3 rounded-full bg-white/10 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
                   >
                     {osdKeyboardLang === 'LAT' ? 'АБВ (RU)' : 'ABC (RO/EN)'}
                   </button>
                   <button
                     type="button"
                     onClick={() => setSearchQuery((q) => q + ' ')}
-                    className="h-7 px-3 bg-zinc-800 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
+                    className="h-7 px-3.5 rounded-full bg-white/10 focus:bg-white focus:text-black text-[11px] font-bold text-white cursor-pointer"
                   >
                     Spațiu
                   </button>
                   <button
                     type="button"
                     onClick={() => setSearchQuery((q) => q.slice(0, -1))}
-                    className="h-7 px-2.5 bg-zinc-800 focus:bg-rose-600 text-[11px] font-bold text-rose-300 focus:text-white cursor-pointer"
+                    className="h-7 px-3 rounded-full bg-rose-500/20 focus:bg-rose-600 text-[11px] font-bold text-rose-300 focus:text-white cursor-pointer"
                   >
                     ⌫ Șterge
                   </button>
@@ -1482,7 +2388,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                       key={`osd_kb_${ch}`}
                       type="button"
                       onClick={() => setSearchQuery((q) => q + ch)}
-                      className="h-7 bg-zinc-900 focus:bg-white focus:text-black text-white font-bold text-xs border border-white/10 cursor-pointer"
+                      className="h-7 rounded-lg bg-white/[0.07] focus:bg-white focus:text-black text-white font-bold text-xs border border-white/10 cursor-pointer"
                     >
                       {ch}
                     </button>
@@ -1493,43 +2399,42 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
           </div>
         )}
 
-        {/* STRICT SINGLE-COLUMN NUMBERED CHANNEL LIST (1..15 visible per view, exact match to Photo 1) */}
+        {/* ROUNDED MODERN CHANNEL LIST */}
         <div
           ref={listContainerRef}
           onScroll={handleListScroll}
           role="listbox"
-          aria-label="Canale TV Smart IPTV"
+          aria-label="Canale TV"
           style={{
             flex: '1 1 0%',
             minHeight: 0,
             overflowY: 'auto',
             overflowX: 'hidden',
+            padding: '6px 8px',
           }}
-          className="flex-1 min-h-0 overflow-y-auto divide-y divide-white/[0.06]"
+          className="flex-1 min-h-0 overflow-y-auto no-scrollbar"
         >
           {visibleChannels.length === 0 ? (
             <div className="py-16 px-4 text-center text-sm text-zinc-400 space-y-3">
               <p>
                 {selectedThemeId === 'FAV'
-                  ? 'Nu ai încă niciun canal TV la Favourites. Apasă butonul Roșu (Fav) pe orice canal!'
+                  ? 'Nu ai încă niciun canal TV la Favorite. Apasă butonul Albastru (Grupuri) pentru a alege un canal!'
                   : 'Niciun canal găsit în această categorie.'}
               </p>
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedThemeId('ALL');
-                  setSearchQuery('');
-                }}
-                className="px-4 py-1.5 bg-white text-black text-xs font-bold cursor-pointer"
+                onClick={openGroupsView}
+                className="px-4 py-1.5 rounded-full bg-blue-600 text-white text-xs font-bold cursor-pointer"
               >
-                Afișează Toate Canalele
+                Deschide Grupuri (Butonul Albastru)
               </button>
             </div>
           ) : (
             visibleChannels.map((ch, idx) => {
-              const isFocused = idx === focusedRowIdx;
+              const isFocused =
+                focusZone === 'channels' && idx === focusedRowIdx;
               const isCurrent = ch.id === currentChannel.id;
-              const isFav = favoriteTvChannels.some((f) => f.id === ch.id);
+              const isFav = favoriteIdSet.has(ch.id);
               const chEpg = resolveChannelEpg(ch);
               const nowProg = chEpg?.now;
               const stats = getEpgTimingStats(nowProg);
@@ -1555,215 +2460,125 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                   }}
                   role="option"
                   aria-selected={isCurrent}
-                  onFocus={() => setFocusedRowIdx(idx)}
-                  onClick={() => selectChannelRow(ch)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    height: '40px',
-                    minHeight: '40px',
-                    maxHeight: '40px',
-                    paddingLeft: '12px',
-                    paddingRight: '12px',
-                    backgroundColor: isFocused
-                      ? 'rgba(2, 132, 199, 0.65)'
-                      : isCurrent
-                        ? 'rgba(255, 255, 255, 0.14)'
-                        : 'transparent',
-                    borderTop: isFocused
-                      ? '2px solid #38bdf8'
-                      : '1px solid transparent',
-                    borderBottom: isFocused
-                      ? '2px solid #38bdf8'
-                      : '1px solid rgba(255, 255, 255, 0.07)',
+                  onFocus={() => {
+                    setFocusZone('channels');
+                    setFocusedRowIdx(idx);
                   }}
-                  className="w-full text-left transition-none cursor-pointer outline-none"
+                  onMouseDown={() => {
+                    clickedChannelIdRef.current = ch.id;
+                    shouldAutoScrollRef.current = false;
+                  }}
+                  onClick={() => {
+                    clickedChannelIdRef.current = ch.id;
+                    shouldAutoScrollRef.current = false;
+                    setFocusZone('channels');
+                    setFocusedRowIdx(idx);
+                    selectChannelRow(ch, true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    width: '100%',
+                    height: '48px',
+                    minHeight: '48px',
+                    maxHeight: '48px',
+                    marginBottom: '3px',
+                    paddingLeft: '10px',
+                    paddingRight: '10px',
+                    borderRadius: '14px',
+                    background: isFocused
+                      ? 'linear-gradient(90deg, rgba(37, 99, 235, 0.82) 0%, rgba(14, 165, 233, 0.65) 100%)'
+                      : isCurrent
+                        ? 'rgba(255, 255, 255, 0.10)'
+                        : 'transparent',
+                    border: isFocused
+                      ? '1px solid rgba(125, 211, 252, 0.78)'
+                      : isCurrent
+                        ? '1px solid rgba(255, 255, 255, 0.14)'
+                        : '1px solid transparent',
+                    boxShadow: isFocused
+                      ? '0 6px 20px rgba(14, 165, 233, 0.28)'
+                      : 'none',
+                  }}
+                  className="w-full text-left transition-none cursor-pointer outline-none hover:bg-white/[0.06]"
                 >
-                  <div
-                    style={{
-                      display: 'table',
-                      tableLayout: 'fixed',
-                      width: '100%',
-                      height: '36px',
-                    }}
-                  >
-                    {/* COLUMN 1 (36%): Channel Number + Logo + Channel Name */}
-                    <div
-                      style={{
-                        display: 'table-cell',
-                        width: '36%',
-                        verticalAlign: 'middle',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        paddingRight: '8px',
-                      }}
+                  {/* LEFT: Channel Number + Logo with crisp fallback badge */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={`w-6 text-right text-xs font-extrabold tabular-nums ${
+                        isFocused ? 'text-white' : 'text-slate-400'
+                      }`}
                     >
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: '30px',
-                          textAlign: 'right',
-                          marginRight: '10px',
-                          fontSize: '16px',
-                          fontWeight: 700,
-                          color: '#ffffff',
-                          verticalAlign: 'middle',
-                        }}
-                      >
-                        {idx + 1}
-                      </span>
+                      {idx + 1}
+                    </span>
 
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: '28px',
-                          height: '22px',
-                          marginRight: '10px',
-                          backgroundColor: 'rgba(0, 0, 0, 0.75)',
-                          border: '1px solid rgba(255, 255, 255, 0.2)',
-                          textAlign: 'center',
-                          lineHeight: '20px',
-                          verticalAlign: 'middle',
-                          overflow: 'hidden',
-                          fontSize: '10px',
-                          fontWeight: 800,
-                          color: '#7dd3fc',
-                        }}
-                      >
-                        {effectiveLogo ? (
-                          <img
-                            src={effectiveLogo}
-                            alt=""
-                            loading="lazy"
-                            onError={(e) => {
-                              e.currentTarget.style.display = 'none';
-                            }}
-                            style={{
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'contain',
-                              display: 'block',
-                            }}
-                          />
-                        ) : (
-                          <span>{shortBadge || 'TV'}</span>
-                        )}
+                    <div className="relative w-8 h-6 rounded-md bg-white/10 border border-white/15 flex items-center justify-center overflow-hidden shrink-0">
+                      <span className="text-[10px] font-extrabold text-sky-300 select-none">
+                        {shortBadge || 'TV'}
                       </span>
-
-                      {isFav && (
-                        <span
-                          style={{
-                            color: '#fbbf24',
-                            marginRight: '6px',
-                            fontSize: '14px',
-                            verticalAlign: 'middle',
+                      {effectiveLogo && (
+                        <img
+                          src={effectiveLogo}
+                          alt=""
+                          loading="lazy"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
                           }}
-                        >
+                          className="absolute inset-0 w-full h-full object-contain bg-slate-900 p-0.5"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* CENTER: Full Readable Channel Name (Line 1) + Live EPG Show (Line 2) */}
+                  <div className="flex-1 min-w-0 flex flex-col justify-center">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {isFav && selectedThemeId !== 'FAV' && (
+                        <span className="text-amber-400 text-xs leading-none shrink-0">
                           ★
                         </span>
                       )}
-
-                      <span
-                        style={{
-                          fontSize: '16px',
-                          fontWeight: 700,
-                          color: '#ffffff',
-                          verticalAlign: 'middle',
-                        }}
-                      >
+                      <span className="text-[14px] font-extrabold text-white truncate leading-tight">
                         {ch.name}
                       </span>
                     </div>
 
-                    {/* COLUMN 2 (50%): Green EPG Dot + Live Programme Title (What is playing right now) */}
-                    <div
-                      style={{
-                        display: 'table-cell',
-                        width: '50%',
-                        verticalAlign: 'middle',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        paddingLeft: '6px',
-                        paddingRight: '8px',
-                      }}
-                    >
-                      {nowProg ? (
-                        <>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: '8px',
-                              height: '8px',
-                              borderRadius: '9999px',
-                              backgroundColor: '#34d399',
-                              verticalAlign: 'middle',
-                              marginRight: '8px',
-                            }}
-                          />
-                          <span
-                            style={{
-                              fontSize: '15px',
-                              fontWeight: 600,
-                              color: isFocused ? '#fef08a' : '#f1f5f9',
-                              verticalAlign: 'middle',
-                            }}
-                          >
-                            {nowProg.title}
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
-
-                    {/* COLUMN 3 (14%): +Remaining Minutes + Compact Progress Bar */}
-                    <div
-                      style={{
-                        display: 'table-cell',
-                        width: '14%',
-                        verticalAlign: 'middle',
-                        textAlign: 'right',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {nowProg ? (
-                        <>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              verticalAlign: 'middle',
-                              marginRight: '6px',
-                              fontSize: '14px',
-                              fontWeight: 600,
-                              color: '#e2e8f0',
-                            }}
-                          >
-                            +{stats.remainingMin}
-                          </span>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              verticalAlign: 'middle',
-                              width: '28px',
-                              height: '8px',
-                              backgroundColor: 'rgba(255, 255, 255, 0.22)',
-                              border: '1px solid rgba(255, 255, 255, 0.6)',
-                              overflow: 'hidden',
-                            }}
-                          >
-                            <span
-                              style={{
-                                display: 'block',
-                                height: '100%',
-                                backgroundColor: '#ffffff',
-                                width: `${stats.progress}%`,
-                              }}
-                            />
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
+                    {nowProg && (
+                      <div className="flex items-center gap-1.5 min-w-0 mt-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                        <span
+                          className={`text-[12px] font-semibold truncate leading-tight ${
+                            isFocused ? 'text-amber-200' : 'text-slate-300'
+                          }`}
+                        >
+                          {nowProg.title}
+                        </span>
+                      </div>
+                    )}
                   </div>
+
+                  {/* RIGHT: +Remaining Minutes + Progress Pill */}
+                  {nowProg && (
+                    <div className="flex items-center gap-1.5 shrink-0 pl-1">
+                      <span
+                        className={`text-[11px] font-bold tabular-nums ${
+                          isFocused ? 'text-white' : 'text-slate-400'
+                        }`}
+                      >
+                        +{stats.remainingMin}m
+                      </span>
+                      <span className="w-8 h-1.5 rounded-full bg-white/20 overflow-hidden inline-block">
+                        <span
+                          className={`block h-full rounded-full ${
+                            isFocused ? 'bg-white' : 'bg-sky-400'
+                          }`}
+                          style={{ width: `${stats.progress}%` }}
+                        />
+                      </span>
+                    </div>
+                  )}
                 </button>
               );
             })
@@ -1771,77 +2586,107 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         </div>
       </div>
 
-      {/* Bottom-Right Protruding Legend Tab: [ i Info | • Edit | • EPG | • A-Z | • Groups ] (Exact match to Photo 1) */}
-      <div
-        style={{
-          backgroundColor: 'rgba(10, 14, 22, 0.96)',
-          borderBottom: '2px solid #7dd3fc',
-          borderLeft: '2px solid #7dd3fc',
-          borderRight: '2px solid #7dd3fc',
-        }}
-        className="self-end bg-black/95 px-4 py-1 flex items-center gap-4 sm:gap-5 text-xs sm:text-[13px] font-bold text-white shrink-0"
-      >
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={() => {
-            if (onToggleInfoPanel) onToggleInfoPanel();
-            if (onCloseOverlay) onCloseOverlay();
-          }}
-          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
-          title="Afișează bara Info jos"
-        >
-          <span className="px-1 py-0.2 bg-sky-200 text-black text-[10px] font-black">
-            i
-          </span>
-          <span>Info</span>
-        </button>
+      {/* Confirmation Modal for Deleting Favorite Channel (Red Button) */}
+      {pendingDeleteFavChannel && (
+        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-5">
+          <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-white/20 p-5 shadow-2xl space-y-4 text-center">
+            <div className="w-11 h-11 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 mx-auto flex items-center justify-center text-lg font-black">
+              ★
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-white">
+                Șterge din Favorite?
+              </h3>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                Sigur vrei să ștergi canalul{' '}
+                <span className="font-extrabold text-white">
+                  «{pendingDeleteFavChannel.name}»
+                </span>{' '}
+                din lista de Favorite?
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-3 pt-1">
+              <button
+                ref={confirmDeleteBtnRef}
+                type="button"
+                onFocus={() => setConfirmFavBtnFocus('confirm')}
+                onClick={() => {
+                  toggleFavoriteTvChannel(pendingDeleteFavChannel);
+                  setPendingDeleteFavChannel(null);
+                }}
+                className={`px-4 py-2 rounded-full text-xs font-extrabold transition-all cursor-pointer outline-none ${
+                  confirmFavBtnFocus === 'confirm'
+                    ? 'bg-rose-600 text-white ring-2 ring-white shadow-lg scale-105'
+                    : 'bg-rose-600/40 text-rose-200 hover:bg-rose-600/70'
+                }`}
+              >
+                Da, șterge
+              </button>
+              <button
+                ref={cancelDeleteBtnRef}
+                type="button"
+                onFocus={() => setConfirmFavBtnFocus('cancel')}
+                onClick={() => setPendingDeleteFavChannel(null)}
+                className={`px-4 py-2 rounded-full text-xs font-extrabold transition-all cursor-pointer outline-none ${
+                  confirmFavBtnFocus === 'cancel'
+                    ? 'bg-white text-slate-950 ring-2 ring-sky-400 shadow-lg scale-105'
+                    : 'bg-white/10 text-zinc-200 hover:bg-white/20'
+                }`}
+              >
+                Anulează
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={toggleFavForFocusedChannel}
-          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
-          title="Adaugă / Elimină canalul selectat la Favorite (Tasta Roșie / F)"
-        >
-          <span className="w-2.5 h-2.5 bg-rose-500 inline-block" />
-          <span>Fav</span>
-        </button>
+      {/* Bottom Integrated 4-Color Remote Legend Bar */}
+      <div className="border-t border-white/10 bg-black/40 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs font-bold text-zinc-200 shrink-0 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1.5 sm:gap-2 mx-auto sm:mx-0 sm:ml-auto whitespace-nowrap">
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={triggerRedFavActionForFocusedChannel}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap shrink-0 cursor-pointer"
+            title="Butonul Roșu: Șterge din Favorite (cu confirmare) / Adaugă la Favorite"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block shrink-0" />
+            <span>{isFocusedChannelFav ? 'Șterge Fav' : '+Fav'}</span>
+          </button>
 
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={openEpgForFocusedChannel}
-          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
-          title="Deschide EPG și Arhiva Catch-up (Tasta Verde / E)"
-        >
-          <span className="w-2.5 h-2.5 bg-emerald-400 inline-block" />
-          <span>EPG</span>
-        </button>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={openDetailedEpgForFocusedChannel}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap shrink-0 cursor-pointer"
+            title="Butonul Verde: EPG Detaliat pentru canalul selectat"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block shrink-0" />
+            <span>EPG Detaliat</span>
+          </button>
 
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={() =>
-            setSortMode((prev) => (prev === 'default' ? 'az' : 'default'))
-          }
-          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
-          title="Sortează alfabetic A-Z (Tasta Galbenă / S)"
-        >
-          <span className="w-2.5 h-2.5 bg-amber-400 inline-block" />
-          <span>{sortMode === 'az' ? 'A-Z ✓' : 'A-Z'}</span>
-        </button>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={openArchiveForFocusedChannel}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap shrink-0 cursor-pointer"
+            title="Butonul Galben: Arhivă TV Catch-up"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block shrink-0" />
+            <span>Arhivă</span>
+          </button>
 
-        <button
-          type="button"
-          data-osd-action-btn="true"
-          onClick={() => setIsGroupPickerOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 hover:text-sky-300 cursor-pointer"
-          title="Alege Categoria sau Țara (Tasta Albastră / G / Săgeți Stânga-Dreapta)"
-        >
-          <span className="w-2.5 h-2.5 bg-blue-500 inline-block" />
-          <span>Groups</span>
-        </button>
+          <button
+            type="button"
+            data-osd-action-btn="true"
+            onClick={openGroupsView}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/15 text-white whitespace-nowrap shrink-0 cursor-pointer"
+            title="Butonul Albastru: Grupuri & Playlist-uri"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block shrink-0" />
+            <span>Grupuri</span>
+          </button>
+        </div>
       </div>
     </div>
   );

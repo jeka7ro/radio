@@ -18,10 +18,12 @@ import {
   Tv,
   Film,
   X,
+  Sparkles,
 } from "lucide-react";
 import { isAdultTvChannel } from "../../services/tvApi";
 import { resolveChannelEpg, getEpgTimingStats } from "../../services/epgService";
 import { setActiveTvPlaylistContext } from "./TvOsdChannelList";
+import { TvPlayerModal } from "./TvPlayerModal";
 import { StationAvatar } from "../common/StationAvatar";
 import { toggleRadioPip } from "../player/RadioPipPlayer";
 import { StreamingPlatformLogo } from "../common/StreamingPlatformLogo";
@@ -39,7 +41,7 @@ import {
   sanitizeDeviceName,
 } from "../../views/smartTvLampaHelpers";
 
-export const SmartTvCatalogSections: React.FC<any> = ({
+export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   section,
   platformMediaTab,
   setPlatformMediaTab,
@@ -255,6 +257,267 @@ export const SmartTvCatalogSections: React.FC<any> = ({
     };
   }, [section, favorites, radioStations]);
 
+  // 4K UHD Dedicated Section State & Fetcher (Movies + Series in 4K, newest first, with LG TV optimized search)
+  const [uhdMediaFilter, setUhdMediaFilter] = React.useState<'all' | 'movie' | 'series'>('all');
+  const [uhdSearchQuery, setUhdSearchQuery] = React.useState<string>('');
+  const [isUhdKeyboardOpen, setIsUhdKeyboardOpen] = React.useState<boolean>(false);
+  const [uhdItems, setUhdItems] = React.useState<CinemetaItem[]>([]);
+  const [isUhdLoading, setIsUhdLoading] = React.useState<boolean>(false);
+  const uhdSearchInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    if (section !== 'uhd_4k') return;
+    let cancelled = false;
+    setIsUhdLoading(true);
+    const q = uhdSearchQuery.trim();
+
+    const extractYearNum = (item: CinemetaItem): number => {
+      const m = String(item.releaseInfo || item.year || '').match(/\b(19\d{2}|20\d{2})\b/);
+      return m ? Number(m[1]) : 2025;
+    };
+
+    const timer = window.setTimeout(async () => {
+      try {
+        if (q.length >= 2) {
+          const [flMovRes, flSerRes, cmMovRes, cmSerRes, kpRes] = await Promise.allSettled([
+            fetch(`/api/filelist/catalog?section=movies_4k&sort=latest&q=${encodeURIComponent(q)}`).then((r) =>
+              r.ok ? r.json() : { items: [] }
+            ),
+            fetch(`/api/filelist/catalog?section=series_4k&sort=latest&q=${encodeURIComponent(q)}`).then((r) =>
+              r.ok ? r.json() : { items: [] }
+            ),
+            fetch(
+              `https://v3-cinemeta.strem.io/catalog/movie/top/search=${encodeURIComponent(q)}.json`
+            ).then((r) => (r.ok ? r.json() : { metas: [] })),
+            fetch(
+              `https://v3-cinemeta.strem.io/catalog/series/top/search=${encodeURIComponent(q)}.json`
+            ).then((r) => (r.ok ? r.json() : { metas: [] })),
+            fetch(
+              `https://kinopoiskapiunofficial.tech/api/v2.1/films/search-by-keyword?keyword=${encodeURIComponent(q)}&page=1`,
+              {
+                headers: {
+                  'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+                },
+              }
+            ).then((r) => (r.ok ? r.json() : { films: [] })),
+          ]);
+
+          if (cancelled) return;
+          const combined: CinemetaItem[] = [];
+          const seenIds = new Set<string>();
+          const seenNames = new Set<string>();
+
+          const addUnique = (item: CinemetaItem) => {
+            if (!item?.id || !item?.name) return;
+            const normName = `${item.type}:${item.name.toLowerCase().trim()}`;
+            if (seenIds.has(item.id) || seenNames.has(normName)) return;
+            seenIds.add(item.id);
+            seenNames.add(normName);
+            combined.push({
+              ...item,
+              qualityBadge: item.qualityBadge || '4K UHD',
+            });
+          };
+
+          for (const res of [flMovRes, flSerRes]) {
+            if (res.status === 'fulfilled' && Array.isArray(res.value?.items)) {
+              for (const tor of res.value.items) {
+                addUnique({
+                  id: tor.imdbId || `fl_${tor.id}`,
+                  flTorrentId: tor.id,
+                  releaseTitle: tor.releaseTitle,
+                  sizeFormatted: tor.sizeFormatted,
+                  seeders: tor.seeders,
+                  freeleech: tor.freeleech,
+                  isRo: tor.isRo,
+                  qualityBadge: tor.quality || '4K UHD',
+                  type: tor.type === 'series' ? 'series' : 'movie',
+                  name: tor.name,
+                  releaseInfo: tor.year || '2026',
+                  poster: tor.poster,
+                  genres: tor.genres,
+                });
+              }
+            }
+          }
+
+          if (cmMovRes.status === 'fulfilled' && Array.isArray(cmMovRes.value?.metas)) {
+            for (const m of cmMovRes.value.metas) {
+              addUnique({ ...m, type: 'movie', qualityBadge: '4K UHD' });
+            }
+          }
+          if (cmSerRes.status === 'fulfilled' && Array.isArray(cmSerRes.value?.metas)) {
+            for (const s of cmSerRes.value.metas) {
+              addUnique({ ...s, type: 'series', qualityBadge: '4K UHD' });
+            }
+          }
+          if (kpRes.status === 'fulfilled' && Array.isArray(kpRes.value?.films)) {
+            for (const f of kpRes.value.films) {
+              const isSer =
+                f.type === 'TV_SERIES' || f.type === 'MINI_SERIES' || f.type === 'TV_SHOW';
+              const ratingNum = parseFloat(String(f.rating || '0'));
+              addUnique({
+                id: `kp_${f.filmId}`,
+                kpId: String(f.filmId),
+                type: isSer ? 'series' : 'movie',
+                name: f.nameEn || f.nameRu || `Film #${f.filmId}`,
+                nameOriginal: f.nameEn || undefined,
+                releaseInfo: f.year && f.year !== 'null' ? String(f.year) : '2026',
+                imdbRating: ratingNum > 0 ? String(ratingNum) : undefined,
+                poster: f.posterUrlPreview || f.posterUrl,
+                qualityBadge: '4K UHD',
+              });
+            }
+          }
+
+          combined.sort((a, b) => {
+            const aFl = a.flTorrentId ? 1 : 0;
+            const bFl = b.flTorrentId ? 1 : 0;
+            if (bFl !== aFl) return bFl - aFl;
+            const yDiff = extractYearNum(b) - extractYearNum(a);
+            if (yDiff !== 0) return yDiff;
+            const rA = parseFloat(String(a.imdbRating || '0')) || 0;
+            const rB = parseFloat(String(b.imdbRating || '0')) || 0;
+            return rB - rA;
+          });
+
+          setUhdItems(combined);
+          return;
+        }
+
+        // Default 4K Catalog: Newest 4K Movies & Series from FileList 4K + Cinemeta Top + Kinopoisk 2025-2026
+        const [flMov4kRes, flSer4kRes, cmMovTopRes, cmSerTopRes, kpNewRes] =
+          await Promise.allSettled([
+            fetch('/api/filelist/catalog?section=movies_4k&sort=latest&q=').then((r) =>
+              r.ok ? r.json() : { items: [] }
+            ),
+            fetch('/api/filelist/catalog?section=series_4k&sort=latest&q=').then((r) =>
+              r.ok ? r.json() : { items: [] }
+            ),
+            fetch('https://v3-cinemeta.strem.io/catalog/movie/top.json').then((r) =>
+              r.ok ? r.json() : { metas: [] }
+            ),
+            fetch('https://v3-cinemeta.strem.io/catalog/series/top.json').then((r) =>
+              r.ok ? r.json() : { metas: [] }
+            ),
+            fetch(
+              'https://kinopoiskapiunofficial.tech/api/v2.2/films?type=ALL&order=NUM_VOTE&yearFrom=2025&yearTo=2026&page=1',
+              {
+                headers: {
+                  'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+                },
+              }
+            ).then((r) => (r.ok ? r.json() : { items: [] })),
+          ]);
+
+        if (cancelled) return;
+        const combined: CinemetaItem[] = [];
+        const seenIds = new Set<string>();
+        const seenNames = new Set<string>();
+
+        const addUnique = (item: CinemetaItem) => {
+          if (!item?.id || !item?.name) return;
+          const normName = `${item.type}:${item.name.toLowerCase().trim()}`;
+          if (seenIds.has(item.id) || seenNames.has(normName)) return;
+          seenIds.add(item.id);
+          seenNames.add(normName);
+          combined.push({
+            ...item,
+            qualityBadge: item.qualityBadge || '4K UHD',
+          });
+        };
+
+        for (const res of [flMov4kRes, flSer4kRes]) {
+          if (res.status === 'fulfilled' && Array.isArray(res.value?.items)) {
+            for (const tor of res.value.items) {
+              addUnique({
+                id: tor.imdbId || `fl_${tor.id}`,
+                flTorrentId: tor.id,
+                releaseTitle: tor.releaseTitle,
+                sizeFormatted: tor.sizeFormatted,
+                seeders: tor.seeders,
+                freeleech: tor.freeleech,
+                isRo: tor.isRo,
+                qualityBadge: tor.quality || '4K UHD',
+                type: tor.type === 'series' ? 'series' : 'movie',
+                name: tor.name,
+                releaseInfo: tor.year || '2026',
+                poster: tor.poster,
+                genres: tor.genres,
+              });
+            }
+          }
+        }
+
+        if (kpNewRes.status === 'fulfilled' && Array.isArray(kpNewRes.value?.items)) {
+          for (const f of kpNewRes.value.items) {
+            const isSer =
+              f.type === 'TV_SERIES' || f.type === 'MINI_SERIES' || f.type === 'TV_SHOW';
+            const validImdb = f.imdbId && /^tt\d+$/.test(f.imdbId) ? f.imdbId : '';
+            const ratingVal = f.ratingKinopoisk || f.ratingImdb;
+            addUnique({
+              id: validImdb || `kp_${f.kinopoiskId}`,
+              kpId: String(f.kinopoiskId),
+              type: isSer ? 'series' : 'movie',
+              name: f.nameOriginal || f.nameEn || f.nameRu || `Film #${f.kinopoiskId}`,
+              releaseInfo: f.year && String(f.year) !== 'null' ? String(f.year) : '2026',
+              imdbRating: ratingVal ? String(ratingVal) : undefined,
+              poster: validImdb
+                ? `https://images.metahub.space/poster/medium/${validImdb}/img`
+                : f.posterUrlPreview || f.posterUrl,
+              qualityBadge: '4K UHD',
+            });
+          }
+        }
+
+        const movMetas =
+          cmMovTopRes.status === 'fulfilled' && Array.isArray(cmMovTopRes.value?.metas)
+            ? cmMovTopRes.value.metas
+            : [];
+        const serMetas =
+          cmSerTopRes.status === 'fulfilled' && Array.isArray(cmSerTopRes.value?.metas)
+            ? cmSerTopRes.value.metas
+            : [];
+        const maxLen = Math.max(movMetas.length, serMetas.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (movMetas[i]) {
+            addUnique({ ...movMetas[i], type: 'movie', qualityBadge: '4K UHD' });
+          }
+          if (serMetas[i]) {
+            addUnique({ ...serMetas[i], type: 'series', qualityBadge: '4K UHD' });
+          }
+        }
+
+        combined.sort((a, b) => {
+          const yDiff = extractYearNum(b) - extractYearNum(a);
+          if (yDiff !== 0) return yDiff;
+          const aFl = a.flTorrentId ? 1 : 0;
+          const bFl = b.flTorrentId ? 1 : 0;
+          if (bFl !== aFl) return bFl - aFl;
+          const rA = parseFloat(String(a.imdbRating || '0')) || 0;
+          const rB = parseFloat(String(b.imdbRating || '0')) || 0;
+          return rB - rA;
+        });
+
+        setUhdItems(combined);
+      } catch {
+        if (!cancelled) setUhdItems([]);
+      } finally {
+        if (!cancelled) setIsUhdLoading(false);
+      }
+    }, q ? 240 : 10);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [section, uhdSearchQuery]);
+
+  const filteredUhdItems = React.useMemo(() => {
+    if (uhdMediaFilter === 'all') return uhdItems;
+    return uhdItems.filter((item) => item.type === uhdMediaFilter);
+  }, [uhdItems, uhdMediaFilter]);
+
   return (
     <>
                 {/* SECTION 0B: LAMPA CATEGORY & STREAMING PLATFORM VIEWS ("Фильмы", "Мультфильмы", "Сериалы", Netflix, HBO Max, Apple TV+, Disney+, Prime Video, SkyShowtime) */}
@@ -423,7 +686,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                   'Сейчас смотрят'
                                 )}
                             </h2>
-                            <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
                               {vodItems.slice(0, 12).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
@@ -505,7 +768,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                     'Рекомендуем посмотреть'
                                   )}
                               </h2>
-                              <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-4 gap-y-6">
+                              <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                                 {vodItems.slice(12).map((item) => {
                                   const isFav = savedVodItems.some(
                                     (x) => x.id === item.id
@@ -521,7 +784,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                       onFocus={() => handleFocusVodItem(item)}
                                       onMouseEnter={() => handleFocusVodItem(item)}
                                       onClick={() => handleOpenVod(item)}
-                                      className="group text-left focus:outline-none cursor-pointer"
+                                      className="group w-full block text-left focus:outline-none cursor-pointer"
                                     >
                                       <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
                                         <img
@@ -600,6 +863,340 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                     </div>
                   )}
 
+                {/* DEDICATED 4K UHD SECTION (MOVIES & SERIES IN 4K, NEWEST FIRST + LG TV REMOTE SEARCH BAR) */}
+                {section === 'uhd_4k' && (
+                  <div className="space-y-6 pb-16">
+                    {/* Top Header + Filter Tabs (Same Lampa dark colors as Filme / Seriale / Căutare) */}
+                    <div className="flex flex-wrap items-center justify-between">
+                      <div className="mr-4 mb-3">
+                        <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
+                          {tr(
+                            'Filme și Seriale 4K Ultra HD',
+                            '4K Ultra HD Movies & Series',
+                            'Фильмы и Сериалы 4K Ultra HD'
+                          )}
+                        </h2>
+                      </div>
+
+                      {/* Filter Tabs with standard Lampa dark/white pills */}
+                      <div className="flex flex-wrap items-center mb-3">
+                        {(
+                          [
+                            {
+                              id: 'all' as const,
+                              label: tr('Toate', 'All', 'Все'),
+                            },
+                            {
+                              id: 'movie' as const,
+                              label: tr('Filme', 'Movies', 'Фильмы'),
+                            },
+                            {
+                              id: 'series' as const,
+                              label: tr('Seriale', 'Series', 'Сериалы'),
+                            },
+                          ]
+                        ).map((tab) => {
+                          const isActive = uhdMediaFilter === tab.id;
+                          return (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => setUhdMediaFilter(tab.id)}
+                              className={`h-10 px-4 rounded-full text-xs sm:text-sm font-extrabold mr-2 mb-1.5 transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
+                                isActive
+                                  ? 'bg-white text-[#141414] shadow-md'
+                                  : 'bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15 focus:bg-white focus:text-[#141414]'
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* LG TV Optimized Search Bar (Identical Lampa dark colors #202020 / #141414 as Căutare) */}
+                    <div className="p-4 sm:p-5 rounded-2xl bg-[#202020] border border-white/10 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between">
+                        <div className="flex-1 min-w-[240px] h-12 px-4 rounded-xl bg-[#141414] border border-white/20 focus-within:border-white flex items-center justify-between mr-2.5 mb-2 sm:mb-0">
+                          <Search className="w-5 h-5 text-zinc-400 shrink-0 mr-3" />
+                          <input
+                            ref={uhdSearchInputRef}
+                            data-uhd-search-input="true"
+                            type="text"
+                            value={uhdSearchQuery}
+                            onChange={(e) => setUhdSearchQuery(e.target.value)}
+                            placeholder={tr(
+                              'Caută film sau serial 4K...',
+                              'Search 4K movie or series...',
+                              'Поиск 4K фильма или сериала...'
+                            )}
+                            className="flex-1 min-w-0 bg-transparent text-base sm:text-lg font-bold text-white placeholder:text-zinc-500 placeholder:font-normal focus:outline-none select-text"
+                          />
+                          {uhdSearchQuery.trim().length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setUhdSearchQuery('')}
+                              className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 focus:bg-white focus:text-zinc-950 focus:outline-none text-xs font-bold text-zinc-300 shrink-0 cursor-pointer ml-2"
+                            >
+                              {tr('Șterge tot', 'Clear all', 'Очистить')}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => setIsUhdKeyboardOpen((prev) => !prev)}
+                            className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-bold border border-white/10 transition-colors cursor-pointer focus:outline-none ${
+                              isUhdKeyboardOpen
+                                ? 'bg-white text-[#141414]'
+                                : 'bg-[#2a2a2a] hover:bg-[#343434] text-white focus:bg-white focus:text-[#141414]'
+                            }`}
+                          >
+                            {isUhdKeyboardOpen
+                              ? tr('Ascunde Tastatura TV', 'Hide TV Keyboard', 'Скрыть клавиатуру')
+                              : tr('Tastatură TV', 'TV Keyboard', 'Клавиатура ТВ')}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* On-Screen D-Pad Remote Keyboard (Identical Lampa dark keys as Căutare) */}
+                      {isUhdKeyboardOpen && (
+                        <div className="grid grid-cols-9 sm:grid-cols-12 gap-1.5 pt-2">
+                          {ON_SCREEN_KEYS_LATIN.map((char) => (
+                            <button
+                              key={char}
+                              type="button"
+                              onClick={() => setUhdSearchQuery((prev) => prev + char.toLowerCase())}
+                              className="h-10 sm:h-11 rounded-xl bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:outline-none text-white font-bold text-sm sm:text-base flex items-center justify-center border border-white/10 transition-colors cursor-pointer"
+                            >
+                              {char}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => setUhdSearchQuery((prev) => prev + ' ')}
+                            className="col-span-4 h-10 sm:h-11 rounded-xl bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:outline-none text-white font-bold text-xs sm:text-sm flex items-center justify-center border border-white/10 transition-colors cursor-pointer"
+                          >
+                            {tr('Spațiu', 'Space', 'Пробел')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setUhdSearchQuery((prev) => prev.slice(0, -1))}
+                            className="col-span-4 h-10 sm:h-11 rounded-xl bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:outline-none text-zinc-200 font-bold text-xs sm:text-sm flex items-center justify-center border border-white/10 transition-colors cursor-pointer"
+                          >
+                            ⌫ {tr('Șterge', 'Backspace', 'Стереть')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setUhdSearchQuery('')}
+                            className="col-span-4 h-10 sm:h-11 rounded-xl bg-[#2a2a2a] hover:bg-[#343434] focus:bg-rose-600 focus:text-white focus:outline-none text-rose-400 font-bold text-xs sm:text-sm flex items-center justify-center border border-white/10 transition-colors cursor-pointer"
+                          >
+                            ✕ {tr('Curăță', 'Clear', 'Очистить')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 4K UHD Cards Grid (Exact same design & colors as Filme / Seriale) */}
+                    {isUhdLoading && filteredUhdItems.length === 0 ? (
+                      <div className="py-20 flex flex-col items-center justify-center gap-3 text-zinc-400">
+                        <Loader2 className="w-10 h-10 text-white animate-spin" />
+                        <span className="text-sm font-medium">
+                          {tr(
+                            'Se încarcă catalogul...',
+                            'Loading catalog...',
+                            'Загрузка каталога...'
+                          )}
+                        </span>
+                      </div>
+                    ) : filteredUhdItems.length === 0 ? (
+                      <div className="py-16 px-6 rounded-2xl bg-[#202020] border border-white/10 text-center space-y-2">
+                        <p className="text-base font-bold text-white mb-2">
+                          {tr(
+                            'Nu s-au găsit titluri',
+                            'No titles found',
+                            'Ничего не найдено'
+                          )}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUhdSearchQuery('');
+                            setUhdMediaFilter('all');
+                          }}
+                          className="mt-2 h-10 px-5 rounded-xl bg-white text-[#141414] text-xs sm:text-sm font-bold focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
+                        >
+                          {tr('Resetează filtrul', 'Reset filter', 'Сбросить фильтр')}
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Shelf 1: Cele mai noi (Primele 12 cele mai noi) */}
+                        <div className="space-y-3.5">
+                          <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
+                            {uhdSearchQuery.trim().length > 0
+                              ? tr(
+                                  `Rezultate pentru „${uhdSearchQuery.trim()}” (${filteredUhdItems.length})`,
+                                  `Results for "${uhdSearchQuery.trim()}" (${filteredUhdItems.length})`,
+                                  `Результаты для «${uhdSearchQuery.trim()}» (${filteredUhdItems.length})`
+                                )
+                              : tr(
+                                  'În tendințe acum',
+                                  'Trending Now',
+                                  'Сейчас смотрят'
+                                )}
+                          </h2>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
+                            {(uhdSearchQuery.trim().length > 0
+                              ? filteredUhdItems
+                              : filteredUhdItems.slice(0, 12)
+                            ).map((item) => {
+                              const isFav = savedVodItems.some((x) => x.id === item.id);
+                              const posterUrl =
+                                item.poster ||
+                                `https://images.metahub.space/poster/medium/${item.id}/img`;
+                              return (
+                                <button
+                                  key={`uhd-top-${item.id}`}
+                                  type="button"
+                                  data-vod-card="true"
+                                  onFocus={() => handleFocusVodItem(item)}
+                                  onMouseEnter={() => handleFocusVodItem(item)}
+                                  onClick={() => handleOpenVod(item)}
+                                  className="group text-left focus:outline-none cursor-pointer max-w-[220px] w-full"
+                                >
+                                  <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
+                                    <img
+                                      src={posterUrl}
+                                      alt={item.name}
+                                      loading="lazy"
+                                      onError={(e) => {
+                                        const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                        if (e.currentTarget.src !== fallback) {
+                                          e.currentTarget.src = fallback;
+                                        }
+                                      }}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <span
+                                      className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                        item.type === 'series'
+                                          ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                          : 'bg-amber-500/90 text-zinc-950'
+                                      }`}
+                                    >
+                                      {item.type === 'series'
+                                        ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
+                                        : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                    </span>
+                                    {isFav && (
+                                      <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
+                                        ❤
+                                      </span>
+                                    )}
+                                    {item.imdbRating && (
+                                      <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
+                                        {item.imdbRating}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="mt-2.5 px-0.5">
+                                    <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                      {item.name}
+                                    </div>
+                                    <div className="text-xs text-zinc-400 mt-0.5">
+                                      {item.releaseInfo || '2026'}
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Shelf 2: Recomandate pentru tine */}
+                        {uhdSearchQuery.trim().length === 0 && filteredUhdItems.length > 12 && (
+                          <div className="space-y-3.5 pt-2">
+                            <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
+                              {tr(
+                                'Recomandate pentru tine',
+                                'Recommended for You',
+                                'Рекомендуем посмотреть'
+                              )}
+                            </h2>
+                            <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
+                              {filteredUhdItems.slice(12).map((item) => {
+                                const isFav = savedVodItems.some((x) => x.id === item.id);
+                                const posterUrl =
+                                  item.poster ||
+                                  `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                return (
+                                  <button
+                                    key={`uhd-rest-${item.id}`}
+                                    type="button"
+                                    data-vod-card="true"
+                                    onFocus={() => handleFocusVodItem(item)}
+                                    onMouseEnter={() => handleFocusVodItem(item)}
+                                    onClick={() => handleOpenVod(item)}
+                                    className="group w-full block text-left focus:outline-none cursor-pointer"
+                                  >
+                                    <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
+                                      <img
+                                        src={posterUrl}
+                                        alt={item.name}
+                                        loading="lazy"
+                                        onError={(e) => {
+                                          const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                          if (e.currentTarget.src !== fallback) {
+                                            e.currentTarget.src = fallback;
+                                          }
+                                        }}
+                                        className="w-full h-full object-cover"
+                                      />
+                                      <span
+                                        className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                          item.type === 'series'
+                                            ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                            : 'bg-amber-500/90 text-zinc-950'
+                                        }`}
+                                      >
+                                        {item.type === 'series'
+                                          ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
+                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                      </span>
+                                      {isFav && (
+                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
+                                          ❤
+                                        </span>
+                                      )}
+                                      {item.imdbRating && (
+                                        <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
+                                          {item.imdbRating}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="mt-2.5 px-0.5">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                        {item.name}
+                                      </div>
+                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                        <span>{item.releaseInfo || '2026'}</span>
+                                      </div>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* SECTION 1 & 2: DEDICATED LAMPA CATALOG ("Каталог") & FILTER ("Фильтр") RESULTS */}
                 {(section === 'catalog' || section === 'filter') && (
                   <div className="space-y-4 pb-16">
@@ -673,7 +1270,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                       </div>
                     ) : (
                       <>
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-4 gap-y-6 pt-1">
+                        <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6 pt-1">
                           {vodItems.map((item) => {
                             const isFav = savedVodItems.some(
                               (x) => x.id === item.id
@@ -685,10 +1282,11 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                               <button
                                 key={item.id}
                                 type="button"
+                                data-vod-card="true"
                                 onFocus={() => handleFocusVodItem(item)}
                                 onMouseEnter={() => handleFocusVodItem(item)}
                                 onClick={() => handleOpenVod(item)}
-                                className="group text-left focus:outline-none cursor-pointer"
+                                className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
                                   <img
@@ -749,442 +1347,8 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                   </div>
                 )}
 
-                {/* SECTION 3: LIVE TV CHANNELS (WITH SEARCH BAR + ON-SCREEN TV KEYBOARD + FAVORITES + iEDEM M3U + ADULT 18+ + COUNTRY FILTER + CATEGORY FILTER) */}
-                {section === 'tv' && (
-                  <div className="space-y-3.5 pb-16">
-                    {/* Row 0: Dedicated TV Channel Search Bar + Expandable On-Screen TV Remote Keyboard */}
-                    <div className="p-3.5 rounded-2xl bg-[#1c1c1c] border border-white/15 shadow-lg space-y-3">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <div className="flex-1 min-w-[220px] h-11 px-4 rounded-xl bg-[#121212] border-2 border-white/15 focus-within:border-white flex items-center gap-3">
-                          <Search className="w-5 h-5 text-white shrink-0" />
-                          <input
-                            ref={tvSearchInputRef}
-                            type="text"
-                            tabIndex={-1}
-                            value={tvSearchQuery}
-                            onChange={(e) => setTvSearchQuery(e.target.value)}
-                            placeholder={tr(
-                              'Caută canal TV după nume (ex: Pro TV, Digi, HBO, Eurosport)...',
-                              'Search TV channel by name (e.g. Pro TV, Digi, HBO, Eurosport)...',
-                              'Поиск телеканала (например: Первый, ТНТ, HBO, Eurosport)...'
-                            )}
-                            className="flex-1 min-w-0 bg-transparent text-sm sm:text-base font-bold text-white placeholder:text-zinc-500 placeholder:font-normal focus:outline-none select-text"
-                          />
-                          {tvSearchQuery && (
-                            <button
-                              type="button"
-                              onClick={() => setTvSearchQuery('')}
-                              className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-extrabold text-zinc-200 shrink-0 cursor-pointer"
-                            >
-                              ✕ {tr('Șterge', 'Clear', 'Сброс')}
-                            </button>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => setIsTvKeyboardOpen((prev) => !prev)}
-                          className={`h-11 px-4 rounded-xl text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 border-2 transition-none focus:outline-none cursor-pointer ${isTvKeyboardOpen
-                              ? 'bg-white text-[#141414] border-white shadow-lg'
-                              : 'bg-[#262626] hover:bg-[#323232] focus:bg-white focus:text-[#141414] text-white border-white/15'
-                            }`}
-                        >
-                          <Search className="w-4 h-4" />
-                          <span>
-                            {isTvKeyboardOpen
-                              ? tr('▲ Ascunde Tastatura TV', '▲ Hide TV Keyboard', '▲ Скрыть клавиатуру')
-                              : tr('⌨ Tastatură TV (Telecomandă)', '⌨ TV Remote Keyboard', '⌨ Экранная клавиатура')}
-                          </span>
-                        </button>
-
-                        {isTvKeyboardOpen && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setKeyboardAlphabet((prev) =>
-                                  prev === 'LAT' ? 'CYR' : 'LAT'
-                                )
-                              }
-                              className="h-11 px-3.5 rounded-xl bg-[#262626] hover:bg-[#323232] focus:bg-white focus:text-[#141414] focus:outline-none text-white text-xs sm:text-sm font-bold border border-white/10 cursor-pointer"
-                            >
-                              {keyboardAlphabet === 'LAT'
-                                ? 'АБВ (RU)'
-                                : 'ABC (RO/EN)'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setTvSearchQuery((q) => q + ' ')}
-                              className="h-11 px-4 rounded-xl bg-[#262626] hover:bg-[#323232] focus:bg-white focus:text-[#141414] focus:outline-none text-white text-xs sm:text-sm font-bold border border-white/10 cursor-pointer"
-                            >
-                              {tr('Spațiu', 'Space', 'Пробел')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setTvSearchQuery((q) => q.slice(0, -1))
-                              }
-                              className="h-11 px-3.5 rounded-xl bg-[#262626] hover:bg-[#323232] focus:bg-rose-600 focus:text-white focus:outline-none text-rose-400 text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 border border-white/10 cursor-pointer"
-                            >
-                              <Delete className="w-4 h-4" />
-                              <span>{tr('Șterge', 'Backspace', 'Стереть')}</span>
-                            </button>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Expandable On-Screen TV Remote Keyboard Grid */}
-                      {isTvKeyboardOpen && (
-                        <div className="grid grid-cols-9 sm:grid-cols-12 gap-1.5 pt-1">
-                          {(keyboardAlphabet === 'LAT'
-                            ? ON_SCREEN_KEYS_LATIN
-                            : ON_SCREEN_KEYS_CYRILLIC
-                          ).map((ch) => (
-                            <button
-                              key={`tv_kb_${ch}`}
-                              type="button"
-                              onClick={() => setTvSearchQuery((q) => q + ch)}
-                              className="h-10 rounded-xl bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-[#1e3a8a] focus:text-white focus:ring-2 focus:ring-white focus:outline-none text-white font-bold text-sm transition-colors border border-white/10 cursor-pointer"
-                            >
-                              {ch}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Row 1: Favorite TV + iEdem + 18+ Adult + Country Pills */}
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                      {TV_LIVE_REGIONS.filter(
-                        (reg) => adultContentEnabled || reg.id !== 'ADULT'
-                      ).map((reg) => {
-                        const active = tvRegionId === reg.id;
-                        const isAdultPill = reg.id === 'ADULT';
-                        return (
-                          <button
-                            key={reg.id}
-                            type="button"
-                            onClick={() => {
-                              setTvRegionId(reg.id);
-                              if (reg.id === 'ADULT') {
-                                setTvCategoryId('ALL');
-                              }
-                            }}
-                            className={`min-h-[38px] px-4 py-1.5 rounded-xl text-xs sm:text-sm whitespace-nowrap shrink-0 transition-none focus:outline-none cursor-pointer ${active
-                                ? isAdultPill
-                                  ? 'bg-rose-600 text-white font-extrabold border border-rose-400'
-                                  : 'bg-white text-[#141414] font-semibold'
-                                : isAdultPill
-                                  ? 'bg-rose-500/15 hover:bg-rose-500/25 focus:bg-rose-600 focus:text-white text-rose-300 border border-rose-500/40 font-semibold'
-                                  : 'bg-[#222222] hover:bg-[#2c2c2c] focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/5'
-                              }`}
-                          >
-                            {tr(reg.label, reg.labelEn, reg.labelRu)}
-                            {reg.id === 'FAV'
-                              ? ` (${favoriteTvChannels.length})`
-                              : reg.id === 'IEDEM' && customTvChannels.length > 0
-                                ? ` (${customTvChannels.length})`
-                                : ''}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Row 2: Live TV Category Filter Pills (Standard + iEdem Dynamic Groups + 18+ Adult) */}
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                      {(() => {
-                        const baseCats = TV_LIVE_CATEGORIES.filter(
-                          (cat) => adultContentEnabled || cat.id !== 'ADULT'
-                        ).map((c) => ({
-                          id: c.id,
-                          label: tr(c.label, c.labelEn, c.labelRu),
-                          match: c.match,
-                        }));
-                        // Also expose dynamic group-title categories from the user's iEdem M3U playlist
-                        const dynamicGroups: Array<{
-                          id: string;
-                          label: string;
-                          match: string;
-                        }> = [];
-                        if (customTvChannels.length > 0) {
-                          const counts = new Map<string, number>();
-                          for (const ch of customTvChannels) {
-                            if (!adultContentEnabled && isAdultTvChannel(ch)) {
-                              continue;
-                            }
-                            const g = (ch.group || '').trim();
-                            if (g) counts.set(g, (counts.get(g) || 0) + 1);
-                          }
-                          for (const [groupName, count] of counts.entries()) {
-                            const isAdultGrp =
-                              /взросл|adult|xxx|18\+|эротик/i.test(groupName);
-                            dynamicGroups.push({
-                              id: `GRP:${groupName}`,
-                              label: `${isAdultGrp ? '18+ ' : ''}${groupName} (${count})`,
-                              match: groupName.toLowerCase(),
-                            });
-                          }
-                        }
-                        const allCats = [...baseCats, ...dynamicGroups];
-                        return allCats.map((cat) => {
-                          const active = tvCategoryId === cat.id;
-                          const isAdultCat =
-                            cat.id === 'ADULT' ||
-                            /взросл|adult|xxx|18\+|эротик/i.test(cat.label);
-                          return (
-                            <button
-                              key={cat.id}
-                              type="button"
-                              onClick={() => setTvCategoryId(cat.id)}
-                              className={`min-h-[36px] px-4 py-1 rounded-xl text-xs whitespace-nowrap shrink-0 transition-none focus:outline-none cursor-pointer ${active
-                                  ? isAdultCat
-                                    ? 'bg-rose-600 text-white font-bold border border-rose-400'
-                                    : 'bg-white text-[#141414] font-semibold'
-                                  : isAdultCat
-                                    ? 'bg-rose-500/15 hover:bg-rose-500/25 focus:bg-rose-600 focus:text-white text-rose-300 border border-rose-500/35 font-semibold'
-                                    : 'bg-[#202020] hover:bg-[#2a2a2a] focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/5'
-                                }`}
-                            >
-                              {cat.label}
-                            </button>
-                          );
-                        });
-                      })()}
-                    </div>
-
-                    {isTvLoading ? (
-                      <div className="py-20 flex flex-col items-center justify-center gap-3 text-zinc-400">
-                        <Loader2 className="w-10 h-10 text-amber-400 animate-spin" />
-                        <span className="text-sm font-bold">
-                          Se încarcă grila TV Live HD...
-                        </span>
-                      </div>
-                    ) : (
-                      (() => {
-                        const qTv = tvSearchQuery.trim().toLowerCase();
-                        const sourcePool = (() => {
-                          if (qTv) {
-                            const combined = [
-                              ...tvChannels,
-                              ...customTvChannels,
-                              ...favoriteTvChannels,
-                            ];
-                            const seen = new Set<string>();
-                            return combined.filter((ch) => {
-                              const key = `${ch.name.toLowerCase().trim()}|${ch.url}`;
-                              if (seen.has(ch.id) || seen.has(key)) return false;
-                              seen.add(ch.id);
-                              seen.add(key);
-                              return true;
-                            });
-                          }
-                          return tvCategoryId.startsWith('GRP:') &&
-                            customTvChannels.length > 0
-                            ? customTvChannels
-                            : tvChannels;
-                        })();
-
-                        const filteredTv = sourcePool.filter((c) => {
-                          if (
-                            !adultContentEnabled &&
-                            isAdultTvChannel(c)
-                          ) {
-                            return false;
-                          }
-                          if (qTv) {
-                            return (
-                              c.name.toLowerCase().includes(qTv) ||
-                              (c.group || '').toLowerCase().includes(qTv) ||
-                              (c.countryCode || '').toLowerCase().includes(qTv)
-                            );
-                          }
-                          if (tvRegionId === 'ADULT' || tvCategoryId === 'ADULT') {
-                            return isAdultTvChannel(c);
-                          }
-                          if (tvCategoryId === 'ALL') return true;
-                          if (tvCategoryId.startsWith('GRP:')) {
-                            const targetGrp = tvCategoryId
-                              .slice(4)
-                              .toLowerCase();
-                            return (c.group || '').trim().toLowerCase() === targetGrp;
-                          }
-                          const catUpper = tvCategoryId.toUpperCase();
-                          const g = (c.group || '').toLowerCase();
-                          if (catUpper === 'GENERAL')
-                            return (
-                              g.includes('general') ||
-                              g.includes('national') ||
-                              g.includes('общ') ||
-                              g.includes('федерал') ||
-                              !c.group
-                            );
-                          if (catUpper === 'NEWS')
-                            return (
-                              g.includes('news') ||
-                              g.includes('stiri') ||
-                              g.includes('știr') ||
-                              g.includes('инфо') ||
-                              g.includes('новост')
-                            );
-                          if (catUpper === 'MOVIES')
-                            return (
-                              g.includes('movie') ||
-                              g.includes('cinema') ||
-                              g.includes('film') ||
-                              g.includes('series') ||
-                              g.includes('кино') ||
-                              g.includes('сериал')
-                            );
-                          if (catUpper === 'SPORT' || catUpper === 'SPORTS')
-                            return g.includes('sport') || g.includes('спорт');
-                          if (catUpper === 'MUSIC')
-                            return (
-                              g.includes('music') ||
-                              g.includes('muzic') ||
-                              g.includes('музык')
-                            );
-                          if (catUpper === 'DOC' || catUpper === 'DOCUMENTARY')
-                            return (
-                              g.includes('doc') ||
-                              g.includes('science') ||
-                              g.includes('history') ||
-                              g.includes('познав')
-                            );
-                          if (catUpper === 'KIDS')
-                            return (
-                              g.includes('kids') ||
-                              g.includes('children') ||
-                              g.includes('animation') ||
-                              g.includes('детск')
-                            );
-                          return true;
-                        });
-
-                        if (filteredTv.length === 0) {
-                          return (
-                            <div className="py-16 px-6 rounded-2xl bg-zinc-900/60 border border-white/10 text-center space-y-2">
-                              <div className="text-base font-extrabold text-white">
-                                {qTv
-                                  ? `Niciun canal TV găsit pentru «${tvSearchQuery.trim()}»`
-                                  : tvRegionId === 'FAV'
-                                    ? 'Nu ai niciun canal TV adăugat la Favorite încă'
-                                    : 'Niciun canal TV găsit pentru această categorie'}
-                              </div>
-                              <p className="text-xs text-zinc-400">
-                                {qTv
-                                  ? 'Încearcă alt termen sau schimbă țara din bara de mai sus pentru a încărca alte canale.'
-                                  : 'Apasă pe inima ❤ din dreptul oricărui canal TV pentru a-l salva la Favorite.'}
-                              </p>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div className="space-y-2.5">
-                            {qTv && (
-                              <div className="text-xs font-extrabold text-[#60a5fa] uppercase tracking-wider px-1 inline-flex items-center gap-1.5">
-                                <Search className="w-3.5 h-3.5" />
-                                <span>Rezultate căutare «{tvSearchQuery.trim()}»: {filteredTv.length} canale găsite</span>
-                              </div>
-                            )}
-                            <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
-                              {filteredTv.map((ch) => {
-                                const isFavTv = favoriteTvChannels.some(
-                                  (f) => f.id === ch.id
-                                );
-                                const chEpg = resolveChannelEpg(ch);
-                                const nowProg = chEpg?.now;
-                                const stats = getEpgTimingStats(nowProg);
-                                const cardLogo =
-                                  !ch.logo ||
-                                  /imgur\.com|wikia\.nocookie\.net/i.test(ch.logo)
-                                    ? chEpg?.icon || ch.logo
-                                    : ch.logo;
-                                return (
-                                  <div
-                                    key={ch.id}
-                                    className="relative rounded-2xl bg-zinc-900/90 border border-white/10 transition-none flex items-center shadow-md overflow-hidden"
-                                  >
-                                    <button
-                                      type="button"
-                                      data-tv-channel-card="true"
-                                      onClick={() => {
-                                        setActiveTvPlaylistContext(
-                                          tvRegionId,
-                                          tvCategoryId
-                                        );
-                                        playTvChannel(ch, filteredTv);
-                                      }}
-                                      className="group/chcard flex-1 min-w-0 p-3.5 flex items-center gap-3 text-left transition-none focus:outline-none focus:bg-white focus:text-[#141414] cursor-pointer"
-                                    >
-                                      <div className="w-11 h-11 rounded-xl bg-zinc-950 border border-white/10 flex items-center justify-center overflow-hidden shrink-0 relative">
-                                        <span className="text-[11px] font-black text-zinc-200 uppercase tracking-tighter select-none">
-                                          {ch.name.replace(/[^a-zA-Zа-яА-Я0-9]/g, '').slice(0, 3) || 'TV'}
-                                        </span>
-                                        {cardLogo && (
-                                          <img
-                                            src={cardLogo}
-                                            alt=""
-                                            loading="lazy"
-                                            referrerPolicy="no-referrer"
-                                            onError={(e) => {
-                                              e.currentTarget.style.display = 'none';
-                                            }}
-                                            className="absolute inset-0 w-full h-full object-contain p-1 bg-zinc-950"
-                                          />
-                                        )}
-                                      </div>
-                                      <div className="min-w-0 flex-1">
-                                        <div className="text-xs sm:text-sm font-extrabold text-white group-focus/chcard:text-[#141414] truncate">
-                                          {ch.name}
-                                        </div>
-                                        {nowProg ? (
-                                          <div className="text-[11px] font-semibold text-blue-300 group-focus/chcard:text-blue-800 truncate mt-0.5">
-                                            ● {nowProg.title}
-                                          </div>
-                                        ) : (
-                                          <div className="text-[11px] text-zinc-400 group-focus/chcard:text-zinc-700 truncate mt-0.5">
-                                            {ch.countryCode} • {ch.group || 'Live'}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </button>
-                                    {nowProg && (
-                                      <div className="absolute bottom-0 left-0 right-11 h-1 bg-white/10 pointer-events-none">
-                                        <div
-                                          className="h-full bg-blue-400"
-                                          style={{ width: `${stats.progress}%` }}
-                                        />
-                                      </div>
-                                    )}
-                                    <button
-                                      type="button"
-                                      title={
-                                        isFavTv
-                                          ? 'Elimină de la Favorite'
-                                          : 'Adaugă la Favorite'
-                                      }
-                                      onClick={() => toggleFavoriteTvChannel(ch)}
-                                      className={`h-full px-3 py-3.5 flex items-center justify-center border-l border-white/10 transition-colors focus:outline-none focus:ring-4 focus:ring-inset focus:ring-white cursor-pointer ${isFavTv
-                                          ? 'text-rose-500 bg-rose-500/10 hover:bg-rose-500/20'
-                                          : 'text-zinc-500 hover:text-white hover:bg-white/10'
-                                        }`}
-                                    >
-                                      <Heart
-                                        className={`w-4 h-4 ${isFavTv ? 'fill-rose-500' : ''
-                                          }`}
-                                      />
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()
-                    )}
-                  </div>
-                )}
+                {/* SECTION 3: LIVE TV CHANNELS — FIXED SPLIT-VIEW MODE (AUTO-STARTS FIRST FAVORITE CHANNEL ON LEFT + FIXED CHANNEL GRID ON RIGHT) */}
+                {section === 'tv' && <TvPlayerModal inlineEmbeddedMode />}
 
                 {/* SECTION 4: RADIO ONLINE (WITH DEDICATED PLAYER DECK + ARTWORK + SONG INFO + FAVORITES + COUNTRY FILTER) */}
                 {section === 'radio' && (
@@ -1221,27 +1385,32 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                         : [];
 
                       return (
-                        <div className="relative rounded-2xl bg-gradient-to-br from-[#0f172a]/90 via-[#141824]/95 to-[#0b1120]/95 border border-blue-500/20 shadow-xl overflow-hidden p-2.5 sm:p-3">
+                        <div
+                          data-top-hero-card="true"
+                          className="relative rounded-2xl bg-gradient-to-br from-[#0f172a]/90 via-[#141824]/95 to-[#0b1120]/95 border border-blue-500/20 shadow-[0_18px_45px_rgba(0,0,0,0.8)] overflow-hidden p-3.5 sm:p-4 lg:p-5"
+                        >
                           {/* Blurred Artwork Ambient Background */}
                           {trackInfo?.coverUrl && (
                             <img
                               src={trackInfo.coverUrl}
                               alt=""
                               aria-hidden="true"
-                              className="absolute inset-0 w-full h-full object-cover opacity-20 blur-2xl scale-110 pointer-events-none select-none"
+                              className="absolute inset-0 w-full h-full object-cover opacity-20 blur-3xl scale-125 pointer-events-none select-none"
                             />
                           )}
-                          <div className="relative z-10 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-                            {/* Left + Center: Dedicated Radio Station Logo + Station Title/Badges + Compact Now Playing Song Bar */}
-                            <div className="flex items-center gap-3 min-w-0 flex-1">
-                              {/* Dedicated Radio Station Logo (Always remains the Station Logo, never replaced by song cover) */}
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#0c0e14]/90 via-[#111522]/85 to-[#0c0e14]/90" />
+
+                          <div className="relative z-10 flex flex-col md:flex-row items-center gap-4 lg:gap-5 w-full">
+                            {/* Left: Station Logo + Spinning Vinyl Disc (ONLY vinyl grooves/sheen spin; center song photo stays upright!) */}
+                            <div className="relative flex items-center shrink-0">
                               <button
                                 type="button"
                                 onClick={() => {
                                   playStation(activeStation, radioStations);
                                 }}
                                 title={tr('Redă / Pauză', 'Play / Pause', 'Старт / Пауза')}
-                                className="relative inline-flex items-center justify-center w-20 h-20 sm:w-24 sm:h-24 group shrink-0 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+                                style={{ borderRadius: '16px' }}
+                                className="relative inline-flex items-center justify-center w-24 h-24 sm:w-28 sm:h-28 z-10 group shrink-0 overflow-hidden shadow-[0_12px_30px_rgba(0,0,0,0.85)] ring-1 ring-white/20 focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
                               >
                                 <StationAvatar
                                   name={activeStation.name}
@@ -1249,60 +1418,120 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                   homepage={activeStation.homepage}
                                   size="lg"
                                   isPlaying={false}
-                                  className="!w-20 !h-20 sm:!w-24 sm:!h-24 !rounded-2xl shadow-lg border border-white/15 group-hover:scale-105 transition-transform duration-200"
+                                  className="!w-full !h-full group-hover:scale-105 transition-transform duration-300"
                                 />
                               </button>
 
-                              {/* Station Header (Title + Badges after title) + Compact Now Playing Song Strip */}
-                              <div className="min-w-0 flex-1 flex flex-col justify-center gap-1.5">
-                                {/* Row 1: Radio Title followed immediately by Status, Country & Bitrate pills */}
+                              {/* Vinyl Record: Outer Vinyl Ring Spins, Inner Song Cover Photo Stays Upright & Stationary */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!trackInfo) {
+                                    playStation(activeStation, radioStations);
+                                    return;
+                                  }
+                                  const q = trackInfo.artist
+                                    ? `${trackInfo.artist} ${trackInfo.title}`
+                                    : trackInfo.title;
+                                  window.dispatchEvent(
+                                    new CustomEvent('smartcinema:open-music-query', {
+                                      detail: {
+                                        query: q,
+                                        label: trackInfo.artist
+                                          ? `${trackInfo.title} — ${trackInfo.artist}`
+                                          : trackInfo.title,
+                                      },
+                                    })
+                                  );
+                                }}
+                                title={
+                                  trackInfo
+                                    ? tr(
+                                        'Ascultă această piesă în Muzică',
+                                        'Listen to this song in Music',
+                                        'Слушать этот трек в Музыке'
+                                      )
+                                    : activeStation.name
+                                }
+                                className="hidden sm:flex -ml-7 w-24 h-24 sm:w-28 sm:h-28 rounded-full shadow-[0_10px_28px_rgba(0,0,0,0.95)] items-center justify-center relative cursor-pointer focus:outline-none overflow-hidden"
+                              >
+                                {/* Spinning Vinyl Disc Grooves & Light Sheen ONLY */}
+                                <div
+                                  style={{
+                                    background:
+                                      'conic-gradient(from 0deg, #09090b 0deg, #27272a 42deg, #09090b 88deg, #09090b 180deg, #27272a 222deg, #09090b 268deg, #09090b 360deg)',
+                                  }}
+                                  className={`absolute inset-0 rounded-full border-2 border-zinc-700/80 ${
+                                    isPlayingCurrent
+                                      ? 'animate-[spin_4s_linear_infinite]'
+                                      : ''
+                                  }`}
+                                >
+                                  <div className="absolute inset-1.5 rounded-full border border-white/15 pointer-events-none" />
+                                  <div className="absolute inset-3 rounded-full border border-dashed border-white/15 pointer-events-none" />
+                                  <div className="absolute inset-5 rounded-full border border-amber-400/25 pointer-events-none" />
+                                </div>
+
+                                {/* Stationary Upright Song Cover Photo in Center (NEVER spins upside down) */}
+                                {trackInfo?.coverUrl || trackInfo?.artistAvatarUrl ? (
+                                  <div className="relative z-10 w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden border-2 border-amber-400/70 shadow-lg bg-zinc-900">
+                                    <img
+                                      src={trackInfo.coverUrl || trackInfo.artistAvatarUrl}
+                                      alt=""
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="relative z-10 w-12 h-12 rounded-full bg-zinc-900/95 border border-white/15 flex items-center justify-center">
+                                    <Music className="w-5 h-5 text-blue-400" />
+                                  </div>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Right Content: 2 Compact Zero-Waste Rows (Row 1: Station Header + Equalizer | Row 2: Large Artist Photo & Song Info + Controls + Volume) */}
+                            <div className="flex-1 min-w-0 flex flex-col justify-between gap-2.5 w-full">
+                              {/* ROW 1: Station Name + Inline Badges on Left, Symmetrical Soundwave on Right */}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex flex-wrap items-center gap-2 min-w-0">
-                                  <span className="text-base sm:text-lg font-extrabold text-white tracking-tight truncate max-w-[240px] sm:max-w-[320px]">
+                                  <h1 className="text-lg sm:text-xl lg:text-2xl font-extrabold text-white tracking-tight truncate max-w-[260px] sm:max-w-[380px]">
                                     {activeStation.name}
-                                  </span>
+                                  </h1>
 
                                   <span
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider shrink-0 ${isPlayingCurrent
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                      isPlayingCurrent
                                         ? 'bg-blue-500/25 text-blue-300 border border-blue-400/40'
                                         : isLoadingCurrent
                                           ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                           : 'bg-white/10 text-zinc-300 border border-white/10'
-                                      }`}
+                                    }`}
                                   >
                                     <span
-                                      className={`w-1.5 h-1.5 rounded-full ${isPlayingCurrent
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        isPlayingCurrent
                                           ? 'bg-blue-400 animate-ping'
                                           : isLoadingCurrent
                                             ? 'bg-amber-400 animate-pulse'
                                             : 'bg-zinc-400'
-                                        }`}
+                                      }`}
                                     />
                                     {isPlayingCurrent
-                                      ? tr(
-                                          'ÎN DIRECT • ON AIR',
-                                          'LIVE • ON AIR',
-                                          'В ЭФИРЕ • ON AIR'
-                                        )
+                                      ? tr('ÎN DIRECT • ON AIR', 'LIVE • ON AIR', 'В ЭФИРЕ • ON AIR')
                                       : isLoadingCurrent
                                         ? tr('SE CONECTEAZĂ...', 'CONNECTING...', 'ПОДКЛЮЧЕНИЕ...')
-                                        : tr('PREGĂTIT DE REDARE', 'READY TO PLAY', 'ГОТОВО К ЭФИРУ')}
+                                        : tr('PREGĂTIT', 'READY', 'ГОТОВО')}
                                   </span>
 
                                   <span className="px-2.5 py-0.5 rounded-full bg-white/10 border border-white/10 text-zinc-200 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0">
-                                    <span>
-                                      {getCountryFlagEmoji(activeStation.countrycode)}
-                                    </span>
-                                    <span>
-                                      {activeStation.country || activeStation.countrycode}
-                                    </span>
+                                    <span>{getCountryFlagEmoji(activeStation.countrycode)}</span>
+                                    <span>{activeStation.country || activeStation.countrycode}</span>
                                   </span>
 
                                   {activeStation.bitrate ? (
                                     <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold shrink-0">
                                       {activeStation.bitrate} kbps
-                                      {activeStation.codec
-                                        ? ` • ${activeStation.codec.toUpperCase()}`
-                                        : ''}
+                                      {activeStation.codec ? ` • ${activeStation.codec.toUpperCase()}` : ''}
                                     </span>
                                   ) : null}
 
@@ -1313,74 +1542,103 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                   )}
                                 </div>
 
-                                {/* Row 2: Now Playing Song Bar (with Large Song Cover Art & Direct Jump to Music) */}
-                                <div className="p-2 sm:p-2.5 rounded-2xl bg-black/55 border border-white/10 flex items-center gap-3.5 max-w-2xl">
-                                  {trackInfo?.coverUrl ||
-                                    trackInfo?.artistAvatarUrl ? (
+                                {/* Symmetrical Acoustic Soundwave Visualizer */}
+                                <div
+                                  className="flex items-center gap-[3px] h-6 px-2 shrink-0"
+                                  aria-hidden="true"
+                                >
+                                  {[38, 65, 92, 54, 100, 74, 46, 88, 60, 40].map((peak, i) => (
+                                    <span
+                                      key={`radio_top_eq_${i}`}
+                                      style={{
+                                        height: isPlayingCurrent ? `${peak}%` : '22%',
+                                        animationDelay: `${i * 0.09}s`,
+                                        animationDuration: `${0.48 + (i % 4) * 0.12}s`,
+                                      }}
+                                      className={`w-[3px] rounded-full transition-all ${
+                                        isPlayingCurrent
+                                          ? 'bg-gradient-to-b from-amber-300 via-emerald-400 to-cyan-400 shadow-[0_0_8px_rgba(52,211,153,0.45)] eq-bar'
+                                          : 'bg-white/15'
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* ROW 2: Unified Zero-Waste Deck — Large Artist Photo + Song Title on Left, Transport & Volume Controls on Right */}
+                              <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 w-full">
+                                {/* Now Playing Box with Large Upright Artist Photo (56x56 / 64x64) */}
+                                <div
+                                  style={{ borderRadius: '16px' }}
+                                  className="px-3 py-2 bg-black/50 border border-white/10 flex items-center gap-3 min-w-0 xl:max-w-[460px] flex-1 overflow-hidden"
+                                >
+                                  {trackInfo?.artistAvatarUrl || trackInfo?.coverUrl ? (
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        if (!trackInfo) return;
-                                        const q = trackInfo.artist
-                                          ? `${trackInfo.artist} ${trackInfo.title}`
-                                          : trackInfo.title;
+                                        const artistQ =
+                                          trackInfo.artist || trackInfo.title;
                                         window.dispatchEvent(
                                           new CustomEvent(
                                             'smartcinema:open-music-query',
                                             {
                                               detail: {
-                                                query: q,
-                                                label: trackInfo.artist
-                                                  ? `${trackInfo.title} — ${trackInfo.artist}`
-                                                  : trackInfo.title,
+                                                query: artistQ,
+                                                label: artistQ,
                                               },
                                             }
                                           )
                                         );
                                       }}
                                       title={tr(
-                                        'Ascultă această piesă în Muzică (TIDAL MAX)',
-                                        'Listen to this song in Music (TIDAL MAX)',
-                                        'Слушать этот трек в Музыке (TIDAL MAX)'
+                                        `Vezi toate piesele artistului „${trackInfo.artist || activeStation.name}” în Muzică`,
+                                        `View all songs by "${trackInfo.artist || activeStation.name}" in Music`,
+                                        `Все треки «${trackInfo.artist || activeStation.name}» в Музыке`
                                       )}
-                                      className="shrink-0 rounded-xl overflow-hidden focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer group"
+                                      className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-xl overflow-hidden border border-amber-400/50 shadow-lg shrink-0 group/artphoto cursor-pointer focus:outline-none focus:ring-2 focus:ring-amber-400"
                                     >
                                       <img
                                         src={
-                                          trackInfo.coverUrl ||
-                                          trackInfo.artistAvatarUrl
+                                          trackInfo.artistAvatarUrl ||
+                                          trackInfo.coverUrl
                                         }
                                         alt={trackInfo.artist || trackInfo.title}
-                                        className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover border border-white/20 shadow-lg group-hover:scale-105 transition-transform"
+                                        className="w-full h-full object-cover group-hover/artphoto:scale-105 transition-transform"
                                       />
                                     </button>
                                   ) : (
-                                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-blue-500/15 border border-blue-400/30 flex items-center justify-center text-blue-400 shrink-0">
                                       <Music className="w-6 h-6" />
                                     </div>
                                   )}
 
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-400 shrink-0 inline-flex items-center gap-1.5">
-                                        {isPlayingCurrent && (
-                                          <span className="inline-flex items-end gap-0.5 h-3">
-                                            <span className="w-0.5 h-full bg-amber-400 eq-bar rounded-full" />
-                                            <span className="w-0.5 h-2 bg-amber-400 eq-bar eq-bar-2 rounded-full" />
-                                            <span className="w-0.5 h-3 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
-                                          </span>
-                                        )}
-                                        <span>{tr('Piesa în curs', 'Now Playing', 'Сейчас играет')}</span>
-                                      </span>
-                                      {trackInfo?.album && (
-                                        <span className="text-[11px] text-zinc-400 truncate inline-flex items-center gap-1">
-                                          <Disc className="w-3 h-3 shrink-0" />
-                                          {trackInfo.album}
-                                        </span>
-                                      )}
-                                    </div>
+                                  <div className="min-w-0 flex-1 flex flex-col justify-center overflow-hidden">
                                     {trackInfo ? (
-                                      <div className="flex items-center gap-2 truncate mt-0.5">
+                                      <>
+                                        {/* Top Line: Artist / Author */}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const artistQ =
+                                              trackInfo.artist || trackInfo.title;
+                                            window.dispatchEvent(
+                                              new CustomEvent(
+                                                'smartcinema:open-music-query',
+                                                {
+                                                  detail: {
+                                                    query: artistQ,
+                                                    label: artistQ,
+                                                  },
+                                                }
+                                              )
+                                            );
+                                          }}
+                                          className="text-xs sm:text-sm font-extrabold text-amber-300 hover:text-amber-200 hover:underline truncate text-left cursor-pointer"
+                                        >
+                                          {trackInfo.artist || activeStation.name}
+                                        </button>
+
+                                        {/* Bottom Line: Song Title */}
                                         <button
                                           type="button"
                                           onClick={() => {
@@ -1401,118 +1659,43 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                               )
                                             );
                                           }}
-                                          title={tr(
-                                            `Deschide piesa „${trackInfo.title}” în Muzică`,
-                                            `Open song "${trackInfo.title}" in Music`,
-                                            `Открыть трек «${trackInfo.title}» в Музыке`
-                                          )}
-                                          className="text-sm sm:text-base font-extrabold text-white hover:text-amber-300 hover:underline truncate cursor-pointer transition-colors text-left"
+                                          className="text-sm sm:text-base font-black text-white hover:text-amber-300 hover:underline truncate text-left cursor-pointer mt-0.5"
                                         >
                                           {trackInfo.title}
                                         </button>
-                                        <span className="text-zinc-500 text-xs shrink-0">—</span>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const artistQ =
-                                              trackInfo.artist ||
-                                              trackInfo.title;
-                                            window.dispatchEvent(
-                                              new CustomEvent(
-                                                'smartcinema:open-music-query',
-                                                {
-                                                  detail: {
-                                                    query: artistQ,
-                                                    label: artistQ,
-                                                  },
-                                                }
-                                              )
-                                            );
-                                          }}
-                                          title={tr(
-                                            `Vezi toate piesele artistului „${trackInfo.artist || activeStation.name}” în Muzică`,
-                                            `View all songs by "${trackInfo.artist || activeStation.name}" in Music`,
-                                            `Все треки «${trackInfo.artist || activeStation.name}» в Музыке`
-                                          )}
-                                          className="inline-flex items-center gap-1.5 min-w-0 px-1.5 py-0.5 -my-0.5 rounded-lg hover:bg-amber-400/15 transition-colors cursor-pointer group/artist"
-                                        >
-                                          {trackInfo.artistAvatarUrl && (
-                                            <img
-                                              src={trackInfo.artistAvatarUrl}
-                                              alt={trackInfo.artist || ''}
-                                              className="w-5 h-5 rounded-full object-cover shrink-0 ring-1 ring-amber-400/60"
-                                            />
-                                          )}
-                                          <span className="text-xs sm:text-sm font-bold text-amber-300 group-hover/artist:underline truncate">
-                                            {trackInfo.artist || activeStation.name}
-                                          </span>
-                                        </button>
-                                      </div>
+                                      </>
                                     ) : (
-                                      <div className="text-xs sm:text-sm font-bold text-zinc-200 truncate mt-0.5">
-                                        {currentStation?.stationuuid ===
-                                          activeStation.stationuuid &&
-                                          nowPlayingTitle
-                                          ? nowPlayingTitle
-                                          : isPlayingCurrent
-                                            ? `${tr('Transmisiune Live', 'Live Broadcast', 'Прямой эфир')} — ${activeStation.name}`
-                                            : tr(
-                                                'Selectează Play pentru a asculta live',
-                                                'Select Play to listen live',
-                                                'Нажмите Play для прямого эфира'
-                                              )}
+                                      <div className="min-w-0">
+                                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-blue-400">
+                                          {tr('Piesa în curs', 'Now Playing', 'Сейчас играет')}
+                                        </div>
+                                        <div className="text-xs sm:text-sm font-bold text-zinc-200 truncate mt-0.5">
+                                          {currentStation?.stationuuid ===
+                                            activeStation.stationuuid && nowPlayingTitle
+                                            ? nowPlayingTitle
+                                            : isPlayingCurrent
+                                              ? `${tr('Transmisiune Live', 'Live Broadcast', 'Прямой эфир')} — ${activeStation.name}`
+                                              : tr(
+                                                  'Selectează Play pentru a asculta live',
+                                                  'Select Play to listen live',
+                                                  'Нажмите Play для прямого эфира'
+                                                )}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
-
-                                  {/* 14-Bar Animated Equalizer on the right of Now Playing Bar */}
-                                  <div
-                                    className="hidden sm:flex items-end gap-[3px] h-8 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 shrink-0"
-                                    aria-hidden="true"
-                                  >
-                                    {Array.from({ length: 14 }).map((_, i) => (
-                                      <span
-                                        key={`radio_top_eq_${i}`}
-                                        style={{
-                                          height: isPlayingCurrent
-                                            ? `${Math.max(25, ((i * 37) % 85) + 15)}%`
-                                            : '22%',
-                                          animationDelay: `${(i % 6) * 0.12}s`,
-                                          animationDuration: `${0.54 + (i % 5) * 0.13}s`,
-                                        }}
-                                        className={`w-1 rounded-full transition-all ${
-                                          isPlayingCurrent
-                                            ? 'bg-gradient-to-t from-blue-500 via-cyan-400 to-amber-300 eq-bar'
-                                            : 'bg-zinc-600'
-                                        }`}
-                                      />
-                                    ))}
-                                  </div>
                                 </div>
-                              </div>
-                            </div>
 
-                            {/* Right: Unified Compact Smart Control Dock (Transport + Actions + Aligned Volume Bar) */}
-                            <div className="flex flex-col gap-1.5 shrink-0 w-full lg:w-auto p-2 rounded-xl bg-black/50 border border-white/10 backdrop-blur-md">
-                              {/* Dock Row 1: Segmented Transport + Favorite + Full Player */}
-                              <div className="flex items-center justify-between lg:justify-end gap-1.5">
-                                {/* Transport Pill Group */}
-                                <div className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-white/[0.06] border border-white/10">
-                                  <button
-                                    type="button"
-                                    onClick={playPreviousStation}
-                                    title={tr('Postul anterior', 'Previous station', 'Предыдущая станция')}
-                                    className="w-7 h-7 rounded-md bg-white/5 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer"
-                                  >
-                                    <SkipBack className="w-3.5 h-3.5 fill-current" />
-                                  </button>
-
+                                {/* Transport Buttons, Actions & Volume Bar on the Right of the Same Row */}
+                                <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2 shrink-0">
+                                {/* Left Group: Play/Pause + Prev/Next + Favorite + PiP + Player Mare */}
+                                <div className="flex flex-wrap items-center gap-2">
                                   <button
                                     type="button"
                                     onClick={() => {
                                       playStation(activeStation, radioStations);
                                     }}
-                                    className={`h-7 px-3.5 rounded-md font-extrabold text-xs inline-flex items-center gap-1.5 shadow transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                                    className={`h-9 px-4 rounded-full font-extrabold text-xs inline-flex items-center gap-1.5 shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer shrink-0 ${
                                       isPlayingCurrent
                                         ? 'bg-gradient-to-r from-[#1e3a8a] to-[#2563eb] text-white border border-blue-400/40'
                                         : 'bg-white text-[#0f172a] hover:bg-zinc-200'
@@ -1534,16 +1717,22 @@ export const SmartTvCatalogSections: React.FC<any> = ({
 
                                   <button
                                     type="button"
+                                    onClick={playPreviousStation}
+                                    title={tr('Postul anterior', 'Previous station', 'Предыдущая станция')}
+                                    className="w-8 h-8 rounded-full bg-white/[0.07] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                                  >
+                                    <SkipBack className="w-3.5 h-3.5 fill-current" />
+                                  </button>
+
+                                  <button
+                                    type="button"
                                     onClick={playNextAvailableStation}
                                     title={tr('Postul următor', 'Next station', 'Следующая станция')}
-                                    className="w-7 h-7 rounded-md bg-white/5 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer"
+                                    className="w-8 h-8 rounded-full bg-white/[0.07] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer shrink-0"
                                   >
                                     <SkipForward className="w-3.5 h-3.5 fill-current" />
                                   </button>
-                                </div>
 
-                                {/* Actions Group: Favorite + Pop-out PiP + Fullscreen */}
-                                <div className="inline-flex items-center gap-1.5">
                                   <button
                                     type="button"
                                     onClick={() => toggleFavorite(activeStation)}
@@ -1552,10 +1741,11 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                         ? tr('Elimină de la Favorite', 'Remove from Favorites', 'Удалить из избранного')
                                         : tr('Adaugă la Favorite', 'Add to Favorites', 'В избранное')
                                     }
-                                    className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-colors focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${isFavActive
+                                    className={`w-8 h-8 rounded-full flex items-center justify-center border transition-colors focus:outline-none focus:ring-2 focus:ring-white cursor-pointer shrink-0 ${
+                                      isFavActive
                                         ? 'bg-rose-500/90 border-rose-400/50 text-white shadow-sm'
-                                        : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white hover:text-[#0f172a]'
-                                      }`}
+                                        : 'bg-white/[0.07] border-white/10 text-zinc-300 hover:bg-white hover:text-[#0f172a]'
+                                    }`}
                                   >
                                     <Heart
                                       className={`w-3.5 h-3.5 ${isFavActive ? 'fill-current' : ''}`}
@@ -1578,9 +1768,9 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                     title={tr(
                                       'MiniPlayer Picture-in-Picture (fereastră flotantă în afara paginii)',
                                       'Picture-in-Picture MiniPlayer (floating window outside page)',
-                                      'Мини-плеер Картинка-в-картинке (плавающее окно вне страницы)'
+                                      'Мини-плеер Картинка-в-картинке'
                                     )}
-                                    className="w-8 h-8 rounded-lg bg-white/[0.06] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer"
+                                    className="w-8 h-8 rounded-full bg-white/[0.07] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-200 flex items-center justify-center transition-colors cursor-pointer shrink-0"
                                   >
                                     <PictureInPicture2 className="w-3.5 h-3.5" />
                                   </button>
@@ -1597,65 +1787,66 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                                       setIsTvRadioPlayerOpen(true);
                                     }}
                                     title={tr('Deschide Playerul Radio pe tot ecranul', 'Open Fullscreen Radio Player', 'Открыть плеер на весь экран')}
-                                    className="h-8 px-2.5 rounded-lg bg-white/[0.06] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-100 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                                    className="h-8 px-3.5 rounded-full bg-white/[0.07] border border-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-zinc-100 text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
                                   >
-                                    <Maximize2 className="w-3.5 h-3.5" />
-                                    <span>{tr('Player Mare', 'Full Player', 'Плеер')}</span>
+                                    <Maximize2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="whitespace-nowrap">
+                                      {tr('Player Mare', 'Full Player', 'Плеер')}
+                                    </span>
                                   </button>
                                 </div>
-                              </div>
 
-                              {/* Dock Row 2: Full-Width Aligned Volume Control Bar */}
-                              <div className="flex items-center gap-2 bg-white/[0.05] px-2 py-1 rounded-lg border border-white/10 w-full">
-                                <button
-                                  type="button"
-                                  onClick={toggleMute}
-                                  title={isMuted ? 'Activează sunetul' : 'Mut'}
-                                  className="w-5 h-5 rounded flex items-center justify-center text-zinc-300 hover:text-white focus:bg-white focus:text-[#0f172a] focus:outline-none shrink-0 cursor-pointer"
-                                >
-                                  {isMuted || volume === 0 ? (
-                                    <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                                  ) : (
-                                    <Volume2 className="w-3.5 h-3.5 text-blue-400" />
-                                  )}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setVolume(Math.max(0, Number((volume - 0.1).toFixed(2))))
-                                  }
-                                  className="w-5 h-5 rounded bg-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-xs font-bold flex items-center justify-center shrink-0 cursor-pointer"
-                                >
-                                  −
-                                </button>
-                                <input
-                                  type="range"
-                                  min={0}
-                                  max={1}
-                                  step={0.02}
-                                  value={isMuted ? 0 : volume}
-                                  onChange={(e) =>
-                                    setVolume(parseFloat(e.target.value))
-                                  }
-                                  aria-label="Volum Radio"
-                                  className="flex-1 min-w-[90px] accent-blue-500 h-1.5 cursor-pointer"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setVolume(Math.min(1, Number((volume + 0.1).toFixed(2))))
-                                  }
-                                  className="w-5 h-5 rounded bg-white/10 hover:bg-white hover:text-[#0f172a] focus:bg-white focus:text-[#0f172a] focus:outline-none text-xs font-bold flex items-center justify-center shrink-0 cursor-pointer"
-                                >
-                                  +
-                                </button>
-                                <span className="text-[11px] font-extrabold text-zinc-200 w-8 text-right tabular-nums shrink-0">
-                                  {effectiveVolPct}%
-                                </span>
+                                {/* Right Group on the SAME Row: Compact Volume Control Pill */}
+                                <div className="flex items-center gap-2 bg-white/[0.06] px-3 py-1.5 rounded-full border border-white/10 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={toggleMute}
+                                    title={isMuted ? 'Activează sunetul' : 'Mut'}
+                                    className="w-5 h-5 rounded-full flex items-center justify-center text-zinc-300 hover:text-white focus:outline-none shrink-0 cursor-pointer"
+                                  >
+                                    {isMuted || volume === 0 ? (
+                                      <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                                    ) : (
+                                      <Volume2 className="w-3.5 h-3.5 text-blue-400" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setVolume(Math.max(0, Number((volume - 0.1).toFixed(2))))
+                                    }
+                                    className="w-5 h-5 rounded-full bg-white/10 hover:bg-white hover:text-[#0f172a] text-xs font-bold flex items-center justify-center shrink-0 cursor-pointer"
+                                  >
+                                    −
+                                  </button>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={1}
+                                    step={0.02}
+                                    value={isMuted ? 0 : volume}
+                                    onChange={(e) => setVolume(parseFloat(e.target.value))}
+                                    aria-label="Volum Radio"
+                                    className="w-20 sm:w-24 accent-blue-500 h-1.5 rounded-full cursor-pointer"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setVolume(Math.min(1, Number((volume + 0.1).toFixed(2))))
+                                    }
+                                    className="w-5 h-5 rounded-full bg-white/10 hover:bg-white hover:text-[#0f172a] text-xs font-bold flex items-center justify-center shrink-0 cursor-pointer"
+                                  >
+                                    +
+                                  </button>
+                                  <span className="text-[11px] font-extrabold text-zinc-200 w-8 text-right tabular-nums shrink-0">
+                                    {effectiveVolPct}%
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           </div>
                         </div>
+                      </div>
                       );
                     })()}
 
@@ -2145,7 +2336,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                         <span className="text-sm font-bold">{tr('Se caută...', 'Searching...', 'Поиск...')}</span>
                       </div>
                     ) : (
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-4 gap-y-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                         {searchResults.map((item) => {
                           const posterUrl =
                             item.poster ||
@@ -2154,8 +2345,9 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                             <button
                               key={item.id}
                               type="button"
+                              data-vod-card="true"
                               onClick={() => handleOpenVod(item)}
-                              className="group text-left focus:outline-none cursor-pointer"
+                              className="group w-full block text-left focus:outline-none cursor-pointer"
                             >
                               <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
                                 <img
@@ -2652,7 +2844,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                         )}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(185px,1fr))] gap-x-4 gap-y-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(185px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                         {flItems.map((tor) => {
                           const mappedVod: CinemetaItem = {
                             id: tor.imdbId || `fl_${tor.id}`,
@@ -2788,7 +2980,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                         )}
                       </p>
                     ) : (
-                      <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-4 gap-y-6">
+                      <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                         {historyList.map((entry) => {
                           const item = entry.item;
                           const isLiveCard = false;
@@ -2891,13 +3083,29 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                   <div className="space-y-8 pb-16">
                     {/* Group 1: Favorite Movies & Series */}
                     <div className="space-y-3.5">
-                      <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
-                        {tr(
-                          `Favorite (${activeProfile.name}) — Filme & Seriale (${savedVodItems.length})`,
-                          `My List (${activeProfile.name}) — Movies & TV Series (${savedVodItems.length})`,
-                          `Избранное (${activeProfile.name}) — Фильмы и Сериалы (${savedVodItems.length})`
-                        )}
-                      </h2>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
+                          {tr(
+                            `Favorite (${activeProfile.name}) — Filme & Seriale (${savedVodItems.length})`,
+                            `My List (${activeProfile.name}) — Movies & TV Series (${savedVodItems.length})`,
+                            `Избранное (${activeProfile.name}) — Фильмы и Сериалы (${savedVodItems.length})`
+                          )}
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setSection('calendar')}
+                          className="h-9 px-4 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:outline-none text-xs font-bold text-zinc-100 border border-white/15 inline-flex items-center gap-2 transition-all cursor-pointer"
+                        >
+                          <span>📅</span>
+                          <span>
+                            {tr(
+                              'Calendar Episoade Noi →',
+                              'New Episodes Calendar →',
+                              'Календарь новых серий →'
+                            )}
+                          </span>
+                        </button>
+                      </div>
                       {savedVodItems.length === 0 ? (
                         <p className="text-xs sm:text-sm text-zinc-400">
                           {tr(
@@ -2907,7 +3115,7 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                           )}
                         </p>
                       ) : (
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-4 gap-y-6">
+                        <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                           {savedVodItems.map((item) => {
                             const posterUrl =
                               item.poster ||
@@ -2916,8 +3124,9 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                               <button
                                 key={item.id}
                                 type="button"
+                                data-vod-card="true"
                                 onClick={() => handleOpenVod(item)}
-                                className="group text-left focus:outline-none cursor-pointer"
+                                className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
                                   <img
@@ -3259,4 +3468,4 @@ export const SmartTvCatalogSections: React.FC<any> = ({
                 )}
     </>
   );
-};
+});

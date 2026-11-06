@@ -72,11 +72,13 @@ import {
   detectCurrentDeviceName,
   loadSharedProfiles,
   saveSharedProfiles,
+  syncSharedProfilesFromServer,
   loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isLocalHomeServer,
 } from '../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
+import { IedemMediatekaSection } from '../components/tv/IedemMediatekaSection';
 import { sortVodItemsByProductionYear } from './smartTvLampaHelpers';
 
 interface MediatecaViewProps {
@@ -86,6 +88,7 @@ interface MediatecaViewProps {
 type MediatecaTab =
   | 'movies'
   | 'series'
+  | 'iedem'
   | 'offline'
   | 'saved'
   | 'lampa'
@@ -1097,21 +1100,26 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     };
     window.addEventListener('aether:active-profile-changed', onProfileChange);
     window.addEventListener('aether:profiles-updated', onProfilesUpdated);
+    const onOpenIedem = () => {
+      setActiveTab('iedem');
+      setActiveVodItem(null);
+      setActiveOfflineItem(null);
+    };
+    window.addEventListener('aether:open-iedem-vod', onOpenIedem);
     return () => {
       window.removeEventListener('aether:active-profile-changed', onProfileChange);
       window.removeEventListener('aether:profiles-updated', onProfilesUpdated);
+      window.removeEventListener('aether:open-iedem-vod', onOpenIedem);
     };
   }, []);
 
   // Real-time Cross-Device Continuity Sync (4s on Home Wi-Fi, 120s smart sync on Netlify / 4G / 5G)
   useEffect(() => {
     const syncCrossDeviceState = () => {
-      fetch('/api/tv-profiles')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((serverProfiles) => {
-          if (Array.isArray(serverProfiles) && serverProfiles.length > 0) {
-            setProfiles(serverProfiles);
-            saveSharedProfiles(serverProfiles);
+      syncSharedProfilesFromServer()
+        .then((merged) => {
+          if (Array.isArray(merged) && merged.length > 0) {
+            setProfiles(merged);
           }
         })
         .catch(() => {});
@@ -2098,6 +2106,24 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               <span>Seriale</span>
             </button>
 
+            {/* Primary Tab 2b: iEdem Mediatecă (1080p & 4K RU) */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('iedem');
+                setActiveVodItem(null);
+                setActiveOfflineItem(null);
+              }}
+              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                activeTab === 'iedem'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/70 hover:bg-emerald-100'
+              }`}
+            >
+              <Film className="w-4 h-4" aria-hidden="true" />
+              <span>iEdem</span>
+            </button>
+
             {/* Primary Tab 3: Lampa TV */}
             <button
               type="button"
@@ -2614,7 +2640,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       preferredSubLang
                     );
                   }}
-                  onStreamError={() => setActiveServer('kinogram_embed')}
+                  onStreamError={() =>
+                    setActiveServer(
+                      activeVodItem.id.startsWith('kp_')
+                        ? 'kinogram_embed'
+                        : 'vidspark'
+                    )
+                  }
                 />
               ) : (
                 <div className="relative w-full h-full">
@@ -3673,6 +3705,13 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             </>
           )}
         </>
+      )}
+
+      {/* iEDEM MEDIATEKA (1080P & 4K RU MOVIES & SERIES) */}
+      {activeTab === 'iedem' && (
+        <div className="rounded-2xl bg-zinc-950 p-4 sm:p-5 border border-zinc-800">
+          <IedemMediatekaSection uiLang="ro" />
+        </div>
       )}
 
       {/* LAMPA SMART TV WEB PLAYER + PLUGINS */}

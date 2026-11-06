@@ -42,14 +42,32 @@ interface OnlineSubtitleFinderModalProps {
 }
 
 const LANG_FILTER_OPTIONS = [
-  { id: 'all', label: 'Toate limbile' },
-  { id: 'ro', label: 'Română (RO)' },
-  { id: 'ru', label: 'Русский (RU)' },
-  { id: 'en', label: 'English (EN)' },
-  { id: 'es', label: 'Español (ES)' },
-  { id: 'fr', label: 'Français (FR)' },
-  { id: 'de', label: 'Deutsch (DE)' },
+  { id: 'all', countryIso: null, label: 'Toate limbile' },
+  { id: 'ro', countryIso: 'ro', label: 'RO • Română' },
+  { id: 'ru', countryIso: 'ru', label: 'RU • Русский' },
+  { id: 'en', countryIso: 'gb', label: 'EN • English' },
+  { id: 'es', countryIso: 'es', label: 'ES • Español' },
+  { id: 'fr', countryIso: 'fr', label: 'FR • Français' },
+  { id: 'de', countryIso: 'de', label: 'DE • Deutsch' },
 ];
+
+const LANG_ISO_TO_FLAG_CODE: Record<string, string> = {
+  ro: 'ro',
+  ru: 'ru',
+  en: 'gb',
+  es: 'es',
+  fr: 'fr',
+  de: 'de',
+  it: 'it',
+  tr: 'tr',
+  uk: 'ua',
+  hu: 'hu',
+  bg: 'bg',
+  pl: 'pl',
+  pt: 'pt',
+  nl: 'nl',
+  el: 'gr',
+};
 
 export const OnlineSubtitleFinderModal: React.FC<
   OnlineSubtitleFinderModalProps
@@ -394,7 +412,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     }}
                     className={`min-h-[28px] px-2.5 py-1 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 border transition-colors ${
                       active
-                        ? 'bg-brand-600 text-white border-brand-500'
+                        ? 'bg-blue-600 text-white border-blue-500'
                         : 'bg-zinc-950 text-zinc-300 border-zinc-800 hover:bg-zinc-800'
                     }`}
                   >
@@ -426,7 +444,15 @@ export const OnlineSubtitleFinderModal: React.FC<
                       : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                   }`}
                 >
-                  <Globe className="w-3 h-3 shrink-0" />
+                  {opt.countryIso ? (
+                    <img
+                      src={`https://flagcdn.com/w40/${opt.countryIso}.png`}
+                      alt=""
+                      className="w-3.5 h-2.5 rounded-[2px] object-cover shrink-0"
+                    />
+                  ) : (
+                    <Globe className="w-3 h-3 shrink-0" />
+                  )}
                   <span>{opt.label}</span>
                   <span className="opacity-75">({count})</span>
                 </button>
@@ -476,8 +502,15 @@ export const OnlineSubtitleFinderModal: React.FC<
               >
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[11px] font-bold uppercase shrink-0">
-                      {sub.langCode2}
+                    <span className="px-2 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[11px] font-bold uppercase shrink-0 inline-flex items-center gap-1.5">
+                      {LANG_ISO_TO_FLAG_CODE[sub.langCode2.toLowerCase()] && (
+                        <img
+                          src={`https://flagcdn.com/w40/${LANG_ISO_TO_FLAG_CODE[sub.langCode2.toLowerCase()]}.png`}
+                          alt=""
+                          className="w-3.5 h-2.5 rounded-[2px] object-cover shrink-0"
+                        />
+                      )}
+                      <span>{sub.langCode2}</span>
                     </span>
                     <span className="text-xs sm:text-sm font-bold text-white truncate">
                       {sub.langLabel}
@@ -543,7 +576,7 @@ export const OnlineSubtitleFinderModal: React.FC<
             onClick={() => localFileInputRef.current?.click()}
             className="min-h-[30px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
           >
-            <Upload className="w-3.5 h-3.5 text-brand-400" />
+            <Upload className="w-3.5 h-3.5 text-blue-400" />
             <span>Încarcă .SRT din Dispozitiv</span>
           </button>
         </div>

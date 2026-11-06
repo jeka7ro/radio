@@ -28,38 +28,19 @@ export const App: React.FC = () => {
   const playerStatus = useRadioStore((state) => state.playerStatus);
 
   const [isSmartTvMode, setIsSmartTvMode] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined') return true;
     const params = new URLSearchParams(window.location.search);
     const pathname = window.location.pathname.toLowerCase();
-    const isTvPath =
-      pathname === '/tv' ||
-      pathname.startsWith('/tv/') ||
-      pathname === '/lampa' ||
-      window.location.hash === '#tv';
-    const savedTvPref = (() => {
-      try {
-        return localStorage.getItem('aether_smart_tv_mode') === '1';
-      } catch {
-        return false;
-      }
-    })();
-    const inIframe = (() => {
-      try {
-        return window.self !== window.top;
-      } catch {
-        return true;
-      }
-    })();
-    return (
-      isTvPath ||
-      params.has('tv') ||
-      params.get('tvmode') === '1' ||
-      savedTvPref ||
-      inIframe ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
-        navigator.userAgent
-      )
-    );
+    const forceClassicWeb =
+      params.has('classic') ||
+      params.has('web') ||
+      params.get('tvmode') === '0' ||
+      pathname === '/web' ||
+      pathname === '/classic';
+    if (forceClassicWeb) {
+      return false;
+    }
+    return true;
   });
 
   useEffect(() => {
@@ -198,8 +179,13 @@ export const App: React.FC = () => {
 
         if (bestCandidate) {
           e.preventDefault();
-          bestCandidate.focus();
-          bestCandidate.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          bestCandidate.focus({ preventScroll: true });
+          const r = bestCandidate.getBoundingClientRect();
+          if (r.top + window.scrollY < 450) {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          } else {
+            bestCandidate.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          }
         }
       }
     };
@@ -208,23 +194,19 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleTvRemoteKeyDown);
   }, [setActiveTab, isSmartTvMode]);
 
-  // Dynamically update document title per active view & playing station
+  // Dynamically update document title
   useEffect(() => {
-    const viewTitles = {
-      home: `${selectedCountry.localizedName} | ${t.appTitle}`,
-      tv: `${t.nav.tv} — ${selectedCountry.localizedName} | ${t.appTitle}`,
-      mediateca: `${t.nav.mediateca} — Filme & Seriale | ${t.appTitle}`,
-      countries: `${t.nav.countries} | ${t.appTitle}`,
-      favorites: `${t.nav.favorites} | ${t.appTitle}`,
-      settings: `${t.nav.settings} | ${t.appTitle}`,
-    };
+    if (isSmartTvMode) {
+      document.title = 'Filmio';
+      return;
+    }
 
     if (currentStation && playerStatus === 'playing') {
-      document.title = `▶ ${currentStation.name} — AetherRadio`;
+      document.title = `▶ ${currentStation.name} — Filmio`;
     } else {
-      document.title = viewTitles[activeTab] || t.appTitle;
+      document.title = 'Filmio';
     }
-  }, [activeTab, selectedCountry.localizedName, currentStation, playerStatus, t]);
+  }, [isSmartTvMode, activeTab, selectedCountry.localizedName, currentStation, playerStatus, t]);
 
   if (isSmartTvMode) {
     return (

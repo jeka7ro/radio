@@ -14,7 +14,7 @@ import { useRadioStore } from '../store/useRadioStore';
 import { SearchScope } from './useStations';
 
 const PAGE_SIZE = 24;
-const CATALOG_REVISION = 13;
+const CATALOG_REVISION = 15;
 
 export function useTvChannels(countryCode: string) {
   const customTvChannels = useRadioStore((state) => state.customTvChannels);

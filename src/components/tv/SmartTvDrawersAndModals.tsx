@@ -42,6 +42,9 @@ import {
   DEFAULT_SMART_TV_SETTINGS,
   saveSmartTvSettings,
   saveTvProfiles,
+  isAdminJekaProfile,
+  canProfileAccessAdult,
+  SmartTvProfile,
 } from "../../views/smartTvLampaHelpers";
 
 export const SmartTvDrawersAndModals: React.FC<any> = ({
@@ -690,6 +693,54 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     <Users className="w-5 h-5 text-white group-focus:text-zinc-900 shrink-0" />
                   </button>
 
+                  {/* 0B. Temă Vizuală Smart TV (Cinema Dark vs Ambient Slate TV) */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateTvSetting(
+                        'tvTheme',
+                        tvSettings.tvTheme === 'ambient' ? 'dark' : 'ambient'
+                      )
+                    }
+                    className="w-full px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 text-left bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.06] focus:bg-gradient-to-r focus:from-[#e4e4e7] focus:via-[#ffffff] focus:to-[#d4d4d8] focus:text-[#141414] focus:outline-none group transition-all cursor-pointer"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[15px] font-semibold text-white group-focus:text-[#141414] flex items-center gap-2">
+                        <span>
+                          {tr(
+                            'Temă Vizuală Smart TV',
+                            'Smart TV Visual Theme',
+                            'Тема оформления Smart TV'
+                          )}
+                        </span>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                            tvSettings.tvTheme === 'ambient'
+                              ? 'bg-amber-400 text-zinc-950'
+                              : 'bg-blue-600 text-white'
+                          }`}
+                        >
+                          {tvSettings.tvTheme === 'ambient'
+                            ? tr('Ambient Deschis', 'Ambient Light', 'Светлая Ambient')
+                            : tr('Cinema Dark', 'Cinema Dark', 'Темная Cinema')}
+                        </span>
+                      </div>
+                      <div className="text-[12px] text-zinc-300 group-focus:text-zinc-800 mt-0.5 font-medium">
+                        {tvSettings.tvTheme === 'ambient'
+                          ? tr(
+                              'Titanium Slate (Deschis confortabil pentru TV, fără alb orbitor)',
+                              'Titanium Slate (Soft daylight theme for TV, no harsh white glare)',
+                              'Titanium Slate (Мягкая светлая тема для ТВ без резкого белого)'
+                            )
+                          : tr(
+                              'Cinema Dark (Negru profund pentru OLED / QLED)',
+                              'Cinema Dark (Deep contrast for OLED / QLED)',
+                              'Cinema Dark (Глубокий темный режим для ТВ)'
+                            )}
+                      </div>
+                    </div>
+                  </button>
+
                   {/* 1. Pistă Audio Implicită (Limbă Originală / Dublaj) */}
                   <button
                     type="button"
@@ -855,63 +906,144 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     </span>
                   </button>
 
-                  {/* 8. Conținut pentru Adulți (18+ / Для взрослых — iEdem & TV): ON / OFF */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !adultContentEnabled;
-                      setAdultContentEnabled(next);
-                      if (!next) {
-                        if (tvRegionId === 'ADULT') setTvRegionId('RO');
-                        if (tvCategoryId === 'ADULT') setTvCategoryId('ALL');
-                        if (selectedGenre === 'Adult') setSelectedGenre('top');
-                      }
-                    }}
-                    className="w-full px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 text-left bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.06] focus:bg-gradient-to-r focus:from-[#e4e4e7] focus:via-[#ffffff] focus:to-[#d4d4d8] focus:text-[#141414] focus:outline-none group transition-all cursor-pointer"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-[15px] font-semibold text-white group-focus:text-[#141414] flex items-center gap-2">
-                        <span>
-                          {tr(
-                            'Conținut pentru Adulți (18+)',
-                            'Adult Content (18+)',
-                            'Контент 18+ / Для взрослых'
-                          )}
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${adultContentEnabled
-                              ? 'bg-rose-500 text-white'
-                              : 'bg-zinc-700 text-zinc-300'
-                            }`}
-                        >
-                          {adultContentEnabled ? 'ON' : 'OFF'}
-                        </span>
+                  {/* 8. Conținut pentru Adulți (18+) — VIZIBIL EXCLUSIV PENTRU PROFILUL ADMIN JEKA */}
+                  {isAdminJekaProfile(activeProfile) && (
+                    <div className="w-full p-4 sm:p-5 rounded-2xl bg-white/[0.04] border border-rose-500/25 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[15px] font-bold text-white flex flex-wrap items-center gap-2">
+                            <span>
+                              {tr(
+                                '🔒 Control Acces Canale 18+ (Doar JEKA)',
+                                '🔒 18+ Channels Access Control (JEKA Admin Only)',
+                                '🔒 Управление доступом 18+ (Только JEKA)'
+                              )}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                              ADMIN JEKA
+                            </span>
+                          </div>
+                          <div className="text-[12px] text-zinc-400 mt-0.5">
+                            {tr(
+                              'Decizi exclusiv de aici ce profiluri au acces la canalele și filmele pentru adulți (18+). Celelalte profiluri nu văd această setare.',
+                              'Decide exclusively from here which profiles can access 18+ adult channels. Other profiles cannot see this setting.',
+                              'Только вы решаете здесь, у каких профилей есть доступ к каналам 18+. Другие профили не видят эту настройку.'
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[12px] text-zinc-400 group-focus:text-zinc-800 mt-0.5">
-                        {adultContentEnabled
-                          ? tr(
-                            'ON (Pornit) — Categoria «18+ Adulți» (iEdem & TV) este vizibilă',
-                            'ON (Enabled) — "18+ Adult" category (iEdem & TV) is visible',
-                            'ON (Вкл) — Категория «Для взрослых / 18+» видна'
-                          )
-                          : tr(
-                            'OFF (Oprit) — Toate canalele și filmele 18+ sunt ascunse',
-                            'OFF (Disabled) — All 18+ channels and movies are hidden',
-                            'OFF (Выкл) — Все каналы и фильмы 18+ скрыты'
-                          )}
+
+                      <div className="space-y-2 pt-1">
+                        {(Array.isArray(tvProfiles) ? tvProfiles : []).map(
+                          (prof: SmartTvProfile) => {
+                            const isProfKids = Boolean(prof.isKids);
+                            const profAllowed = canProfileAccessAdult(prof);
+                            const isJeka = isAdminJekaProfile(prof);
+
+                            return (
+                              <button
+                                key={`adult_perm_${prof.id}`}
+                                type="button"
+                                disabled={isProfKids}
+                                onClick={() => {
+                                  if (isProfKids) return;
+                                  const nextAllowed = !profAllowed;
+                                  const nextProfiles = (
+                                    Array.isArray(tvProfiles) ? tvProfiles : []
+                                  ).map((p: SmartTvProfile) =>
+                                    p.id === prof.id
+                                      ? { ...p, allowAdultContent: nextAllowed }
+                                      : p
+                                  );
+                                  setTvProfiles(nextProfiles);
+                                  saveTvProfiles(nextProfiles);
+                                  if (prof.id === activeProfile?.id) {
+                                    setAdultContentEnabled(nextAllowed);
+                                    if (!nextAllowed) {
+                                      if (tvRegionId === 'ADULT')
+                                        setTvRegionId('FAV');
+                                      if (tvCategoryId === 'ADULT')
+                                        setTvCategoryId('ALL');
+                                      if (selectedGenre === 'Adult')
+                                        setSelectedGenre('top');
+                                    }
+                                  }
+                                }}
+                                className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white ${
+                                  isProfKids
+                                    ? 'bg-white/[0.02] border-white/[0.04] opacity-55 cursor-not-allowed'
+                                    : profAllowed
+                                      ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/40 cursor-pointer'
+                                      : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.07] cursor-pointer'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {prof.avatarUrl ? (
+                                    <img
+                                      src={prof.avatarUrl}
+                                      alt={prof.name}
+                                      className="w-8 h-8 rounded-lg object-cover shrink-0 border border-white/15"
+                                    />
+                                  ) : (
+                                    <div
+                                      className={`w-8 h-8 rounded-lg bg-gradient-to-br ${prof.avatarBg} flex items-center justify-center text-xs font-black text-white shrink-0`}
+                                    >
+                                      {prof.avatarEmoji || prof.name.slice(0, 1)}
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-bold text-white flex items-center gap-1.5 truncate">
+                                      <span>{prof.name}</span>
+                                      {isJeka && (
+                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 font-extrabold">
+                                          TU (ADMIN)
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] text-zinc-400 truncate">
+                                      {isProfKids
+                                        ? tr(
+                                            'Profil Copii — Canalele 18+ sunt blocate permanent',
+                                            'Kids Profile — 18+ channels permanently blocked',
+                                            'Детский профиль — каналы 18+ заблокированы'
+                                          )
+                                        : profAllowed
+                                          ? tr(
+                                              'Canalele 18+ (Adulți) sunt PERMISE pe acest profil',
+                                              '18+ Adult channels are ALLOWED on this profile',
+                                              'Каналы 18+ РАЗРЕШЕНЫ для этого профиля'
+                                            )
+                                          : tr(
+                                              'Canalele 18+ (Adulți) sunt ASCUNSE pe acest profil',
+                                              '18+ Adult channels are HIDDEN on this profile',
+                                              'Каналы 18+ СКРЫТЫ для этого профиля'
+                                            )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <span
+                                  className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                    isProfKids
+                                      ? 'bg-zinc-800 text-zinc-500'
+                                      : profAllowed
+                                        ? 'bg-rose-500 text-white shadow'
+                                        : 'bg-zinc-700 text-zinc-300'
+                                  }`}
+                                >
+                                  {isProfKids
+                                    ? tr('BLOCAT', 'LOCKED', 'БЛОК')
+                                    : profAllowed
+                                      ? '18+ ON'
+                                      : 'OFF'}
+                                </span>
+                              </button>
+                            );
+                          }
+                        )}
                       </div>
                     </div>
-                    <span
-                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${adultContentEnabled
-                          ? 'border-rose-500 bg-rose-500 text-white'
-                          : 'border-zinc-500 group-focus:border-zinc-800'
-                        }`}
-                    >
-                      {adultContentEnabled && (
-                        <span className="text-xs font-black">✓</span>
-                      )}
-                    </span>
-                  </button>
+                  )}
 
                   {/* 9. Șterge Istoricul de Vizionare */}
                   <button
@@ -947,21 +1079,6 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                         'Reset to Default Settings',
                         'Сбросить настройки'
                       )}
-                    </div>
-                  </button>
-
-                  {/* 11. Comută în Modul Web Normal */}
-                  <button
-                    type="button"
-                    data-drawer-item="true"
-                    onClick={() => {
-                      setIsSettingsDrawerOpen(false);
-                      onExitTvMode();
-                    }}
-                    className="w-full px-5 py-3.5 rounded-2xl text-left bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 focus:bg-rose-600 focus:text-white focus:outline-none group transition-all cursor-pointer"
-                  >
-                    <div className="text-[14px] font-bold text-rose-400 group-focus:text-white">
-                      ← Ieșire în Modul Web Normal (AetherRadio)
                     </div>
                   </button>
                 </div>
@@ -1698,8 +1815,8 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
         </div>
       )}
 
-      {/* Live HLS TV Video Player Modal (when a TV channel is clicked — 100% Full Mode on Smart TV) */}
-      <TvPlayerModal isSmartTvFullMode />
+      {/* Live HLS TV Video Player Modal (when a TV channel is clicked outside the dedicated TV Online section) */}
+      {section !== 'tv' && <TvPlayerModal isSmartTvFullMode />}
 
 {/* LAMPA FULLSCREEN TRAILER PLAYER MODAL */}
       {isTrailerModalOpen && activeVodItem && (
@@ -1797,7 +1914,6 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
           onSelectProfile={handleSelectProfile}
           onProfilesChange={(nextProfiles) => {
             setTvProfiles(nextProfiles);
-            saveTvProfiles(nextProfiles);
           }}
           activeMedia={
             activeVodItem

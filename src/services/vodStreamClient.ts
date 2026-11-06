@@ -149,10 +149,13 @@ function parseKinogramHtml(
 ): ResolvedDirectVodStream {
   const addMatch = html.match(/else\s+o\[k\]\+=.\&.\+([a-zA-Z0-9_]+)/);
   const varName = addMatch?.[1];
-  const varValMatch = varName
-    ? html.match(new RegExp(`${varName}\\s*=\\s*"([^"]+)"`))
-    : null;
-  const token = varValMatch?.[1] || '';
+  const allTokenMatches = varName
+    ? Array.from(html.matchAll(new RegExp(`${varName}\\s*=\\s*"([^"]+)"`, 'g')))
+    : [];
+  const token =
+    allTokenMatches.length > 0
+      ? allTokenMatches[allTokenMatches.length - 1][1] || ''
+      : '';
 
   const seasonsIdx = html.indexOf('seasons:');
   if (seasonsIdx >= 0) {

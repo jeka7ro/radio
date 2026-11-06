@@ -1,9 +1,10 @@
 {
-  "headline": "AetherRadio Smart TV",
+  "headline": "Filmio",
+  "logo": "{PREFIX}/msx/logo.png",
   "menu": [
     {
       "icon": "apps",
-      "label": "AetherRadio Hub",
+      "label": "Filmio Hub",
       "data": "{PREFIX}/msx/launcher.json"
     },
     {

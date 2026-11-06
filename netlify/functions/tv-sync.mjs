@@ -1,17 +1,22 @@
 // Netlify Serverless Function for Cross-Device Account, Photo, PIN & Watch Progress Sync
 // Works when the user is away from home (on 4G/5G, vacation, laptop, iPad) with smart throttling.
+import {
+  SEED_PROFILES,
+  SEED_PROGRESS_BY_PROFILE,
+  SEED_SAVED_BY_PROFILE,
+} from './_seedData.mjs';
 
 const globalStore = globalThis.__aetherCloudSyncStore || {
-  profiles: [],
-  progressByProfile: {},
-  savedByProfile: {},
+  profiles: Array.isArray(SEED_PROFILES) ? [...SEED_PROFILES] : [],
+  progressByProfile: { ...(SEED_PROGRESS_BY_PROFILE || {}) },
+  savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
 };
 globalThis.__aetherCloudSyncStore = globalStore;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Deleted-Profile-Ids',
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-cache, no-store',
 };
@@ -34,7 +39,36 @@ export default async (req) => {
       if (req.method === 'POST') {
         const incoming = await req.json().catch(() => null);
         if (Array.isArray(incoming) && incoming.length > 0) {
-          globalStore.profiles = incoming.slice(0, 12);
+          let deletedIds = new Set();
+          try {
+            const rawDel = req.headers.get('x-deleted-profile-ids') || '[]';
+            const parsedDel = JSON.parse(rawDel);
+            if (Array.isArray(parsedDel)) {
+              deletedIds = new Set(parsedDel.filter((x) => typeof x === 'string'));
+            }
+          } catch {
+            // ignore
+          }
+          const byId = new Map();
+          for (const p of globalStore.profiles || []) {
+            if (p?.id && !deletedIds.has(p.id)) {
+              byId.set(p.id, p);
+            }
+          }
+          for (const p of incoming) {
+            if (!p?.id || deletedIds.has(p.id)) continue;
+            if (p.id === 'p1' && p.name === 'Eugeniu' && !p.pin) continue;
+            const prev = byId.get(p.id);
+            const prevTs = typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
+            const nextTs = typeof p?.updatedAt === 'number' ? p.updatedAt : 0;
+            if (!prev || nextTs >= prevTs) {
+              byId.set(p.id, p);
+            }
+          }
+          const merged = Array.from(byId.values());
+          if (merged.length > 0) {
+            globalStore.profiles = merged.slice(0, 16);
+          }
         }
         return new Response(JSON.stringify(globalStore.profiles), {
           status: 200,
@@ -52,8 +86,16 @@ export default async (req) => {
       const currentSaved = globalStore.savedByProfile[profileId] || [];
       if (req.method === 'POST') {
         const incoming = await req.json().catch(() => null);
-        if (Array.isArray(incoming)) {
-          globalStore.savedByProfile[profileId] = incoming.slice(0, 300);
+        if (Array.isArray(incoming) && incoming.length > 0) {
+          const seen = new Set(currentSaved.map((x) => x?.id).filter(Boolean));
+          const merged = [...currentSaved];
+          for (const item of incoming) {
+            if (item && item.id && !seen.has(item.id)) {
+              seen.add(item.id);
+              merged.push(item);
+            }
+          }
+          globalStore.savedByProfile[profileId] = merged.slice(0, 300);
         }
         return new Response(
           JSON.stringify(globalStore.savedByProfile[profileId] || []),
@@ -104,4 +146,3 @@ export default async (req) => {
     });
   }
 };
-

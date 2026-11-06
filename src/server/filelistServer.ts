@@ -1190,6 +1190,28 @@ export async function handleFileListRequest(
           ? `${speedKb.toFixed(0)} KB/s`
           : 'Buffer HD';
 
+    const fileIdxParam = parsedUrl.searchParams.get('fileIdx');
+    let probedDurationSec = 0;
+    if (targetEntry) {
+      if (fileIdxParam !== null && fileIdxParam !== '') {
+        const fIdx = parseInt(fileIdxParam, 10) || 0;
+        const p = targetEntry.probeCache.get(fIdx);
+        if (p && p.durationSec > 0) {
+          probedDurationSec = Math.round(p.durationSec);
+        } else if (targetEntry.ready && !p) {
+          probeTorrentVideoFile(targetEntry, fIdx).catch(() => {});
+        }
+      }
+      if (!probedDurationSec && targetEntry.probeCache.size > 0) {
+        for (const p of targetEntry.probeCache.values()) {
+          if (p && p.durationSec > 0) {
+            probedDurationSec = Math.round(p.durationSec);
+            break;
+          }
+        }
+      }
+    }
+
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
@@ -1204,6 +1226,7 @@ export async function handleFileListRequest(
         numPeers: wiresCount,
         downloadedBytes,
         downloadedText: formatBytes(downloadedBytes),
+        durationSec: probedDurationSec,
         source: (targetEntry?.id || 0) < 0 ? 'Torrentio P2P' : 'FileList.io VIP',
       })
     );
@@ -1587,16 +1610,26 @@ export async function handleFileListRequest(
       }
 
       const cachedProbe = entry.probeCache.get(fileIdx);
+      if (!cachedProbe) {
+        probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+      }
       const isHevc = cachedProbe
         ? /hevc|h265/i.test(cachedProbe.videoCodec)
         : /\b(hevc|x265|h\.?265)\b/i.test(rawFile.name || '');
 
-      res.writeHead(200, {
+      const streamHeaders: Record<string, string> = {
         'Content-Type': 'video/mp4',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'X-Content-Duration',
         'Cache-Control': 'no-store',
         Connection: 'keep-alive',
-      });
+      };
+      if (cachedProbe?.durationSec && cachedProbe.durationSec > 30) {
+        streamHeaders['X-Content-Duration'] = String(
+          Math.round(cachedProbe.durationSec)
+        );
+      }
+      res.writeHead(200, streamHeaders);
 
       const rangePort = await ensureInternalRangeServer();
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];

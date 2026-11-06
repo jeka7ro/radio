@@ -354,7 +354,36 @@ export async function saveSubtitleFileToDevice(
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
 }
 
-export type AudioTrackPreference = 'original' | 'ru' | 'uk' | 'first';
+export type AudioTrackPreference = 'original' | 'ro' | 'ru' | 'uk' | 'first';
+
+/**
+ * Infers the AudioTrackPreference from a selected audio track label/lang.
+ */
+export function inferAudioPrefFromTrackName(nameOrLang: string): AudioTrackPreference {
+  const s = String(nameOrLang || '').trim().toLowerCase();
+  if (!s) return 'original';
+  if (/\b(ro|ron|rum|română|romana|romanian)\b/i.test(s)) {
+    return 'ro';
+  }
+  if (/укр|ukr|\bua\b|ukrainian|postmodern|dnipro|так треба/i.test(s)) {
+    return 'uk';
+  }
+  if (
+    /orig|ориг|eng\.?\s*orig|\b(en|eng|english)\b|английск|англ|v\.?o\.?\b|субт|subt/i.test(
+      s
+    )
+  ) {
+    return 'original';
+  }
+  if (
+    /\b(ru|rus|russian)\b|рус|дубл|hdrezka|lostfilm|red head|jaskier|кубик|winmedia|moviedalen|tvshows|[а-яё]{3,}/i.test(
+      s
+    )
+  ) {
+    return 'ru';
+  }
+  return 'original';
+}
 
 /**
  * Find the index of the Original Language audio track (e.g. "Eng.Original", "Оригинал", "English", "Original")
@@ -365,7 +394,7 @@ export function findPreferredOriginalAudioTrackIndex(labels: string[]): number {
 
   // Priority 1: Explicit Original / English / Оригинал track
   const origIdx = labels.findIndex((name) =>
-    /orig|ориг|eng\.?\s*orig|english|английск|англ|v\.?o\.?\b/i.test(
+    /orig|ориг|eng\.?\s*orig|english|\beng\b|английск|англ|v\.?o\.?\b/i.test(
       String(name || '')
     )
   );
@@ -391,13 +420,21 @@ export function resolveAudioTrackIndexByPreference(
 
   if (pref === 'first') return 0;
 
+  if (pref === 'ro') {
+    const roIdx = labels.findIndex((name) =>
+      /\b(ro|ron|rum|română|romana|romanian)\b/i.test(String(name || ''))
+    );
+    if (roIdx >= 0) return roIdx;
+    return findPreferredOriginalAudioTrackIndex(labels);
+  }
+
   if (pref === 'original') {
     return findPreferredOriginalAudioTrackIndex(labels);
   }
 
   if (pref === 'uk') {
     const ukIdx = labels.findIndex((name) =>
-      /укр|ukr|ua\b|postmodern|dnipro|так треба/i.test(String(name || ''))
+      /укр|ukr|ua\b|ukrainian|postmodern|dnipro|так треба/i.test(String(name || ''))
     );
     return ukIdx >= 0 ? ukIdx : 0;
   }
@@ -413,9 +450,16 @@ export function resolveAudioTrackIndexByPreference(
     if (dubIdx >= 0) return dubIdx;
 
     const ruIdx = labels.findIndex(
-      (name) => !/orig|ориг|eng|english|укр|ukr/i.test(String(name || ''))
+      (name) =>
+        /\b(ru|rus|russian)\b|рус|[а-яё]{2,}/i.test(String(name || '')) &&
+        !/orig|ориг|eng|english|укр|ukr/i.test(String(name || ''))
     );
-    return ruIdx >= 0 ? ruIdx : 0;
+    if (ruIdx >= 0) return ruIdx;
+
+    const fallbackRuIdx = labels.findIndex(
+      (name) => !/orig|ориг|eng|english|укр|ukr|\b(ro|ron|rum)\b/i.test(String(name || ''))
+    );
+    return fallbackRuIdx >= 0 ? fallbackRuIdx : 0;
   }
 
   return findPreferredOriginalAudioTrackIndex(labels);
@@ -463,13 +507,18 @@ export async function autoResolveAndFetchBestRoRuSubtitle(params: {
 
   if (tracks.length === 0) return null;
 
-  // Priority order based on user's preferredLang ('ro' | 'ru' | 'en')
-  const pref =
-    params.preferredLang === 'ru'
+  // Priority order based on user's preferredLang ('ro' | 'ru' | 'en' | 'es' | 'fr' | 'de')
+  const requestedLang = (params.preferredLang || 'ro').toLowerCase().trim();
+  const baseOrder =
+    requestedLang === 'ru'
       ? ['ru', 'ro', 'en']
-      : params.preferredLang === 'en'
+      : requestedLang === 'en'
         ? ['en', 'ro', 'ru']
-        : ['ro', 'ru', 'en'];
+        : ['ro', 'en', 'ru'];
+  const pref = [
+    requestedLang,
+    ...baseOrder.filter((c) => c !== requestedLang),
+  ];
   let chosen: OnlineSubtitleTrack | undefined;
   for (const code of pref) {
     chosen = tracks.find((t) => t.langCode2 === code);

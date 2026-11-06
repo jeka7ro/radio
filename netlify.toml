@@ -10,6 +10,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/iedem-vod"
+  to = "/.netlify/functions/iedem-vod"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/tv-epg"
   to = "/.netlify/functions/tv-epg"
   status = 200
@@ -52,25 +58,58 @@
   force = true
 
 [[redirects]]
+  from = "/start.json"
+  to = "/.netlify/functions/msx-start"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/msx/start.json"
+  to = "/.netlify/functions/msx-start"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/tv/msx/start.json"
+  to = "/.netlify/functions/msx-start"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/tv/msx/*"
   to = "/msx/:splat"
   status = 200
   force = true
 
 [[redirects]]
+  from = "/tv/icons/*"
+  to = "/icons/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/tv/start.json"
-  to = "/start.json"
+  to = "/.netlify/functions/msx-start"
   status = 200
   force = true
 
 [[headers]]
-  for = "/msx/*"
+  for = "/msx/*.json"
   [headers.values]
     Access-Control-Allow-Origin = "*"
     Access-Control-Allow-Methods = "GET, HEAD, OPTIONS"
     Access-Control-Allow-Headers = "*"
     Content-Type = "application/json; charset=utf-8"
     Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/msx/*.png"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, HEAD, OPTIONS"
+    Access-Control-Allow-Headers = "*"
+    Content-Type = "image/png"
+    Cache-Control = "public, max-age=3600"
 
 [[headers]]
   for = "/start.json"

@@ -13,7 +13,6 @@ import {
   Tv,
   Clock,
   Calendar,
-  Layers,
   Languages,
   Subtitles,
   Upload,
@@ -26,7 +25,10 @@ import {
 import { EpgProgramme, TvChannel } from '../../types/radio';
 import { useRadioStore } from '../../store/useRadioStore';
 import { StationAvatar } from '../common/StationAvatar';
-import { TvOsdChannelList } from './TvOsdChannelList';
+import {
+  TvOsdChannelList,
+  setActiveTvPlaylistContext,
+} from './TvOsdChannelList';
 import { OnlineSubtitleFinderModal } from './OnlineSubtitleFinderModal';
 import { useTranslation } from '../../i18n/useTranslation';
 import {
@@ -42,9 +44,78 @@ import {
   getEpgDayKey,
   formatEpgDayLabel,
 } from '../../services/epgService';
-import { buildCatchupStreamCandidates } from '../../services/tvApi';
+import {
+  buildCatchupStreamCandidates,
+  isAdultTvChannel,
+} from '../../services/tvApi';
+import {
+  getActiveProfileMediaPrefs,
+  saveActiveProfileMediaPrefs,
+} from '../../services/deviceContinuityService';
+import {
+  resolveAudioTrackIndexByPreference,
+  inferAudioPrefFromTrackName,
+} from '../../services/subtitleSearchService';
+
+// Map iEdem raw DVB-S2 "orig" / "FHD" streams (which carry MP2 0x04 / AC-3 0x81 audio or HEVC 0x24 that browser MSE/Hls.js cannot demux)
+// to their official iEdem H.264 + AAC (0x1b + 0x0f) HD stream IDs on the exact same server & token.
+const IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP: Record<string, string> = {
+  // Первый канал (orig/FHD MP2/AC3 -> HD AAC 204)
+  '7253': '204',
+  '2402': '204',
+  '9201': '204',
+  // Россия 1 (FHD/orig MP2/AC3 -> HD AAC 205)
+  '2409': '205',
+  '7252': '205',
+  '9202': '205',
+  '15133': '205',
+  // РЕН ТВ (HD orig/orig MP2/AC3 -> HD AAC 2024)
+  '9002': '2024',
+  '9205': '2024',
+  // НТВ (orig/HD orig MP2/AC3 -> HD AAC 213)
+  '9203': '213',
+  '9028': '213',
+  // Пятница! HD (orig MP2/AC3 -> HD H.264+AAC 5031)
+  '9207': '5031',
+  '2006': '5031',
+  // Известия (orig MP2 -> HD AAC 18039)
+  '9216': '18039',
+  // ТНТ (FHD/orig MP2/AC3 -> HD 50 AAC 10024)
+  '2417': '10024',
+  '7251': '10024',
+  '9204': '237',
+  '9208': '6370',
+  // Pro TV RO (6997 is HEVC 0x24 -> 7055 H.264+AAC)
+  '6997': '7055',
+  // Кинопремьера (HD orig MP2/AC3 -> HD AAC 224)
+  '9020': '224',
+  // Viju+ Megahit / Premiere / Serial (HD orig MP2/AC3 -> HD AAC 201 / 202 / 2443)
+  '5081': '201',
+  '5079': '202',
+  '9245': '2443',
+  // Amedia Premium / Hit / 1 / 2 (orig/FHD MP2/AC3 -> HD AAC 229 / 6010 / 2046)
+  '9233': '229',
+  '9022': '229',
+  '9070': '6010',
+  '9234': '6010',
+  '9129': '2046',
+  '9069': '554',
+  '9137': '554',
+  // Кинохит & Остросюжетное (orig MP2/AC3 -> HD AAC 7250 / 904)
+  '9128': '7250',
+  '9044': '904',
+};
 
 function resolveWorkingStreamUrl(rawUrl: string): string {
+  const iedemMatch = rawUrl.match(
+    /^(https?:\/\/[^/]+\/iptv\/[^/]+\/)(\d+)(\/index\.m3u8.*)$/i
+  );
+  if (iedemMatch) {
+    const mappedCid = IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP[iedemMatch[2]];
+    if (mappedCid) {
+      return `${iedemMatch[1]}${mappedCid}${iedemMatch[3]}`;
+    }
+  }
   if (/rdsnet\.ro\/.*digi24/i.test(rawUrl)) {
     return 'https://edge-ar.rcs-rds.ro/digi24ar/index.m3u8';
   }
@@ -101,14 +172,14 @@ const KNOWN_CHANNEL_BACKUPS: Array<[RegExp, string[]]> = [
     [
       'https://stream8.cinerama.uz/1046/index.m3u8',
       'http://stream.mcquack.net/101/index.m3u8',
-      'http://flussonic.mkpnet.ru/tv-687ba838ca927b9a/video.m3u8',
+      'https://flussonic.mkpnet.ru/tv-687ba838ca927b9a/video.m3u8',
     ],
   ],
   [
     /Viasat Explore|viju\+? Explore/i,
     [
-      'http://stream.mcquack.net/239/index.m3u8',
       'https://flussonic.mkpnet.ru/tv-7c57a4c3f9a896ea/video.m3u8',
+      'http://stream.mcquack.net/239/index.m3u8',
     ],
   ],
   [
@@ -143,15 +214,15 @@ const KNOWN_CHANNEL_BACKUPS: Array<[RegExp, string[]]> = [
   [
     /^ТНТ\b|^TNT\b/i,
     [
-      'http://stream.mcquack.net/135/index.m3u8',
       'https://bl.rutube.ru/livestream/546602986e6a424d74d594876ddb3f04/index.m3u8?s=K-z3nz49R1oGQ-5yPSd8pg&e=2082157024&scheme=https',
+      'http://stream.mcquack.net/135/index.m3u8',
     ],
   ],
   [
     /^Первый канал|Channel One/i,
     [
       'https://stream3.cinerama.uz/1214/mono.m3u8',
-      'http://flussonic.mkpnet.ru/tv-4f9598ab5f91dca4/video.m3u8',
+      'https://flussonic.mkpnet.ru/tv-4f9598ab5f91dca4/video.m3u8',
       'https://streaming.thestream.cyou/live/210-req_offset_28000000-req_window_0-3k_v5.m3u8',
     ],
   ],
@@ -172,15 +243,16 @@ const KNOWN_CHANNEL_BACKUPS: Array<[RegExp, string[]]> = [
   [
     /^СТС\b|^STS\b/i,
     [
+      'https://flussonic.linkintel.ru/sts/index.m3u8',
       'http://stream.mcquack.net/138/index.m3u8',
-      'http://flussonic.linkintel.ru/sts/index.m3u8',
     ],
   ],
 ];
 
 function getCandidateStreams(
   channel: TvChannel | null,
-  queue: TvChannel[]
+  queue: TvChannel[],
+  customChannels: TvChannel[] = []
 ): string[] {
   if (!channel) return [];
   const urls: string[] = [];
@@ -196,19 +268,29 @@ function getCandidateStreams(
 
   add(channel.url);
 
+  const targetKey = normalizeEpgLookupKey(channel.name, true);
+  if (targetKey) {
+    // Prefer non-orig HD / standard AAC streams from queue & customChannels before external fallbacks
+    const combinedPool = [...queue, ...customChannels];
+    const nonOrigMatches: string[] = [];
+    const otherMatches: string[] = [];
+    for (const q of combinedPool) {
+      if (q.id === channel.id) continue;
+      if (normalizeEpgLookupKey(q.name, true) === targetKey) {
+        if (!/\borig\b|\bfhd\b|\buhd\b|\b4k\b/i.test(q.name)) {
+          nonOrigMatches.push(q.url);
+        } else {
+          otherMatches.push(q.url);
+        }
+      }
+    }
+    for (const u of nonOrigMatches) add(u);
+    for (const u of otherMatches) add(u);
+  }
+
   for (const [pattern, backups] of KNOWN_CHANNEL_BACKUPS) {
     if (pattern.test(channel.name)) {
       for (const b of backups) add(b);
-    }
-  }
-
-  const targetKey = normalizeEpgLookupKey(channel.name, true);
-  if (targetKey) {
-    for (const q of queue) {
-      if (q.id === channel.id) continue;
-      if (normalizeEpgLookupKey(q.name, true) === targetKey) {
-        add(q.url);
-      }
     }
   }
 
@@ -243,20 +325,29 @@ interface HlsTrackItem {
 
 interface TvPlayerModalProps {
   isSmartTvFullMode?: boolean;
+  inlineEmbeddedMode?: boolean;
 }
 
 export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   isSmartTvFullMode = false,
+  inlineEmbeddedMode = false,
 }) => {
   const { t, language, format } = useTranslation();
+  const [isFullModeExpanded, setIsFullModeExpanded] = useState(
+    () => isSmartTvFullMode
+  );
+  const [isSplitFullscreen, setIsSplitFullscreen] = useState(false);
   const effectiveTvFullMode =
-    isSmartTvFullMode ||
-    (typeof document !== 'undefined' &&
-      document.documentElement.classList.contains('smart-tv-mode'));
+    isFullModeExpanded || (inlineEmbeddedMode ? false : isSmartTvFullMode);
 
-  const currentTvChannel = useRadioStore((state) => state.currentTvChannel);
+  const storeTvChannel = useRadioStore((state) => state.currentTvChannel);
   const tvQueue = useRadioStore((state) => state.tvQueue);
   const favoriteTvChannels = useRadioStore((state) => state.favoriteTvChannels);
+  const customTvChannels = useRadioStore((state) => state.customTvChannels);
+  const adultContentEnabled = useRadioStore(
+    (state) => state.adultContentEnabled
+  );
+  const playTvChannel = useRadioStore((state) => state.playTvChannel);
   const closeTvPlayer = useRadioStore((state) => state.closeTvPlayer);
   const playNextTvChannel = useRadioStore((state) => state.playNextTvChannel);
   const playPreviousTvChannel = useRadioStore(
@@ -265,6 +356,37 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const toggleFavoriteTvChannel = useRadioStore(
     (state) => state.toggleFavoriteTvChannel
   );
+
+  const currentTvChannel = useMemo(() => {
+    if (storeTvChannel) return storeTvChannel;
+    if (!inlineEmbeddedMode) return null;
+    const favPool = favoriteTvChannels.filter(
+      (c) => adultContentEnabled || !isAdultTvChannel(c)
+    );
+    return favPool[0] || null;
+  }, [
+    storeTvChannel,
+    inlineEmbeddedMode,
+    favoriteTvChannels,
+    adultContentEnabled,
+  ]);
+
+  useEffect(() => {
+    if (inlineEmbeddedMode && !storeTvChannel && currentTvChannel) {
+      const favPool = favoriteTvChannels.filter(
+        (c) => adultContentEnabled || !isAdultTvChannel(c)
+      );
+      setActiveTvPlaylistContext('FAV', 'FAV');
+      playTvChannel(currentTvChannel, favPool);
+    }
+  }, [
+    inlineEmbeddedMode,
+    storeTvChannel,
+    currentTvChannel,
+    favoriteTvChannels,
+    adultContentEnabled,
+    playTvChannel,
+  ]);
 
   const epg = useChannelEpg(currentTvChannel);
   const epgStats = getEpgTimingStats(epg?.now);
@@ -275,17 +397,97 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     []
   );
   const [selectedArchiveDay, setSelectedArchiveDay] = useState<string>('');
+  const [archiveSeekOffsetSec, setArchiveSeekOffsetSec] = useState<number>(0);
+  const [archiveVideoTimeSec, setArchiveVideoTimeSec] = useState<number>(0);
+
+  useEffect(() => {
+    setArchiveSeekOffsetSec(0);
+    setArchiveVideoTimeSec(0);
+  }, [activeArchiveProg?.start, activeArchiveProg?.stop, currentTvChannel?.id]);
+
+  const archiveTotalSec = activeArchiveProg
+    ? Math.max(
+        60,
+        Math.round((activeArchiveProg.stop - activeArchiveProg.start) / 1000)
+      )
+    : 0;
+  const archiveElapsedSec = activeArchiveProg
+    ? Math.min(
+        archiveTotalSec,
+        Math.max(0, archiveSeekOffsetSec + archiveVideoTimeSec)
+      )
+    : 0;
+  const archiveProgressPct =
+    activeArchiveProg && archiveTotalSec > 0
+      ? Math.min(
+          100,
+          Math.max(0, Math.round((archiveElapsedSec / archiveTotalSec) * 100))
+        )
+      : 0;
+  const archiveRemainingMin = activeArchiveProg
+    ? Math.max(0, Math.ceil((archiveTotalSec - archiveElapsedSec) / 60))
+    : 0;
+
+  const archiveNextProgrammes = useMemo(() => {
+    if (!activeArchiveProg || archiveProgrammes.length === 0) return [];
+    return archiveProgrammes
+      .filter((p) => p.start >= activeArchiveProg.stop)
+      .slice(0, 3);
+  }, [activeArchiveProg, archiveProgrammes]);
+
+  const formatArchiveClock = (sec: number): string => {
+    const s = Math.max(0, Math.floor(sec));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const remSec = s % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
+  };
+
+  const handleSeekArchiveProgress = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!activeArchiveProg || archiveTotalSec <= 0) return;
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.min(
+      0.98,
+      Math.max(0, (e.clientX - rect.left) / rect.width)
+    );
+    const targetSec = Math.floor(ratio * archiveTotalSec);
+    const vid = videoRef.current;
+    if (
+      vid &&
+      Number.isFinite(vid.duration) &&
+      vid.duration >= archiveTotalSec * 0.85 &&
+      archiveSeekOffsetSec === 0
+    ) {
+      vid.currentTime = targetSec;
+      setArchiveVideoTimeSec(targetSec);
+    } else {
+      setArchiveSeekOffsetSec(targetSec);
+      setArchiveVideoTimeSec(0);
+      setStreamIndex(0);
+    }
+  };
 
   const candidateStreams = useMemo(() => {
-    const baseCandidates = getCandidateStreams(currentTvChannel, tvQueue);
+    const baseCandidates = getCandidateStreams(
+      currentTvChannel,
+      tvQueue,
+      customTvChannels
+    );
     if (!activeArchiveProg || !currentTvChannel) {
       return baseCandidates;
     }
+    const effectiveStartMs =
+      activeArchiveProg.start + archiveSeekOffsetSec * 1000;
     const catchupUrls: string[] = [];
     for (const baseUrl of baseCandidates) {
       const generated = buildCatchupStreamCandidates(
         baseUrl,
-        activeArchiveProg.start,
+        effectiveStartMs,
         activeArchiveProg.stop,
         currentTvChannel.catchupSource
       );
@@ -296,13 +498,20 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       }
     }
     return catchupUrls;
-  }, [currentTvChannel, tvQueue, activeArchiveProg]);
+  }, [
+    currentTvChannel,
+    tvQueue,
+    customTvChannels,
+    activeArchiveProg,
+    archiveSeekOffsetSec,
+  ]);
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const liveSurfaceBtnRef = useRef<HTMLButtonElement | null>(null);
   const osdClosedAtRef = useRef<number>(0);
+  const lastTvBackAtRef = useRef<number>(0);
   const hlsRef = useRef<Hls | null>(null);
   const subFileInputRef = useRef<HTMLInputElement | null>(null);
   const channelGridBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -315,15 +524,19 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const [reloadCount, setReloadCount] = useState(0);
   const [streamIndex, setStreamIndex] = useState(0);
   const [isOsdOverlayOpen, setIsOsdOverlayOpen] = useState(false);
-  const [osdViewMode, setOsdViewMode] = useState<'channels' | 'epg'>('channels');
+  const [osdViewMode, setOsdViewMode] = useState<
+    'channels' | 'groups' | 'epg_detail' | 'epg'
+  >('channels');
   const [videoResolution, setVideoResolution] = useState<string>('');
   const [isTvOsdVisible, setIsTvOsdVisible] = useState(true);
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(() =>
     effectiveTvFullMode
       ? false
-      : typeof window !== 'undefined'
-        ? window.innerWidth >= 1024
-        : true
+      : inlineEmbeddedMode
+        ? true
+        : typeof window !== 'undefined'
+          ? window.innerWidth >= 1024
+          : true
   );
   const [sidePanelTab, setSidePanelTab] = useState<'channels' | 'archive'>(
     'channels'
@@ -340,6 +553,35 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     osdTimerRef.current = window.setTimeout(() => {
       setIsTvOsdVisible(false);
     }, 4500);
+  };
+
+  const enterTvFullMode = () => {
+    setIsFullModeExpanded(true);
+    setIsSidePanelOpen(false);
+    setIsInfoPanelOpen(false);
+    setIsOsdOverlayOpen(false);
+    wakeTvOsd();
+    window.setTimeout(() => {
+      liveSurfaceBtnRef.current?.focus({ preventScroll: true });
+    }, 40);
+  };
+
+  const exitTvFullMode = () => {
+    setIsFullModeExpanded(false);
+    setIsSplitFullscreen(false);
+    setIsSidePanelOpen(true);
+    setIsInfoPanelOpen(true);
+    setIsOsdOverlayOpen(false);
+    window.setTimeout(() => {
+      const selectedRow =
+        dialogRef.current?.querySelector<HTMLElement>(
+          '[data-osd-channel-row="true"][aria-selected="true"]'
+        ) ||
+        dialogRef.current?.querySelector<HTMLElement>(
+          '[data-osd-channel-row="true"]'
+        );
+      selectedRow?.focus({ preventScroll: true });
+    }, 45);
   };
 
   useEffect(() => {
@@ -360,6 +602,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const [customSubtitleName, setCustomSubtitleName] = useState<string>('');
   const [isOnlineSubFinderOpen, setIsOnlineSubFinderOpen] =
     useState<boolean>(false);
+  const [profileSubFontPx, setProfileSubFontPx] = useState<number>(
+    () => getActiveProfileMediaPrefs().defaultSubFontPx || 24
+  );
+
+  useEffect(() => {
+    const syncPrefs = () => {
+      setProfileSubFontPx(getActiveProfileMediaPrefs().defaultSubFontPx || 24);
+    };
+    window.addEventListener('aether:active-profile-changed', syncPrefs);
+    window.addEventListener('aether:profile-media-prefs-changed', syncPrefs);
+    return () => {
+      window.removeEventListener('aether:active-profile-changed', syncPrefs);
+      window.removeEventListener('aether:profile-media-prefs-changed', syncPrefs);
+    };
+  }, []);
 
   const isOpen = Boolean(currentTvChannel);
 
@@ -372,18 +629,124 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     setSubtitleTracks([]);
     setActiveSubtitleTrack(-1);
     setActiveArchiveProg(currentTvChannel?.archiveProgram || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentTvChannel?.id,
+    currentTvChannel?.url,
+    currentTvChannel?.archiveProgram?.start,
+  ]);
+
+  useEffect(() => {
+    const isFull =
+      Boolean(currentTvChannel) &&
+      (!inlineEmbeddedMode || effectiveTvFullMode || isSplitFullscreen);
+    if (typeof document !== 'undefined') {
+      if (isFull) {
+        document.documentElement.setAttribute('data-tv-full-mode', 'true');
+      } else {
+        document.documentElement.removeAttribute('data-tv-full-mode');
+      }
+    }
+    window.dispatchEvent(
+      new CustomEvent('aether:tv-full-mode-change', {
+        detail: { isFullMode: isFull },
+      })
+    );
+    return () => {
+      window.setTimeout(() => {
+        const stillFull = document.querySelector(
+          '#aether-tv-player-modal[data-full-mode="true"]'
+        );
+        if (!stillFull) {
+          if (typeof document !== 'undefined') {
+            document.documentElement.removeAttribute('data-tv-full-mode');
+          }
+          window.dispatchEvent(
+            new CustomEvent('aether:tv-full-mode-change', {
+              detail: { isFullMode: false },
+            })
+          );
+        }
+      }, 0);
+    };
+  }, [
+    currentTvChannel,
+    effectiveTvFullMode,
+    inlineEmbeddedMode,
+    isSplitFullscreen,
+  ]);
+
+  useEffect(() => {
     if (effectiveTvFullMode) {
       setIsSidePanelOpen(false);
       setIsInfoPanelOpen(false);
       setIsOsdOverlayOpen(false);
       wakeTvOsd();
+      window.setTimeout(() => {
+        if (!isOsdOverlayOpen) {
+          liveSurfaceBtnRef.current?.focus({ preventScroll: true });
+        }
+      }, 45);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTvChannel?.id, currentTvChannel?.archiveProgram, effectiveTvFullMode]);
+  }, [effectiveTvFullMode]);
+
+  useEffect(() => {
+    const onEnterFullModeEvent = () => {
+      setIsSplitFullscreen(false);
+      setIsFullModeExpanded(false);
+      setIsSidePanelOpen(true);
+      setIsInfoPanelOpen(true);
+      setIsOsdOverlayOpen(false);
+      window.setTimeout(() => {
+        const firstRow =
+          dialogRef.current?.querySelector<HTMLElement>(
+            '[data-osd-channel-row="true"][aria-selected="true"]'
+          ) ||
+          dialogRef.current?.querySelector<HTMLElement>(
+            '[data-osd-channel-row="true"]'
+          );
+        firstRow?.focus({ preventScroll: true });
+      }, 50);
+    };
+    window.addEventListener('aether:tv-enter-full-mode', onEnterFullModeEvent);
+    return () => {
+      window.removeEventListener('aether:tv-enter-full-mode', onEnterFullModeEvent);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Automatically unmute on the very first key press or click anywhere on the page
+  useEffect(() => {
+    if (!isAutoMuted) return;
+    const unlockAudio = () => {
+      const v = videoRef.current;
+      if (v) {
+        v.muted = false;
+        if (v.volume === 0) v.volume = 1;
+      }
+      setIsAutoMuted(false);
+    };
+    window.addEventListener('keydown', unlockAudio, true);
+    window.addEventListener('pointerdown', unlockAudio, true);
+    return () => {
+      window.removeEventListener('keydown', unlockAudio, true);
+      window.removeEventListener('pointerdown', unlockAudio, true);
+    };
+  }, [isAutoMuted]);
 
   useEffect(() => {
     if (!currentTvChannel) return;
     const onBackEvent = () => {
+      if (document.querySelector('[data-osd-subview="true"]')) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastTvBackAtRef.current < 250) {
+        return;
+      }
+      lastTvBackAtRef.current = now;
+
       if (isOnlineSubFinderOpen) {
         setIsOnlineSubFinderOpen(false);
         return;
@@ -393,20 +756,20 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         setIsOsdOverlayOpen(false);
         return;
       }
-      if (isSidePanelOpen) {
-        setIsSidePanelOpen(false);
+      if (effectiveTvFullMode || isFullModeExpanded) {
+        exitTvFullMode();
         return;
       }
-      if (isInfoPanelOpen) {
-        setIsInfoPanelOpen(false);
-        return;
-      }
-      if (isTvOsdVisible) {
-        if (osdTimerRef.current) {
-          window.clearTimeout(osdTimerRef.current);
-          osdTimerRef.current = null;
+      if (inlineEmbeddedMode) {
+        if (isSplitFullscreen) {
+          setIsSplitFullscreen(false);
         }
-        setIsTvOsdVisible(false);
+        window.setTimeout(() => {
+          const navBtn = document.querySelector<HTMLElement>(
+            'aside [data-nav-section="tv"], aside button'
+          );
+          navBtn?.focus();
+        }, 30);
         return;
       }
       closeTvPlayer();
@@ -414,11 +777,36 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     const onWakeEvent = () => {
       wakeTvOsd();
     };
+    const onDirectEscOrBackKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'SELECT' ||
+        target?.tagName === 'TEXTAREA';
+      const isBackKey =
+        e.key === 'Escape' ||
+        e.key === 'GoBack' ||
+        e.key === 'BrowserBack' ||
+        e.keyCode === 27 ||
+        e.keyCode === 461 ||
+        e.keyCode === 10009 ||
+        ((e.key === 'Backspace' || e.keyCode === 8) &&
+          !isInput &&
+          !document.querySelector('[data-tv-osd-search-open="true"]'));
+      if (!isBackKey) return;
+      if (document.querySelector('[data-osd-subview="true"]')) {
+        return;
+      }
+      e.preventDefault();
+      onBackEvent();
+    };
     window.addEventListener('aether:tv-player-back', onBackEvent);
     window.addEventListener('aether:tv-player-wake-osd', onWakeEvent);
+    window.addEventListener('keydown', onDirectEscOrBackKey);
     return () => {
       window.removeEventListener('aether:tv-player-back', onBackEvent);
       window.removeEventListener('aether:tv-player-wake-osd', onWakeEvent);
+      window.removeEventListener('keydown', onDirectEscOrBackKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -426,6 +814,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     isTvOsdVisible,
     isOnlineSubFinderOpen,
     isOsdOverlayOpen,
+    isFullModeExpanded,
+    isSplitFullscreen,
+    effectiveTvFullMode,
+    inlineEmbeddedMode,
     isSidePanelOpen,
     isInfoPanelOpen,
     closeTvPlayer,
@@ -496,11 +888,29 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         return;
       }
 
-      // ArrowRight or Green Button (404) -> Opens Smart IPTV EPG & Catchup Archive Window (Photo 3)
-      if (e.key === 'ArrowRight' || e.keyCode === 404) {
+      // Green Button (404) -> Opens Detailed EPG Window
+      if (e.keyCode === 404) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOsdViewMode('epg_detail');
+        setIsOsdOverlayOpen(true);
+        return;
+      }
+
+      // ArrowRight or Yellow Button (405) -> Opens Catchup Archive Window
+      if (e.key === 'ArrowRight' || e.keyCode === 405) {
         e.preventDefault();
         e.stopPropagation();
         setOsdViewMode('epg');
+        setIsOsdOverlayOpen(true);
+        return;
+      }
+
+      // Blue Button (406) -> Opens Groups / Playlists Window
+      if (e.keyCode === 406) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOsdViewMode('groups');
         setIsOsdOverlayOpen(true);
         return;
       }
@@ -562,7 +972,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         const v = videoRef.current;
         if (v) {
           if (v.paused) {
-            v.play().catch(() => {});
+            v.play().catch(() => { });
             setVideoStatus('playing');
           } else {
             v.pause();
@@ -573,8 +983,24 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       }
     };
 
+    const onTvRemoteWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) < 1 && Math.abs(e.deltaX) < 1) return;
+      if (Date.now() - osdClosedAtRef.current < 320) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOsdViewMode('channels');
+      setIsOsdOverlayOpen(true);
+    };
+
     window.addEventListener('keydown', onTvRemoteKeyDown, true);
-    return () => window.removeEventListener('keydown', onTvRemoteKeyDown, true);
+    window.addEventListener('wheel', onTvRemoteWheel, {
+      passive: false,
+      capture: true,
+    });
+    return () => {
+      window.removeEventListener('keydown', onTvRemoteKeyDown, true);
+      window.removeEventListener('wheel', onTvRemoteWheel, true);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentTvChannel,
@@ -624,26 +1050,24 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     );
   }, [archiveProgrammes, selectedArchiveDay]);
 
-  useEffect(() => {
-    if (!isOpen || effectiveTvFullMode) return;
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        closeTvPlayer();
-      }
-    };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [isOpen, effectiveTvFullMode, closeTvPlayer]);
-
   // Attach HLS stream whenever currentTvChannel, streamIndex, or reloadCount changes
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !currentTvChannel) return;
 
     let cancelled = false;
+    let frameWatchdogTimer: number | null = null;
     setVideoStatus('loading');
 
+    const clearWatchdog = () => {
+      if (frameWatchdogTimer !== null) {
+        window.clearTimeout(frameWatchdogTimer);
+        frameWatchdogTimer = null;
+      }
+    };
+
     const cleanupHls = () => {
+      clearWatchdog();
       if (hlsRef.current) {
         try {
           hlsRef.current.destroy();
@@ -675,18 +1099,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         video.muted = false;
         setIsAutoMuted(false);
         await video.play();
-        if (!cancelled) setVideoStatus('playing');
-      } catch {
-        // Browser blocked unmuted autoplay — fallback to muted autoplay so video starts immediately
+      } catch (err: unknown) {
         if (cancelled) return;
-        try {
-          video.muted = true;
-          setIsAutoMuted(true);
-          await video.play();
-          if (!cancelled) setVideoStatus('playing');
-        } catch {
-          // User can click play on native controls
-          if (!cancelled) setVideoStatus('playing');
+        const errName =
+          err && typeof err === 'object' && 'name' in err
+            ? String((err as { name?: string }).name)
+            : '';
+        // Only fall back to muted autoplay if the browser explicitly rejected unmuted playback with NotAllowedError
+        if (errName === 'NotAllowedError') {
+          try {
+            video.muted = true;
+            setIsAutoMuted(true);
+            await video.play();
+          } catch {
+            // ignore
+          }
         }
       }
     };
@@ -707,27 +1134,46 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           let mediaRecoveryCount = 0;
 
           const hls = new Hls({
-            enableWorker: !effectiveTvFullMode,
+            enableWorker: true,
             lowLatencyMode: false,
-            backBufferLength: 30,
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
-            manifestLoadingTimeOut: 15000,
-            manifestLoadingMaxRetry: 3,
-            levelLoadingTimeOut: 15000,
-            fragLoadingTimeOut: 20000,
+            startFragPrefetch: true,
+            liveSyncDurationCount: 1.2,
+            liveMaxLatencyDurationCount: 4,
+            backBufferLength: 8,
+            maxBufferLength: 12,
+            maxMaxBufferLength: 24,
+            maxBufferSize: 18 * 1000 * 1000,
+            highBufferWatchdogPeriod: 1,
+            nudgeMaxRetry: 5,
+            manifestLoadingTimeOut: 10000,
+            manifestLoadingMaxRetry: 2,
+            levelLoadingTimeOut: 10000,
+            fragLoadingTimeOut: 12000,
           });
           hlsRef.current = hls;
 
+          let hasAppliedInitialProfileTracks = false;
           const syncTracks = () => {
             if (cancelled) return;
+            const profilePrefs = getActiveProfileMediaPrefs();
             const aTracks = (hls.audioTracks || []).map((trk, idx) => ({
               id: idx,
               name: trk.name || trk.lang || `Audio ${idx + 1}`,
               lang: trk.lang,
             }));
             setAudioTracks(aTracks);
-            if (hls.audioTrack >= 0) {
+            if (!hasAppliedInitialProfileTracks && aTracks.length > 1) {
+              const prefIdx = resolveAudioTrackIndexByPreference(
+                aTracks.map((t) => `${t.name} ${t.lang || ''}`),
+                profilePrefs.defaultAudioPref
+              );
+              if (prefIdx >= 0 && prefIdx < aTracks.length) {
+                hls.audioTrack = prefIdx;
+                setActiveAudioTrack(prefIdx);
+              } else if (hls.audioTrack >= 0) {
+                setActiveAudioTrack(hls.audioTrack);
+              }
+            } else if (hls.audioTrack >= 0) {
               setActiveAudioTrack(hls.audioTrack);
             }
 
@@ -737,7 +1183,34 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               lang: trk.lang,
             }));
             setSubtitleTracks(sTracks);
-            setActiveSubtitleTrack(hls.subtitleTrack);
+            if (!hasAppliedInitialProfileTracks && sTracks.length > 0) {
+              if (profilePrefs.defaultSubLang === 'off') {
+                hls.subtitleDisplay = false;
+                hls.subtitleTrack = -1;
+                setActiveSubtitleTrack(-1);
+              } else {
+                const targetLang = profilePrefs.defaultSubLang || 'ro';
+                const matchIdx = sTracks.findIndex((t) => {
+                  const hay = `${t.name} ${t.lang || ''}`.toLowerCase();
+                  if (targetLang === 'ro') return /ro|rum|ron|român/i.test(hay);
+                  if (targetLang === 'ru') return /ru|rus|рус/i.test(hay);
+                  if (targetLang === 'en') return /en|eng|english/i.test(hay);
+                  return hay.includes(targetLang);
+                });
+                if (matchIdx >= 0) {
+                  hls.subtitleDisplay = true;
+                  hls.subtitleTrack = matchIdx;
+                  setActiveSubtitleTrack(matchIdx);
+                } else {
+                  setActiveSubtitleTrack(hls.subtitleTrack);
+                }
+              }
+            } else {
+              setActiveSubtitleTrack(hls.subtitleTrack);
+            }
+            if (aTracks.length > 0 || sTracks.length > 0) {
+              hasAppliedInitialProfileTracks = true;
+            }
           };
 
           hls.attachMedia(video);
@@ -752,6 +1225,18 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             if (cancelled) return;
             syncTracks();
             void safeAutoPlay();
+            clearWatchdog();
+            frameWatchdogTimer = window.setTimeout(() => {
+              if (cancelled) return;
+              if (
+                video.videoWidth === 0 &&
+                video.readyState < 3 &&
+                streamIndex + 1 < candidateStreams.length
+              ) {
+                cleanupHls();
+                setStreamIndex((prev) => prev + 1);
+              }
+            }, 5500);
           });
 
           hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncTracks);
@@ -805,12 +1290,15 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       cleanupHls();
       video.pause();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    currentTvChannel,
-    candidateStreams,
+    currentTvChannel?.id,
+    currentTvChannel?.url,
+    activeArchiveProg?.start,
+    activeArchiveProg?.stop,
+    archiveSeekOffsetSec,
     streamIndex,
     reloadCount,
-    effectiveTvFullMode,
   ]);
 
   if (!currentTvChannel) return null;
@@ -821,13 +1309,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
   const effectiveLogo =
     !currentTvChannel.logo ||
-    /imgur\.com|wikia\.nocookie\.net/i.test(currentTvChannel.logo)
+      /imgur\.com|wikia\.nocookie\.net/i.test(currentTvChannel.logo)
       ? epg?.icon || currentTvChannel.logo
       : currentTvChannel.logo;
 
   const displayGroup =
     currentTvChannel.group &&
-    currentTvChannel.group.toLowerCase() !== 'undefined'
+      currentTvChannel.group.toLowerCase() !== 'undefined'
       ? currentTvChannel.group
       : 'General';
 
@@ -835,10 +1323,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     const container = videoContainerRef.current;
     const video = videoRef.current as
       | (HTMLVideoElement & {
-          webkitEnterFullscreen?: () => void;
-          webkitExitFullscreen?: () => void;
-          webkitDisplayingFullscreen?: boolean;
-        })
+        webkitEnterFullscreen?: () => void;
+        webkitExitFullscreen?: () => void;
+        webkitDisplayingFullscreen?: boolean;
+      })
       | null;
     if (!video) return;
 
@@ -849,7 +1337,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
     if (doc.fullscreenElement || doc.webkitFullscreenElement) {
       if (doc.exitFullscreen) {
-        void doc.exitFullscreen().catch(() => {});
+        void doc.exitFullscreen().catch(() => { });
       } else if (doc.webkitExitFullscreen) {
         void doc.webkitExitFullscreen();
       }
@@ -910,13 +1398,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
   const handleAudioTrackChange = (trackIdx: number) => {
     setActiveAudioTrack(trackIdx);
+    const picked = audioTracks[trackIdx];
+    if (picked) {
+      saveActiveProfileMediaPrefs({
+        defaultAudioPref: inferAudioPrefFromTrackName(
+          `${picked.name} ${picked.lang || ''}`
+        ),
+      });
+    }
     if (hlsRef.current) {
       hlsRef.current.audioTrack = trackIdx;
     }
     const video = videoRef.current as
       | (HTMLVideoElement & {
-          audioTracks?: ArrayLike<{ enabled: boolean }>;
-        })
+        audioTracks?: ArrayLike<{ enabled: boolean }>;
+      })
       | null;
     if (video?.audioTracks) {
       for (let i = 0; i < video.audioTracks.length; i += 1) {
@@ -935,6 +1431,25 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       return;
     }
     setActiveSubtitleTrack(trackIdx);
+    if (trackIdx === -1) {
+      saveActiveProfileMediaPrefs({ defaultSubLang: 'off' });
+    } else if (trackIdx >= 0 && subtitleTracks[trackIdx]) {
+      const hay =
+        `${subtitleTracks[trackIdx].name} ${subtitleTracks[trackIdx].lang || ''}`.toLowerCase();
+      if (/ro|rum|ron|român/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'ro' });
+      } else if (/ru|rus|рус/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'ru' });
+      } else if (/en|eng|english/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'en' });
+      } else if (/es|spa|españ/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'es' });
+      } else if (/fr|fra|fre|franç/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'fr' });
+      } else if (/de|ger|deu|deutsch/i.test(hay)) {
+        saveActiveProfileMediaPrefs({ defaultSubLang: 'de' });
+      }
+    }
     const video = videoRef.current;
 
     if (trackIdx === 999) {
@@ -997,7 +1512,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     }
   };
 
-  const showSideColumn = isSidePanelOpen && !isOsdOverlayOpen;
+  const showSideColumn =
+    !effectiveTvFullMode && isSidePanelOpen && !isOsdOverlayOpen;
 
   return (
     <div
@@ -1005,6 +1521,11 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       ref={dialogRef}
       role="dialog"
       aria-modal="true"
+      data-full-mode={
+        effectiveTvFullMode || (inlineEmbeddedMode && isSplitFullscreen)
+          ? 'true'
+          : 'false'
+      }
       data-osd-visible={isTvOsdVisible ? 'true' : 'false'}
       data-osd-overlay={isOsdOverlayOpen ? 'true' : 'false'}
       aria-label={currentTvChannel.name}
@@ -1015,32 +1536,44 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         if (effectiveTvFullMode) wakeTvOsd();
       }}
       onClick={(e) => {
-        if (e.target === dialogRef.current && !effectiveTvFullMode) {
+        if (
+          e.target === dialogRef.current &&
+          !effectiveTvFullMode &&
+          !inlineEmbeddedMode
+        ) {
           closeTvPlayer();
         }
       }}
       className={
         effectiveTvFullMode
           ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
-          : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-1 sm:p-3 overflow-y-auto'
+          : inlineEmbeddedMode && isSplitFullscreen
+            ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+            : inlineEmbeddedMode
+              ? 'relative w-full h-[calc(100dvh-7.75rem)] md:h-[calc(100dvh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
+              : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-1 sm:p-3 overflow-y-auto no-scrollbar'
       }
     >
       <div
         className={
           effectiveTvFullMode
             ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-black'
-            : 'mx-auto mt-10 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-zinc-950 text-zinc-100 border border-zinc-800 shadow-2xl flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
+            : inlineEmbeddedMode && isSplitFullscreen
+              ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-[#090d16]'
+              : inlineEmbeddedMode
+                ? 'relative flex flex-col w-full h-full flex-1 min-h-0 overflow-hidden bg-[#090d16]'
+                : 'mx-auto mt-10 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-[#090d16] text-zinc-100 border border-zinc-800 shadow-2xl flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
         }
       >
         {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}
         {!effectiveTvFullMode && (
-          <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-5 py-2 sm:py-3 bg-zinc-900/95 border-b border-zinc-800">
+          <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-[#0b111e] border-b border-white/10">
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <StationAvatar
                 name={currentTvChannel.name}
                 favicon={effectiveLogo}
                 size="sm"
-                isPlaying={videoStatus === 'playing'}
+                isPlaying={false}
               />
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 sm:gap-2">
@@ -1065,11 +1598,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   )}
                   <span>•</span>
                   <span className="truncate">{displayGroup}</span>
-                  {epg?.now?.title && (
+                  {(activeArchiveProg?.title || epg?.now?.title) && (
                     <>
                       <span>•</span>
                       <span className="text-amber-300 font-semibold truncate">
-                        {epg.now.title}
+                        {activeArchiveProg
+                          ? `[ARHIVĂ] ${activeArchiveProg.title}`
+                          : epg?.now?.title}
                       </span>
                     </>
                   )}
@@ -1078,22 +1613,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {candidateStreams.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setStreamIndex((prev) => (prev + 1) % candidateStreams.length)
-                  }
-                  title="Schimbă sursa streamului (Backup)"
-                  className="min-h-[36px] px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
-                >
-                  <Layers className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
-                  <span>
-                    Sursa {streamIndex + 1}/{candidateStreams.length}
-                  </span>
-                </button>
-              )}
-
               <button
                 type="button"
                 onClick={() => toggleFavoriteTvChannel(currentTvChannel)}
@@ -1102,11 +1621,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   isFavorite ? t.favorites.removeFav : t.favorites.addFav,
                   { name: currentTvChannel.name }
                 )}
-                className={`min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-all focus:outline-none focus:ring-4 focus:ring-white ${
-                  isFavorite
-                    ? 'text-rose-400 bg-rose-950/60 hover:bg-rose-950/90'
-                    : 'text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700'
-                }`}
+                className={`min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full transition-all focus:outline-none focus:ring-4 focus:ring-white ${isFavorite
+                  ? 'text-rose-400 bg-rose-950/60 hover:bg-rose-950/90'
+                  : 'text-zinc-300 bg-zinc-800/80 hover:text-white hover:bg-zinc-700'
+                  }`}
               >
                 <Heart
                   aria-hidden="true"
@@ -1116,18 +1634,35 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
               <button
                 type="button"
-                onClick={closeTvPlayer}
-                aria-label={t.tv.closeTvPlayer}
-                className="min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/90 hover:text-white hover:bg-rose-600 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-rose-600"
+                onClick={() => {
+                  setIsFullModeExpanded(true);
+                  setIsSidePanelOpen(false);
+                  setIsInfoPanelOpen(false);
+                  wakeTvOsd();
+                }}
+                aria-label="Full Mode TV"
+                title="Deschide în Full Mode (OK pe ecran deschide grila de canale)"
+                className="min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/80 hover:text-white hover:bg-blue-600 transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
               >
-                <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
+                <Maximize className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
               </button>
+
+              {!inlineEmbeddedMode && (
+                <button
+                  type="button"
+                  onClick={closeTvPlayer}
+                  aria-label={t.tv.closeTvPlayer}
+                  className="min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/90 hover:text-white hover:bg-rose-600 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-rose-600"
+                >
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
+                </button>
+              )}
             </div>
           </div>
         )}
 
         {/* Active Catch-up / TV Archive Playback Banner */}
-        {activeArchiveProg && (
+        {activeArchiveProg && (!effectiveTvFullMode || isTvOsdVisible) && (
           <div className="shrink-0 px-3 sm:px-6 py-2 bg-amber-950/90 border-b border-amber-600/60 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-zinc-950 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
@@ -1156,25 +1691,32 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           </div>
         )}
 
-        {/* SMART BODY: Flex-col on Mobile (so Left Column NEVER gets squished/clipped!) | 12-Col Grid on Desktop */}
-        <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden flex flex-col lg:grid lg:grid-cols-12">
-          {/* LEFT COLUMN: 16:9 Video Player + Controls + EPG Now/Next (shrink-0 on mobile so it is ALWAYS 100% visible!) */}
+        {/* SMART BODY: Sticky Video + Compact EPG on Top + Full-Height Scrollable Channel List on Mobile (<1024px) | Strict 2/3 Left + 1/3 Right Flex-Row on Desktop/TV */}
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row h-full">
+          {/* LEFT COLUMN (2/3 of screen on Desktop/TV; compact shrink-0 video + EPG header on Mobile): 16:9 Video Player + Controls + EPG Now/Next */}
           <div
-            className={`${
-              showSideColumn
-                ? 'lg:col-span-7 xl:col-span-7'
-                : 'lg:col-span-12'
-            } flex flex-col flex-1 shrink-0 lg:shrink lg:min-h-0 lg:overflow-y-auto bg-zinc-950`}
+            className={`${showSideColumn
+              ? 'lg:w-2/3 xl:w-2/3 lg:h-full'
+              : 'lg:w-full lg:h-full'
+              } flex flex-col shrink-0 lg:flex-1 lg:shrink lg:min-h-0 lg:overflow-hidden no-scrollbar bg-[#090d16]`}
           >
-            {/* Video Area (Full height in TV Full Mode, or 16:9 when side/EPG panels are open) */}
+            {/* Video Area (Full height in TV Full Mode, or flex-1 above compact EPG in Split-View so EPG + Upcoming Shows are never pushed off screen) */}
             <div
               ref={videoContainerRef}
-              className={`group/video relative w-full bg-black flex items-center justify-center overflow-hidden ${
-                effectiveTvFullMode && !showSideColumn && !isInfoPanelOpen
-                  ? 'flex-1 min-h-0'
-                  : 'aspect-video shrink-0'
-              }`}
+              className={`group/video relative w-full bg-black flex items-center justify-center overflow-hidden ${effectiveTvFullMode && !showSideColumn && !isInfoPanelOpen
+                ? 'flex-1 min-h-0'
+                : 'aspect-video shrink-0 lg:aspect-auto lg:flex-1 lg:min-h-0'
+                }`}
             >
+              <style>{`
+                #aether-tv-player-modal video::cue {
+                  font-size: ${profileSubFontPx}px !important;
+                  font-weight: 800 !important;
+                  color: #ffffff !important;
+                  background-color: rgba(0, 0, 0, 0.78) !important;
+                  text-shadow: 0 2px 4px rgba(0,0,0,0.95) !important;
+                }
+              `}</style>
               <video
                 ref={videoRef}
                 controls={!effectiveTvFullMode}
@@ -1184,6 +1726,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   if (effectiveTvFullMode) {
                     setOsdViewMode('channels');
                     setIsOsdOverlayOpen(true);
+                  } else {
+                    enterTvFullMode();
                   }
                 }}
                 onPlaying={(e) => {
@@ -1224,6 +1768,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 }}
                 onTimeUpdate={(e) => {
                   const vid = e.currentTarget;
+                  if (activeArchiveProg) {
+                    const cur = Math.max(0, Math.floor(vid.currentTime || 0));
+                    setArchiveVideoTimeSec((prev) => (prev !== cur ? cur : prev));
+                  }
                   if (!currentTvChannel?.url || !Number.isFinite(vid.duration) || vid.duration <= 90) return;
                   if (vid.currentTime < 5) return;
                   try {
@@ -1253,8 +1801,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 )}
               </video>
 
-              {/* Unmute banner if browser forced muted autoplay */}
-              {isAutoMuted && videoStatus === 'playing' && (
+              {/* Unmute banner ONLY if browser genuinely forced muted autoplay AND video frames are playing */}
+              {isAutoMuted && videoStatus === 'playing' && Boolean(videoResolution) && (
                 <button
                   type="button"
                   onClick={() => {
@@ -1302,6 +1850,24 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 />
               )}
 
+              {/* Top-Right Exit Full Mode Pill (shown when OSD is awake in Full Mode) */}
+              {effectiveTvFullMode && isTvOsdVisible && !isOsdOverlayOpen && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    exitTvFullMode();
+                  }}
+                  style={{
+                    backgroundColor: 'rgba(10, 15, 28, 0.88)',
+                    border: '1px solid rgba(148, 163, 184, 0.28)',
+                  }}
+                  className="absolute top-5 right-6 z-30 px-4 py-2 rounded-full text-xs sm:text-sm font-bold text-zinc-100 hover:text-white hover:bg-slate-800/95 backdrop-blur-xl shadow-2xl inline-flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <span>← Ieșire Full Mode (Back / Esc)</span>
+                </button>
+              )}
+
               {/* Smart IPTV Bottom Info Banner (Exact match to Photo 2: Channel No + Name | Current & Next EPG + Mins | Clock + Logo + Resolution) */}
               {effectiveTvFullMode && isTvOsdVisible && !isOsdOverlayOpen && (
                 <div
@@ -1311,17 +1877,39 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     setIsOsdOverlayOpen(true);
                   }}
                   style={{
-                    backgroundColor: 'rgba(10, 14, 22, 0.94)',
-                    border: '2px solid #7dd3fc',
+                    backgroundColor: 'rgba(10, 15, 28, 0.92)',
+                    border: '1px solid rgba(148, 163, 184, 0.22)',
+                    borderRadius: '24px',
+                    boxShadow: '0 24px 64px rgba(0, 0, 0, 0.8)',
                   }}
-                  className="absolute bottom-5 inset-x-6 z-30 bg-black/95 shadow-2xl overflow-hidden cursor-pointer select-none"
+                  className="absolute bottom-5 inset-x-6 z-30 rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden cursor-pointer select-none"
                 >
-                  {/* Top Edge Full-Width EPG Progress Line */}
-                  <div className="w-full h-1 bg-white/15 overflow-hidden">
+                  {/* Top Edge Full-Width EPG / Archive Progress Line (clickable to seek when playing from Archive) */}
+                  <div
+                    onClick={
+                      activeArchiveProg ? handleSeekArchiveProgress : undefined
+                    }
+                    title={
+                      activeArchiveProg
+                        ? 'Click pe bară pentru a derula emisiunea din Arhivă'
+                        : undefined
+                    }
+                    className={`w-full ${
+                      activeArchiveProg ? 'h-2 cursor-pointer' : 'h-1'
+                    } bg-white/15 overflow-hidden`}
+                  >
                     <div
-                      className="h-full bg-[#38bdf8]"
+                      className={`h-full transition-all duration-300 ${
+                        activeArchiveProg ? 'bg-[#f59e0b]' : 'bg-[#38bdf8]'
+                      }`}
                       style={{
-                        width: `${epg?.now ? epgStats.progress : 100}%`,
+                        width: `${
+                          activeArchiveProg
+                            ? archiveProgressPct
+                            : epg?.now
+                              ? epgStats.progress
+                              : 100
+                        }%`,
                       }}
                     />
                   </div>
@@ -1440,73 +2028,85 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                         <span
                           style={{
                             display: 'table-cell',
-                            width: '64px',
+                            width: '115px',
                             textAlign: 'right',
-                            fontSize: '16px',
-                            color: '#e4e4e7',
+                            fontSize: '15px',
+                            color: activeArchiveProg ? '#fbbf24' : '#e4e4e7',
+                            fontWeight: activeArchiveProg ? 700 : 400,
                             whiteSpace: 'nowrap',
                             verticalAlign: 'middle',
                           }}
                         >
-                          {epg?.now && !activeArchiveProg
-                            ? `+${epgStats.remainingMin}`
-                            : ''}
+                          {activeArchiveProg
+                            ? `${formatArchiveClock(archiveElapsedSec)} / ${formatArchiveClock(archiveTotalSec)}`
+                            : epg?.now
+                              ? `+${epgStats.remainingMin}`
+                              : ''}
                         </span>
                       </div>
 
-                      {/* Row 2: Next Programme */}
-                      <div
-                        style={{
-                          display: 'table',
-                          tableLayout: 'fixed',
-                          width: '100%',
-                        }}
-                      >
-                        <span
-                          style={{
-                            display: 'table-cell',
-                            width: '135px',
-                            fontSize: '15px',
-                            color: '#a1a1aa',
-                            whiteSpace: 'nowrap',
-                            verticalAlign: 'middle',
-                          }}
-                        >
-                          {epg?.upcoming?.[0]
-                            ? `${formatEpgTime(epg.upcoming[0].start)} - ${formatEpgTime(epg.upcoming[0].stop)}`
-                            : ''}
-                        </span>
-                        <span
-                          style={{
-                            display: 'table-cell',
-                            fontSize: '15px',
-                            fontWeight: 400,
-                            color: '#d4d4d8',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            verticalAlign: 'middle',
-                            paddingRight: '10px',
-                          }}
-                        >
-                          {epg?.upcoming?.[0]?.title || ''}
-                        </span>
-                        <span
-                          style={{
-                            display: 'table-cell',
-                            width: '64px',
-                            textAlign: 'right',
-                            fontSize: '15px',
-                            color: '#a1a1aa',
-                            whiteSpace: 'nowrap',
-                            verticalAlign: 'middle',
-                          }}
-                        >
-                          {epg?.upcoming?.[0]
-                            ? `+${Math.max(1, Math.round((epg.upcoming[0].stop - epg.upcoming[0].start) / 60000))}`
-                            : ''}
-                        </span>
-                      </div>
+                      {/* Row 2: Next Programme (from Archive when playing Catchup, or Live Upcoming) */}
+                      {(() => {
+                        const nextProg = activeArchiveProg
+                          ? archiveNextProgrammes[0]
+                          : epg?.upcoming?.[0];
+                        return (
+                          <div
+                            style={{
+                              display: 'table',
+                              tableLayout: 'fixed',
+                              width: '100%',
+                            }}
+                          >
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                width: '135px',
+                                fontSize: '15px',
+                                color: '#a1a1aa',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              {nextProg
+                                ? `${formatEpgTime(nextProg.start)} - ${formatEpgTime(nextProg.stop)}`
+                                : ''}
+                            </span>
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                fontSize: '15px',
+                                fontWeight: 400,
+                                color: '#d4d4d8',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                verticalAlign: 'middle',
+                                paddingRight: '10px',
+                              }}
+                            >
+                              {nextProg?.title || ''}
+                            </span>
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                width: '115px',
+                                textAlign: 'right',
+                                fontSize: '15px',
+                                color: '#a1a1aa',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              {activeArchiveProg
+                                ? `-${archiveRemainingMin}m (${archiveProgressPct}%)`
+                                : nextProg
+                                  ? `+${Math.max(1, Math.round((nextProg.stop - nextProg.start) / 60000))}`
+                                  : ''}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Right (14%): Wall Clock + Channel Logo + Video Resolution */}
@@ -1640,7 +2240,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               {videoStatus === 'loading' && (
                 <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-[2px]">
                   <Loader2
-                    className="w-10 h-10 text-brand-400 animate-spin"
+                    className="w-10 h-10 text-blue-400 animate-spin"
                     aria-hidden="true"
                   />
                   <span className="text-sm font-medium text-zinc-200">
@@ -1678,7 +2278,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     <button
                       type="button"
                       onClick={playNextTvChannel}
-                      className="min-h-[42px] px-4 py-2 rounded-full bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold inline-flex items-center gap-2 transition-colors"
+                      className="min-h-[42px] px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold inline-flex items-center gap-2 transition-colors"
                     >
                       <Tv className="w-4 h-4" aria-hidden="true" />
                       <span>{t.tv.tryAnotherChannel}</span>
@@ -1688,340 +2288,178 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               )}
             </div>
 
-            {/* Unified Single-Row Compact Controls Bar — Normal Web Mode only */}
-            {!effectiveTvFullMode && (
-              <div className="shrink-0 flex items-center justify-between gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-zinc-900 border-t border-b border-zinc-800 overflow-x-auto no-scrollbar">
-                {/* Left Group: Icon Nav + Channels + Archive */}
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={playPreviousTvChannel}
-                  aria-label={t.player.prevStation}
-                  title={t.player.prevStation}
-                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-100 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
-                >
-                  <SkipBack className="w-4 h-4" aria-hidden="true" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={playNextTvChannel}
-                  aria-label={t.player.nextStation}
-                  title={t.player.nextStation}
-                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-100 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
-                >
-                  <SkipForward className="w-4 h-4" aria-hidden="true" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setReloadCount((c) => c + 1)}
-                  aria-label={t.player.retryStream}
-                  title={t.player.retryStream}
-                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-200 inline-flex items-center justify-center shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-amber-500 focus:text-zinc-950"
-                >
-                  <RotateCcw className="w-4 h-4" aria-hidden="true" />
-                </button>
-
-                {/* Toggle Channel List / Grid */}
-                <button
-                  ref={channelGridBtnRef}
-                  type="button"
-                  onClick={() => {
-                    if (effectiveTvFullMode) {
-                      setIsOsdOverlayOpen((v) => !v);
-                      setIsSidePanelOpen(false);
-                      return;
-                    }
-                    if (isOsdOverlayOpen) {
-                      setIsOsdOverlayOpen(false);
-                      setIsSidePanelOpen(true);
-                      setSidePanelTab('channels');
-                    } else if (isSidePanelOpen && sidePanelTab === 'channels') {
-                      setIsSidePanelOpen(false);
-                    } else {
-                      setIsSidePanelOpen(true);
-                      setSidePanelTab('channels');
-                    }
-                  }}
-                  aria-pressed={
-                    isOsdOverlayOpen ||
-                    (showSideColumn && sidePanelTab === 'channels')
-                  }
-                  title="Deschide / închide grila de canale"
-                  className={`h-9 sm:h-10 px-3.5 sm:px-4 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shrink-0 transition-all border focus:outline-none focus:ring-4 focus:ring-white ${
-                    isOsdOverlayOpen ||
-                    (showSideColumn && sidePanelTab === 'channels') ||
-                    effectiveTvFullMode
-                      ? 'bg-amber-500 hover:bg-amber-400 text-zinc-950 border-amber-400 shadow-lg'
-                      : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
-                  }`}
-                >
-                  <Tv className="w-4 h-4 shrink-0" aria-hidden="true" />
-                  <span>Grilă Canale ({tvQueue.length || 1})</span>
-                </button>
-
-                {/* Toggle 7-Day TV Archive */}
-                {archiveDays.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsOsdOverlayOpen(false);
-                      if (isSidePanelOpen && sidePanelTab === 'archive') {
-                        setIsSidePanelOpen(false);
-                      } else {
-                        setIsSidePanelOpen(true);
-                        setSidePanelTab('archive');
-                      }
-                    }}
-                    aria-pressed={showSideColumn && sidePanelTab === 'archive'}
-                    title={`Deschide / închide Arhiva TV (${archiveDays.length} zile)`}
-                    className={`h-8 sm:h-9 px-2.5 sm:px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors border ${
-                      (showSideColumn && sidePanelTab === 'archive') ||
-                      activeArchiveProg
-                        ? 'bg-blue-500 text-zinc-950 border-blue-400 font-bold'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-blue-300 border-zinc-700'
-                    }`}
-                  >
-                    <History className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                    <span>Arhivă ({archiveDays.length}z)</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Right Group: Compact Audio + Subtitles + .SRT + PiP + Fullscreen */}
-              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-                {/* Compact Audio Track Selector */}
-                <div
-                  title="Selectează pista audio"
-                  className="h-8 sm:h-9 inline-flex items-center gap-1 px-2.5 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 shrink-0"
-                >
-                  <Languages
-                    className="w-3.5 h-3.5 text-amber-400 shrink-0"
-                    aria-hidden="true"
-                  />
-                  <select
-                    aria-label="Selectează pista audio"
-                    value={activeAudioTrack}
-                    onChange={(e) =>
-                      handleAudioTrackChange(Number(e.target.value))
-                    }
-                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer max-w-[90px] sm:max-w-[115px] truncate"
-                  >
-                    {audioTracks.length > 0 ? (
-                      audioTracks.map((trk, idx) => (
-                        <option
-                          key={trk.id}
-                          value={trk.id}
-                          className="bg-zinc-900 text-zinc-100"
-                        >
-                          {trk.lang
-                            ? trk.lang.toUpperCase()
-                            : trk.name || `Audio ${idx + 1}`}
-                        </option>
-                      ))
-                    ) : (
-                      <option value={0} className="bg-zinc-900 text-zinc-100">
-                        Original
-                      </option>
-                    )}
-                  </select>
-                </div>
-
-                {/* Compact Subtitle Track Selector */}
-                <div
-                  title="Selectează subtitrarea sau încarcă un fișier .SRT / .VTT"
-                  className="h-8 sm:h-9 inline-flex items-center gap-1 px-2.5 rounded-full bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-xs text-zinc-100 shrink-0"
-                >
-                  <Subtitles
-                    className="w-3.5 h-3.5 text-blue-400 shrink-0"
-                    aria-hidden="true"
-                  />
-                  <select
-                    aria-label="Selectează subtitrarea"
-                    value={activeSubtitleTrack}
-                    onChange={(e) =>
-                      handleSubtitleTrackChange(Number(e.target.value))
-                    }
-                    className="bg-transparent text-zinc-100 text-xs font-semibold outline-none cursor-pointer max-w-[85px] sm:max-w-[115px] truncate"
-                  >
-                    <option value={-1} className="bg-zinc-900 text-zinc-100">
-                      Oprit
-                    </option>
-                    {subtitleTracks.map((trk) => (
-                      <option
-                        key={trk.id}
-                        value={trk.id}
-                        className="bg-zinc-900 text-zinc-100"
-                      >
-                        {trk.name}
-                        {trk.lang ? ` (${trk.lang.toUpperCase()})` : ''}
-                      </option>
-                    ))}
-                    {customSubtitleUrl && (
-                      <option value={999} className="bg-zinc-900 text-blue-300">
-                        {customSubtitleName || '.SRT'}
-                      </option>
-                    )}
-                    <option value={-98} className="bg-zinc-900 text-blue-300">
-                      Caută pe Net (.SRT)...
-                    </option>
-                    <option value={-99} className="bg-zinc-900 text-amber-300">
-                      + .SRT din Dispozitiv...
-                    </option>
-                  </select>
-                </div>
-
-                {/* Search & Download Online Subtitles (OpenSubtitles) */}
-                <button
-                  type="button"
-                  onClick={() => setIsOnlineSubFinderOpen(true)}
-                  aria-label="Caută și descarcă subtitrări de pe net (.SRT)"
-                  title="Caută și descarcă subtitrări de pe net (OpenSubtitles .SRT)"
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-blue-400 inline-flex items-center justify-center border border-zinc-700 shrink-0 transition-colors"
-                >
-                  <Globe className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-
-                {/* Upload custom .SRT / .VTT subtitle file */}
-                <input
-                  ref={subFileInputRef}
-                  type="file"
-                  accept=".srt,.vtt"
-                  onChange={(e) => void handleUploadSubtitleFile(e)}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => subFileInputRef.current?.click()}
-                  aria-label="Încarcă subtitrare (.srt / .vtt)"
-                  title={
-                    customSubtitleName
-                      ? `Subtitrare încărcată: ${customSubtitleName}`
-                      : 'Încarcă fișier subtitrare (.srt / .vtt)'
-                  }
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 inline-flex items-center justify-center border border-zinc-700 shrink-0 transition-colors"
-                >
-                  <Upload className="w-3.5 h-3.5 text-brand-400" aria-hidden="true" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePip}
-                  aria-label={t.tv.pip}
-                  title={t.tv.pip}
-                  className="hidden sm:inline-flex w-9 h-9 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 items-center justify-center shrink-0 transition-colors"
-                >
-                  <PictureInPicture2 className="w-4 h-4" aria-hidden="true" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleFullscreen}
-                  aria-label={t.tv.fullscreen}
-                  title={t.tv.fullscreen}
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-brand-600 hover:bg-brand-500 text-white inline-flex items-center justify-center shadow-md shrink-0 transition-colors"
-                >
-                  <Maximize className="w-4 h-4" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-            )}
-
-            {/* Compact Live EPG Program Guide Section (Below Controls) */}
+            {/* Compact EPG / Archive Program Guide & Progress Line Section */}
             {isInfoPanelOpen &&
-              (epg?.now || (epg?.upcoming && epg.upcoming.length > 0)) && (
-                <div className="px-4 py-3 bg-zinc-900/60 space-y-2.5">
-                  {epg.now && (
+              (activeArchiveProg ||
+                epg?.now ||
+                (epg?.upcoming && epg.upcoming.length > 0)) && (
+                <div className="shrink-0 flex flex-col justify-start px-3 sm:px-4 py-1.5 sm:py-2.5 bg-[#090d16] border-t border-white/10 gap-1.5 sm:gap-2">
+                  {activeArchiveProg ? (
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-950/90 border border-blue-700/50 text-blue-300 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                            EPG ACUM
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/50 text-amber-300 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            ARHIVĂ TV
                           </span>
                           <span className="inline-flex items-center gap-1 text-xs font-bold text-zinc-200 tabular-nums shrink-0">
                             <Clock
-                              className="w-3.5 h-3.5 text-brand-400"
+                              className="w-3.5 h-3.5 text-amber-400"
                               aria-hidden="true"
                             />
-                            {formatEpgTime(epg.now.start)} –{' '}
-                            {formatEpgTime(epg.now.stop)}
+                            {formatEpgTime(activeArchiveProg.start)} –{' '}
+                            {formatEpgTime(activeArchiveProg.stop)}
                           </span>
-                          {epg.now.category && (
+                          {activeArchiveProg.category && (
                             <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 text-[11px] font-medium truncate">
-                              {epg.now.category}
+                              {activeArchiveProg.category}
                             </span>
                           )}
                         </div>
-                        <span className="text-xs font-bold text-blue-400 tabular-nums">
-                          {epgStats.remainingShort} ({epgStats.progress}%)
+                        <span className="text-xs font-bold text-amber-300 tabular-nums">
+                          {formatArchiveClock(archiveElapsedSec)} /{' '}
+                          {formatArchiveClock(archiveTotalSec)} • mai sunt{' '}
+                          {archiveRemainingMin} min ({archiveProgressPct}%)
                         </span>
                       </div>
 
                       <div className="flex items-baseline justify-between gap-2">
                         <h3 className="text-sm sm:text-base font-bold text-white truncate">
-                          {epg.now.title}
+                          {activeArchiveProg.title}
                         </h3>
                       </div>
 
-                      {epg.now.desc && (
-                        <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
-                          {epg.now.desc}
-                        </p>
-                      )}
-
-                      <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden shadow-inner">
+                      {/* Interactive Archive Progress Line (click anywhere to seek inside the archive show) */}
+                      <div
+                        onClick={handleSeekArchiveProgress}
+                        title="Click pe bară pentru a derula în emisiunea din Arhivă"
+                        className="group/archbar relative w-full h-2.5 rounded-full bg-zinc-800 overflow-hidden shadow-inner cursor-pointer"
+                      >
                         <div
-                          className="h-full bg-gradient-to-r from-brand-500 to-blue-400 rounded-full transition-all duration-300"
-                          style={{ width: `${epgStats.progress}%` }}
+                          className="h-full bg-gradient-to-r from-amber-500 via-amber-400 to-sky-400 rounded-full transition-all duration-300"
+                          style={{ width: `${archiveProgressPct}%` }}
                         />
                       </div>
                     </div>
-                  )}
+                  ) : (
+                    epg?.now && (
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-950/90 border border-blue-700/50 text-blue-300 text-[11px] font-extrabold uppercase tracking-wider shrink-0">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                              EPG ACUM
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-zinc-200 tabular-nums shrink-0">
+                              <Clock
+                                className="w-3.5 h-3.5 text-blue-400"
+                                aria-hidden="true"
+                              />
+                              {formatEpgTime(epg.now.start)} –{' '}
+                              {formatEpgTime(epg.now.stop)}
+                            </span>
+                            {epg.now.category && (
+                              <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 text-[11px] font-medium truncate">
+                                {epg.now.category}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs font-bold text-blue-400 tabular-nums">
+                            {epgStats.remainingShort} ({epgStats.progress}%)
+                          </span>
+                        </div>
 
-                  {epg.upcoming && epg.upcoming.length > 0 && (
-                    <div className="pt-2 border-t border-zinc-800/80">
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                          <Calendar
-                            className="w-3.5 h-3.5 text-brand-400"
-                            aria-hidden="true"
+                        <div className="flex items-baseline justify-between gap-2">
+                          <h3 className="text-sm sm:text-base font-bold text-white truncate">
+                            {epg.now.title}
+                          </h3>
+                        </div>
+
+                        <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden shadow-inner">
+                          <div
+                            className="h-full bg-gradient-to-r from-[#1e3a8a] via-[#2563eb] to-[#38bdf8] rounded-full transition-all duration-300"
+                            style={{ width: `${epgStats.progress}%` }}
                           />
-                          <span>Urmează în program</span>
                         </div>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                        {epg.upcoming.slice(0, 3).map((item, idx) => (
-                          <div
-                            key={`${item.start}_${idx}`}
-                            className="px-2.5 py-1.5 rounded-xl bg-zinc-950/70 border border-zinc-800/80 flex flex-col min-w-0"
-                          >
-                            <span className="text-[11px] font-bold text-brand-400 tabular-nums">
-                              {formatEpgTime(item.start)} –{' '}
-                              {formatEpgTime(item.stop)}
-                            </span>
-                            <span
-                              className="text-xs font-medium text-zinc-200 truncate"
-                              title={item.title}
-                            >
-                              {item.title}
+                    )
+                  )}
+
+                  {(() => {
+                    const nextList = activeArchiveProg
+                      ? archiveNextProgrammes
+                      : epg?.upcoming?.slice(0, 3) || [];
+                    if (nextList.length === 0) return null;
+                    return (
+                      <div className="hidden lg:block pt-1.5 border-t border-white/10">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                            <Calendar
+                              className="w-3.5 h-3.5 text-blue-400"
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {activeArchiveProg
+                                ? 'Urmează în arhivă'
+                                : 'Urmează în program'}
                             </span>
                           </div>
-                        ))}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                          {nextList.map((item, idx) => {
+                            const canPlayArchiveItem =
+                              Boolean(activeArchiveProg) &&
+                              item.stop <= Date.now();
+                            return (
+                              <div
+                                key={`${item.start}_${idx}`}
+                                onClick={
+                                  canPlayArchiveItem
+                                    ? () => {
+                                        setActiveArchiveProg(item);
+                                        setStreamIndex(0);
+                                      }
+                                    : undefined
+                                }
+                                className={`px-2.5 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 flex flex-col min-w-0 ${
+                                  canPlayArchiveItem
+                                    ? 'hover:border-amber-500/50 hover:bg-white/[0.08] cursor-pointer transition-colors'
+                                    : ''
+                                }`}
+                              >
+                                <span
+                                  className={`text-[11px] font-bold tabular-nums ${
+                                    activeArchiveProg
+                                      ? 'text-amber-400'
+                                      : 'text-blue-400'
+                                  }`}
+                                >
+                                  {formatEpgTime(item.start)} –{' '}
+                                  {formatEpgTime(item.stop)}
+                                </span>
+                                <span
+                                  className="text-xs font-medium text-zinc-200 truncate"
+                                  title={item.title}
+                                >
+                                  {item.title}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               )}
           </div>
 
-          {/* RIGHT COLUMN: Side-by-Side Channel Switcher OR Multi-Day TV Archive */}
+          {/* RIGHT COLUMN (1/3 of screen on Desktop/TV; remaining full height below video on Mobile): Side-by-Side Channel Switcher OR Multi-Day TV Archive */}
           {showSideColumn && (
-            <div className="lg:col-span-5 xl:col-span-5 border-t lg:border-t-0 lg:border-l border-zinc-800 bg-[#0b111e] flex flex-col shrink-0 lg:shrink min-h-[280px] max-h-[52vh] lg:min-h-0 lg:max-h-none overflow-hidden">
+            <div className="flex-1 min-h-0 lg:flex-initial lg:w-1/3 xl:w-1/3 lg:h-full border-t lg:border-t-0 lg:border-l border-white/10 bg-[#090d16] flex flex-col overflow-hidden">
               {/* Tab 1: Clean Channel List */}
               {sidePanelTab === 'channels' ? (
-                <div className="flex-1 min-h-0 p-2 sm:p-2.5 flex flex-col overflow-hidden">
+                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                   <TvOsdChannelList
                     currentChannel={currentTvChannel}
                     channels={tvQueue}
@@ -2029,6 +2467,29 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     onToggleOverlayMode={() => setIsOsdOverlayOpen(true)}
                     onToggleInfoPanel={() => setIsInfoPanelOpen((v) => !v)}
                     isInfoPanelOpen={isInfoPanelOpen}
+                    onSelectChannel={(selectedCh) => {
+                      const isMobileViewport =
+                        typeof window !== 'undefined' &&
+                        window.innerWidth < 1024;
+                      if (
+                        !isMobileViewport ||
+                        selectedCh.id === currentTvChannel.id
+                      ) {
+                        enterTvFullMode();
+                      }
+                    }}
+                    onPlayArchiveProgramme={(ch, prog) => {
+                      if (ch.id !== currentTvChannel.id) {
+                        useRadioStore.getState().playTvChannel(
+                          { ...ch, archiveProgram: prog || undefined },
+                          tvQueue
+                        );
+                      } else {
+                        setActiveArchiveProg(prog);
+                        setStreamIndex(0);
+                      }
+                      enterTvFullMode();
+                    }}
                   />
                 </div>
               ) : (
@@ -2059,11 +2520,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                             key={dayKey}
                             type="button"
                             onClick={() => setSelectedArchiveDay(dayKey)}
-                            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
-                              isSelected
-                                ? 'bg-blue-500 text-zinc-950 font-bold shadow-xs'
-                                : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
-                            }`}
+                            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${isSelected
+                              ? 'bg-blue-500 text-zinc-950 font-bold shadow-xs'
+                              : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
+                              }`}
                           >
                             {formatEpgDayLabel(dayKey)}
                           </button>
@@ -2085,13 +2545,12 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                       return (
                         <div
                           key={`${prog.start}_${idx}`}
-                          className={`py-2 px-2.5 rounded-xl flex items-center justify-between gap-2 transition-colors ${
-                            isSelectedArchive
-                              ? 'bg-amber-950/60 border border-amber-500/70'
-                              : isLiveNow
-                                ? 'bg-blue-950/40 border border-blue-700/50'
-                                : 'bg-zinc-900/60 hover:bg-zinc-900'
-                          }`}
+                          className={`py-2 px-2.5 rounded-xl flex items-center justify-between gap-2 transition-colors ${isSelectedArchive
+                            ? 'bg-amber-950/60 border border-amber-500/70'
+                            : isLiveNow
+                              ? 'bg-blue-950/40 border border-blue-700/50'
+                              : 'bg-zinc-900/60 hover:bg-zinc-900'
+                            }`}
                         >
                           <div className="min-w-0 flex-1 space-y-0.5">
                             <div className="flex items-center gap-2">
@@ -2135,14 +2594,14 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                                   setActiveArchiveProg(prog);
                                 }
                                 setStreamIndex(0);
+                                enterTvFullMode();
                               }}
-                              className={`min-h-[30px] px-2.5 py-1 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 transition-colors ${
-                                isSelectedArchive
-                                  ? 'bg-amber-500 text-zinc-950'
-                                  : isLiveNow
-                                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                                    : 'bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 border border-amber-500/40'
-                              }`}
+                              className={`min-h-[30px] px-2.5 py-1 rounded-full text-[11px] font-bold inline-flex items-center gap-1 shrink-0 transition-colors ${isSelectedArchive
+                                ? 'bg-amber-500 text-zinc-950'
+                                : isLiveNow
+                                  ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                                  : 'bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-amber-300 border border-amber-500/40'
+                                }`}
                             >
                               <Play className="w-3 h-3 fill-current" />
                               <span>

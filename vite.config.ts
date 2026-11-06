@@ -1058,10 +1058,8 @@ async function resolveRichTrackMetadata(
           )
         );
         if (matchedItem) {
-          if (!hasAuthoritativeArtistAndTitle) {
-            artist = matchedItem.artist?.name || artist;
-            title = matchedItem.title || title;
-          }
+          artist = matchedItem.artist?.name || artist;
+          title = matchedItem.title || title;
           album = album || matchedItem.album?.title || '';
           coverUrl =
             matchedItem.album?.cover_xl ||
@@ -1125,10 +1123,8 @@ async function resolveRichTrackMetadata(
               )
             );
             if (matchedItem) {
-              if (!hasAuthoritativeArtistAndTitle) {
-                artist = matchedItem.artistName || artist;
-                title = matchedItem.trackName || title;
-              }
+              artist = matchedItem.artistName || artist;
+              title = matchedItem.trackName || title;
               album = album || matchedItem.collectionName || '';
               if (matchedItem.artworkUrl100) {
                 coverUrl = matchedItem.artworkUrl100.replace(
@@ -1242,23 +1238,113 @@ function tvStreamProxyPlugin(): Plugin {
       });
 
       server.middlewares.use((req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
+            'Access-Control-Allow-Private-Network': 'true',
+          });
+          res.end();
+          return;
+        }
+
         const rawUrl = (req.url || '/').split('?')[0];
-        if (rawUrl === '/tv/msx/start.json' || rawUrl === '/tv/start.json') {
-          const startPath = path.resolve(process.cwd(), 'public/msx/start.json');
-          if (fs.existsSync(startPath)) {
+        const hostHeader = req.headers.host || 'localhost:8769';
+        const baseOrigin = `http://${hostHeader}`;
+
+        // Normalize /tv/msx/... -> /msx/... and /tv/icons/... -> /icons/... so Media Station X
+        // works identically whether configured with 192.168.x.x:8769 or 192.168.x.x:8769/tv
+        const normalizedMsxUrl = rawUrl.startsWith('/tv/msx/')
+          ? rawUrl.slice(3)
+          : rawUrl === '/tv/start.json'
+            ? '/msx/start.json'
+            : rawUrl === '/start.json'
+              ? '/msx/start.json'
+              : rawUrl;
+
+        if (normalizedMsxUrl.startsWith('/msx/')) {
+          const msxFilePath = path.resolve(
+            process.cwd(),
+            'public',
+            normalizedMsxUrl.slice(1)
+          );
+          if (fs.existsSync(msxFilePath) && fs.statSync(msxFilePath).isFile()) {
+            const ext = path.extname(msxFilePath).toLowerCase();
+            if (ext === '.json') {
+              const rawJson = fs.readFileSync(msxFilePath, 'utf-8');
+              const resolvedJson = rawJson
+                .replace(/\{PREFIX\}\{SERVER\}/g, baseOrigin)
+                .replace(/\{PREFIX\}/g, baseOrigin)
+                .replace(/https:\/\/filmio\.my/g, baseOrigin);
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Cross-Origin-Resource-Policy': 'cross-origin',
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+              });
+              res.end(resolvedJson);
+              return;
+            }
+            const mime =
+              ext === '.png'
+                ? 'image/png'
+                : ext === '.svg'
+                  ? 'image/svg+xml'
+                  : ext === '.ico'
+                    ? 'image/x-icon'
+                    : 'application/octet-stream';
             res.writeHead(200, {
               'Access-Control-Allow-Origin': '*',
-              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Private-Network': 'true',
+              'Cross-Origin-Resource-Policy': 'cross-origin',
+              'Content-Type': mime,
               'Cache-Control': 'no-cache',
             });
-            res.end(fs.readFileSync(startPath));
+            res.end(fs.readFileSync(msxFilePath));
+            return;
+          }
+        }
+
+        const normalizedIconUrl = rawUrl.startsWith('/tv/icons/')
+          ? rawUrl.slice(3)
+          : rawUrl;
+        if (
+          normalizedIconUrl.startsWith('/icons/') ||
+          normalizedIconUrl === '/favicon.png' ||
+          normalizedIconUrl === '/favicon.ico' ||
+          normalizedIconUrl === '/apple-touch-icon.png'
+        ) {
+          const iconPath = path.resolve(
+            process.cwd(),
+            'public',
+            normalizedIconUrl.slice(1)
+          );
+          if (fs.existsSync(iconPath) && fs.statSync(iconPath).isFile()) {
+            const ext = path.extname(iconPath).toLowerCase();
+            const mime =
+              ext === '.png'
+                ? 'image/png'
+                : ext === '.svg'
+                  ? 'image/svg+xml'
+                  : ext === '.ico'
+                    ? 'image/x-icon'
+                    : 'application/octet-stream';
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Private-Network': 'true',
+              'Cross-Origin-Resource-Policy': 'cross-origin',
+              'Content-Type': mime,
+              'Cache-Control': 'no-cache',
+            });
+            res.end(fs.readFileSync(iconPath));
             return;
           }
         }
 
         // When accessed from a Smart TV on LAN (e.g. 192.168.x.x), serve the pre-built ES2015 IIFE dist/ bundle
         // so the TV never receives Vite 6's /@vite/client (which uses ES2022 private class fields #)
-        const hostHeader = req.headers.host || '';
         const isLanTvClient =
           hostHeader.startsWith('192.168.') ||
           hostHeader.startsWith('10.') ||
@@ -1277,13 +1363,19 @@ function tvStreamProxyPlugin(): Plugin {
                   ? 'application/javascript; charset=utf-8'
                   : ext === '.css'
                     ? 'text/css; charset=utf-8'
-                    : ext === '.svg'
-                      ? 'image/svg+xml'
-                      : ext === '.json' || ext === '.webmanifest'
-                        ? 'application/json; charset=utf-8'
-                        : 'application/octet-stream';
+                    : ext === '.png'
+                      ? 'image/png'
+                      : ext === '.ico'
+                        ? 'image/x-icon'
+                        : ext === '.svg'
+                          ? 'image/svg+xml'
+                          : ext === '.json' || ext === '.webmanifest'
+                            ? 'application/json; charset=utf-8'
+                            : 'application/octet-stream';
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Cross-Origin-Resource-Policy': 'cross-origin',
                 'Content-Type': mime,
                 'Cache-Control': 'no-cache',
               });
@@ -1530,16 +1622,20 @@ function tvStreamProxyPlugin(): Plugin {
       server.middlewares.use('/api/tv-profiles', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader(
+          'Access-Control-Allow-Headers',
+          'Content-Type, X-Deleted-Profile-Ids'
+        );
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
           res.end();
           return;
         }
-        const readProfiles = (): unknown => {
+        const readProfiles = (): Array<Record<string, unknown>> | null => {
           try {
             if (fs.existsSync(tvProfilesFile)) {
-              return JSON.parse(fs.readFileSync(tvProfilesFile, 'utf-8'));
+              const parsed = JSON.parse(fs.readFileSync(tvProfilesFile, 'utf-8'));
+              if (Array.isArray(parsed)) return parsed;
             }
           } catch {
             // ignore
@@ -1555,11 +1651,48 @@ function tvStreamProxyPlugin(): Plugin {
             try {
               const incoming = JSON.parse(body || 'null');
               if (Array.isArray(incoming) && incoming.length > 0) {
-                fs.writeFileSync(
-                  tvProfilesFile,
-                  JSON.stringify(incoming),
-                  'utf-8'
+                const deletedHeader = String(
+                  req.headers['x-deleted-profile-ids'] || '[]'
                 );
+                let deletedIds = new Set<string>();
+                try {
+                  const parsedDel = JSON.parse(deletedHeader);
+                  if (Array.isArray(parsedDel)) {
+                    deletedIds = new Set(
+                      parsedDel.filter((x) => typeof x === 'string')
+                    );
+                  }
+                } catch {
+                  // ignore
+                }
+                const existing = readProfiles() || [];
+                const byId = new Map<string, Record<string, unknown>>();
+                for (const p of existing) {
+                  const id = typeof p?.id === 'string' ? p.id : '';
+                  if (id && !deletedIds.has(id)) {
+                    byId.set(id, p);
+                  }
+                }
+                for (const p of incoming) {
+                  const id = typeof p?.id === 'string' ? p.id : '';
+                  if (!id || deletedIds.has(id)) continue;
+                  const prev = byId.get(id);
+                  const prevTs =
+                    typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
+                  const nextTs =
+                    typeof p?.updatedAt === 'number' ? p.updatedAt : 0;
+                  if (!prev || nextTs >= prevTs) {
+                    byId.set(id, p);
+                  }
+                }
+                const merged = Array.from(byId.values());
+                if (merged.length > 0) {
+                  fs.writeFileSync(
+                    tvProfilesFile,
+                    JSON.stringify(merged),
+                    'utf-8'
+                  );
+                }
               }
             } catch {
               // ignore
@@ -2096,6 +2229,15 @@ function tvStreamProxyPlugin(): Plugin {
                 }
               }
             }
+            if (rawMode) {
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store',
+              });
+              res.end(text);
+              return;
+            }
             // If this is a simple Icecast/Shoutcast .m3u redirect file (no #EXT-X- HLS tags), redirect to the underlying audio stream
             if (!text.includes('#EXT-X-')) {
               const firstStreamLine = text
@@ -2110,15 +2252,6 @@ function tvStreamProxyPlugin(): Plugin {
                 res.end();
                 return;
               }
-            }
-            if (rawMode) {
-              res.writeHead(200, {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'text/plain; charset=utf-8',
-                'Cache-Control': 'no-cache, no-store',
-              });
-              res.end(text);
-              return;
             }
             const rawLines = text.split(/\r?\n/);
             const filteredLines: string[] = [];
@@ -2261,6 +2394,72 @@ function tvStreamProxyPlugin(): Plugin {
           }
           res.end(
             `Proxy error: ${err instanceof Error ? err.message : 'Unknown'}`
+          );
+        }
+      });
+
+      server.middlewares.use('/api/iedem-vod', async (req, res) => {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
+          });
+          res.end();
+          return;
+        }
+        try {
+          const reqUrl = new URL(req.url || '', 'http://localhost');
+          const posterUrl = reqUrl.searchParams.get('poster');
+          if (posterUrl && /^https?:\/\//i.test(posterUrl)) {
+            const imgRes = await fetch(posterUrl);
+            if (!imgRes.ok) {
+              res.writeHead(imgRes.status);
+              res.end('Not found');
+              return;
+            }
+            const buf = Buffer.from(await imgRes.arrayBuffer());
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': imgRes.headers.get('content-type') || 'image/jpeg',
+              'Cache-Control': 'public, max-age=604800',
+            });
+            res.end(buf);
+            return;
+          }
+
+          const payload: Record<string, unknown> = {
+            key: 'b55f67862ee6fe7-798a6b713ccb40d',
+          };
+          for (const [k, v] of reqUrl.searchParams.entries()) {
+            if (k === 'poster') continue;
+            if (k === 'fid' || k === 'offset' || k === 'limit' || k === 'genre' || k === 'vc') {
+              payload[k] = Number(v);
+            } else {
+              payload[k] = v;
+            }
+          }
+
+          const upstream = await fetch('http://895890bd73a7.jmeekos.com/api/v1/', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'OTT-Play/1.0',
+            },
+            body: JSON.stringify(payload),
+          });
+          const text = await upstream.text();
+          res.writeHead(upstream.status, {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json; charset=utf-8',
+          });
+          res.end(text);
+        } catch (err) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: err instanceof Error ? err.message : 'iEdem VOD error',
+            })
           );
         }
       });

@@ -1,15 +1,39 @@
 {
-  "name": "SmartCinema — Filme, Seriale, TV Live & Radio",
-  "short_name": "SmartCinema",
+  "name": "Filmio — Filme, Seriale, TV Live & Radio",
+  "short_name": "Filmio",
   "description": "Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#060a08",
-  "theme_color": "#10b981",
+  "background_color": "#090b10",
+  "theme_color": "#2563eb",
   "categories": ["entertainment", "video", "music"],
   "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "32x32 64x64",
+      "type": "image/x-icon",
+      "purpose": "any"
+    },
     {
       "src": "/icons/favicon.svg",
       "sizes": "any",

@@ -8,9 +8,20 @@ import {
 import {
   loadSharedProfiles,
   saveSharedProfiles,
+  loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isLocalHomeServer,
+  isAdminJekaProfile,
+  canProfileAccessAdult,
+  getActiveProfileMediaPrefs,
+  saveActiveProfileMediaPrefs,
 } from "../services/deviceContinuityService";
+
+export { isAdminJekaProfile, canProfileAccessAdult };
+import {
+  DEFAULT_SEED_PROGRESS_BY_PROFILE,
+  DEFAULT_SEED_SAVED_BY_PROFILE,
+} from "../services/defaultSeedData";
 import { Station } from "../types/radio";
 
 export type StreamingPlatformId =
@@ -26,6 +37,8 @@ export type TvSectionId =
   | 'movies'
   | 'cartoons'
   | 'series'
+  | 'uhd_4k'
+  | 'iedem_vod'
   | StreamingPlatformId
   | 'youtube'
   | 'torrents'
@@ -35,6 +48,7 @@ export type TvSectionId =
   | 'catalog'
   | 'filter'
   | 'saved'
+  | 'calendar'
   | 'history'
   | 'search';
 
@@ -70,11 +84,13 @@ export type VodServerId =
   | 'nontongo'
   | 'vidsrc_pm';
 
-export type SubtitleLangId = 'ro' | 'ru' | 'en';
+export type SubtitleLangId = 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de';
 
 export interface CinemetaItem {
   id: string;
   kpId?: string;
+  iedemFid?: number;
+  iedemStreamUrl?: string;
   flTorrentId?: number;
   releaseTitle?: string;
   sizeFormatted?: string;
@@ -211,6 +227,8 @@ export interface VodWatchProgressEntry {
   subLang: SubtitleLangId;
   updatedAt: number;
   deviceName?: string;
+  deviceId?: string;
+  isPlayingNow?: boolean;
   totalEpisodesInSeason?: number;
   totalSeasons?: number;
   episodeProgressMap?: Record<string, EpisodeProgress>;
@@ -231,7 +249,9 @@ export interface SmartTvProfile {
   avatarBg: string;
   pin?: string;
   isKids?: boolean;
+  allowAdultContent?: boolean;
   uiLang?: TvUiLang;
+  updatedAt?: number;
 }
 
 export const DEFAULT_TV_PROFILES: SmartTvProfile[] = loadSharedProfiles();
@@ -251,8 +271,11 @@ export function loadTvProfiles(): SmartTvProfile[] {
   return loadSharedProfiles();
 }
 
-export function saveTvProfiles(profiles: SmartTvProfile[]): void {
-  saveSharedProfiles(profiles);
+export function saveTvProfiles(
+  profiles: SmartTvProfile[],
+  options?: { allowShrink?: boolean }
+): void {
+  saveSharedProfiles(profiles, options);
 }
 
 export function loadActiveProfileId(): string {
@@ -363,22 +386,12 @@ export const TV_LIVE_REGIONS: Array<{
   country: string;
   group?: string;
 }> = [
-    { id: 'FAV', label: 'Favorite TV', labelEn: 'Favorite TV', labelRu: 'Избранное ТВ', country: 'FAV' },
+    { id: 'FAV', label: '★ Favourites', labelEn: '★ Favourites', labelRu: '★ Favourites', country: 'FAV' },
     { id: 'IEDEM', label: 'iEdem / Playlist M3U', labelEn: 'iEdem / M3U Playlist', labelRu: 'iEdem / Плейлист M3U', country: 'IEDEM' },
-    { id: 'ADULT', label: '18+ Adulți', labelEn: '18+ Adult', labelRu: '18+ Для взрослых', country: 'ADULT' },
     { id: 'RO', label: 'RO • România HD', labelEn: 'RO • Romania HD', labelRu: 'RO • Румыния HD', country: 'RO' },
     { id: 'MD', label: 'MD • Moldova HD', labelEn: 'MD • Moldova HD', labelRu: 'MD • Молдова HD', country: 'MD' },
     { id: 'RU', label: 'RU • Rusia', labelEn: 'RU • Russia', labelRu: 'RU • Россия', country: 'RU' },
-    { id: 'US', label: 'US • SUA', labelEn: 'US • USA', labelRu: 'US • США', country: 'US' },
-    { id: 'GB', label: 'UK • Marea Britanie', labelEn: 'UK • United Kingdom', labelRu: 'UK • Великобритания', country: 'GB' },
-    { id: 'DE', label: 'DE • Germania', labelEn: 'DE • Germany', labelRu: 'DE • Германия', country: 'DE' },
-    { id: 'FR', label: 'FR • Franța', labelEn: 'FR • France', labelRu: 'FR • Франция', country: 'FR' },
-    { id: 'IT', label: 'IT • Italia', labelEn: 'IT • Italy', labelRu: 'IT • Италия', country: 'IT' },
-    { id: 'ES', label: 'ES • Spania', labelEn: 'ES • Spain', labelRu: 'ES • Испания', country: 'ES' },
-    { id: 'TR', label: 'TR • Turcia', labelEn: 'TR • Turkey', labelRu: 'TR • Турция', country: 'TR' },
-    { id: 'UA', label: 'UA • Ucraina', labelEn: 'UA • Ukraine', labelRu: 'UA • Украина', country: 'UA' },
-    { id: 'HU', label: 'HU • Ungaria', labelEn: 'HU • Hungary', labelRu: 'HU • Венгрия', country: 'HU' },
-    { id: 'BG', label: 'BG • Bulgaria', labelEn: 'BG • Bulgaria', labelRu: 'BG • Болгария', country: 'BG' },
+    { id: 'ADULT', label: '18+ Adulți', labelEn: '18+ Adult', labelRu: '18+ Для взрослых', country: 'ADULT' },
   ];
 
 export const TV_LIVE_CATEGORIES: Array<{
@@ -482,19 +495,43 @@ export function sanitizeDeviceName(name?: string): string {
 export function loadWatchProgressMap(
   profileId = 'p1'
 ): Record<string, VodWatchProgressEntry> {
+  const seedMap =
+    (DEFAULT_SEED_PROGRESS_BY_PROFILE[profileId] as Record<
+      string,
+      VodWatchProgressEntry
+    >) || {};
   try {
-    const raw = localStorage.getItem(getWatchProgressKeyForProfile(profileId));
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
+    const storageKey = getWatchProgressKeyForProfile(profileId);
+    const seedAppliedKey = `filmio_seed_progress_v2_${profileId}`;
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      (Object.keys(parsed).length === 0 &&
+        Object.keys(seedMap).length > 0 &&
+        !localStorage.getItem(seedAppliedKey))
+    ) {
+      if (Object.keys(seedMap).length > 0) {
+        const cloned = { ...seedMap };
+        localStorage.setItem(storageKey, JSON.stringify(cloned));
+        localStorage.setItem(seedAppliedKey, '1');
+        return cloned;
+      }
+      return {};
+    }
+    const localFl = isLocalHomeServer();
     for (const key of Object.keys(parsed)) {
       if (parsed[key]?.deviceName) {
         parsed[key].deviceName = sanitizeDeviceName(parsed[key].deviceName);
       }
+      if (!localFl && parsed[key]?.server === 'filelist_torrent') {
+        parsed[key].server = 'kinogram_hls';
+      }
     }
     return parsed;
   } catch {
-    return {};
+    return { ...seedMap };
   }
 }
 
@@ -507,6 +544,7 @@ export function saveWatchProgressMap(
       getWatchProgressKeyForProfile(profileId),
       JSON.stringify(map)
     );
+    localStorage.setItem(`filmio_seed_progress_v2_${profileId}`, '1');
   } catch {
     // ignore
   }
@@ -524,13 +562,23 @@ export function saveWatchProgressMap(
 }
 
 export function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
+  const seedList =
+    (DEFAULT_SEED_SAVED_BY_PROFILE[profileId] as CinemetaItem[]) || [];
   try {
-    const raw = localStorage.getItem(getSavedVodKeyForProfile(profileId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const storageKey = getSavedVodKeyForProfile(profileId);
+    const raw = localStorage.getItem(storageKey);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed) || (parsed.length === 0 && seedList.length > 0)) {
+      if (seedList.length > 0) {
+        const cloned = [...seedList];
+        localStorage.setItem(storageKey, JSON.stringify(cloned));
+        return cloned;
+      }
+      return [];
+    }
+    return parsed;
   } catch {
-    return [];
+    return [...seedList];
   }
 }
 
@@ -563,11 +611,18 @@ export function buildVodEmbedUrl(
   startSeconds: number,
   fallbackImdbId?: string
 ): string {
+  const rawItemImdb = String(
+    (item as { imdbId?: string; imdb_id?: string }).imdbId ||
+      (item as { imdbId?: string; imdb_id?: string }).imdb_id ||
+      ''
+  ).trim();
   const imdbId = item.id.startsWith('tt')
-    ? item.id
-    : fallbackImdbId && fallbackImdbId.startsWith('tt')
-      ? fallbackImdbId
-      : '';
+    ? item.id.split(':')[0]
+    : rawItemImdb.startsWith('tt')
+      ? rawItemImdb.split(':')[0]
+      : fallbackImdbId && fallbackImdbId.startsWith('tt')
+        ? fallbackImdbId.split(':')[0]
+        : '';
   const kpId =
     item.kpId || (item.id.startsWith('kp_') ? item.id.replace(/^kp_/, '') : '');
   const tmdbOrImdbId = item.moviedb_id
@@ -636,12 +691,14 @@ export const SMART_TV_SETTINGS_STORAGE_KEY = 'aether_smart_tv_settings_v2';
 export interface SmartTvSettings {
   uiLang: TvUiLang;
   defaultAudioPref: AudioTrackPreference;
-  defaultSubLang: 'ro' | 'ru' | 'en' | 'off';
+  defaultSubLang: 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off';
   defaultSubFontSize: TvSubFontSize;
+  defaultSubFontPx?: number;
   defaultVideoQuality: TvPreferredQuality;
   defaultVodServer: 'auto_best' | VodServerId;
   osdAutoHideSec: 0 | 3 | 4 | 6 | 10;
   autoFullscreenOnPlay: boolean;
+  tvTheme?: 'dark' | 'ambient';
 }
 
 export const DEFAULT_SMART_TV_SETTINGS: SmartTvSettings = {
@@ -649,10 +706,12 @@ export const DEFAULT_SMART_TV_SETTINGS: SmartTvSettings = {
   defaultAudioPref: 'original',
   defaultSubLang: 'ro',
   defaultSubFontSize: 'large',
+  defaultSubFontPx: 24,
   defaultVideoQuality: 'max',
   defaultVodServer: 'auto_best',
   osdAutoHideSec: 6,
   autoFullscreenOnPlay: true,
+  tvTheme: 'dark',
 };
 
 export const SMART_TV_AUDIO_OPTIONS: Array<{
@@ -664,6 +723,11 @@ export const SMART_TV_AUDIO_OPTIONS: Array<{
       id: 'original',
       label: 'Limba Originală (Eng.Original / Original)',
       desc: 'Selectează automat pista audio originală a filmului',
+    },
+    {
+      id: 'ro',
+      label: 'RO • Română (Dublaj / Audio RO când este disponibil)',
+      desc: 'Selectează automat pista audio în limba română (sau original dacă nu există)',
     },
     {
       id: 'ru',
@@ -701,6 +765,21 @@ export const SMART_TV_SUB_LANG_OPTIONS: Array<{
       id: 'en',
       label: 'EN • English (prioritar EN, fallback RO/RU)',
       desc: 'Caută și încarcă automat subtitrarea în limba engleză',
+    },
+    {
+      id: 'es',
+      label: 'ES • Español (prioritar ES)',
+      desc: 'Caută și încarcă automat subtitrarea în limba spaniolă',
+    },
+    {
+      id: 'fr',
+      label: 'FR • Français (prioritar FR)',
+      desc: 'Caută și încarcă automat subtitrarea în limba franceză',
+    },
+    {
+      id: 'de',
+      label: 'DE • Deutsch (prioritar DE)',
+      desc: 'Caută și încarcă automat subtitrarea în limba germană',
     },
     {
       id: 'off',
@@ -814,27 +893,52 @@ export function getSmartTvSettingsKeyForProfile(profileId = 'p1'): string {
     : `${SMART_TV_SETTINGS_STORAGE_KEY}_${profileId}`;
 }
 
-export function loadSmartTvSettings(profileId = 'p1'): SmartTvSettings {
+export function loadSmartTvSettings(profileId?: string): SmartTvSettings {
+  const targetPid = profileId || loadSharedActiveProfileId() || 'p1';
   try {
+    const profileMedia = getActiveProfileMediaPrefs(targetPid);
     const raw = localStorage.getItem(
-      getSmartTvSettingsKeyForProfile(profileId)
+      getSmartTvSettingsKeyForProfile(targetPid)
     );
-    if (!raw) return DEFAULT_SMART_TV_SETTINGS;
-    const parsed = JSON.parse(raw) as Partial<SmartTvSettings>;
-    return {
+    const parsed: Partial<SmartTvSettings> = raw ? JSON.parse(raw) : {};
+    const merged: SmartTvSettings = {
       ...DEFAULT_SMART_TV_SETTINGS,
       ...parsed,
+      defaultAudioPref: profileMedia.defaultAudioPref || parsed.defaultAudioPref || DEFAULT_SMART_TV_SETTINGS.defaultAudioPref,
+      defaultSubLang: profileMedia.defaultSubLang || parsed.defaultSubLang || DEFAULT_SMART_TV_SETTINGS.defaultSubLang,
+      defaultSubFontSize: profileMedia.defaultSubFontSize || parsed.defaultSubFontSize || DEFAULT_SMART_TV_SETTINGS.defaultSubFontSize,
+      defaultSubFontPx: profileMedia.defaultSubFontPx || parsed.defaultSubFontPx || DEFAULT_SMART_TV_SETTINGS.defaultSubFontPx,
     };
+    if (merged.defaultVodServer === 'filelist_torrent' && !isLocalHomeServer()) {
+      merged.defaultVodServer = 'auto_best';
+    }
+    return merged;
   } catch {
     return DEFAULT_SMART_TV_SETTINGS;
   }
 }
 
-export function saveSmartTvSettings(next: SmartTvSettings, profileId = 'p1') {
+export function saveSmartTvSettings(next: SmartTvSettings, profileId?: string) {
+  const targetPid = profileId || loadSharedActiveProfileId() || 'p1';
   try {
     localStorage.setItem(
-      getSmartTvSettingsKeyForProfile(profileId),
+      getSmartTvSettingsKeyForProfile(targetPid),
       JSON.stringify(next)
+    );
+    saveActiveProfileMediaPrefs(
+      {
+        defaultAudioPref: next.defaultAudioPref,
+        defaultSubLang: next.defaultSubLang,
+        defaultSubFontSize: next.defaultSubFontSize,
+        defaultSubFontPx:
+          next.defaultSubFontPx ||
+          (next.defaultSubFontSize === 'normal'
+            ? 20
+            : next.defaultSubFontSize === 'xlarge'
+              ? 30
+              : 24),
+      },
+      targetPid
     );
   } catch {
     // ignore

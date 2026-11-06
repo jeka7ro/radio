@@ -2,7 +2,7 @@ import { LanguageCode } from '../types/radio';
 
 export const translations = {
   ro: {
-    appTitle: 'AetherRadio — Radio Online Global',
+    appTitle: 'Filmio',
     skipToContent: 'Sari la conținutul principal',
     nav: {
       home: 'Radio',
@@ -122,7 +122,7 @@ export const translations = {
       cacheDesc: 'Listele de țări și posturi sunt păstrate în cache timp de 1 oră pentru încărcare instantanee și protejarea API-ului Radio Browser.',
       clearCacheBtn: 'Golește cache-ul API',
       cacheCleared: 'Cache-ul a fost golit cu succes!',
-      aboutTitle: 'Despre AetherRadio',
+      aboutTitle: 'Despre Filmio',
       aboutDesc: 'Aplicație web PWA modernă bazată pe directorul deschis comunitar Radio Browser API (api.radio-browser.info). Fără reclame, fără chei API, cu suport nativ HLS și Media Session.',
     },
     tv: {
@@ -146,7 +146,7 @@ export const translations = {
     },
   },
   en: {
-    appTitle: 'AetherRadio — Global Online Radio',
+    appTitle: 'Filmio',
     skipToContent: 'Skip to main content',
     nav: {
       home: 'Radio',
@@ -266,7 +266,7 @@ export const translations = {
       cacheDesc: 'Country and station lists are cached locally for 1 hour for instant startup and to reduce load on the Radio Browser API.',
       clearCacheBtn: 'Clear API Cache',
       cacheCleared: 'API cache cleared successfully!',
-      aboutTitle: 'About AetherRadio',
+      aboutTitle: 'About Filmio',
       aboutDesc: 'Modern PWA web radio player powered by the open community Radio Browser API (api.radio-browser.info). Ad-free, no API keys required, featuring native HLS and Media Session support.',
     },
     tv: {

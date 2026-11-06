@@ -95,11 +95,17 @@ body {
 }
 
 *:focus,
-*:focus-visible,
 a:focus,
 button:focus,
 input:focus,
-select:focus,
+select:focus {
+  outline: none !important;
+  outline-width: 0 !important;
+  outline-style: none !important;
+  outline-color: transparent !important;
+}
+
+*:focus-visible,
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
@@ -116,41 +122,79 @@ select:focus-visible {
 .tahoe-glass {
   background: linear-gradient(
     145deg,
-    rgba(28, 30, 38, 0.68) 0%,
-    rgba(18, 20, 26, 0.74) 100%
+    rgba(22, 26, 36, 0.94) 0%,
+    rgba(14, 17, 24, 0.96) 100%
   );
-  backdrop-filter: blur(40px) saturate(190%);
-  -webkit-backdrop-filter: blur(40px) saturate(190%);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 24px 60px rgba(0, 0, 0, 0.65);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
 .tahoe-emerald-osd {
   background: linear-gradient(
     145deg,
-    rgba(26, 28, 36, 0.66) 0%,
-    rgba(16, 18, 24, 0.74) 100%
+    rgba(20, 24, 34, 0.95) 0%,
+    rgba(12, 15, 22, 0.97) 100%
   );
-  backdrop-filter: blur(44px) saturate(200%);
-  -webkit-backdrop-filter: blur(44px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 28px 70px rgba(0, 0, 0, 0.72);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+}
+
+/* Disable expensive GPU backdrop-blur across Smart TV & Web views for instant 60fps navigation */
+.backdrop-blur,
+.backdrop-blur-sm,
+.backdrop-blur-md,
+.backdrop-blur-lg,
+.backdrop-blur-xl,
+.backdrop-blur-2xl,
+.backdrop-blur-3xl {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .tahoe-emerald-card {
-  background: rgba(255, 255, 255, 0.09);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background-color: rgba(255, 255, 255, 0.11);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
     0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* Bulletproof Smart TV Remote Focus Highlight on OSD & Popover Buttons (No nested backdrop-filter or transition glitches on LG webOS) */
+.tahoe-emerald-card:focus,
+[data-vod-bottom-row="true"] button:focus,
+[data-vod-menu-popover="true"] button:focus,
+[data-vod-top-back-btn="true"]:focus {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  color: #09090b !important;
+  border: 2px solid #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.95),
+    0 8px 24px rgba(0, 0, 0, 0.7) !important;
+  transition: none !important;
+}
+
+.tahoe-emerald-card:focus *,
+[data-vod-bottom-row="true"] button:focus *,
+[data-vod-menu-popover="true"] button:focus *,
+[data-vod-top-back-btn="true"]:focus * {
+  color: #09090b !important;
+}
+
+/* Ensure horizontal & vertical spacing between OSD transport pills on Smart TV Chromium engines (< 84) that lack Flexbox gap */
+[data-vod-bottom-row="true"] > div > button,
+[data-vod-bottom-row="true"] > div > div {
+  margin-right: 8px;
+}
+[data-vod-bottom-row="true"] > div > button:last-child,
+[data-vod-bottom-row="true"] > div > div:last-child {
+  margin-right: 0;
 }
 
 .tahoe-pill {
@@ -160,12 +204,7 @@ select:focus-visible {
     0 6px 18px rgba(0, 0, 0, 0.32);
 }
 
-/* Global macOS Tahoe refinement for Smart TV & Web containers and buttons */
-button.rounded-lg,
-button.rounded-xl {
-  border-radius: 9999px;
-}
-
+/* Global macOS Tahoe refinement for Smart TV & Web containers */
 div.rounded-2xl,
 section.rounded-2xl,
 article.rounded-2xl {
@@ -222,12 +261,40 @@ article.rounded-2xl {
   }
 }
 
-/* Hide scrollbars on horizontal filter chip bars while preserving scrollability */
+/* Hide scrollbars on horizontal filter chip bars and OSD lists while preserving scrollability */
 .no-scrollbar {
-  scrollbar-width: none;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 .no-scrollbar::-webkit-scrollbar {
-  display: none;
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Global sleek dark/translucent scrollbar — eliminates ugly default white OS scrollbars everywhere */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.24);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.42);
 }
 
 /* Hide duplicate native WebKit search clear button when custom clear button is rendered */
@@ -251,7 +318,7 @@ input[type="search"]::-webkit-search-decoration {
     height: 8px;
     background: linear-gradient(
       to right,
-      var(--brand-color, #6d28d9) var(--progress, 80%),
+      var(--brand-color, #2563eb) var(--progress, 80%),
       #cbd5e1 var(--progress, 80%)
     );
     border-radius: 4px;
@@ -263,7 +330,7 @@ input[type="search"]::-webkit-search-decoration {
     height: 16px;
     width: 16px;
     border-radius: 50%;
-    background: var(--brand-color, #6d28d9);
+    background: var(--brand-color, #2563eb);
     cursor: pointer;
     margin-top: -4px;
   }
@@ -279,19 +346,22 @@ input[type="search"]::-webkit-search-decoration {
     height: 16px;
     width: 16px;
     border-radius: 50%;
-    background: var(--brand-color, #6d28d9);
+    background: var(--brand-color, #2563eb);
     cursor: pointer;
   }
 
   input[type="range"]::-moz-range-progress {
-    background-color: var(--brand-color, #6d28d9);
+    background-color: var(--brand-color, #2563eb);
     height: 8px;
     border-radius: 4px;
   }
 }
 
-/* Clean focus handling for poster cards without overriding button widths or flex layouts */
-button[data-vod-card="true"] {
+/* Clean focus handling for poster cards & 100% width inside CSS Grid on older LG webOS Chromium (< 88) */
+button[data-vod-card="true"]:not(.flex):not(.inline-flex),
+button[data-watched-poster-btn="true"] {
+  display: block;
+  width: 100%;
   outline: none !important;
   box-shadow: none !important;
 }
@@ -302,22 +372,88 @@ button.cast-person-card {
   flex-shrink: 0 !important;
 }
 
-.aspect-\[2\/3\] {
-  position: relative;
-  display: block;
-  width: 100%;
-  aspect-ratio: 2 / 3;
+/* Prevent browser focus/scrollIntoView from scrolling inside top hero cards (Radio, TV, Music, Home) */
+[data-top-hero-card="true"] {
+  overflow: clip !important;
 }
 
-.aspect-\[2\/3\] > img {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+/* Bulletproof 2:3 Poster, 1:1 Square & 16:9 Video Aspect Ratio using CSS2.1 padding-bottom so LG webOS TVs without CSS aspect-ratio render full posters & album covers */
+:not(img).aspect-\[2\/3\] {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  height: 0 !important;
+  padding-bottom: 150% !important;
+  aspect-ratio: auto !important;
+}
+
+:not(img).aspect-\[2\/3\] > img,
+:not(img).aspect-\[2\/3\] > video,
+:not(img).aspect-\[2\/3\] > iframe {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+div.aspect-square.w-full {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  height: 0 !important;
+  padding-bottom: 100% !important;
+  aspect-ratio: auto !important;
+}
+
+div.aspect-square.w-full > img,
+div.aspect-square.w-full > video,
+div.aspect-square.w-full > svg {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+button.aspect-video,
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  height: 0 !important;
+  padding-bottom: 56.25% !important;
+  aspect-ratio: auto !important;
+}
+
+button.aspect-video > img,
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > img,
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > iframe {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+}
+
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > video {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
 }
 
 /* SmartCinema Animated Black & Emerald Logo Keyframes */
@@ -361,24 +497,169 @@ button.cast-person-card {
   }
 }
 
-.sc-logo-orbit {
-  transform-origin: 32px 32px;
-  animation: scLogoOrbit 6.5s linear infinite;
-}
-
-.sc-logo-orbit-reverse {
-  transform-origin: 32px 32px;
-  animation: scLogoOrbitReverse 11s linear infinite;
-}
-
-.sc-logo-aura {
-  animation: scLogoAura 3.4s ease-in-out infinite;
-}
-
+.sc-logo-orbit,
+.sc-logo-orbit-reverse,
+.sc-logo-aura,
 .sc-logo-play {
-  transform-origin: 33px 31px;
-  animation: scLogoPlayPulse 3.4s ease-in-out infinite;
+  animation: none !important;
 }
+
+/* ============================================================================
+   SMART TV SMOOTH PERFORMANCE OPTIMIZATION (100% REVERSIBLE, ZERO VISUAL LOSS)
+   ============================================================================ */
+html.smart-tv-mode .tahoe-glass,
+html.smart-tv-mode .tahoe-emerald-osd,
+html.smart-tv-mode [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Fallback for LG webOS / Tizen Smart TVs (Chromium < 84) without CSS Flexbox gap support */
+html.no-flex-gap .flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.25rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-1\.5 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-1\.5 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.375rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-2 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-2 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.5rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-2\.5 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-2\.5 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.625rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-3 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-3 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.75rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-3\.5 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-3\.5 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 0.875rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-4 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-4 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 1rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-5 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-5 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 1.25rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-6 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-6 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 1.5rem;
+}
+html.no-flex-gap .flex:not(.flex-col).gap-8 > *:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-8 > *:not(:last-child):not([class*="mr-"]) {
+  margin-right: 2rem;
+}
+html.no-flex-gap .flex.flex-col.gap-1\.5 > *:not(:last-child):not([class*="mb-"]) {
+  margin-bottom: 0.375rem;
+}
+html.no-flex-gap .flex.flex-col.gap-2 > *:not(:last-child):not([class*="mb-"]) {
+  margin-bottom: 0.5rem;
+}
+html.no-flex-gap .flex.flex-col.gap-3 > *:not(:last-child):not([class*="mb-"]) {
+  margin-bottom: 0.75rem;
+}
+html.no-flex-gap .flex.flex-col.gap-4 > *:not(:last-child):not([class*="mb-"]) {
+  margin-bottom: 1rem;
+}
+
+html.smart-tv-mode button[data-vod-card="true"],
+html.smart-tv-mode button[data-watched-poster-btn="true"],
+html.smart-tv-mode button[data-tv-channel-card="true"] {
+  transition-duration: 140ms !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+html.smart-tv-mode button[data-vod-card="true"] img,
+html.smart-tv-mode button[data-watched-poster-btn="true"] img,
+html.smart-tv-mode button[data-tv-channel-card="true"] img {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+/* === END SMART TV SMOOTH PERFORMANCE OPTIMIZATION === */
+
+/* ============================================================================
+   SMART TV AMBIENT SLATE / TITANIUM PEARL THEME (SOFT LIGHT FOR TV — NO HARSH WHITE)
+   ============================================================================ */
+[data-tv-theme="ambient"] {
+  background:
+    radial-gradient(circle at 50% 0%, rgba(148, 163, 184, 0.24) 0%, transparent 65%),
+    linear-gradient(145deg, #2c374b 0%, #38465e 48%, #263143 100%) !important;
+  color: #f8fafc !important;
+}
+
+[data-tv-theme="ambient"] > header {
+  background: rgba(45, 57, 77, 0.84) !important;
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+[data-tv-theme="ambient"] .tahoe-glass,
+[data-tv-theme="ambient"] .tahoe-emerald-osd {
+  background: linear-gradient(
+    145deg,
+    rgba(71, 88, 114, 0.76) 0%,
+    rgba(52, 66, 89, 0.82) 100%
+  ) !important;
+  border-color: rgba(255, 255, 255, 0.26) !important;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 20px 50px rgba(15, 23, 42, 0.42) !important;
+}
+
+[data-tv-theme="ambient"] .tahoe-emerald-card {
+  background-color: rgba(255, 255, 255, 0.16) !important;
+  border-color: rgba(255, 255, 255, 0.26) !important;
+}
+
+[data-tv-theme="ambient"] main .bg-\[\#141414\],
+[data-tv-theme="ambient"] main .bg-\[\#181818\],
+[data-tv-theme="ambient"] main .bg-\[\#1c1c1c\],
+[data-tv-theme="ambient"] main .bg-\[\#202020\],
+[data-tv-theme="ambient"] main .bg-\[\#222222\],
+[data-tv-theme="ambient"] main .bg-\[\#242424\],
+[data-tv-theme="ambient"] main .bg-\[\#262626\],
+[data-tv-theme="ambient"] main .bg-\[\#0b0e14\],
+[data-tv-theme="ambient"] main .bg-\[\#0d111a\] {
+  background-color: rgba(58, 73, 97, 0.78) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+[data-tv-theme="ambient"] main .bg-\[\#121212\] {
+  background-color: rgba(38, 49, 68, 0.82) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+[data-tv-theme="ambient"] main .text-zinc-400,
+[data-tv-theme="ambient"] aside .text-zinc-400 {
+  color: #cbd5e1 !important;
+}
+
+[data-tv-theme="ambient"] main .text-zinc-300,
+[data-tv-theme="ambient"] aside .text-zinc-300 {
+  color: #e2e8f0 !important;
+}
+
+/* Force-hide navigation sidebar and header whenever any Full Mode player (Live TV or VOD) is active */
+html[data-tv-full-mode="true"] aside,
+html[data-tv-full-mode="true"] header,
+html[data-vod-full-mode="true"] aside,
+html[data-vod-full-mode="true"] header {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+
+
 
 
 

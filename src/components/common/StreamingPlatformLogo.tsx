@@ -816,7 +816,7 @@ export const ProducerStudioLogoBadge: React.FC<{
 
   return (
     <span
-      className={`inline-flex items-center gap-2 ${
+      className={`inline-flex items-center ${
         size === 'md'
           ? 'px-3 py-1.5 rounded-xl text-xs sm:text-sm'
           : 'px-2.5 py-1 rounded-full text-xs'
@@ -841,7 +841,7 @@ export const ProducerStudioLogoBadge: React.FC<{
           🎬
         </span>
       )}
-      <span className="truncate max-w-[180px]">{studio.name}</span>
+      <span className="ml-2 truncate max-w-[180px]">{studio.name}</span>
     </span>
   );
 };

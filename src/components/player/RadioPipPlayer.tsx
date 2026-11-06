@@ -133,13 +133,13 @@ export const RadioPipPlayer: React.FC = () => {
     // Background gradient
     const grad = ctx.createLinearGradient(0, 0, w, h);
     grad.addColorStop(0, '#18181b');
-    grad.addColorStop(0.5, '#1e1b4b');
+    grad.addColorStop(0.5, '#172554');
     grad.addColorStop(1, '#09090b');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
     // Subtle accent border at top
-    ctx.fillStyle = '#7c3aed';
+    ctx.fillStyle = '#2563eb';
     ctx.fillRect(0, 0, w, 6);
 
     // Draw cover art or station placeholder box

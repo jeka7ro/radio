@@ -108,6 +108,16 @@ export default async (req) => {
 
     if (isM3u8) {
       const text = await upstreamRes.text();
+      if (rawMode) {
+        return new Response(text, {
+          status: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store',
+          },
+        });
+      }
       if (!text.includes('#EXT-X-')) {
         const firstStreamLine = text
           .split(/\r?\n/)
@@ -122,16 +132,6 @@ export default async (req) => {
             },
           });
         }
-      }
-      if (rawMode) {
-        return new Response(text, {
-          status: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'text/plain; charset=utf-8',
-            'Cache-Control': 'no-cache, no-store',
-          },
-        });
       }
 
       const rawLines = text.split(/\r?\n/);
@@ -174,16 +174,19 @@ export default async (req) => {
               return `URI="${buildProxyUrl(uri)}"`;
             });
           }
-          // Option B (Zero Netlify Bandwidth): Only proxy sub-manifests (.m3u8/.m3u).
-          // Resolve heavy binary video segments (.ts, .m4s, .mp4, .aac) directly to the upstream CDN!
+          // Resolve HTTPS binary video segments directly when no custom Referer is needed;
+          // proxy HTTP segments through /api/tv-proxy so https://filmio.my never hits Mixed Content blocks!
           const isHeavySegment = /\.(ts|m4s|mp4|mkv|webm|aac)(\?|$)/i.test(
             trimmed
           );
           if (isHeavySegment) {
             try {
-              return new URL(trimmed, finalUrl).toString();
+              const resolvedSegUrl = new URL(trimmed, finalUrl).toString();
+              if (resolvedSegUrl.startsWith('https://') && !customRef) {
+                return resolvedSegUrl;
+              }
             } catch {
-              return trimmed;
+              // fall through to proxy URL
             }
           }
           return buildProxyUrl(trimmed);
@@ -200,8 +203,19 @@ export default async (req) => {
       });
     }
 
-    // Option B (Zero Netlify Bandwidth): For direct binary video/audio streams, issue a 302 redirect
-    // to the resolved upstream CDN URL instead of piping gigabytes through Netlify Serverless!
+    // For plain HTTP streams or streams requiring custom Referer, pipe the binary body over HTTPS
+    // so https://filmio.my never gets blocked by browser Mixed Content policy.
+    if (finalUrl.startsWith('http://') || customRef) {
+      return new Response(upstreamRes.body, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': contentType || 'video/mp2t',
+          'Cache-Control': 'public, max-age=15',
+        },
+      });
+    }
+
     return new Response(null, {
       status: 302,
       headers: {

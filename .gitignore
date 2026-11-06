@@ -32,6 +32,8 @@ dist-ssr
 .tv-profiles.json
 .tv-watch-progress*.json
 .tv-saved*.json
+.netlify
+
 
 
 

@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Calendar,
+  Disc,
   Flame,
   Heart,
+  Loader2,
   Pause,
   Play,
   Radio,
@@ -13,7 +16,22 @@ import {
   Tv,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
+
+export interface MusicAlbumDetailCard {
+  albumTitle: string;
+  artistName: string;
+  coverUrl: string;
+  year: number;
+  releaseDateText?: string;
+  genre: string;
+  copyright?: string;
+  country?: string;
+  trackCount: number;
+  totalDurationSec: number;
+  tracks: SpotifyTrackItem[];
+}
 
 export interface SpotifyTrackItem {
   id: string;
@@ -367,6 +385,19 @@ function formatMusicDuration(sec: number): string {
   return `${mins}:${rem < 10 ? '0' : ''}${rem}`;
 }
 
+/**
+ * Proxy external HTTPS cover images through local `/api/tv-proxy` so LG webOS Smart TVs
+ * (Chrome 68 with outdated 2018 root CA certificates) never fail SSL handshakes on Unsplash/Deezer/Apple CDNs.
+ */
+function proxyMusicCover(url?: string): string {
+  if (!url) return '/icons/icon-192.png';
+  if (url.startsWith('/') || url.startsWith('data:')) return url;
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return `/api/tv-proxy?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
+
 interface SmartTvMusicSpotifySectionProps {
   tr: (ro: string, en: string, ru?: string) => string;
   currentTrack: SpotifyTrackItem | null;
@@ -378,7 +409,13 @@ interface SmartTvMusicSpotifySectionProps {
   isShuffle: boolean;
   isRepeat: boolean;
   likedTracks: SpotifyTrackItem[];
-  externalSearchRequest?: { query: string; label?: string; ts: number } | null;
+  externalSearchRequest?: {
+    query: string;
+    label?: string;
+    album?: string;
+    artist?: string;
+    ts: number;
+  } | null;
   onPlayTrack: (track: SpotifyTrackItem, queueList?: SpotifyTrackItem[]) => void;
   onTogglePlayPause: () => void;
   onNextTrack: () => void;
@@ -435,6 +472,10 @@ export const SmartTvMusicSpotifySection: React.FC<
     const [isLoadingTracks, setIsLoadingTracks] = useState<boolean>(false);
     const [isVideoClipMode, setIsVideoClipMode] = useState<boolean>(false);
     const [resolvedClipVideoId, setResolvedClipVideoId] = useState<string>('');
+    const [activeAlbumCard, setActiveAlbumCard] =
+      useState<MusicAlbumDetailCard | null>(null);
+    const [isLoadingAlbumCard, setIsLoadingAlbumCard] =
+      useState<boolean>(false);
 
     const activePlaylist = useMemo(
       () =>
@@ -724,15 +765,227 @@ export const SmartTvMusicSpotifySection: React.FC<
         .catch(() => { })
         .finally(() => {
           setIsLoadingTracks(false);
-          window.setTimeout(() => {
-            const el = document.getElementById('music-tracklist-section');
-            el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 120);
         });
     };
 
-    // React to external search requests (e.g. clicking a song or artist in Radio)
+    const handleOpenAlbumCard = async (
+      albumName: string,
+      artistName: string,
+      fallbackTrack?: SpotifyTrackItem
+    ) => {
+      const cleanAlbum = (albumName || fallbackTrack?.album || '').trim();
+      const cleanArtist = (artistName || fallbackTrack?.artist || '').trim();
+      if (!cleanAlbum && !cleanArtist) return;
+
+      setIsLoadingAlbumCard(true);
+      document
+        .querySelector('main')
+        ?.scrollTo({ top: 0, behavior: 'smooth' });
+      const initialTracks = fallbackTrack ? [fallbackTrack] : [];
+      setActiveAlbumCard({
+        albumTitle: cleanAlbum || cleanArtist,
+        artistName: cleanArtist,
+        coverUrl: fallbackTrack?.cover || INITIAL_SPOTIFY_TRACKS[0].cover,
+        year: fallbackTrack?.year || 2025,
+        genre: fallbackTrack?.genre || 'Music',
+        trackCount: initialTracks.length,
+        totalDurationSec: fallbackTrack?.durationSec || 200,
+        tracks: initialTracks,
+      });
+
+      try {
+        const searchTerm = `${cleanArtist} ${cleanAlbum}`.trim();
+        let collectionMeta: any = null;
+        let rawTrackItems: any[] = [];
+
+        // Step 1: Search iTunes for the exact Album (entity=album) to get collectionId, releaseDate, copyright, genre
+        const albumSearchRes = await fetch(
+          `https://itunes.apple.com/search?term=${encodeURIComponent(
+            searchTerm
+          )}&media=music&entity=album&limit=10`
+        );
+        if (albumSearchRes.ok) {
+          const albumSearchData = await albumSearchRes.json();
+          const albums = Array.isArray(albumSearchData?.results)
+            ? albumSearchData.results
+            : [];
+          const normAlbum = cleanAlbum.toLowerCase();
+          const normArtist = cleanArtist.toLowerCase();
+          collectionMeta =
+            albums.find(
+              (a: any) =>
+                String(a.collectionName || '')
+                  .toLowerCase()
+                  .includes(normAlbum) &&
+                String(a.artistName || '')
+                  .toLowerCase()
+                  .includes(normArtist)
+            ) ||
+            albums.find((a: any) =>
+              String(a.collectionName || '')
+                .toLowerCase()
+                .includes(normAlbum)
+            ) ||
+            albums[0];
+
+          if (collectionMeta?.collectionId) {
+            const lookupRes = await fetch(
+              `https://itunes.apple.com/lookup?id=${encodeURIComponent(
+                String(collectionMeta.collectionId)
+              )}&entity=song&limit=100`
+            );
+            if (lookupRes.ok) {
+              const lookupData = await lookupRes.json();
+              const lookupResults = Array.isArray(lookupData?.results)
+                ? lookupData.results
+                : [];
+              const colEntry = lookupResults.find(
+                (r: any) => r.wrapperType === 'collection'
+              );
+              if (colEntry) collectionMeta = colEntry;
+              rawTrackItems = lookupResults.filter(
+                (r: any) => r.wrapperType === 'track' && r.trackName
+              );
+            }
+          }
+        }
+
+        // Step 2: Fallback to song search if lookup returned no tracks
+        if (rawTrackItems.length === 0) {
+          const songRes = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(
+              searchTerm
+            )}&media=music&entity=song&limit=40`
+          );
+          if (songRes.ok) {
+            const songData = await songRes.json();
+            const allSongs = Array.isArray(songData?.results)
+              ? songData.results
+              : [];
+            const normAlbum = cleanAlbum.toLowerCase();
+            const matchingAlbumSongs = allSongs.filter((s: any) =>
+              String(s.collectionName || '')
+                .toLowerCase()
+                .includes(normAlbum)
+            );
+            rawTrackItems =
+              matchingAlbumSongs.length > 0 ? matchingAlbumSongs : allSongs.slice(0, 20);
+          }
+        }
+
+        const firstItem = collectionMeta || rawTrackItems[0] || {};
+        const rawArt = String(
+          firstItem.artworkUrl100 ||
+            rawTrackItems[0]?.artworkUrl100 ||
+            fallbackTrack?.cover ||
+            ''
+        );
+        const hiResCover = rawArt
+          ? rawArt.replace(/\d+x\d+bb/, '1000x1000bb')
+          : fallbackTrack?.cover || INITIAL_SPOTIFY_TRACKS[0].cover;
+        const relDateRaw = String(
+          firstItem.releaseDate || rawTrackItems[0]?.releaseDate || ''
+        );
+        const parsedYear = relDateRaw
+          ? Number(relDateRaw.slice(0, 4)) || fallbackTrack?.year || 2025
+          : fallbackTrack?.year || 2025;
+        const formattedDate = relDateRaw
+          ? relDateRaw.slice(0, 10).split('-').reverse().join('.')
+          : '';
+
+        const mappedAlbumTracks: SpotifyTrackItem[] = rawTrackItems.map(
+          (item: any, idx: number) => {
+            const tArt = String(item.artworkUrl100 || '');
+            const isHiRes = idx % 3 !== 2;
+            const audioQuery = `${item.artistName || cleanArtist} - ${item.trackName} Official Audio`;
+            return {
+              id: `alb_sp_${item.trackId || idx}`,
+              title: String(item.trackName),
+              artist: String(item.artistName || cleanArtist),
+              album: String(
+                item.collectionName ||
+                  firstItem.collectionName ||
+                  cleanAlbum ||
+                  item.trackName
+              ),
+              cover: tArt
+                ? tArt.replace(/\d+x\d+bb/, '1000x1000bb')
+                : hiResCover,
+              coverSmall: tArt
+                ? tArt.replace(/\d+x\d+bb/, '300x300bb')
+                : hiResCover,
+              durationSec: Math.max(
+                35,
+                Math.round((Number(item.trackTimeMillis) || 200000) / 1000)
+              ),
+              year: item.releaseDate
+                ? Number(String(item.releaseDate).slice(0, 4)) || parsedYear
+                : parsedYear,
+              genre: String(
+                item.primaryGenreName ||
+                  firstItem.primaryGenreName ||
+                  fallbackTrack?.genre ||
+                  'Music'
+              ),
+              previewUrl: String(item.previewUrl || ''),
+              fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(
+                audioQuery
+              )}`,
+              videoQuery: `${item.artistName || cleanArtist} - ${item.trackName}`,
+              qualityTier: isHiRes ? 'MAX' : 'HIFI',
+              qualityLabel: isHiRes
+                ? 'MAX • 24-bit / 192 kHz FLAC'
+                : 'HiFi • 16-bit / 44.1 kHz FLAC',
+              bitrateKbps: isHiRes ? 9216 : 1411,
+            };
+          }
+        );
+
+        const finalTracks =
+          mappedAlbumTracks.length > 0 ? mappedAlbumTracks : initialTracks;
+        const totalDur = finalTracks.reduce(
+          (acc, t) => acc + (t.durationSec || 0),
+          0
+        );
+
+        setActiveAlbumCard({
+          albumTitle: String(
+            firstItem.collectionName || cleanAlbum || cleanArtist
+          ),
+          artistName: String(firstItem.artistName || cleanArtist),
+          coverUrl: hiResCover,
+          year: parsedYear,
+          releaseDateText: formattedDate || undefined,
+          genre: String(
+            firstItem.primaryGenreName ||
+              finalTracks[0]?.genre ||
+              fallbackTrack?.genre ||
+              'Music'
+          ),
+          copyright: firstItem.copyright
+            ? String(firstItem.copyright)
+            : undefined,
+          country: firstItem.country ? String(firstItem.country) : undefined,
+          trackCount: finalTracks.length,
+          totalDurationSec: totalDur,
+          tracks: finalTracks,
+        });
+      } catch {
+        // keep fallback album card
+      } finally {
+        setIsLoadingAlbumCard(false);
+      }
+    };
+
+    // React to external search requests (e.g. clicking a song, artist, or album in Radio)
     useEffect(() => {
+      if (externalSearchRequest?.album) {
+        void handleOpenAlbumCard(
+          externalSearchRequest.album,
+          externalSearchRequest.artist || externalSearchRequest.query
+        );
+        return;
+      }
       if (externalSearchRequest?.query) {
         handleRunSearch(
           externalSearchRequest.query,
@@ -740,7 +993,11 @@ export const SmartTvMusicSpotifySection: React.FC<
         );
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [externalSearchRequest?.ts, externalSearchRequest?.query]);
+    }, [
+      externalSearchRequest?.ts,
+      externalSearchRequest?.query,
+      externalSearchRequest?.album,
+    ]);
 
     const isHeroLiked = likedTracks.some((t) => t.id === heroTrack.id);
 
@@ -749,10 +1006,13 @@ export const SmartTvMusicSpotifySection: React.FC<
         {/* ====================================================================
           1. COMPACT HERO PLAYER CARD — OFFICIAL HI-RES / FLAC LOGOS + ICON CONTROLS
          ==================================================================== */}
-        <div className="relative rounded-2xl overflow-hidden tahoe-emerald-osd p-3.5 sm:p-4 lg:p-5 shadow-[0_18px_45px_rgba(0,0,0,0.8)]">
+        <div
+          data-top-hero-card="true"
+          className="relative rounded-2xl overflow-hidden tahoe-emerald-osd p-3.5 sm:p-4 lg:p-5 shadow-[0_18px_45px_rgba(0,0,0,0.8)]"
+        >
           {/* Dynamic Blurred Album Cover Backdrop */}
           <img
-            src={heroTrack.cover}
+            src={proxyMusicCover(heroTrack.cover)}
             alt=""
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-20 blur-3xl scale-125 transition-all duration-700"
@@ -760,35 +1020,55 @@ export const SmartTvMusicSpotifySection: React.FC<
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#0c0e14]/95 via-[#11141d]/90 to-[#0c0e14]/95" />
 
           <div className="relative z-10 flex flex-col md:flex-row items-center gap-4 lg:gap-6">
-            {/* Left: Compact Album Art + Spinning Vinyl Disc */}
-            <div className="relative flex items-center shrink-0">
-              <div className="relative w-24 h-24 sm:w-28 sm:h-28 lg:w-32 lg:h-32 rounded-xl overflow-hidden shadow-[0_12px_30px_rgba(0,0,0,0.85)] ring-1 ring-white/20 z-10 bg-zinc-900">
+            {/* Left: Compact Album Art + Spinning Vinyl Disc (Click to open Album Card) */}
+            <button
+              type="button"
+              onClick={() =>
+                void handleOpenAlbumCard(
+                  heroTrack.album || heroTrack.title,
+                  heroTrack.artist,
+                  heroTrack
+                )
+              }
+              title={tr(
+                `Deschide Cardul Albumului: ${heroTrack.album || heroTrack.title}`,
+                `Open Album Card: ${heroTrack.album || heroTrack.title}`,
+                `Открыть карточку альбома: ${heroTrack.album || heroTrack.title}`
+              )}
+              className="relative flex items-center shrink-0 group cursor-pointer focus:outline-none"
+            >
+              <div className="relative w-24 h-24 sm:w-28 sm:h-28 lg:w-32 lg:h-32 rounded-xl overflow-hidden shadow-[0_12px_30px_rgba(0,0,0,0.85)] ring-1 ring-white/20 group-hover:ring-amber-400/70 z-10 bg-zinc-900 transition-all">
                 <img
-                  src={heroTrack.cover}
+                  src={proxyMusicCover(heroTrack.cover)}
                   alt={heroTrack.title}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
               </div>
 
-              {/* Compact Spinning Vinyl Record */}
-              <div
-                className={`hidden sm:flex -ml-9 w-24 h-24 sm:w-26 sm:h-26 lg:w-28 lg:h-28 rounded-full bg-gradient-to-tr from-zinc-950 via-zinc-800 to-zinc-950 border-2 border-zinc-800/90 shadow-[0_10px_28px_rgba(0,0,0,0.9)] items-center justify-center relative ${
-                  isPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
-                }`}
-              >
-                <div className="absolute inset-2 rounded-full border border-white/10 pointer-events-none" />
-                <div className="absolute inset-4 rounded-full border border-white/10 pointer-events-none" />
-                <div className="absolute inset-6 rounded-full border border-amber-400/20 pointer-events-none" />
-                <div className="w-9 h-9 rounded-full overflow-hidden border border-amber-400/50 relative">
+              {/* Compact Spinning Vinyl Record — ONLY the vinyl disc spins, NOT the center cover photo */}
+              <div className="hidden sm:flex -ml-9 w-24 h-24 sm:w-28 sm:h-28 lg:w-32 lg:h-32 rounded-full shadow-[0_10px_28px_rgba(0,0,0,0.9)] items-center justify-center relative shrink-0">
+                <div
+                  className={`absolute inset-0 rounded-full border-2 border-zinc-800/90 ${
+                    isPlaying ? 'animate-[spin_4s_linear_infinite]' : ''
+                  }`}
+                  style={{
+                    background:
+                      'conic-gradient(from 0deg, #09090b 0deg, #27272a 45deg, #09090b 90deg, #18181b 135deg, #09090b 180deg, #27272a 225deg, #09090b 270deg, #18181b 315deg, #09090b 360deg)',
+                  }}
+                >
+                  <div className="absolute inset-2 rounded-full border border-white/15 pointer-events-none" />
+                  <div className="absolute inset-4 rounded-full border border-dashed border-amber-400/30 pointer-events-none" />
+                  <div className="absolute inset-6 rounded-full border border-white/10 pointer-events-none" />
+                </div>
+                <div className="relative z-10 w-14 h-14 sm:w-16 sm:h-16 rounded-full overflow-hidden border-2 border-amber-400/70 shadow-lg bg-zinc-900">
                   <img
-                    src={heroTrack.cover}
+                    src={proxyMusicCover(heroTrack.cover)}
                     alt=""
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute inset-0 m-auto w-2 h-2 rounded-full bg-[#0c0e14] border border-white/40" />
                 </div>
               </div>
-            </div>
+            </button>
 
             {/* Middle & Right: Track Info, Official Quality Icons, Seekbar & Icon Controls */}
             <div className="flex-1 min-w-0 flex flex-col justify-between space-y-2.5 w-full">
@@ -811,12 +1091,36 @@ export const SmartTvMusicSpotifySection: React.FC<
                     >
                       {heroTrack.artist}
                     </button>
-                    {heroTrack.album && heroTrack.album !== heroTrack.title && (
+                    {heroTrack.album && (
                       <>
                         <span className="text-zinc-600">•</span>
-                        <span className="text-zinc-400 truncate max-w-[220px] sm:max-w-xs">
-                          {heroTrack.album}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleOpenAlbumCard(
+                              heroTrack.album,
+                              heroTrack.artist,
+                              heroTrack
+                            )
+                          }
+                          title={tr(
+                            `Vezi Cardul Albumului „${heroTrack.album}” (detalii, anul producției și lista de piese)`,
+                            `View Album Card "${heroTrack.album}" (details, release year & tracklist)`,
+                            `Открыть карточку альбома «${heroTrack.album}»`
+                          )}
+                          className="inline-flex items-center gap-1 text-zinc-300 hover:text-amber-300 hover:underline font-medium truncate max-w-[240px] sm:max-w-xs cursor-pointer transition-colors"
+                        >
+                          <Disc className="w-3.5 h-3.5 text-amber-400/85 shrink-0" />
+                          <span className="truncate">
+                            {heroTrack.album
+                              .replace(/\s*-\s*Single$/i, '')
+                              .trim()
+                              .toLowerCase() ===
+                            heroTrack.title.trim().toLowerCase()
+                              ? tr('Vezi Albumul', 'View Album', 'Альбом')
+                              : heroTrack.album}
+                          </span>
+                        </button>
                       </>
                     )}
                   </div>
@@ -931,28 +1235,28 @@ export const SmartTvMusicSpotifySection: React.FC<
                     </text>
                   </svg>
 
-                  {/* Compact 14-Bar Animated Equalizer */}
+                  {/* Symmetrical Acoustic Soundwave Visualizer */}
                   <div
-                    className="flex items-end gap-[2px] h-6 px-2.5 py-1 rounded-md bg-black/55 border border-white/10"
+                    className="flex items-center gap-[3px] h-6 px-2"
                     aria-hidden="true"
                   >
-                    {Array.from({ length: 14 }).map((_, i) => (
-                      <span
-                        key={`viz_${i}`}
-                        style={{
-                          height: isPlaying
-                            ? `${Math.max(25, ((i * 37) % 85) + 15)}%`
-                            : '22%',
-                          animationDelay: `${(i % 7) * 0.11}s`,
-                          animationDuration: `${0.55 + (i % 5) * 0.14}s`,
-                        }}
-                        className={`w-[2.5px] rounded-full transition-all ${
-                          isPlaying
-                            ? 'bg-gradient-to-t from-amber-500 to-amber-300 eq-bar'
-                            : 'bg-zinc-600'
-                        }`}
-                      />
-                    ))}
+                    {[38, 65, 92, 54, 100, 74, 46, 88, 60, 40].map(
+                      (peak, i) => (
+                        <span
+                          key={`viz_${i}`}
+                          style={{
+                            height: isPlaying ? `${peak}%` : '22%',
+                            animationDelay: `${i * 0.09}s`,
+                            animationDuration: `${0.48 + (i % 4) * 0.12}s`,
+                          }}
+                          className={`w-[3px] rounded-full transition-all ${
+                            isPlaying
+                              ? 'bg-gradient-to-b from-amber-300 via-emerald-400 to-cyan-400 shadow-[0_0_8px_rgba(251,191,36,0.45)] eq-bar'
+                              : 'bg-white/15'
+                          }`}
+                        />
+                      )
+                    )}
                   </div>
                 </div>
               </div>
@@ -1046,12 +1350,19 @@ export const SmartTvMusicSpotifySection: React.FC<
                         onTogglePlayPause();
                       }
                     }}
-                    className="h-9 w-9 rounded-full bg-white hover:bg-white/90 focus:bg-white text-[#090d16] inline-flex items-center justify-center shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer"
+                    style={{ backgroundColor: '#ffffff', color: '#090d16' }}
+                    className="h-9 w-9 mr-2 rounded-full bg-white hover:bg-white/90 focus:bg-white text-[#090d16] inline-flex items-center justify-center shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer shrink-0"
                   >
                     {isPlaying && currentTrack?.id === heroTrack.id ? (
-                      <Pause className="w-4 h-4 fill-current text-[#090d16]" />
+                      <Pause
+                        style={{ width: 16, height: 16, color: '#090d16' }}
+                        className="w-4 h-4 fill-current text-[#090d16] shrink-0"
+                      />
                     ) : (
-                      <Play className="w-4 h-4 fill-current text-[#090d16] ml-0.5" />
+                      <Play
+                        style={{ width: 16, height: 16, color: '#090d16' }}
+                        className="w-4 h-4 fill-current text-[#090d16] ml-0.5 shrink-0"
+                      />
                     )}
                   </button>
 
@@ -1059,58 +1370,71 @@ export const SmartTvMusicSpotifySection: React.FC<
                     type="button"
                     title={tr('Piesa anterioară', 'Previous track', 'Предыдущий трек')}
                     onClick={onPrevTrack}
-                    className="h-8 w-8 rounded-full tahoe-emerald-card hover:bg-white/20 focus:bg-white focus:text-[#090d16] text-white inline-flex items-center justify-center transition-all cursor-pointer"
+                    className="h-8 w-8 mr-1.5 rounded-full tahoe-emerald-card hover:bg-white/20 focus:bg-white focus:text-[#090d16] text-white inline-flex items-center justify-center transition-all cursor-pointer shrink-0"
                   >
-                    <SkipBack className="w-3.5 h-3.5 fill-current" />
+                    <SkipBack
+                      style={{ width: 15, height: 15 }}
+                      className="w-3.5 h-3.5 fill-current shrink-0"
+                    />
                   </button>
 
                   <button
                     type="button"
                     title={tr('Piesa următoare', 'Next track', 'Следующий трек')}
                     onClick={onNextTrack}
-                    className="h-8 w-8 rounded-full tahoe-emerald-card hover:bg-white/20 focus:bg-white focus:text-[#090d16] text-white inline-flex items-center justify-center transition-all cursor-pointer"
+                    className="h-8 w-8 mr-1.5 rounded-full tahoe-emerald-card hover:bg-white/20 focus:bg-white focus:text-[#090d16] text-white inline-flex items-center justify-center transition-all cursor-pointer shrink-0"
                   >
-                    <SkipForward className="w-3.5 h-3.5 fill-current" />
+                    <SkipForward
+                      style={{ width: 15, height: 15 }}
+                      className="w-3.5 h-3.5 fill-current shrink-0"
+                    />
                   </button>
 
                   <button
                     type="button"
                     title={tr('Amestecare (Shuffle)', 'Shuffle', 'Перемешать')}
                     onClick={onToggleShuffle}
-                    className={`h-8 w-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer ${
+                    className={`h-8 w-8 mr-1.5 rounded-full inline-flex items-center justify-center transition-all cursor-pointer shrink-0 ${
                       isShuffle
                         ? 'bg-white text-[#090d16] shadow-sm'
-                        : 'tahoe-emerald-card text-white/80 hover:text-white focus:bg-white focus:text-[#090d16]'
+                        : 'tahoe-emerald-card text-white/90 hover:text-white focus:bg-white focus:text-[#090d16]'
                     }`}
                   >
-                    <Shuffle className="w-3.5 h-3.5" />
+                    <Shuffle
+                      style={{ width: 15, height: 15 }}
+                      className="w-3.5 h-3.5 shrink-0"
+                    />
                   </button>
 
                   <button
                     type="button"
                     title={tr('Repetare piesă', 'Repeat', 'Повтор')}
                     onClick={onToggleRepeat}
-                    className={`h-8 w-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer ${
+                    className={`h-8 w-8 mr-1.5 rounded-full inline-flex items-center justify-center transition-all cursor-pointer shrink-0 ${
                       isRepeat
                         ? 'bg-white text-[#090d16] shadow-sm'
-                        : 'tahoe-emerald-card text-white/80 hover:text-white focus:bg-white focus:text-[#090d16]'
+                        : 'tahoe-emerald-card text-white/90 hover:text-white focus:bg-white focus:text-[#090d16]'
                     }`}
                   >
-                    <Repeat className="w-3.5 h-3.5" />
+                    <Repeat
+                      style={{ width: 15, height: 15 }}
+                      className="w-3.5 h-3.5 shrink-0"
+                    />
                   </button>
 
                   <button
                     type="button"
                     title={tr('Piese Apreciate', 'Save to Liked Songs', 'В Любимые треки')}
                     onClick={() => onToggleLikeTrack(heroTrack)}
-                    className={`h-8 w-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer ${
+                    className={`h-8 w-8 mr-1.5 rounded-full inline-flex items-center justify-center transition-all cursor-pointer shrink-0 ${
                       isHeroLiked
                         ? 'bg-rose-500 text-white shadow-sm'
-                        : 'tahoe-emerald-card text-white/80 hover:bg-white/20 focus:bg-white focus:text-[#090d16]'
+                        : 'tahoe-emerald-card text-white/90 hover:bg-white/20 focus:bg-white focus:text-[#090d16]'
                     }`}
                   >
                     <Heart
-                      className={`w-3.5 h-3.5 ${isHeroLiked ? 'fill-current' : ''}`}
+                      style={{ width: 15, height: 15 }}
+                      className={`w-3.5 h-3.5 shrink-0 ${isHeroLiked ? 'fill-current' : ''}`}
                     />
                   </button>
 
@@ -1121,14 +1445,24 @@ export const SmartTvMusicSpotifySection: React.FC<
                         ? tr('Ascunde Videoclipul', 'Hide Video Clip', 'Скрыть клип')
                         : tr('Videoclip Oficial HD', 'Official Video Clip', 'Видеоклип HD')
                     }
-                    onClick={() => setIsVideoClipMode((v) => !v)}
-                    className={`h-8 w-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer ${
+                    onClick={(e) => {
+                      const nextMode = !isVideoClipMode;
+                      setIsVideoClipMode(nextMode);
+                      if (nextMode) {
+                        const mainEl = e.currentTarget.closest('main');
+                        mainEl?.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className={`h-8 w-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer shrink-0 ${
                       isVideoClipMode
                         ? 'bg-white text-[#090d16]'
-                        : 'tahoe-emerald-card text-white/80 hover:bg-white/20 focus:bg-white focus:text-[#090d16]'
+                        : 'tahoe-emerald-card text-white/90 hover:bg-white/20 focus:bg-white focus:text-[#090d16]'
                     }`}
                   >
-                    <Tv className="w-3.5 h-3.5" />
+                    <Tv
+                      style={{ width: 15, height: 15 }}
+                      className="w-3.5 h-3.5 shrink-0"
+                    />
                   </button>
                 </div>
 
@@ -1137,12 +1471,18 @@ export const SmartTvMusicSpotifySection: React.FC<
                   <button
                     type="button"
                     onClick={onToggleMute}
-                    className="text-white/80 hover:text-white focus:outline-none cursor-pointer"
+                    className="text-white/90 hover:text-white focus:outline-none cursor-pointer mr-1.5 shrink-0"
                   >
                     {isMuted || volume === 0 ? (
-                      <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                      <VolumeX
+                        style={{ width: 15, height: 15 }}
+                        className="w-3.5 h-3.5 text-rose-400 shrink-0"
+                      />
                     ) : (
-                      <Volume2 className="w-3.5 h-3.5" />
+                      <Volume2
+                        style={{ width: 15, height: 15 }}
+                        className="w-3.5 h-3.5 shrink-0"
+                      />
                     )}
                   </button>
                   <div
@@ -1212,7 +1552,7 @@ export const SmartTvMusicSpotifySection: React.FC<
 
           {/* Optional Official HD Music Video Clip Drawer inside Hero Card */}
           {isVideoClipMode && resolvedClipVideoId && (
-            <div className="relative z-10 mt-4 rounded-xl overflow-hidden border border-white/15 bg-black aspect-video max-h-[360px] w-full shadow-2xl">
+            <div className="relative z-10 mt-4 rounded-xl overflow-hidden border border-white/15 bg-black h-[220px] sm:h-[320px] lg:h-[360px] max-w-3xl mx-auto w-full shadow-2xl">
               <video
                 key={`clip_${resolvedClipVideoId}`}
                 src={`/api/youtube/stream?id=${encodeURIComponent(
@@ -1226,6 +1566,298 @@ export const SmartTvMusicSpotifySection: React.FC<
             </div>
           )}
         </div>
+
+        {/* ====================================================================
+          1B. CARDUL ALBUMULUI (ALBUM DETAIL CARD — SCURTE DETALII, ANUL PRODUCȚIEI & LISTA DE PIESE)
+         ==================================================================== */}
+        {activeAlbumCard && (
+          <div className="relative rounded-2xl overflow-hidden tahoe-emerald-osd p-4 sm:p-5 lg:p-6 shadow-[0_22px_55px_rgba(0,0,0,0.85)] border border-amber-400/25">
+            {/* Blurred Album Cover Backdrop */}
+            <img
+              src={proxyMusicCover(activeAlbumCard.coverUrl)}
+              alt=""
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-20 blur-3xl scale-125"
+            />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0d111a]/90 via-[#0b0e16]/95 to-[#090b11]/98" />
+
+            <div className="relative z-10 space-y-5">
+              {/* Top Section: Album Cover + Production Details + Actions */}
+              <div className="flex flex-col md:flex-row items-center md:items-start gap-5">
+                {/* Album Cover + Vinyl */}
+                <div className="relative flex items-center shrink-0">
+                  <div className="w-28 h-28 sm:w-36 sm:h-36 rounded-xl overflow-hidden shadow-[0_14px_35px_rgba(0,0,0,0.85)] ring-1 ring-white/20 z-10 bg-zinc-900">
+                    <img
+                      src={proxyMusicCover(activeAlbumCard.coverUrl)}
+                      alt={activeAlbumCard.albumTitle}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="hidden sm:flex -ml-10 w-28 h-28 sm:w-32 sm:h-32 rounded-full shadow-2xl items-center justify-center relative shrink-0">
+                    <div
+                      className={`absolute inset-0 rounded-full border-2 border-zinc-800/90 ${
+                        isPlaying &&
+                        activeAlbumCard.tracks.some((t) => t.id === currentTrack?.id)
+                          ? 'animate-[spin_4s_linear_infinite]'
+                          : ''
+                      }`}
+                      style={{
+                        background:
+                          'conic-gradient(from 0deg, #09090b 0deg, #27272a 45deg, #09090b 90deg, #18181b 135deg, #09090b 180deg, #27272a 225deg, #09090b 270deg, #18181b 315deg, #09090b 360deg)',
+                      }}
+                    >
+                      <div className="absolute inset-2 rounded-full border border-white/15 pointer-events-none" />
+                      <div className="absolute inset-4 rounded-full border border-dashed border-amber-400/30 pointer-events-none" />
+                    </div>
+                    <div className="relative z-10 w-16 h-16 sm:w-18 sm:h-18 rounded-full overflow-hidden border-2 border-amber-400/70 shadow-lg bg-zinc-900">
+                      <img
+                        src={proxyMusicCover(activeAlbumCard.coverUrl)}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Album Info, Production Year, Copyright & Action Buttons */}
+                <div className="flex-1 min-w-0 text-center md:text-left space-y-2.5 w-full">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/35 text-amber-300 text-[11px] font-bold tracking-wider uppercase mx-auto md:mx-0">
+                      <Disc className="w-3.5 h-3.5" />
+                      <span>
+                        {tr(
+                          'Cardul Albumului • Ediție Studio Master',
+                          'Album Card • Studio Master Edition',
+                          'Карточка альбома • Studio Master'
+                        )}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveAlbumCard(null)}
+                      title={tr('Închide cardul albumului', 'Close album card', 'Закрыть карточку альбома')}
+                      className="h-8 px-3 rounded-full tahoe-emerald-card hover:bg-rose-500/80 hover:text-white text-zinc-300 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>{tr('Închide', 'Close', 'Закрыть')}</span>
+                    </button>
+                  </div>
+
+                  <div>
+                    <h2 className="text-xl sm:text-2xl lg:text-3xl font-extrabold text-white tracking-tight">
+                      {activeAlbumCard.albumTitle}
+                    </h2>
+                    <div className="mt-1 flex flex-wrap items-center justify-center md:justify-start gap-2 text-xs sm:text-sm">
+                      <button
+                        type="button"
+                        onClick={() => handleRunSearch(activeAlbumCard.artistName)}
+                        className="font-bold text-amber-300 hover:underline cursor-pointer"
+                      >
+                        {activeAlbumCard.artistName}
+                      </button>
+                      <span className="text-zinc-600">•</span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.07] text-zinc-200 font-medium">
+                        <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                        <span>
+                          {tr('Anul producției:', 'Released:', 'Год выпуска:')}{' '}
+                          <strong className="text-white">
+                            {activeAlbumCard.releaseDateText || activeAlbumCard.year}
+                          </strong>
+                        </span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.07] text-zinc-200 font-medium">
+                        🎵 {activeAlbumCard.genre}
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.07] text-zinc-200 font-medium">
+                        💿 {activeAlbumCard.trackCount}{' '}
+                        {tr('piese', 'tracks', 'треков')} •{' '}
+                        {Math.max(
+                          1,
+                          Math.round(activeAlbumCard.totalDurationSec / 60)
+                        )}{' '}
+                        min
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Short Album Summary & Production / Record Label Details */}
+                  <p className="text-xs sm:text-sm text-zinc-300/90 leading-relaxed max-w-3xl">
+                    {tr(
+                      `Albumul „${activeAlbumCard.albumTitle}” semnat de ${activeAlbumCard.artistName}, lansat oficial în anul ${activeAlbumCard.year} (${activeAlbumCard.genre}), conține ${activeAlbumCard.trackCount} piese disponibile pentru audiție imediată în format Lossless Hi-Res 24-bit.`,
+                      `Album "${activeAlbumCard.albumTitle}" by ${activeAlbumCard.artistName}, officially released in ${activeAlbumCard.year} (${activeAlbumCard.genre}), featuring ${activeAlbumCard.trackCount} tracks in Lossless Hi-Res 24-bit audio.`,
+                      `Альбом «${activeAlbumCard.albumTitle}» исполнителя ${activeAlbumCard.artistName}, выпущенный в ${activeAlbumCard.year} году (${activeAlbumCard.genre}), включает ${activeAlbumCard.trackCount} треков в качестве Lossless Hi-Res.`
+                    )}
+                    {activeAlbumCard.copyright ? (
+                      <span className="block mt-1 text-[11px] text-zinc-400">
+                        {tr('Producție & Casă de discuri:', 'Production & Label:', 'Продюсирование и лейбл:')}{' '}
+                        <span className="text-zinc-300">{activeAlbumCard.copyright}</span>
+                      </span>
+                    ) : null}
+                  </p>
+
+                  {/* Play All Album Controls */}
+                  <div className="pt-1 flex flex-wrap items-center justify-center md:justify-start gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (activeAlbumCard.tracks.length > 0) {
+                          onPlayTrack(
+                            activeAlbumCard.tracks[0],
+                            activeAlbumCard.tracks
+                          );
+                        }
+                      }}
+                      style={{ backgroundColor: '#ffffff', color: '#090d16' }}
+                      className="h-9 px-4 rounded-full bg-white hover:bg-amber-300 text-[#090d16] text-xs sm:text-sm font-bold inline-flex items-center gap-2 shadow-lg cursor-pointer transition-all"
+                    >
+                      <Play className="w-4 h-4 fill-current text-[#090d16]" />
+                      <span>
+                        {tr(
+                          'Redă Albumul Integral',
+                          'Play Full Album',
+                          'Слушать весь альбом'
+                        )}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (activeAlbumCard.tracks.length > 0) {
+                          const rnd =
+                            activeAlbumCard.tracks[
+                              Math.floor(
+                                Math.random() * activeAlbumCard.tracks.length
+                              )
+                            ];
+                          onPlayTrack(rnd, activeAlbumCard.tracks);
+                        }
+                      }}
+                      className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white hover:text-[#090d16] text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                    >
+                      <Shuffle className="w-3.5 h-3.5" />
+                      <span>{tr('Amestecă', 'Shuffle', 'Перемешать')}</span>
+                    </button>
+
+                    {isLoadingAlbumCard && (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-amber-300">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>
+                          {tr(
+                            'Se încarcă piesele din album...',
+                            'Loading album tracks...',
+                            'Загрузка треков альбома...'
+                          )}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Album Tracklist Table */}
+              <div className="border-t border-white/10 pt-3">
+                <div className="flex items-center justify-between mb-2 px-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                    {tr(
+                      'Lista de piese din album (click pentru redare)',
+                      'Album Tracklist (click to play)',
+                      'Список треков альбома (нажмите для воспроизведения)'
+                    )}
+                  </span>
+                  <span className="text-[11px] text-zinc-400">
+                    {activeAlbumCard.tracks.length}{' '}
+                    {tr('piese', 'tracks', 'треков')}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 max-h-[340px] overflow-y-auto pr-1 no-scrollbar">
+                  {activeAlbumCard.tracks.map((albTrack, idx) => {
+                    const isCurrentAlbTrack =
+                      currentTrack?.id === albTrack.id ||
+                      (currentTrack?.title === albTrack.title &&
+                        currentTrack?.artist === albTrack.artist);
+                    const isAlbLiked = likedTracks.some(
+                      (t) => t.id === albTrack.id
+                    );
+
+                    return (
+                      <div
+                        key={`alb_row_${albTrack.id}_${idx}`}
+                        className={`px-3 py-2 rounded-xl flex items-center justify-between gap-2.5 transition-colors ${
+                          isCurrentAlbTrack
+                            ? 'bg-amber-400/15 border border-amber-400/35'
+                            : 'bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.05]'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onPlayTrack(albTrack, activeAlbumCard.tracks)
+                          }
+                          className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer focus:outline-none"
+                        >
+                          <span
+                            className={`w-5 text-xs font-bold tabular-nums text-center shrink-0 ${
+                              isCurrentAlbTrack
+                                ? 'text-amber-300'
+                                : 'text-zinc-400'
+                            }`}
+                          >
+                            {isCurrentAlbTrack && isPlaying ? '▶' : idx + 1}
+                          </span>
+                          <img
+                            src={proxyMusicCover(
+                              albTrack.coverSmall || albTrack.cover
+                            )}
+                            alt={albTrack.title}
+                            className="w-8 h-8 rounded-md object-cover shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className={`text-xs sm:text-sm font-semibold truncate ${
+                                isCurrentAlbTrack
+                                  ? 'text-amber-300'
+                                  : 'text-white'
+                              }`}
+                            >
+                              {albTrack.title}
+                            </div>
+                            <div className="text-[11px] text-zinc-400 truncate">
+                              {albTrack.artist} • {albTrack.year}
+                            </div>
+                          </div>
+                        </button>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => onToggleLikeTrack(albTrack)}
+                            className={`w-7 h-7 rounded-full inline-flex items-center justify-center cursor-pointer ${
+                              isAlbLiked
+                                ? 'text-rose-400'
+                                : 'text-zinc-400 hover:text-white'
+                            }`}
+                          >
+                            <Heart
+                              className={`w-3.5 h-3.5 ${
+                                isAlbLiked ? 'fill-current' : ''
+                              }`}
+                            />
+                          </button>
+                          <span className="text-[11px] text-zinc-400 tabular-nums w-9 text-right">
+                            {formatMusicDuration(albTrack.durationSec)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ====================================================================
           2. COMPACT SEARCH BAR + LIKED SONGS PILL
@@ -1338,7 +1970,7 @@ export const SmartTvMusicSpotifySection: React.FC<
                 }`}
               >
                 <img
-                  src={pl.cover}
+                  src={proxyMusicCover(pl.cover)}
                   alt={pl.titleRo}
                   className="w-12 h-12 object-cover shrink-0 shadow-[4px_0_12px_rgba(0,0,0,0.45)]"
                 />
@@ -1372,16 +2004,16 @@ export const SmartTvMusicSpotifySection: React.FC<
                   key={`med_${pl.id}`}
                   type="button"
                   onClick={() => setActivePlaylistId(pl.id)}
-                  className={`p-2 rounded-lg text-left transition-colors flex flex-col justify-between group cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/60 ${
+                  className={`p-2 rounded-xl text-left transition-colors flex flex-col justify-between group cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/60 ${
                     isSelected
-                      ? 'bg-white/[0.12]'
+                      ? 'bg-white/[0.12] ring-1 ring-white/25'
                       : 'bg-transparent hover:bg-white/[0.06]'
                   }`}
                 >
                   <div className="space-y-1.5 w-full">
-                    <div className="relative aspect-square w-full rounded-md overflow-hidden bg-zinc-900 shadow-md">
+                    <div className="relative aspect-square w-full rounded-lg overflow-hidden bg-zinc-900 shadow-md">
                       <img
-                        src={pl.cover}
+                        src={proxyMusicCover(pl.cover)}
                         alt={pl.titleRo}
                         className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                       />
@@ -1404,219 +2036,255 @@ export const SmartTvMusicSpotifySection: React.FC<
          ==================================================================== */}
         <div
           id="music-tracklist-section"
-          className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start"
+          className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:items-stretch"
         >
-          {/* LEFT COLUMN (8 cols): Interactive Playlist Tracklist */}
-          <div className="xl:col-span-8 rounded-2xl tahoe-emerald-osd p-4 sm:p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <img
-                  src={
-                    activePlaylistId === 'search_results'
-                      ? tracksList[0]?.cover || activePlaylist.cover
-                      : activePlaylist.cover
-                  }
-                  alt=""
-                  className="w-11 h-11 rounded-lg object-cover border border-white/15 shrink-0"
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base sm:text-lg font-bold text-white truncate">
-                      {activePlaylistId === 'liked_songs'
-                        ? tr('Piese Apreciate', 'Liked Songs', 'Любимые треки')
-                        : activePlaylistId === 'search_results'
-                          ? customSearchHeader || searchQuery
-                          : tr(
-                              activePlaylist.titleRo,
-                              activePlaylist.titleEn,
-                              activePlaylist.titleRu
-                            )}
-                    </h3>
-                    {/* Mini Official Hi-Res Audio Crest */}
-                    <svg
-                      viewBox="0 0 56 36"
-                      className="h-4 w-auto shrink-0"
-                      aria-hidden="true"
-                    >
-                      <rect
-                        x="0.75"
-                        y="0.75"
-                        width="54.5"
-                        height="34.5"
-                        rx="3.5"
-                        fill="#0b0c10"
-                        stroke="#d4af37"
-                        strokeWidth="1.5"
-                      />
-                      <path
-                        d="M1.5 4C1.5 2.61929 2.61929 1.5 4 1.5H52C53.3807 1.5 54.5 2.61929 54.5 4V18H1.5V4Z"
-                        fill="#d4af37"
-                      />
-                      <text
-                        x="28"
-                        y="13"
-                        textAnchor="middle"
-                        fill="#0b0c10"
-                        fontSize="10.5"
-                        fontWeight="900"
-                        fontFamily="system-ui, -apple-system, sans-serif"
+          {/* LEFT COLUMN (8 cols): Interactive Playlist Tracklist — matched height with Right Column */}
+          <div className="lg:col-span-8 flex flex-col">
+            <div className="h-full rounded-2xl tahoe-emerald-osd p-4 sm:p-5 flex flex-col">
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <img
+                    src={proxyMusicCover(
+                      activePlaylistId === 'search_results'
+                        ? tracksList[0]?.cover || activePlaylist.cover
+                        : activePlaylist.cover
+                    )}
+                    alt=""
+                    className="w-11 h-11 rounded-lg object-cover border border-white/15 shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base sm:text-lg font-bold text-white truncate">
+                        {activePlaylistId === 'liked_songs'
+                          ? tr('Piese Apreciate', 'Liked Songs', 'Любимые треки')
+                          : activePlaylistId === 'search_results'
+                            ? customSearchHeader || searchQuery
+                            : tr(
+                                activePlaylist.titleRo,
+                                activePlaylist.titleEn,
+                                activePlaylist.titleRu
+                              )}
+                      </h3>
+                      {/* Mini Official Hi-Res Audio Crest */}
+                      <svg
+                        viewBox="0 0 56 36"
+                        className="h-4 w-auto shrink-0"
+                        aria-hidden="true"
                       >
-                        Hi-Res
-                      </text>
-                      <text
-                        x="28"
-                        y="29.5"
-                        textAnchor="middle"
-                        fill="#e6c665"
-                        fontSize="9.5"
-                        fontWeight="800"
-                        fontFamily="system-ui, -apple-system, sans-serif"
-                        letterSpacing="1.4"
-                      >
-                        AUDIO
-                      </text>
-                    </svg>
+                        <rect
+                          x="0.75"
+                          y="0.75"
+                          width="54.5"
+                          height="34.5"
+                          rx="3.5"
+                          fill="#0b0c10"
+                          stroke="#d4af37"
+                          strokeWidth="1.5"
+                        />
+                        <path
+                          d="M1.5 4C1.5 2.61929 2.61929 1.5 4 1.5H52C53.3807 1.5 54.5 2.61929 54.5 4V18H1.5V4Z"
+                          fill="#d4af37"
+                        />
+                        <text
+                          x="28"
+                          y="13"
+                          textAnchor="middle"
+                          fill="#0b0c10"
+                          fontSize="10.5"
+                          fontWeight="900"
+                          fontFamily="system-ui, -apple-system, sans-serif"
+                        >
+                          Hi-Res
+                        </text>
+                        <text
+                          x="28"
+                          y="29.5"
+                          textAnchor="middle"
+                          fill="#e6c665"
+                          fontSize="9.5"
+                          fontWeight="800"
+                          fontFamily="system-ui, -apple-system, sans-serif"
+                          letterSpacing="1.4"
+                        >
+                          AUDIO
+                        </text>
+                      </svg>
+                    </div>
+                    <span className="text-[11px] text-zinc-400">
+                      {tracksList.length} {tr('piese', 'tracks', 'треков')}
+                    </span>
                   </div>
-                  <span className="text-[11px] text-zinc-400">
-                    {tracksList.length} {tr('piese', 'tracks', 'треков')}
-                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {isLoadingTracks && (
+                    <span className="text-xs font-medium text-amber-300 animate-pulse">
+                      ...
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    title={tr('Redă Tot', 'Play All', 'Слушать всё')}
+                    onClick={() => {
+                      if (tracksList.length > 0) {
+                        onPlayTrack(tracksList[0], tracksList);
+                      }
+                    }}
+                    style={{ backgroundColor: '#ffffff', color: '#090d16' }}
+                    className="h-9 w-9 rounded-full bg-white hover:bg-amber-300 text-[#090d16] inline-flex items-center justify-center shadow-md cursor-pointer shrink-0"
+                  >
+                    <Play
+                      style={{ width: 16, height: 16, color: '#090d16' }}
+                      className="w-4 h-4 fill-current text-[#090d16] ml-0.5 shrink-0"
+                    />
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                {isLoadingTracks && (
-                  <span className="text-xs font-medium text-amber-300 animate-pulse">
-                    ...
-                  </span>
-                )}
-                <button
-                  type="button"
-                  title={tr('Redă Tot', 'Play All', 'Слушать всё')}
-                  onClick={() => {
-                    if (tracksList.length > 0) {
-                      onPlayTrack(tracksList[0], tracksList);
-                    }
-                  }}
-                  className="h-9 w-9 rounded-full bg-white hover:bg-amber-300 text-[#090d16] inline-flex items-center justify-center shadow-md cursor-pointer"
-                >
-                  <Play className="w-4 h-4 fill-current text-[#090d16] ml-0.5" />
-                </button>
-              </div>
-            </div>
+              {/* Tracklist Rows — Compact, Clean, Minimal Text */}
+              <div className="mt-3 space-y-0.5 flex-1 min-h-0 max-h-[620px] overflow-y-auto pr-1 no-scrollbar">
+                {tracksList.map((track, idx) => {
+                  const isCurrent = currentTrack?.id === track.id;
+                  const isLiked = likedTracks.some((t) => t.id === track.id);
 
-            {/* Tracklist Rows — Compact, Clean, Minimal Text */}
-            <div className="space-y-0.5 max-h-[620px] overflow-y-auto pr-1 no-scrollbar">
-              {tracksList.map((track, idx) => {
-                const isCurrent = currentTrack?.id === track.id;
-                const isLiked = likedTracks.some((t) => t.id === track.id);
-
-                return (
-                  <div
-                    key={track.id}
-                    className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-3 transition-colors ${
-                      isCurrent
-                        ? 'bg-white/[0.1]'
-                        : 'hover:bg-white/[0.06]'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onPlayTrack(track, tracksList)}
-                      className="flex-1 min-w-0 flex items-center gap-3 text-left focus:outline-none focus:ring-2 focus:ring-white/50 rounded-md cursor-pointer"
+                  return (
+                    <div
+                      key={track.id}
+                      className={`w-full px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-3 transition-colors ${
+                        isCurrent
+                          ? 'bg-white/[0.1]'
+                          : 'hover:bg-white/[0.06]'
+                      }`}
                     >
-                      <div className="w-5 text-center shrink-0">
-                        {isCurrent && isPlaying ? (
-                          <div className="inline-flex items-end gap-0.5 h-3.5">
-                            <span className="w-0.5 h-full bg-amber-400 eq-bar rounded-full" />
-                            <span className="w-0.5 h-2.5 bg-amber-400 eq-bar eq-bar-2 rounded-full" />
-                            <span className="w-0.5 h-3.5 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
-                          </div>
-                        ) : (
-                          <span
-                            className={`text-xs font-medium tabular-nums ${
-                              isCurrent ? 'text-amber-300' : 'text-zinc-500'
-                            }`}
-                          >
-                            {idx + 1}
-                          </span>
-                        )}
-                      </div>
-
-                      <img
-                        src={track.coverSmall || track.cover}
-                        alt={track.title}
-                        className="w-9 h-9 rounded-md object-cover shrink-0"
-                      />
-
-                      <div className="min-w-0 flex-1">
-                        <div
-                          className={`text-xs sm:text-sm font-semibold truncate ${
-                            isCurrent ? 'text-amber-300' : 'text-white'
-                          }`}
-                        >
-                          {track.title}
-                        </div>
-                        <div className="text-[11px] text-[#a7a7a7] truncate">
-                          <span
-                            role="link"
-                            tabIndex={-1}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRunSearch(track.artist);
-                            }}
-                            title={tr(
-                              `Vezi toate piesele lui ${track.artist}`,
-                              `View all songs by ${track.artist}`,
-                              `Все треки ${track.artist}`
-                            )}
-                            className="hover:text-white hover:underline cursor-pointer"
-                          >
-                            {track.artist}
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-
-                    <div className="flex items-center gap-2.5 shrink-0">
-                      {/* Subtle Lossless Wave Icon instead of text */}
-                      <svg
-                        viewBox="0 0 18 14"
-                        className="w-3.5 h-3.5 text-amber-400/75 hidden sm:block shrink-0"
-                        aria-label="Lossless Audio"
-                      >
-                        <title>Hi-Res Lossless FLAC</title>
-                        <rect x="1" y="4" width="2" height="6" rx="1" fill="currentColor" />
-                        <rect x="5" y="1" width="2" height="12" rx="1" fill="currentColor" />
-                        <rect x="9" y="3" width="2" height="8" rx="1" fill="currentColor" />
-                        <rect x="13" y="5" width="2" height="4" rx="1" fill="currentColor" />
-                      </svg>
-
                       <button
                         type="button"
-                        onClick={() => onToggleLikeTrack(track)}
-                        className={`w-7 h-7 rounded-full inline-flex items-center justify-center transition-colors cursor-pointer ${
-                          isLiked
-                            ? 'text-rose-400 hover:text-rose-300'
-                            : 'text-zinc-500 hover:text-white'
-                        }`}
+                        onClick={() => onPlayTrack(track, tracksList)}
+                        className="flex-1 min-w-0 flex items-center gap-3 text-left focus:outline-none focus:ring-2 focus:ring-white/50 rounded-md cursor-pointer"
                       >
-                        <Heart
-                          className={`w-3.5 h-3.5 ${isLiked ? 'fill-current' : ''}`}
+                        <div className="w-5 text-center shrink-0 mr-2">
+                          {isCurrent && isPlaying ? (
+                            <div className="inline-flex items-end gap-0.5 h-3.5">
+                              <span className="w-0.5 h-full bg-amber-400 eq-bar rounded-full" />
+                              <span className="w-0.5 h-2.5 bg-amber-400 eq-bar eq-bar-2 rounded-full" />
+                              <span className="w-0.5 h-3.5 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
+                            </div>
+                          ) : (
+                            <span
+                              className={`text-xs font-medium tabular-nums ${
+                                isCurrent ? 'text-amber-300' : 'text-zinc-500'
+                              }`}
+                            >
+                              {idx + 1}
+                            </span>
+                          )}
+                        </div>
+
+                        <img
+                          src={proxyMusicCover(track.coverSmall || track.cover)}
+                          alt={track.title}
+                          className="w-9 h-9 mr-2.5 rounded-md object-cover shrink-0"
                         />
+
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className={`text-xs sm:text-sm font-semibold truncate ${
+                              isCurrent ? 'text-amber-300' : 'text-white'
+                            }`}
+                          >
+                            {track.title}
+                          </div>
+                          <div className="text-[11px] text-[#a7a7a7] truncate">
+                            <span
+                              role="link"
+                              tabIndex={-1}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRunSearch(track.artist);
+                              }}
+                              title={tr(
+                                `Vezi toate piesele lui ${track.artist}`,
+                                `View all songs by ${track.artist}`,
+                                `Все треки ${track.artist}`
+                              )}
+                              className="hover:text-white hover:underline cursor-pointer"
+                            >
+                              {track.artist}
+                            </span>
+                            {track.album &&
+                              track.album
+                                .replace(/\s*-\s*Single$/i, '')
+                                .trim()
+                                .toLowerCase() !==
+                                track.title.trim().toLowerCase() && (
+                              <>
+                                <span className="mx-1.5 text-zinc-600">•</span>
+                                <span
+                                  role="link"
+                                  tabIndex={-1}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleOpenAlbumCard(
+                                      track.album,
+                                      track.artist,
+                                      track
+                                    );
+                                  }}
+                                  title={tr(
+                                    `Deschide Cardul Albumului: ${track.album}`,
+                                    `Open Album Card: ${track.album}`,
+                                    `Открыть карточку альбома: ${track.album}`
+                                  )}
+                                  className="hover:text-amber-300 hover:underline cursor-pointer"
+                                >
+                                  {track.album}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
                       </button>
 
-                      <span className="text-[11px] text-[#a7a7a7] w-9 text-right tabular-nums">
-                        {formatMusicDuration(track.durationSec)}
-                      </span>
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        {/* Subtle Lossless Wave Icon instead of text */}
+                        <svg
+                          viewBox="0 0 18 14"
+                          className="w-3.5 h-3.5 text-amber-400/75 hidden sm:block shrink-0"
+                          aria-label="Lossless Audio"
+                        >
+                          <title>Hi-Res Lossless FLAC</title>
+                          <rect x="1" y="4" width="2" height="6" rx="1" fill="currentColor" />
+                          <rect x="5" y="1" width="2" height="12" rx="1" fill="currentColor" />
+                          <rect x="9" y="3" width="2" height="8" rx="1" fill="currentColor" />
+                          <rect x="13" y="5" width="2" height="4" rx="1" fill="currentColor" />
+                        </svg>
+
+                        <button
+                          type="button"
+                          onClick={() => onToggleLikeTrack(track)}
+                          className={`w-7 h-7 rounded-full inline-flex items-center justify-center transition-colors cursor-pointer ${
+                            isLiked
+                              ? 'text-rose-400 hover:text-rose-300'
+                              : 'text-zinc-500 hover:text-white'
+                          }`}
+                        >
+                          <Heart
+                            className={`w-3.5 h-3.5 ${isLiked ? 'fill-current' : ''}`}
+                          />
+                        </button>
+
+                        <span className="text-[11px] text-[#a7a7a7] w-9 text-right tabular-nums">
+                          {formatMusicDuration(track.durationSec)}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
 
           {/* RIGHT COLUMN (4 cols): COMPACT SUGGESTIONS + ARTISTS */}
-          <div className="xl:col-span-4 space-y-4">
+          <div className="lg:col-span-4 flex flex-col justify-between gap-5">
             {/* Smart Suggestions Box */}
             <div className="rounded-2xl tahoe-emerald-osd p-4 space-y-2.5">
               <div className="flex items-center gap-2">
@@ -1646,9 +2314,9 @@ export const SmartTvMusicSpotifySection: React.FC<
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <img
-                          src={sTrack.coverSmall || sTrack.cover}
+                          src={proxyMusicCover(sTrack.coverSmall || sTrack.cover)}
                           alt={sTrack.title}
-                          className="w-9 h-9 rounded-md object-cover shrink-0"
+                          className="w-9 h-9 mr-2.5 rounded-md object-cover shrink-0"
                         />
                         <div className="min-w-0">
                           <div className="text-xs sm:text-sm font-semibold text-white truncate">
@@ -1668,7 +2336,7 @@ export const SmartTvMusicSpotifySection: React.FC<
             {/* Popular Artists Compact Cards */}
             <div className="rounded-2xl tahoe-emerald-osd p-4 space-y-2.5">
               <div className="flex items-center gap-2">
-                <Radio className="w-4 h-4 text-amber-400" />
+                <Radio className="w-4 h-4 text-amber-400 shrink-0 mr-1.5" />
                 <h3 className="text-sm sm:text-base font-bold text-white">
                   {tr(
                     'Artiști Recomandați',
@@ -1690,9 +2358,9 @@ export const SmartTvMusicSpotifySection: React.FC<
                     className="p-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] focus:ring-2 focus:ring-white/60 flex items-center gap-2.5 text-left transition-colors cursor-pointer"
                   >
                     <img
-                      src={art.avatar}
+                      src={proxyMusicCover(art.avatar)}
                       alt={art.name}
-                      className="w-9 h-9 rounded-full object-cover shrink-0"
+                      className="w-9 h-9 mr-2 rounded-full object-cover shrink-0"
                     />
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-white truncate">

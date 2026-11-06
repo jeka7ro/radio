@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Plus,
@@ -21,7 +22,10 @@ import {
   isProfileRememberedOnDevice,
   rememberProfileOnDevice,
   forgetProfileOnDevice,
+  markProfileDeleted,
+  unmarkProfileDeleted,
   compressUploadedAvatarImage,
+  isAdminJekaProfile,
 } from '../../services/deviceContinuityService';
 
 interface HandoffMediaInfo {
@@ -71,10 +75,13 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   // PIN unlock state
   const [targetPinProfile, setTargetPinProfile] = useState<SharedTvProfile | null>(null);
-  const [pendingPinAction, setPendingPinAction] = useState<'select' | 'edit' | 'delete'>('select');
+  const [pendingPinAction, setPendingPinAction] = useState<
+    'select' | 'edit' | 'delete' | 'admin_reset'
+  >('select');
   const [enteredPin, setEnteredPin] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
   const firstDigitBtnRef = useRef<HTMLButtonElement | null>(null);
+  const pinInputRef = useRef<HTMLInputElement | null>(null);
 
   // Create / Edit account state
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null); // 'NEW' or profile.id
@@ -105,7 +112,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     if (initialMode === 'create') {
       startCreateNewAccount();
     } else if (
-      (initialMode === 'pin_unlock' || isPinLockRequired) &&
+      initialMode === 'pin_unlock' &&
       activeProfile?.pin &&
       activeProfile.pin.trim()
     ) {
@@ -131,11 +138,27 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     return () => window.clearTimeout(t);
   }, [isOpen, viewMode, targetPinProfile?.id]);
 
-  // Allow typing digits 0-9 or Backspace directly on the TV remote / keyboard when PIN prompt is open
+  // Allow typing digits 0-9, Backspace, or Escape/Back directly on the TV remote / keyboard
   useEffect(() => {
-    if (!isOpen || viewMode !== 'pin_prompt') return;
+    if (!isOpen || viewMode === 'list') return;
     const onKeyDown = (e: KeyboardEvent) => {
       const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
+      const isBackKey =
+        e.key === 'Escape' ||
+        e.key === 'GoBack' ||
+        e.key === 'BrowserBack' ||
+        e.keyCode === 27 ||
+        e.keyCode === 461 ||
+        e.keyCode === 10009;
+      if (isBackKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPinError('');
+        setEnteredPin('');
+        setViewMode('list');
+        return;
+      }
+      if (viewMode !== 'pin_prompt') return;
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
@@ -152,8 +175,11 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isOpen, viewMode, targetPinProfile?.id, pendingPinAction]);
 
-  const applyUpdatedProfiles = (nextList: SharedTvProfile[]) => {
-    saveSharedProfiles(nextList);
+  const applyUpdatedProfiles = (
+    nextList: SharedTvProfile[],
+    options?: { allowShrink?: boolean }
+  ) => {
+    saveSharedProfiles(nextList, options);
     onProfilesChange?.(nextList);
   };
 
@@ -174,8 +200,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   const performDeleteAccount = (idToDelete: string) => {
     if (profiles.length <= 1) return;
+    markProfileDeleted(idToDelete);
     const nextList = profiles.filter((p) => p.id !== idToDelete);
-    applyUpdatedProfiles(nextList);
+    applyUpdatedProfiles(nextList, { allowShrink: true });
     forgetProfileOnDevice(idToDelete);
     if (activeProfileId === idToDelete && nextList[0]) {
       saveSharedActiveProfileId(nextList[0].id);
@@ -184,9 +211,51 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     setViewMode('list');
   };
 
+  const jekaAdminProfile =
+    profiles.find((p) => isAdminJekaProfile(p)) || profiles[0];
+  const jekaMasterPin = (jekaAdminProfile?.pin || '1155').trim();
+  const isCurrentActiveAdminJeka = Boolean(
+    activeProfile &&
+      isAdminJekaProfile(activeProfile) &&
+      (!activeProfile.pin || isProfileRememberedOnDevice(activeProfile))
+  );
+
+  const performResetPinForProfile = (prof: SharedTvProfile) => {
+    const clearedProf: SharedTvProfile = {
+      ...prof,
+      pin: undefined,
+      updatedAt: Date.now(),
+    };
+    const nextList = profiles.map((p) =>
+      p.id === prof.id ? clearedProf : p
+    );
+    applyUpdatedProfiles(nextList);
+    forgetProfileOnDevice(prof.id);
+    setTargetPinProfile(null);
+    setEnteredPin('');
+    setPinError('');
+    openEditorForProfile(clearedProf);
+  };
+
+  const handleResetPinByAdmin = (
+    prof: SharedTvProfile,
+    e?: React.MouseEvent
+  ) => {
+    if (e) e.stopPropagation();
+    if (isCurrentActiveAdminJeka) {
+      performResetPinForProfile(prof);
+      return;
+    }
+    setTargetPinProfile(prof);
+    setPendingPinAction('admin_reset');
+    setEnteredPin('');
+    setPinError('');
+    setViewMode('pin_prompt');
+  };
+
   const handleAccountClick = (prof: SharedTvProfile) => {
-    // Only require PIN the first time on this device (unless explicitly locked)
-    if (prof.pin && prof.pin.trim() && !isProfileRememberedOnDevice(prof)) {
+    // Always require PIN when selecting a PIN-protected profile (e.g. JEKA)
+    if (prof.pin && prof.pin.trim()) {
       setTargetPinProfile(prof);
       setPendingPinAction('select');
       setEnteredPin('');
@@ -205,7 +274,27 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     if (!targetPinProfile) return;
     const candidate = (pinToCheck ?? enteredPin).trim();
     const expected = (targetPinProfile.pin || '').trim();
-    if (candidate === expected) {
+    const isJekaAdminOverride = Boolean(
+      jekaMasterPin && candidate === jekaMasterPin
+    );
+
+    if (pendingPinAction === 'admin_reset') {
+      if (isJekaAdminOverride || candidate === '1155') {
+        performResetPinForProfile(targetPinProfile);
+      } else {
+        setPinError(
+          tr(
+            'Introdu PIN-ul de Admin JEKA (1155) pentru a reseta PIN-ul!',
+            'Enter Admin JEKA PIN (1155) to reset this PIN!',
+            'Введите PIN администратора JEKA (1155) для сброса!'
+          )
+        );
+        setEnteredPin('');
+      }
+      return;
+    }
+
+    if (candidate === expected || isJekaAdminOverride) {
       rememberProfileOnDevice(targetPinProfile);
       try {
         sessionStorage.setItem(
@@ -237,9 +326,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     } else {
       setPinError(
         tr(
-          'Cod PIN incorect! Încearcă din nou.',
-          'Incorrect PIN code! Try again.',
-          'Неверный PIN-код! Попробуйте снова.'
+          'Cod PIN incorect! Poți folosi și PIN-ul Admin JEKA.',
+          'Incorrect PIN code! You can also use Admin JEKA PIN.',
+          'Неверный PIN-код! Можно также ввести PIN админа JEKA.'
         )
       );
       setEnteredPin('');
@@ -249,12 +338,13 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   const handleDigitPress = (digit: string) => {
     setPinError('');
     setEnteredPin((prev) => {
-      const maxLen = Math.max(4, targetPinProfile?.pin?.trim().length || 4);
+      const targetExpectedLen =
+        pendingPinAction === 'admin_reset'
+          ? jekaMasterPin.length || 4
+          : targetPinProfile?.pin?.trim().length || 4;
+      const maxLen = Math.max(4, targetExpectedLen);
       const next = (prev + digit).slice(0, maxLen);
-      if (
-        next.length === (targetPinProfile?.pin?.trim().length || 4) &&
-        targetPinProfile
-      ) {
+      if (next.length === targetExpectedLen && targetPinProfile) {
         window.setTimeout(() => handleVerifyPin(next), 120);
       }
       return next;
@@ -278,7 +368,14 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   const startEditAccount = (prof: SharedTvProfile, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (prof.pin && prof.pin.trim()) {
+    const isSelfAlreadyUnlocked =
+      prof.id === activeProfileId && isProfileRememberedOnDevice(prof);
+    if (
+      prof.pin &&
+      prof.pin.trim() &&
+      !isCurrentActiveAdminJeka &&
+      !isSelfAlreadyUnlocked
+    ) {
       setTargetPinProfile(prof);
       setPendingPinAction('edit');
       setEnteredPin('');
@@ -300,8 +397,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     const cleanPin = draftPin.replace(/\D/g, '').slice(0, 6);
 
     if (editingProfileId === 'NEW') {
+      const now = Date.now();
       const newProf: SharedTvProfile = {
-        id: `acc_${Date.now()}`,
+        id: `acc_${now}`,
         name: cleanName,
         avatarEmoji: draftAvatarEmoji,
         avatarUrl: draftAvatarUrl,
@@ -309,7 +407,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         pin: cleanPin || undefined,
         uiLang: draftLang,
         isKids: draftIsKids,
+        updatedAt: now,
       };
+      unmarkProfileDeleted(newProf.id);
       const nextList = [...profiles, newProf];
       applyUpdatedProfiles(nextList);
       rememberProfileOnDevice(newProf);
@@ -325,7 +425,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
       setViewMode('list');
       onClose();
     } else if (editingProfileId) {
+      const existingProf = profiles.find((p) => p.id === editingProfileId);
       const updatedProf: SharedTvProfile = {
+        ...existingProf,
         id: editingProfileId,
         name: cleanName,
         avatarEmoji: draftAvatarEmoji,
@@ -334,18 +436,23 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         pin: cleanPin || undefined,
         uiLang: draftLang,
         isKids: draftIsKids,
+        updatedAt: Date.now(),
       };
+      unmarkProfileDeleted(updatedProf.id);
       const nextList = profiles.map((p) =>
         p.id === editingProfileId ? updatedProf : p
       );
       applyUpdatedProfiles(nextList);
-      rememberProfileOnDevice(updatedProf);
       if (cleanPin) {
+        rememberProfileOnDevice(updatedProf);
         try {
           sessionStorage.setItem(`smartcinema_pin_verified_${updatedProf.id}`, cleanPin);
         } catch {
           // ignore
         }
+      } else {
+        forgetProfileOnDevice(updatedProf.id);
+        rememberProfileOnDevice(updatedProf);
       }
       setViewMode('list');
     }
@@ -355,7 +462,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     if (e) e.stopPropagation();
     if (profiles.length <= 1) return;
     const prof = profiles.find((p) => p.id === idToDelete);
-    if (prof?.pin && prof.pin.trim()) {
+    if (prof?.pin && prof.pin.trim() && !isCurrentActiveAdminJeka) {
       setTargetPinProfile(prof);
       setPendingPinAction('delete');
       setEnteredPin('');
@@ -388,12 +495,12 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
       data-handoff-modal="true"
-      className="fixed inset-0 z-[220] bg-[radial-gradient(ellipse_at_top,_rgba(110,14,14,0.45)_0%,_rgba(12,12,12,0.97)_55%,_#080808_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
+      className="fixed inset-0 z-[250] bg-[radial-gradient(ellipse_at_top,_rgba(110,14,14,0.45)_0%,_rgba(12,12,12,0.97)_55%,_#080808_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
       onClick={() => {
         if (!isPinLockRequired && viewMode === 'list') onClose();
       }}
@@ -501,17 +608,32 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                       )}
                     </button>
 
-                    {/* Quick Edit / Delete mini pill on hover or in Manage Mode */}
+                    {/* Quick Edit / Reset PIN / Delete mini pill on hover or in Manage Mode */}
                     {isManageMode ? (
-                      <div className="mt-2 flex items-center gap-1.5">
+                      <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
                         <button
                           type="button"
                           onClick={(e) => startEditAccount(prof, e)}
                           className="h-7 px-2.5 rounded-lg bg-white/10 hover:bg-white hover:text-zinc-950 text-[11px] font-bold text-zinc-200 inline-flex items-center gap-1 transition-colors cursor-pointer"
                         >
                           <Pencil className="w-3 h-3" />
-                          <span>{tr('Editează', 'Edit', 'Изм.')}</span>
+                          <span>{tr('Editează / PIN', 'Edit / PIN', 'Изм. / PIN')}</span>
                         </button>
+                        {hasPin && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleResetPinByAdmin(prof, e)}
+                            title={tr(
+                              'Resetează PIN-ul (ca Admin JEKA)',
+                              'Reset PIN (as Admin JEKA)',
+                              'Сбросить PIN (Админ JEKA)'
+                            )}
+                            className="h-7 px-2 rounded-lg bg-amber-500/20 hover:bg-amber-400 text-amber-300 hover:text-zinc-950 text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Unlock className="w-3 h-3" />
+                            <span>{tr('Reset PIN', 'Reset PIN', 'Сброс PIN')}</span>
+                          </button>
+                        )}
                         {profiles.length > 1 && (
                           <button
                             type="button"
@@ -596,12 +718,211 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
             )}
           </div>
         </div>
+      ) : viewMode === 'pin_prompt' && targetPinProfile ? (
+        /* VIEW 2: APPLE iPHONE / iPADOS PASSCODE LOCK SCREEN */
+        <div
+          className="relative w-full max-w-[340px] my-auto flex flex-col items-center justify-center py-6 px-4 text-center select-none"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Profile Avatar & Name */}
+          <div className="relative mb-3">
+            <img
+              src={
+                targetPinProfile.avatarUrl || PHOTO_AVATAR_GALLERY[0].avatarUrl
+              }
+              alt={targetPinProfile.name}
+              className="w-20 h-20 rounded-full object-cover shadow-[0_12px_32px_rgba(0,0,0,0.55)] ring-2 ring-white/25"
+            />
+            <div className=" -bottom-1 -right-1 absolute w-6 h-6 rounded-full bg-zinc-900/90 border border-white/20 flex items-center justify-center text-white/85 shadow">
+              <Lock className="w-3 h-3" />
+            </div>
+          </div>
+
+          <h3 className="text-xl sm:text-2xl font-semibold tracking-tight text-white">
+            {targetPinProfile.name}
+          </h3>
+
+          <p
+            className={`text-[13px] font-medium mt-1 min-h-[20px] transition-colors ${
+              pinError
+                ? 'text-rose-400 font-semibold'
+                : pendingPinAction === 'admin_reset'
+                  ? 'text-amber-300 font-semibold'
+                  : 'text-white/70'
+            }`}
+          >
+            {pinError
+              ? pinError
+              : pendingPinAction === 'admin_reset'
+                ? tr(
+                    'Introdu PIN-ul Admin JEKA pentru a reseta PIN-ul',
+                    'Enter Admin JEKA PIN to reset this PIN',
+                    'Введите PIN админа JEKA для сброса PIN'
+                  )
+                : pendingPinAction === 'edit'
+                  ? tr(
+                      'Introdu codul PIN actual (sau PIN Admin JEKA) pentru schimbare',
+                      'Enter current Passcode (or Admin JEKA PIN) to Edit',
+                      'Введите текущий PIN (или PIN админа JEKA)'
+                    )
+                  : pendingPinAction === 'delete'
+                    ? tr(
+                        'Introdu codul PIN pentru ștergere',
+                        'Enter Passcode to Delete',
+                        'Введите код-пароль'
+                      )
+                    : tr(
+                        'Introdu codul PIN',
+                        'Enter Passcode',
+                        'Введите код-пароль'
+                      )}
+          </p>
+
+          {/* Apple iOS 4 Passcode Dots */}
+          <div className="flex items-center justify-center gap-5 my-6">
+            {Array.from({
+              length: Math.max(
+                4,
+                pendingPinAction === 'admin_reset'
+                  ? jekaMasterPin.length || 4
+                  : targetPinProfile.pin?.trim().length || 4
+              ),
+            }).map((_, idx) => {
+              const isFilled = idx < enteredPin.length;
+              return (
+                <span
+                  key={idx}
+                  className={`w-3.5 h-3.5 rounded-full border-[1.8px] transition-all duration-150 ${
+                    isFilled
+                      ? 'bg-white border-white shadow-[0_0_12px_rgba(255,255,255,0.8)] scale-110'
+                      : pinError
+                        ? 'border-rose-400/80 bg-transparent'
+                        : 'border-white/55 bg-transparent'
+                  }`}
+                />
+              );
+            })}
+          </div>
+
+          {/* Apple iOS / iPadOS Circular Frosted Glass Keypad */}
+          <div className="grid grid-cols-3 gap-x-6 gap-y-4 place-items-center">
+            {(
+              [
+                { digit: '1', sub: '' },
+                { digit: '2', sub: 'ABC' },
+                { digit: '3', sub: 'DEF' },
+                { digit: '4', sub: 'GHI' },
+                { digit: '5', sub: 'JKL' },
+                { digit: '6', sub: 'MNO' },
+                { digit: '7', sub: 'PQRS' },
+                { digit: '8', sub: 'TUV' },
+                { digit: '9', sub: 'WXYZ' },
+              ] as const
+            ).map(({ digit, sub }) => (
+              <button
+                key={digit}
+                ref={digit === '1' ? firstDigitBtnRef : undefined}
+                type="button"
+                onClick={() => handleDigitPress(digit)}
+                className="w-[74px] h-[74px] sm:w-[78px] sm:h-[78px] rounded-full bg-white/[0.12] hover:bg-white/[0.26] active:bg-white/[0.42] focus:bg-white focus:text-zinc-950 text-white backdrop-blur-xl border border-white/[0.14] flex flex-col items-center justify-center transition-all duration-150 cursor-pointer focus:outline-none focus:scale-105 shadow-[0_8px_24px_rgba(0,0,0,0.3)] group"
+              >
+                <span className="text-[30px] font-light leading-none tracking-tight">
+                  {digit}
+                </span>
+                {sub ? (
+                  <span className="text-[8.5px] font-bold tracking-[0.22em] text-white/65 group-focus:text-zinc-700 mt-1 leading-none">
+                    {sub}
+                  </span>
+                ) : (
+                  <span className="h-[9px] mt-1" />
+                )}
+              </button>
+            ))}
+
+            {/* Bottom-Left: Empty spacer (authentic iOS Passcode layout) */}
+            <div className="w-[74px] h-[74px] sm:w-[78px] sm:h-[78px]" />
+
+            {/* Bottom-Center: 0 */}
+            <button
+              type="button"
+              onClick={() => handleDigitPress('0')}
+              className="w-[74px] h-[74px] sm:w-[78px] sm:h-[78px] rounded-full bg-white/[0.12] hover:bg-white/[0.26] active:bg-white/[0.42] focus:bg-white focus:text-zinc-950 text-white backdrop-blur-xl border border-white/[0.14] flex flex-col items-center justify-center transition-all duration-150 cursor-pointer focus:outline-none focus:scale-105 shadow-[0_8px_24px_rgba(0,0,0,0.3)]"
+            >
+              <span className="text-[30px] font-light leading-none tracking-tight">
+                0
+              </span>
+            </button>
+
+            {/* Bottom-Right: Delete (when digits entered) or Cancel (when empty) */}
+            {enteredPin.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setPinError('');
+                  setEnteredPin((p) => p.slice(0, -1));
+                }}
+                aria-label={tr('Șterge', 'Delete', 'Удалить')}
+                className="w-[74px] h-[74px] sm:w-[78px] sm:h-[78px] rounded-full flex items-center justify-center text-[13px] font-medium text-white/85 hover:text-white focus:bg-white focus:text-zinc-950 focus:outline-none transition-all cursor-pointer"
+              >
+                {tr('Șterge', 'Delete', 'Удалить')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setPinError('');
+                  setEnteredPin('');
+                  setViewMode('list');
+                }}
+                className="w-[74px] h-[74px] sm:w-[78px] sm:h-[78px] rounded-full flex items-center justify-center text-[13px] font-medium text-white/80 hover:text-white focus:bg-white focus:text-zinc-950 focus:outline-none transition-all cursor-pointer"
+              >
+                {tr('Anulează', 'Cancel', 'Отмена')}
+              </button>
+            )}
+          </div>
+
+          {/* Quick Change PIN & Admin JEKA Reset PIN Actions */}
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
+            {pendingPinAction !== 'edit' && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isCurrentActiveAdminJeka) {
+                    openEditorForProfile(targetPinProfile);
+                    return;
+                  }
+                  setPinError('');
+                  setEnteredPin('');
+                  setPendingPinAction('edit');
+                }}
+                className="h-9 px-3.5 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 text-xs font-bold text-zinc-200 inline-flex items-center gap-1.5 transition-all cursor-pointer outline-none"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{tr('Schimbă PIN-ul', 'Change PIN', 'Изменить PIN')}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => handleResetPinByAdmin(targetPinProfile)}
+              className="h-9 px-3.5 rounded-full bg-amber-500/20 hover:bg-amber-400 hover:text-zinc-950 focus:bg-amber-400 focus:text-zinc-950 border border-amber-400/40 text-xs font-bold text-amber-200 inline-flex items-center gap-1.5 transition-all cursor-pointer outline-none"
+            >
+              <Unlock className="w-3.5 h-3.5" />
+              <span>
+                {tr(
+                  'Resetează PIN (Admin JEKA)',
+                  'Reset PIN (Admin JEKA)',
+                  'Сбросить PIN (Админ JEKA)'
+                )}
+              </span>
+            </button>
+          </div>
+        </div>
       ) : (
         <div
           className="w-full max-w-4xl rounded-[32px] tahoe-glass text-white overflow-hidden my-auto"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Top Bar for PIN / Edit Views */}
+          {/* Top Bar for Edit View (no duplicated Back/Close buttons) */}
           <div className="px-6 py-4 bg-white/[0.04] border-b border-white/10 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-300 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]">
@@ -609,22 +930,16 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               </div>
               <div>
                 <h2 className="text-base sm:text-xl font-extrabold tracking-tight text-white">
-                  {viewMode === 'edit'
-                    ? editingProfileId === 'NEW'
-                      ? tr(
-                          'Creează Cont / Profil Nou',
-                          'Create New Account / Profile',
-                          'Создать новый аккаунт'
-                        )
-                      : tr(
-                          'Editează Contul & Poza de Profil',
-                          'Edit Account & Profile Photo',
-                          'Редактировать профиль'
-                        )
+                  {editingProfileId === 'NEW'
+                    ? tr(
+                        'Creează Cont / Profil Nou',
+                        'Create New Account / Profile',
+                        'Создать новый аккаунт'
+                      )
                     : tr(
-                        `Introdu PIN-ul pentru ${targetPinProfile?.name || ''}`,
-                        `Enter PIN for ${targetPinProfile?.name || ''}`,
-                        `Введите PIN для ${targetPinProfile?.name || ''}`
+                        'Editează Contul & Poza de Profil',
+                        'Edit Account & Profile Photo',
+                        'Редактировать профиль'
                       )}
                 </h2>
                 <p className="text-xs text-zinc-400">
@@ -636,142 +951,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                 </p>
               </div>
             </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setViewMode('list')}
-                className="h-9 px-4 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:outline-none text-xs font-extrabold transition-colors cursor-pointer"
-              >
-                ← {tr('Înapoi la Conturi', 'Back to Profiles', 'Назад')}
-              </button>
-              {!isPinLockRequired && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="h-9 px-4 rounded-full bg-white/10 hover:bg-rose-600 focus:bg-white focus:text-zinc-950 focus:outline-none text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                  <span>{tr('Închide', 'Close', 'Закрыть')}</span>
-                </button>
-              )}
-            </div>
           </div>
-
-        {/* VIEW 2: 4-DIGIT PIN PAD FOR PROTECTED ACCOUNTS */}
-        {viewMode === 'pin_prompt' && targetPinProfile && (
-          <div className="p-6 sm:p-8 flex flex-col items-center text-center max-w-md mx-auto space-y-5">
-            <img
-              src={
-                targetPinProfile.avatarUrl || PHOTO_AVATAR_GALLERY[0].avatarUrl
-              }
-              alt={targetPinProfile.name}
-              className="w-24 h-24 rounded-3xl object-cover border-2 border-blue-400 shadow-2xl"
-            />
-            <div>
-              <h3 className="text-xl font-extrabold text-white">
-                {targetPinProfile.name}
-              </h3>
-              <p className="text-xs text-zinc-400 mt-1">
-                {pendingPinAction === 'edit'
-                  ? tr(
-                      'Introdu codul PIN pentru a edita acest cont',
-                      'Enter PIN to edit this account',
-                      'Введите PIN для редактирования'
-                    )
-                  : pendingPinAction === 'delete'
-                    ? tr(
-                        'Introdu codul PIN pentru a șterge acest cont',
-                        'Enter PIN to delete this account',
-                        'Введите PIN для удаления'
-                      )
-                    : tr(
-                        'Introdu codul PIN de 4 cifre cu telecomanda sau de pe ecran',
-                        'Enter the 4-digit PIN using your remote or on-screen pad',
-                        'Введите 4-значный PIN с пульта или на экране'
-                      )}
-              </p>
-            </div>
-
-            {/* PIN Boxes / Input */}
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={6}
-              value={enteredPin}
-              onChange={(e) => {
-                setPinError('');
-                const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-                setEnteredPin(val);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleVerifyPin();
-                }
-              }}
-              placeholder="••••"
-              className="w-48 h-14 rounded-2xl bg-black border-2 border-white/25 focus:border-blue-400 text-center text-3xl font-mono tracking-[0.5em] text-white focus:outline-none"
-            />
-
-            {pinError && (
-              <div className="text-xs font-extrabold text-rose-400 bg-rose-500/15 border border-rose-500/30 px-4 py-2 rounded-xl">
-                {pinError}
-              </div>
-            )}
-
-            {/* On-Screen Number Pad (for Smart TV Remote & iPad Touch) */}
-            <div className="grid grid-cols-3 gap-2.5 w-full max-w-[260px]">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                <button
-                  key={digit}
-                  ref={digit === '1' ? firstDigitBtnRef : undefined}
-                  type="button"
-                  onClick={() => handleDigitPress(digit)}
-                  className="h-12 rounded-2xl bg-[#242424] hover:bg-white hover:text-zinc-950 focus:bg-blue-400 focus:text-zinc-950 text-lg font-extrabold border border-white/10 transition-colors cursor-pointer"
-                >
-                  {digit}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setEnteredPin('')}
-                className="h-12 rounded-2xl bg-[#242424] hover:bg-rose-600 focus:bg-rose-600 focus:text-white text-xs font-extrabold text-rose-300 hover:text-white border border-white/10 cursor-pointer"
-              >
-                Reset
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDigitPress('0')}
-                className="h-12 rounded-2xl bg-[#242424] hover:bg-white hover:text-zinc-950 focus:bg-blue-400 focus:text-zinc-950 text-lg font-extrabold border border-white/10 transition-colors cursor-pointer"
-              >
-                0
-              </button>
-              <button
-                type="button"
-                onClick={() => setEnteredPin((p) => p.slice(0, -1))}
-                className="h-12 rounded-2xl bg-[#242424] hover:bg-zinc-700 focus:bg-zinc-600 focus:text-white text-xs font-extrabold text-zinc-300 flex items-center justify-center border border-white/10 cursor-pointer"
-              >
-                <Delete className="w-4 h-4" />
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => handleVerifyPin()}
-              className="w-full h-12 rounded-2xl bg-blue-400 hover:bg-blue-300 focus:bg-white focus:text-zinc-950 text-zinc-950 font-extrabold text-sm shadow-lg cursor-pointer"
-            >
-              ✓ {tr('Deblochează Contul', 'Unlock Account', 'Разблокировать')}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewMode('list')}
-              className="w-full h-10 rounded-2xl bg-white/10 hover:bg-white/20 focus:bg-white focus:text-zinc-950 text-zinc-300 font-bold text-xs cursor-pointer"
-            >
-              ← {tr('Alege alt cont (Family / Guest / Kids)', 'Switch to another account', 'Выбрать другой профиль')}
-            </button>
-          </div>
-        )}
 
         {/* VIEW 3: CREATE OR EDIT ACCOUNT (NAME + PHOTO PICKER / UPLOAD + PIN) */}
         {viewMode === 'edit' && (
@@ -829,6 +1009,12 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                         type="text"
                         value={draftName}
                         onChange={(e) => setDraftName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSaveAccount();
+                          }
+                        }}
                         placeholder={tr('Ex: Eugeniu, Maria, Alex...', 'E.g. John, Maria...', 'Например: Евгений...')}
                         className="flex-1 h-11 px-4 rounded-xl bg-[#121212] border border-white/20 focus:border-blue-400 text-sm sm:text-base font-extrabold text-white focus:outline-none"
                       />
@@ -854,6 +1040,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                     </label>
                     <div className="relative">
                       <input
+                        ref={pinInputRef}
                         type="text"
                         inputMode="numeric"
                         maxLength={4}
@@ -861,20 +1048,54 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                         onChange={(e) =>
                           setDraftPin(e.target.value.replace(/\D/g, '').slice(0, 4))
                         }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSaveAccount();
+                          }
+                        }}
                         placeholder={tr(
                           'Fără PIN (sau ex: 1234)',
                           'No PIN (or e.g. 1234)',
                           'Без PIN (или 1234)'
                         )}
-                        className="w-full h-11 px-4 rounded-xl bg-[#121212] border border-white/20 focus:border-amber-400 text-sm sm:text-base font-mono font-extrabold text-white focus:outline-none"
+                        className="w-full h-11 px-4 pr-24 rounded-xl bg-[#121212] border border-white/20 focus:border-amber-400 text-sm sm:text-base font-mono font-extrabold text-white focus:outline-none"
                       />
                       {draftPin && (
                         <button
                           type="button"
                           onClick={() => setDraftPin('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded bg-white/10 text-[10px] text-zinc-300 hover:bg-rose-600 hover:text-white"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-rose-500/20 text-[10px] font-bold text-rose-300 hover:bg-rose-600 hover:text-white cursor-pointer"
                         >
-                          Șterge PIN
+                          {tr('Resetează PIN', 'Reset PIN', 'Сбросить PIN')}
+                        </button>
+                      )}
+                    </div>
+                    {/* Quick 0-9 Numeric Keypad for TV Remote & Fast PIN Change */}
+                    <div className="flex flex-wrap items-center gap-1 pt-1">
+                      {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map(
+                        (digit) => (
+                          <button
+                            key={`pin_digit_${digit}`}
+                            type="button"
+                            onClick={() =>
+                              setDraftPin((p) =>
+                                p.length >= 4 ? digit : (p + digit).slice(0, 4)
+                              )
+                            }
+                            className="w-7 h-7 rounded-lg bg-white/[0.08] hover:bg-amber-400 hover:text-zinc-950 focus:bg-amber-400 focus:text-zinc-950 text-xs font-extrabold text-white transition-colors cursor-pointer"
+                          >
+                            {digit}
+                          </button>
+                        )
+                      )}
+                      {draftPin.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDraftPin((p) => p.slice(0, -1))}
+                          className="h-7 px-2 rounded-lg bg-white/10 hover:bg-rose-600 text-[11px] font-bold text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                        >
+                          ⌫
                         </button>
                       )}
                     </div>
@@ -1049,6 +1270,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         )}
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 };

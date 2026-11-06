@@ -32,8 +32,13 @@ import {
   OnlineSubtitleTrack,
   fetchOnlineSubtitlesByImdb,
   downloadSubtitleAsVttBlobUrl,
-  findPreferredOriginalAudioTrackIndex,
+  resolveAudioTrackIndexByPreference,
+  inferAudioPrefFromTrackName,
 } from '../../services/subtitleSearchService';
+import {
+  getActiveProfileMediaPrefs,
+  saveActiveProfileMediaPrefs,
+} from '../../services/deviceContinuityService';
 
 export type TvSubFontSize = 'normal' | 'large' | 'xlarge';
 export type TvPreferredQuality = 'max' | '1080' | '720' | '480' | 'auto';
@@ -161,17 +166,18 @@ interface VodNativeHlsPlayerProps {
   onPrevEpisode?: () => void;
   onNextEpisode?: () => void;
   onOpenEpisodesDrawer?: () => void;
+  onOpenInfoSheet?: () => void;
   prevEpisodeLabel?: string;
   nextEpisodeLabel?: string;
 }
 
 const QUICK_SUB_LANGS = [
-  { code: 'ro', flag: 'RO', label: 'Română' },
-  { code: 'ru', flag: 'RU', label: 'Русский' },
-  { code: 'en', flag: 'EN', label: 'English' },
-  { code: 'es', flag: 'ES', label: 'Español' },
-  { code: 'fr', flag: 'FR', label: 'Français' },
-  { code: 'de', flag: 'DE', label: 'Deutsch' },
+  { code: 'ro', flag: 'RO', countryIso: 'ro', label: 'Română' },
+  { code: 'ru', flag: 'RU', countryIso: 'ru', label: 'Русский' },
+  { code: 'en', flag: 'EN', countryIso: 'gb', label: 'English' },
+  { code: 'es', flag: 'ES', countryIso: 'es', label: 'Español' },
+  { code: 'fr', flag: 'FR', countryIso: 'fr', label: 'Français' },
+  { code: 'de', flag: 'DE', countryIso: 'de', label: 'Deutsch' },
 ];
 
 export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
@@ -213,6 +219,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   onPrevEpisode,
   onNextEpisode,
   onOpenEpisodesDrawer,
+  onOpenInfoSheet,
   prevEpisodeLabel,
   nextEpisodeLabel,
 }) => {
@@ -245,8 +252,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     ) {
       return initialAudioTrackIndex;
     }
+    const profileAudioPref = getActiveProfileMediaPrefs().defaultAudioPref;
     return audioTrackLabels.length > 0
-      ? findPreferredOriginalAudioTrackIndex(audioTrackLabels)
+      ? resolveAudioTrackIndexByPreference(audioTrackLabels, profileAudioPref)
       : 0;
   });
 
@@ -255,6 +263,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   );
   const [isAutoMuted, setIsAutoMuted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const userIntentionallyPausedRef = useRef<boolean>(false);
+  const lastTimeUpdateWallMsRef = useRef<number>(Date.now());
+  const lastTimeUpdateMediaSecRef = useRef<number>(0);
+  const lastAutoRecoverWallMsRef = useRef<number>(0);
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(startAtSeconds || 0);
   const [videoDurationSec, setVideoDurationSec] = useState<number>(0);
   const [bufferedEndSec, setBufferedEndSec] = useState<number>(0);
@@ -266,25 +278,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const [streamOffsetSec, setStreamOffsetSec] = useState<number>(0);
   const [subOffsetSec, setSubOffsetSec] = useState<number>(0);
   const [subFontSize, setSubFontSize] = useState<TvSubFontSize>(() => {
+    const profilePrefs = getActiveProfileMediaPrefs();
+    if (profilePrefs.defaultSubFontSize) return profilePrefs.defaultSubFontSize;
     if (initialSubFontSize) return initialSubFontSize;
-    try {
-      const saved = localStorage.getItem('aether_tv_sub_font_size');
-      if (saved === 'normal' || saved === 'large' || saved === 'xlarge') {
-        return saved;
-      }
-    } catch {
-      // ignore
-    }
     return 'large';
   });
   const [subFontPx, setSubFontPx] = useState<number>(() => {
-    try {
-      const savedPx = Number(localStorage.getItem('aether_tv_sub_font_px'));
-      if (Number.isFinite(savedPx) && savedPx >= 12 && savedPx <= 56) {
-        return savedPx;
-      }
-    } catch {
-      // ignore
+    const profilePrefs = getActiveProfileMediaPrefs();
+    if (
+      Number.isFinite(profilePrefs.defaultSubFontPx) &&
+      profilePrefs.defaultSubFontPx >= 12 &&
+      profilePrefs.defaultSubFontPx <= 56
+    ) {
+      return profilePrefs.defaultSubFontPx;
     }
     return initialSubFontSize === 'xlarge'
       ? 32
@@ -299,19 +305,42 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const tier: TvSubFontSize =
       clamped >= 30 ? 'xlarge' : clamped >= 23 ? 'large' : 'normal';
     setSubFontSize(tier);
-    try {
-      localStorage.setItem('aether_tv_sub_font_px', String(clamped));
-      localStorage.setItem('aether_tv_sub_font_size', tier);
-    } catch {
-      // ignore
-    }
+    saveActiveProfileMediaPrefs({
+      defaultSubFontPx: clamped,
+      defaultSubFontSize: tier,
+    });
   };
 
   useEffect(() => {
-    if (initialSubFontSize) {
-      setSubFontSize(initialSubFontSize);
-    }
-  }, [initialSubFontSize]);
+    const syncFromProfile = () => {
+      const prefs = getActiveProfileMediaPrefs();
+      if (prefs.defaultSubFontSize) {
+        setSubFontSize(prefs.defaultSubFontSize);
+      }
+      if (
+        Number.isFinite(prefs.defaultSubFontPx) &&
+        prefs.defaultSubFontPx >= 12 &&
+        prefs.defaultSubFontPx <= 56
+      ) {
+        setSubFontPx(prefs.defaultSubFontPx);
+      }
+    };
+    window.addEventListener('aether:active-profile-changed', syncFromProfile);
+    window.addEventListener(
+      'aether:profile-media-prefs-changed',
+      syncFromProfile
+    );
+    return () => {
+      window.removeEventListener(
+        'aether:active-profile-changed',
+        syncFromProfile
+      );
+      window.removeEventListener(
+        'aether:profile-media-prefs-changed',
+        syncFromProfile
+      );
+    };
+  }, []);
 
   // Lampa-style in-player quick menus
   const [openMenu, setOpenMenu] = useState<
@@ -324,8 +353,28 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   );
   const [activeSubTrackId, setActiveSubTrackId] = useState<string | null>(null);
 
-  // Stremio Auto-Next Episode & Live Torrent Speed / Peers Stats
+  // Smart Intro Detection ("Sari peste Intro") & Next Episode Prompt (when 2 min remain or credits start)
   const [autoNextDismissed, setAutoNextDismissed] = useState<boolean>(false);
+  const [showNextEpisodePrompt, setShowNextEpisodePrompt] =
+    useState<boolean>(false);
+  const hasTriggeredAutoNextRef = useRef<boolean>(false);
+  const hasAutoFocusedNextEpRef = useRef<boolean>(false);
+
+  const [skipIntroDismissed, setSkipIntroDismissed] = useState<boolean>(false);
+  const [skipIntroManualClosed, setSkipIntroManualClosed] =
+    useState<boolean>(false);
+  const [skipIntroRemainingPct, setSkipIntroRemainingPct] =
+    useState<number>(100);
+  const skipIntroElapsedMsRef = useRef<number>(0);
+  const [apiIntroWindow, setApiIntroWindow] = useState<{
+    startSec: number;
+    endSec: number;
+  } | null>(null);
+  const [apiOutroStartSec, setApiOutroStartSec] = useState<number | null>(null);
+  const [apiNoIntro, setApiNoIntro] = useState<boolean>(false);
+  const [isIntroApiSettled, setIsIntroApiSettled] = useState<boolean>(false);
+  const hasAutoFocusedSkipIntroRef = useRef<boolean>(false);
+
   const [torrentLiveStats, setTorrentLiveStats] = useState<{
     downloadSpeedText: string;
     numPeers: number;
@@ -334,7 +383,178 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   useEffect(() => {
     setAutoNextDismissed(false);
-  }, [season, episode, hlsUrl]);
+    setShowNextEpisodePrompt(false);
+    hasTriggeredAutoNextRef.current = false;
+    hasAutoFocusedNextEpRef.current = false;
+    setSkipIntroDismissed(false);
+    setSkipIntroManualClosed(false);
+    setSkipIntroRemainingPct(100);
+    skipIntroElapsedMsRef.current = 0;
+    setApiIntroWindow(null);
+    setApiOutroStartSec(null);
+    setApiNoIntro(false);
+    setIsIntroApiSettled(false);
+    hasAutoFocusedSkipIntroRef.current = false;
+    setVideoDurationSec(0);
+  }, [season, episode, hlsUrl, dashUrl]);
+
+  // Query both TheIntroDB v2 (direct CORS, supports imdb_id and tmdb_id) and IntroDB.app (via /api/tv-proxy) for exact community-verified Intro & Outro timestamps
+  useEffect(() => {
+    if (mediaType !== 'series' || !imdbId) {
+      setApiIntroWindow(null);
+      setApiOutroStartSec(null);
+      setApiNoIntro(false);
+      setIsIntroApiSettled(true);
+      return;
+    }
+
+    const cleanImdb = imdbId.startsWith('tt')
+      ? imdbId.match(/^(tt\d+)/)?.[1] || ''
+      : '';
+    const tmdbMatch = !cleanImdb ? imdbId.match(/(\d{2,10})/) : null;
+    const cleanTmdb = tmdbMatch ? tmdbMatch[1] : '';
+
+    if (!cleanImdb && !cleanTmdb) {
+      setIsIntroApiSettled(true);
+      return;
+    }
+
+    let active = true;
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 3200);
+
+    const parseAndApplySegments = (
+      introCandidate: { startSec: number; endSec: number } | null,
+      outroCandidateSec: number | null,
+      explicitNoIntro?: boolean
+    ) => {
+      if (!active) return;
+      if (explicitNoIntro) {
+        setApiNoIntro(true);
+      }
+      if (
+        introCandidate &&
+        introCandidate.endSec > introCandidate.startSec + 10 &&
+        introCandidate.startSec >= 0 &&
+        introCandidate.endSec <= 1200
+      ) {
+        setApiNoIntro(false);
+        setApiIntroWindow({
+          startSec: Math.max(2, Math.floor(introCandidate.startSec)),
+          endSec: Math.ceil(introCandidate.endSec),
+        });
+      }
+      if (outroCandidateSec && outroCandidateSec > 300) {
+        setApiOutroStartSec(Math.floor(outroCandidateSec));
+      }
+    };
+
+    const fetchTheIntroDbV2 = async (): Promise<boolean> => {
+      const idQuery = cleanImdb
+        ? `imdb_id=${encodeURIComponent(cleanImdb)}`
+        : `tmdb_id=${encodeURIComponent(cleanTmdb)}`;
+      const res = await fetch(
+        `https://api.theintrodb.org/v2/media?${idQuery}&season=${season}&episode=${episode}`,
+        { signal: ctrl.signal }
+      );
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (!d || typeof d !== 'object') return false;
+
+      let introCand: { startSec: number; endSec: number } | null = null;
+      if (Array.isArray(d.intro) && d.intro.length > 0) {
+        for (const seg of d.intro) {
+          const sMs = typeof seg?.start_ms === 'number' ? seg.start_ms : 0;
+          const eMs = typeof seg?.end_ms === 'number' ? seg.end_ms : 0;
+          if (eMs > sMs + 10000 && sMs < 1200000) {
+            introCand = { startSec: sMs / 1000, endSec: eMs / 1000 };
+            break;
+          }
+        }
+      }
+
+      let outroCand: number | null = null;
+      if (Array.isArray(d.credits) && d.credits.length > 0) {
+        const lastCred = d.credits[d.credits.length - 1];
+        if (typeof lastCred?.start_ms === 'number' && lastCred.start_ms > 300000) {
+          outroCand = lastCred.start_ms / 1000;
+        }
+      }
+
+      if (introCand || outroCand) {
+        parseAndApplySegments(introCand, outroCand, false);
+        return Boolean(introCand);
+      }
+      return false;
+    };
+
+    const fetchIntroDbApp = async (): Promise<boolean> => {
+      if (!cleanImdb) return false;
+      const targetUrl = `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(cleanImdb)}&season=${season}&episode=${episode}`;
+      const res = await fetch(
+        `/api/tv-proxy?raw=1&url=${encodeURIComponent(targetUrl)}&ref=${encodeURIComponent('https://introdb.app/')}`,
+        { signal: ctrl.signal }
+      );
+      if (!res.ok) return false;
+      const d = await res.json();
+      if (!d || typeof d !== 'object') return false;
+
+      let introCand: { startSec: number; endSec: number } | null = null;
+      if (d.intro && typeof d.intro === 'object') {
+        const sSec =
+          typeof d.intro.start_sec === 'number'
+            ? d.intro.start_sec
+            : typeof d.intro.start_ms === 'number'
+              ? d.intro.start_ms / 1000
+              : 0;
+        const eSec =
+          typeof d.intro.end_sec === 'number'
+            ? d.intro.end_sec
+            : typeof d.intro.end_ms === 'number'
+              ? d.intro.end_ms / 1000
+              : 0;
+        if (eSec > sSec + 10 && sSec < 1200) {
+          introCand = { startSec: sSec, endSec: eSec };
+        }
+      }
+
+      let outroCand: number | null = null;
+      if (d.outro && typeof d.outro === 'object') {
+        const oSec =
+          typeof d.outro.start_sec === 'number'
+            ? d.outro.start_sec
+            : typeof d.outro.start_ms === 'number'
+              ? d.outro.start_ms / 1000
+              : 0;
+        if (oSec > 300) {
+          outroCand = oSec;
+        }
+      }
+
+      parseAndApplySegments(introCand, outroCand, d.no_intro === true);
+      return Boolean(introCand);
+    };
+
+    void (async () => {
+      try {
+        const foundV2 = await fetchTheIntroDbV2().catch(() => false);
+        if (!foundV2 && active) {
+          await fetchIntroDbApp().catch(() => false);
+        }
+      } finally {
+        window.clearTimeout(timer);
+        if (active) {
+          setIsIntroApiSettled(true);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+      ctrl.abort();
+      window.clearTimeout(timer);
+    };
+  }, [mediaType, imdbId, season, episode]);
 
   useEffect(() => {
     if (!hlsUrl || !hlsUrl.includes('/api/filelist/stream')) {
@@ -343,7 +563,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
     let active = true;
     const idMatch = hlsUrl.match(/[?&]id=(-?\d+)/);
-    const idQuery = idMatch ? `?id=${idMatch[1]}` : '';
+    const fileIdxMatch = hlsUrl.match(/[?&]fileIdx=(\d+)/);
+    const queryParts: string[] = [];
+    if (idMatch) queryParts.push(`id=${idMatch[1]}`);
+    if (fileIdxMatch) queryParts.push(`fileIdx=${fileIdxMatch[1]}`);
+    const idQuery = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
     const fetchStats = () => {
       fetch(`/api/filelist/stats${idQuery}`)
         .then((r) => (r.ok ? r.json() : null))
@@ -354,6 +578,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               numPeers: Number(d.numPeers || 0),
               source: d.source || 'FileList.io',
             });
+            const probedDur = Number(d.durationSec || 0);
+            if (Number.isFinite(probedDur) && probedDur > 60) {
+              setVideoDurationSec(probedDur);
+            }
           }
         })
         .catch(() => {});
@@ -760,7 +988,32 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               if (controller.signal.aborted) break;
 
               const { done, value } = await reader.read();
-              if (done || !value) break;
+              if (done || !value) {
+                if (!controller.signal.aborted) {
+                  try {
+                    if (sb.buffered.length > 0) {
+                      const exactEnd =
+                        streamOffsetRef.current +
+                        sb.buffered.end(sb.buffered.length - 1);
+                      const isNearRealEnd =
+                        exactEnd > 300 &&
+                        (!durationHintSec || exactEnd >= durationHintSec * 0.85);
+                      if (isNearRealEnd) {
+                        setVideoDurationSec((prev) =>
+                          prev > exactEnd ? prev : exactEnd
+                        );
+                        await waitUpdate();
+                        if (ms.readyState === 'open') {
+                          ms.endOfStream();
+                        }
+                      }
+                    }
+                  } catch {
+                    // ignore
+                  }
+                }
+                break;
+              }
 
               try {
                 sb.appendBuffer(value);
@@ -843,21 +1096,22 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         if (cancelled) return;
         setAvailableSubs(list);
 
-        // Automatically activate subtitle by default according to preferredSubLang ('ro' | 'ru' | 'en' | 'off')
+        // Automatically activate subtitle by default according to profile's preferredSubLang ('ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off')
+        const effSubLang =
+          preferredSubLang || getActiveProfileMediaPrefs().defaultSubLang || 'ro';
         const alreadyHasSub =
           Boolean(subtitleVttUrl) || (subtitleCues && subtitleCues.length > 0);
         if (
-          preferredSubLang !== 'off' &&
+          effSubLang !== 'off' &&
           !alreadyHasSub &&
           list.length > 0 &&
           onApplyAutoSubtitle
         ) {
-          const prefOrder =
-            preferredSubLang === 'ru'
-              ? ['ru', 'ro', 'en']
-              : preferredSubLang === 'en'
-                ? ['en', 'ro', 'ru']
-                : ['ro', 'ru', 'en'];
+          const allLangs = ['ro', 'ru', 'en', 'es', 'fr', 'de'];
+          const prefOrder = [
+            effSubLang,
+            ...allLangs.filter((l) => l !== effSubLang),
+          ];
           let autoTrack: OnlineSubtitleTrack | undefined;
           for (const code of prefOrder) {
             autoTrack = list.find((t) => t.langCode2 === code);
@@ -897,6 +1151,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const handleSelectQuickSubTrack = async (track: OnlineSubtitleTrack) => {
     setLoadingSubTrackId(track.id);
+    if (
+      track.langCode2 === 'ro' ||
+      track.langCode2 === 'ru' ||
+      track.langCode2 === 'en' ||
+      track.langCode2 === 'es' ||
+      track.langCode2 === 'fr' ||
+      track.langCode2 === 'de'
+    ) {
+      saveActiveProfileMediaPrefs({ defaultSubLang: track.langCode2 });
+    }
     try {
       const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(
         track.url
@@ -1067,15 +1331,36 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       ensureAutoPlay(video);
     };
 
+    const isIosMobile =
+      typeof navigator !== 'undefined' &&
+      /iPhone|iPod/i.test(navigator.userAgent);
+
     const startHlsPlayback = (targetUrl: string) => {
       if (!targetUrl) {
         setStatus('error');
+        onStreamError?.();
         return;
       }
 
       logTvVod('start_hls', targetUrl);
 
+      if (
+        isIosMobile &&
+        !offlineItem &&
+        video.canPlayType('application/vnd.apple.mpegurl')
+      ) {
+        switchToNativeVideoHls(targetUrl, 'ios_native_hls');
+        return;
+      }
+
       if (Hls.isSupported()) {
+        try {
+          if ('ManagedMediaSource' in window && !('MediaSource' in window)) {
+            video.disableRemotePlayback = true;
+          }
+        } catch {
+          // ignore
+        }
         const hlsConfig: Partial<ConstructorParameters<typeof Hls>[0]> = {
           enableWorker: !isHardwareSmartTv,
           capLevelToPlayerSize: false,
@@ -1214,9 +1499,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }));
           setAudioTracks(list);
 
-          // Default to Original Language audio track (or explicit forcedAudioIdx / initialAudioTrackIndex if valid)
-          const autoOrigIdx = findPreferredOriginalAudioTrackIndex(
-            list.map((x) => x.name)
+          // Default to active profile's preferred Audio Language (or explicit forcedAudioIdx / initialAudioTrackIndex if valid)
+          const profileAudioPref = getActiveProfileMediaPrefs().defaultAudioPref;
+          const autoPrefIdx = resolveAudioTrackIndexByPreference(
+            list.map((x) => x.name),
+            profileAudioPref
           );
           const targetIdx =
             forcedAudioIdx >= 0 && forcedAudioIdx < list.length
@@ -1225,7 +1512,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   initialAudioTrackIndex >= 0 &&
                   initialAudioTrackIndex < list.length
                 ? initialAudioTrackIndex
-                : autoOrigIdx;
+                : autoPrefIdx;
 
           if (list[targetIdx]) {
             if (hls.audioTrack !== list[targetIdx].id) {
@@ -1257,12 +1544,27 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             data.fatal ? 'hls_fatal_error' : 'hls_warn',
             `${data.type}:${data.details}:${data.response?.code || ''}`
           );
+          if (
+            !data.fatal &&
+            (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+              data.details === Hls.ErrorDetails.BUFFER_NUDGE_ON_STALL)
+          ) {
+            try {
+              hls.startLoad();
+              if (video && !userIntentionallyPausedRef.current) {
+                video.play().catch(() => {});
+              }
+            } catch {
+              // ignore
+            }
+            return;
+          }
           if (data.fatal) {
             errorRetries += 1;
-            if (errorRetries <= 1 && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            if (errorRetries <= 4 && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
               hls.startLoad();
             } else if (
-              errorRetries <= 1 &&
+              errorRetries <= 4 &&
               data.type === Hls.ErrorTypes.MEDIA_ERROR
             ) {
               hls.recoverMediaError();
@@ -1488,15 +1790,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }));
                 setAudioTracks(list);
 
-                const autoOrigIdx = findPreferredOriginalAudioTrackIndex(
-                  list.map((x) => x.name)
+                const profileAudioPref =
+                  getActiveProfileMediaPrefs().defaultAudioPref;
+                const autoPrefIdx = resolveAudioTrackIndexByPreference(
+                  list.map((x) => x.name),
+                  profileAudioPref
                 );
                 const targetIdx =
                   typeof initialAudioTrackIndex === 'number' &&
                   initialAudioTrackIndex >= 0 &&
                   initialAudioTrackIndex < list.length
                     ? initialAudioTrackIndex
-                    : autoOrigIdx;
+                    : autoPrefIdx;
 
                 if (dashAudio[targetIdx]) {
                   dashPlayer.setCurrentTrack(dashAudio[targetIdx]);
@@ -1693,21 +1998,340 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       (hlsUrl.includes('/api/filelist/stream') ||
         hlsUrl.includes('/api/youtube/stream'))
   );
-  const effectiveDurationSec = isFileListStream
-    ? durationHintSec && durationHintSec > 5
-      ? durationHintSec
-      : videoDurationSec > 5
-        ? videoDurationSec
-        : 7200
-    : videoDurationSec > 10
-      ? videoDurationSec
-      : durationHintSec && durationHintSec > 10
-        ? durationHintSec
-        : 7200;
-
   const displayTimeSec =
     scrubPreviewSec !== null ? scrubPreviewSec : currentTimeSec;
+  const hasVerifiedDuration =
+    Number.isFinite(videoDurationSec) && videoDurationSec > 60;
+  const rawBaseDurationSec = hasVerifiedDuration
+    ? videoDurationSec
+    : durationHintSec && durationHintSec > 60
+      ? durationHintSec
+      : mediaType === 'series'
+        ? 3600
+        : 7200;
+  const isVideoElementEnded = Boolean(videoRef.current?.ended);
+  const effectiveDurationSec = (() => {
+    if (!hasVerifiedDuration && displayTimeSec >= rawBaseDurationSec - 90 && !isVideoElementEnded) {
+      // Expand estimated duration smoothly in 15-min blocks so the scrubber never hits 00:00 while video is still playing
+      return Math.max(
+        rawBaseDurationSec,
+        Math.ceil((displayTimeSec + 600) / 900) * 900
+      );
+    }
+    if (displayTimeSec >= rawBaseDurationSec - 1 && !isVideoElementEnded) {
+      return Math.max(rawBaseDurationSec, Math.floor(displayTimeSec) + 60);
+    }
+    return rawBaseDurationSec;
+  })();
+
   const remainingTimeSec = Math.max(0, effectiveDurationSec - displayTimeSec);
+
+  // Smart Intro Window Detection:
+  // 1) Exact TheIntroDB v2 & IntroDB.app community timestamps (supports IMDb ID + TMDB ID + Season + Episode)
+  // 2) Smart Subtitle Theme-Song & Cold-Open Dialogue-Gap Analysis (only after API check settles; never guesses during spoken dialogue)
+  const detectedIntroWindow = useMemo<{
+    startSec: number;
+    endSec: number;
+  } | null>(() => {
+    if (mediaType !== 'series' || apiNoIntro) return null;
+    if (apiIntroWindow) return apiIntroWindow;
+    if (!isIntroApiSettled) return null;
+
+    if (subtitleCues && subtitleCues.length >= 15) {
+      const cleanCues = subtitleCues.filter((c) => {
+        const t = (c.text || '').toLowerCase();
+        return (
+          c.end > c.start &&
+          !t.includes('opensubtitles') &&
+          !t.includes('subtitrare') &&
+          !t.includes('traducere') &&
+          !t.includes('synced by') &&
+          !t.includes('www.') &&
+          !t.includes('http')
+        );
+      });
+
+      const isMusicOrThemeCue = (text: string): boolean => {
+        const t = text.toLowerCase();
+        return (
+          t.includes('♪') ||
+          t.includes('♫') ||
+          t.includes('[music') ||
+          t.includes('(music') ||
+          t.includes('[theme') ||
+          t.includes('(theme') ||
+          t.includes('[opening') ||
+          t.includes('[intro') ||
+          t.includes('[generic') ||
+          t.includes('theme song') ||
+          t.includes('opening theme')
+        );
+      };
+
+      const spokenCues = cleanCues.filter((c) => !isMusicOrThemeCue(c.text));
+
+      if (spokenCues.length >= 12) {
+        // 1. Check if first spoken dialogue starts after an opening theme sequence (28s - 108s)
+        const firstSpoken = spokenCues[0];
+        if (firstSpoken.start >= 28 && firstSpoken.start <= 108) {
+          return {
+            startSec: 3,
+            endSec: Math.max(28, Math.floor(firstSpoken.start - 1)),
+          };
+        }
+
+        // 2. Look for a Cold-Open -> Theme Song gap (38s - 96s without spoken dialogue) within the first 10 minutes (600s)
+        let bestGap: {
+          startSec: number;
+          endSec: number;
+          score: number;
+        } | null = null;
+        for (let i = 2; i < spokenCues.length - 3; i++) {
+          const cur = spokenCues[i];
+          const nxt = spokenCues[i + 1];
+          if (cur.end > 600) break;
+          const gap = nxt.start - cur.end;
+          if (gap >= 38 && gap <= 96 && cur.end >= 18) {
+            // Boost score if explicit ♪ / [music] cues appear inside this gap
+            const hasMusicInGap = cleanCues.some(
+              (c) =>
+                c.start >= cur.end - 2 &&
+                c.end <= nxt.start + 2 &&
+                isMusicOrThemeCue(c.text)
+            );
+            // Standard TV intros are typically 45s-90s; prefer gaps with music markers or closest to 50s-85s
+            const score = (hasMusicInGap ? 100 : 0) + gap;
+            if (!bestGap || score > bestGap.score) {
+              bestGap = {
+                startSec: Math.floor(cur.end + 1),
+                endSec: Math.floor(nxt.start - 1),
+                score,
+              };
+            }
+          }
+        }
+        if (bestGap) {
+          return { startSec: bestGap.startSec, endSec: bestGap.endSec };
+        }
+      }
+    }
+
+    return null;
+  }, [mediaType, apiNoIntro, apiIntroWindow, isIntroApiSettled, subtitleCues]);
+
+  // Reset Skip Intro timer & dismissal state whenever detectedIntroWindow changes (e.g. when API resolves)
+  useEffect(() => {
+    if (!detectedIntroWindow) return;
+    skipIntroElapsedMsRef.current = 0;
+    setSkipIntroRemainingPct(100);
+    setSkipIntroDismissed(false);
+    setSkipIntroManualClosed(false);
+    hasAutoFocusedSkipIntroRef.current = false;
+  }, [detectedIntroWindow?.startSec, detectedIntroWindow?.endSec]);
+
+  const isSkipIntroVisible = Boolean(
+    mediaType === 'series' &&
+      !skipIntroDismissed &&
+      detectedIntroWindow &&
+      displayTimeSec >= detectedIntroWindow.startSec &&
+      displayTimeSec < detectedIntroWindow.endSec - 4
+  );
+
+  // If the 10s bar auto-hid (without manual close) and user wakes the OSD while still inside the intro, re-show it
+  const prevOsdVisibleForIntroRef = useRef<boolean>(isOsdVisible);
+  useEffect(() => {
+    const wasVisible = prevOsdVisibleForIntroRef.current;
+    prevOsdVisibleForIntroRef.current = isOsdVisible;
+    if (
+      !wasVisible &&
+      isOsdVisible &&
+      mediaType === 'series' &&
+      detectedIntroWindow &&
+      !skipIntroManualClosed &&
+      skipIntroDismissed &&
+      displayTimeSec >= detectedIntroWindow.startSec &&
+      displayTimeSec < detectedIntroWindow.endSec - 5
+    ) {
+      skipIntroElapsedMsRef.current = 0;
+      setSkipIntroRemainingPct(100);
+      setSkipIntroDismissed(false);
+    }
+  }, [
+    isOsdVisible,
+    mediaType,
+    detectedIntroWindow,
+    skipIntroManualClosed,
+    skipIntroDismissed,
+    displayTimeSec,
+  ]);
+
+  // If user seeks backward before the intro window, reset Skip Intro so it appears again
+  useEffect(() => {
+    if (
+      mediaType === 'series' &&
+      detectedIntroWindow &&
+      displayTimeSec < detectedIntroWindow.startSec - 1 &&
+      (skipIntroDismissed || skipIntroElapsedMsRef.current > 0)
+    ) {
+      skipIntroElapsedMsRef.current = 0;
+      setSkipIntroRemainingPct(100);
+      setSkipIntroDismissed(false);
+      setSkipIntroManualClosed(false);
+      hasAutoFocusedSkipIntroRef.current = false;
+    }
+  }, [mediaType, detectedIntroWindow, displayTimeSec, skipIntroDismissed]);
+
+  // Temporary 10-second draining progress bar for "Sari peste Intro" (auto-hides when bar finishes draining)
+  useEffect(() => {
+    if (!isSkipIntroVisible || status !== 'playing' || isPaused) return;
+    const TOTAL_DISPLAY_MS = 10000;
+    const TICK_MS = 80;
+    const interval = window.setInterval(() => {
+      skipIntroElapsedMsRef.current += TICK_MS;
+      const remPct = Math.max(
+        0,
+        100 - (skipIntroElapsedMsRef.current / TOTAL_DISPLAY_MS) * 100
+      );
+      setSkipIntroRemainingPct(remPct);
+      if (skipIntroElapsedMsRef.current >= TOTAL_DISPLAY_MS) {
+        window.clearInterval(interval);
+        setSkipIntroDismissed(true);
+      }
+    }, TICK_MS);
+    return () => window.clearInterval(interval);
+  }, [isSkipIntroVisible, status, isPaused]);
+
+  // Auto-focus "Sari peste Intro" once when playback enters the intro window
+  useEffect(() => {
+    if (!isSkipIntroVisible || hasAutoFocusedSkipIntroRef.current) return;
+    hasAutoFocusedSkipIntroRef.current = true;
+    const timer = window.setTimeout(() => {
+      if (openMenu === 'none') {
+        const btn = playerRootRef.current?.querySelector<HTMLButtonElement>(
+          '[data-vod-skip-intro-btn="true"]'
+        );
+        btn?.focus();
+      }
+    }, 35);
+    return () => window.clearTimeout(timer);
+  }, [isSkipIntroVisible, openMenu]);
+
+  // Smart End-of-Episode / Credits Detection:
+  // 1) Exact IntroDB / TheIntroDB credits timestamp (if available)
+  // 2) Subtitle end-of-dialogue detection within the last 3.5 minutes (210s)
+  // 3) Default 2 minutes (120s) remaining threshold
+  const smartOutroRemainingThresholdSec = useMemo(() => {
+    if (
+      mediaType === 'series' &&
+      apiOutroStartSec &&
+      effectiveDurationSec > apiOutroStartSec + 15
+    ) {
+      const remAtApiOutro = effectiveDurationSec - apiOutroStartSec;
+      if (remAtApiOutro >= 30 && remAtApiOutro <= 260) {
+        return Math.max(120, Math.ceil(remAtApiOutro));
+      }
+    }
+    if (
+      mediaType === 'series' &&
+      subtitleCues &&
+      subtitleCues.length >= 15 &&
+      effectiveDurationSec > 300
+    ) {
+      const cleanCues = subtitleCues.filter((c) => {
+        const t = (c.text || '').toLowerCase();
+        return (
+          !t.includes('opensubtitles') &&
+          !t.includes('subtitrare') &&
+          !t.includes('traducere') &&
+          !t.includes('synced by') &&
+          !t.includes('www.')
+        );
+      });
+      const lastCue = cleanCues[cleanCues.length - 1];
+      if (lastCue) {
+        const remAfterLastCue = effectiveDurationSec - lastCue.end;
+        if (remAfterLastCue >= 120 && remAfterLastCue <= 210) {
+          return Math.ceil(remAfterLastCue - 2);
+        }
+      }
+    }
+    return 120;
+  }, [mediaType, apiOutroStartSec, subtitleCues, effectiveDurationSec]);
+
+  // Propose moving to the Next Episode when 2 minutes (or smart credits threshold) remain, and auto-advance when the episode finishes
+  useEffect(() => {
+    if (
+      mediaType !== 'series' ||
+      !onNextEpisode ||
+      autoNextDismissed ||
+      hasTriggeredAutoNextRef.current ||
+      (!hasVerifiedDuration && !(durationHintSec && durationHintSec > 180))
+    ) {
+      return;
+    }
+    if (
+      displayTimeSec > 45 &&
+      effectiveDurationSec > 180 &&
+      remainingTimeSec <= smartOutroRemainingThresholdSec &&
+      remainingTimeSec > 0
+    ) {
+      if (!showNextEpisodePrompt) {
+        setShowNextEpisodePrompt(true);
+      }
+      if (hasVerifiedDuration && remainingTimeSec <= 2) {
+        hasTriggeredAutoNextRef.current = true;
+        setShowNextEpisodePrompt(false);
+        onNextEpisode();
+      }
+    } else if (
+      remainingTimeSec > smartOutroRemainingThresholdSec + 5 &&
+      showNextEpisodePrompt
+    ) {
+      // User seeked backward away from the end credits
+      setShowNextEpisodePrompt(false);
+      hasAutoFocusedNextEpRef.current = false;
+    }
+  }, [
+    mediaType,
+    onNextEpisode,
+    autoNextDismissed,
+    hasVerifiedDuration,
+    durationHintSec,
+    displayTimeSec,
+    effectiveDurationSec,
+    remainingTimeSec,
+    smartOutroRemainingThresholdSec,
+    showNextEpisodePrompt,
+  ]);
+
+  // Auto-focus the Next Episode button once when it first appears at 2 minutes remaining
+  useEffect(() => {
+    if (
+      !showNextEpisodePrompt ||
+      autoNextDismissed ||
+      mediaType !== 'series' ||
+      !onNextEpisode ||
+      hasAutoFocusedNextEpRef.current
+    ) {
+      return;
+    }
+    hasAutoFocusedNextEpRef.current = true;
+    const timer = window.setTimeout(() => {
+      if (openMenu === 'none') {
+        const btn = playerRootRef.current?.querySelector<HTMLButtonElement>(
+          '[data-vod-autonext-btn="true"]'
+        );
+        btn?.focus();
+      }
+    }, 35);
+    return () => window.clearTimeout(timer);
+  }, [
+    showNextEpisodePrompt,
+    autoNextDismissed,
+    mediaType,
+    onNextEpisode,
+    openMenu,
+  ]);
   const progressPct = Math.min(
     100,
     Math.max(0, (displayTimeSec / Math.max(1, effectiveDurationSec)) * 100)
@@ -1830,29 +2454,148 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }, 1100);
   };
 
+  const resumeOrRecoverPlayback = (v: HTMLVideoElement, showToast = true) => {
+    userIntentionallyPausedRef.current = false;
+    setIsPaused(false);
+    const now = Date.now();
+    const currentEff = Math.max(
+      0,
+      Math.floor(
+        isFileListStream
+          ? isSeekingFileListRef.current
+            ? streamOffsetRef.current
+            : Math.max(currentTimeSec, streamOffsetRef.current + (v.currentTime || 0))
+          : v.currentTime || currentTimeSec
+      )
+    );
+
+    // Check if the stream buffer is exhausted / MSE ended / connection dropped mid-movie
+    let bufferedAhead = 0;
+    try {
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (
+          v.currentTime >= v.buffered.start(i) - 0.5 &&
+          v.currentTime <= v.buffered.end(i) + 0.5
+        ) {
+          bufferedAhead = Math.max(0, v.buffered.end(i) - v.currentTime);
+          break;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const isMidMovie = remainingTimeSec > 35;
+    const isMseClosedEarly =
+      Boolean(flMediaSourceRef.current) &&
+      flMediaSourceRef.current?.readyState !== 'open' &&
+      bufferedAhead < 1.5 &&
+      isMidMovie;
+    const isStalledLong =
+      now - lastTimeUpdateWallMsRef.current > 3500 &&
+      (bufferedAhead < 0.8 || v.readyState < 3 || v.ended || v.networkState === 3) &&
+      isMidMovie;
+
+    if (isFileListStream && (v.ended || isMseClosedEarly || isStalledLong)) {
+      lastTimeUpdateWallMsRef.current = now;
+      seekToAbsoluteSeconds(currentEff, showToast ? '▶ Reluare' : undefined);
+      return;
+    }
+
+    if (hlsRef.current && (v.ended || isStalledLong)) {
+      lastTimeUpdateWallMsRef.current = now;
+      try {
+        hlsRef.current.startLoad(currentEff);
+        if (v.readyState < 2) {
+          hlsRef.current.recoverMediaError();
+        }
+        v.currentTime = Math.max(0, v.currentTime + 0.05);
+      } catch {
+        // ignore
+      }
+    } else if (dashRef.current && (v.ended || isStalledLong)) {
+      lastTimeUpdateWallMsRef.current = now;
+      try {
+        dashRef.current.seek(currentEff);
+        dashRef.current.play();
+      } catch {
+        // ignore
+      }
+    } else if (v.ended || isStalledLong) {
+      lastTimeUpdateWallMsRef.current = now;
+      try {
+        v.currentTime = Math.max(0, currentEff);
+      } catch {
+        // ignore
+      }
+    }
+
+    v.play()
+      .then(() => {
+        setIsPaused(false);
+        setStatus('playing');
+      })
+      .catch(() => {
+        if (isFileListStream && currentEff > 5 && isMidMovie) {
+          seekToAbsoluteSeconds(currentEff, showToast ? '▶ Reluare' : undefined);
+        }
+      });
+
+    if (showToast) {
+      showTransportToast('▶ Redare');
+    }
+  };
+
+  const resumeOrRecoverPlaybackRef = useRef(resumeOrRecoverPlayback);
+  resumeOrRecoverPlaybackRef.current = resumeOrRecoverPlayback;
+
+  // Automatic Stall Watchdog: if the movie freezes mid-playback without user pausing, auto-reconnect at exact second
+  useEffect(() => {
+    const watchdog = window.setInterval(() => {
+      const v = videoRef.current;
+      if (
+        !v ||
+        status !== 'playing' ||
+        userIntentionallyPausedRef.current ||
+        isSeekingFileListRef.current ||
+        remainingTimeSec <= 35
+      ) {
+        return;
+      }
+      const now = Date.now();
+      const stalledMs = now - lastTimeUpdateWallMsRef.current;
+      if (
+        stalledMs >= 6500 &&
+        now - lastAutoRecoverWallMsRef.current >= 8000
+      ) {
+        lastAutoRecoverWallMsRef.current = now;
+        resumeOrRecoverPlaybackRef.current(v, false);
+      }
+    }, 2500);
+    return () => window.clearInterval(watchdog);
+  }, [status, remainingTimeSec]);
+
   const handleRemotePlayPause = (mode: 'play' | 'pause' | 'toggle') => {
     const v = videoRef.current;
     if (!v) return;
     onWakeOsd?.();
-    // On Smart TV remotes where Play or Pause may be pressed either as dedicated buttons or as a toggle:
-    // - If paused -> play
-    // - If playing -> pause
+
+    const isCurrentlyFrozen =
+      !userIntentionallyPausedRef.current &&
+      Date.now() - lastTimeUpdateWallMsRef.current > 2800 &&
+      (v.readyState < 3 || v.ended || v.paused);
+
     const shouldPlay =
       mode === 'play'
-        ? v.paused
-          ? true
-          : false
+        ? true
         : mode === 'pause'
-          ? v.paused
-            ? true
-            : false
-          : v.paused;
+          ? false
+          : v.paused || userIntentionallyPausedRef.current || isCurrentlyFrozen;
 
     if (shouldPlay) {
-      v.play().catch(() => {});
-      setIsPaused(false);
-      showTransportToast('▶ Redare');
+      resumeOrRecoverPlayback(v, true);
     } else {
+      userIntentionallyPausedRef.current = true;
       v.pause();
       setIsPaused(true);
       showTransportToast('❚❚ Pauză');
@@ -2018,6 +2761,34 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         return next;
       });
     };
+    const onOpenMenuEv = (ev: Event) => {
+      const customEv = ev as CustomEvent<{
+        menu?: 'subtitles' | 'audio' | 'server' | 'quality';
+      }>;
+      const targetMenu = customEv.detail?.menu;
+      if (!targetMenu) return;
+      onWakeOsd?.();
+      setOpenMenu((prev) => {
+        const next = prev === targetMenu ? 'none' : targetMenu;
+        if (next !== 'none') {
+          window.setTimeout(() => {
+            const rootEl = playerRootRef.current;
+            const popover = rootEl?.querySelector<HTMLElement>(
+              '[data-vod-menu-popover="true"]'
+            );
+            const activeBtn =
+              popover?.querySelector<HTMLButtonElement>(
+                '[data-sub-track-active="true"], [data-audio-track-active="true"], [data-server-opt-active="true"], [data-quality-opt-active="true"]'
+              ) ||
+              popover?.querySelector<HTMLButtonElement>(
+                '[data-sub-track-opt="true"], [data-audio-track-opt="true"], [data-server-opt="true"], [data-quality-opt="true"], button:not([disabled])'
+              );
+            activeBtn?.focus();
+          }, 45);
+        }
+        return next;
+      });
+    };
     window.addEventListener('aether:vod-seek', onExternalSeek);
     window.addEventListener('aether:vod-transport', onExternalTransport);
     window.addEventListener('keydown', onMediaKeyDown, true);
@@ -2027,6 +2798,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       'aether:vod-open-quality-menu',
       onOpenQualityMenuEv
     );
+    window.addEventListener('aether:vod-open-menu', onOpenMenuEv);
     return () => {
       window.removeEventListener('aether:vod-seek', onExternalSeek);
       window.removeEventListener('aether:vod-transport', onExternalTransport);
@@ -2040,13 +2812,39 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         'aether:vod-open-quality-menu',
         onOpenQualityMenuEv
       );
+      window.removeEventListener('aether:vod-open-menu', onOpenMenuEv);
     };
   }, []);
 
+  const playerRootRef = useRef<HTMLDivElement | null>(null);
+
+  // Ensure that whenever the OSD is visible, a button on the OSD has focus so the white highlight is always visible and ready for Left/Right arrows
+  useEffect(() => {
+    if (!isOsdVisible || openMenu !== 'none') return;
+    const timer = window.setTimeout(() => {
+      const rootEl = playerRootRef.current;
+      if (!rootEl) return;
+      const active = document.activeElement as HTMLElement | null;
+      const isAlreadyFocusedInside =
+        active &&
+        active !== document.body &&
+        (rootEl.contains(active) ||
+          Boolean(active.closest('[data-vod-top-back-btn="true"]')));
+      if (!isAlreadyFocusedInside) {
+        const playBtn = rootEl.querySelector<HTMLButtonElement>(
+          '[data-vod-play-btn="true"]'
+        );
+        playBtn?.focus();
+      }
+    }, 30);
+    return () => window.clearTimeout(timer);
+  }, [isOsdVisible, openMenu, status]);
+
   return (
     <div
+      ref={playerRootRef}
       data-vod-open-menu={openMenu}
-      className="relative w-full h-full bg-[#090b10] flex flex-col select-none"
+      className="relative z-10 w-full h-full bg-[#090b10] flex flex-col select-none"
     >
       <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
         {/* AMBIENT CINEMA GLOW BACKDROP (Eliminates dead pitch-black 21:9 letterbox bars) */}
@@ -2081,8 +2879,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }}
           onPause={() => setIsPaused(true)}
           onDurationChange={(e) => {
+            if (isFileListStream) return;
             const d = e.currentTarget.duration;
-            if (Number.isFinite(d) && d > 10) {
+            if (Number.isFinite(d) && d > 60) {
               setVideoDurationSec(d);
             }
           }}
@@ -2104,7 +2903,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             const targetStart = startAtSecondsRef.current;
             const v = videoRef.current;
             syncVideoDims(v);
-            if (v && Number.isFinite(v.duration) && v.duration > 10) {
+            if (!isFileListStream && v && Number.isFinite(v.duration) && v.duration > 60) {
               setVideoDurationSec(v.duration);
             }
             if (
@@ -2257,7 +3056,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               return;
             }
             const effectiveTime = streamOffsetRef.current + vid.currentTime;
-            if (Number.isFinite(vid.duration) && vid.duration > 10) {
+            if (Math.abs(effectiveTime - lastTimeUpdateMediaSecRef.current) >= 0.15) {
+              lastTimeUpdateMediaSecRef.current = effectiveTime;
+              lastTimeUpdateWallMsRef.current = Date.now();
+            }
+            if (!isFileListStream && Number.isFinite(vid.duration) && vid.duration > 60) {
               setVideoDurationSec(vid.duration);
             }
             try {
@@ -2268,73 +3071,134 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             } catch {
               // ignore
             }
-            const effectiveDuration =
-              durationHintSec && durationHintSec > 10
-                ? durationHintSec
-                : vid.duration;
+            const reportedDuration = Math.max(
+              effectiveDurationSec,
+              Math.floor(effectiveTime) + 30
+            );
             setCurrentTimeSec(effectiveTime);
             if (
               effectiveTime > 1 &&
-              Number.isFinite(effectiveDuration) &&
-              effectiveDuration > 10
+              Number.isFinite(reportedDuration) &&
+              reportedDuration > 10
             ) {
               onTimeUpdate?.(
                 Math.floor(effectiveTime),
-                Math.floor(effectiveDuration)
+                Math.floor(reportedDuration)
               );
             }
           }}
           onEnded={() => {
-            if (mediaType === 'series' && onNextEpisode && !autoNextDismissed) {
+            if (
+              mediaType === 'series' &&
+              onNextEpisode &&
+              !autoNextDismissed &&
+              !hasTriggeredAutoNextRef.current
+            ) {
+              hasTriggeredAutoNextRef.current = true;
+              setShowNextEpisodePrompt(false);
               onNextEpisode();
             }
           }}
           className="relative z-10 w-full h-full object-contain bg-transparent"
         />
 
-        {/* STREMIO-STYLE AUTO-NEXT EPISODE FLOATING PROMPT (25s before episode ends) */}
+        {/* CLEAN FRAMELESS SKIP INTRO PILL BUTTON ("Sari peste Intro") */}
+        {isSkipIntroVisible &&
+          detectedIntroWindow &&
+          !showNextEpisodePrompt && (
+            <div
+              className={`absolute right-5 sm:right-8 z-40 flex items-center transition-all duration-300 ${
+                isOsdVisible || openMenu !== 'none'
+                  ? 'bottom-48 sm:bottom-56'
+                  : 'bottom-8 sm:bottom-10'
+              }`}
+            >
+              <button
+                type="button"
+                data-vod-skip-intro-btn="true"
+                onClick={() => {
+                  setSkipIntroManualClosed(true);
+                  setSkipIntroDismissed(true);
+                  seekToAbsoluteSeconds(
+                    detectedIntroWindow.endSec,
+                    '⏭ Intro Omis'
+                  );
+                }}
+                className="relative overflow-hidden h-11 sm:h-12 px-5 sm:px-6 mr-2 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md focus:outline-none focus:ring-4 focus:ring-blue-500 focus:scale-105 transition-transform cursor-pointer"
+              >
+                {/* Live draining progress bar fill inside the button pill */}
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-y-0 left-0 bg-white transition-[width] duration-100 ease-linear"
+                  style={{ width: `${skipIntroRemainingPct}%` }}
+                />
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-0 left-0 h-1 bg-[#2563eb] transition-[width] duration-100 ease-linear"
+                  style={{ width: `${skipIntroRemainingPct}%` }}
+                />
+                <SkipForward className="relative z-10 w-4 h-4 fill-current shrink-0 mr-2 text-zinc-950" />
+                <span className="relative z-10 text-zinc-950">
+                  Sari peste Intro
+                </span>
+              </button>
+
+              <button
+                type="button"
+                title="Ascunde butonul"
+                onClick={() => {
+                  setSkipIntroManualClosed(true);
+                  setSkipIntroDismissed(true);
+                }}
+                className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-black/75 hover:bg-black/90 text-white/90 border border-white/25 inline-flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.85)] focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+        {/* CLEAN FRAMELESS NEXT EPISODE PILL BUTTON (PROPOSED WHEN 2 MINUTES REMAIN OR CREDITS START) */}
         {mediaType === 'series' &&
           onNextEpisode &&
           !autoNextDismissed &&
-          displayTimeSec > 60 &&
-          effectiveDurationSec > 120 &&
-          remainingTimeSec <= 25 &&
-          remainingTimeSec > 0 && (
-            <div className="
-              absolute right-5 sm:right-8 bottom-36 sm:bottom-44 z-40
-              w-80 sm:w-96 p-4 rounded-3xl bg-[#111116]/95 backdrop-blur-2xl
-              border-2 border-blue-400/60 shadow-[0_20px_50px_rgba(0,0,0,0.95)]
-              flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-3
-            ">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-400">
-                  ● Stremio Auto-Play
+          showNextEpisodePrompt && (
+            <div
+              className={`absolute right-5 sm:right-8 z-40 flex items-center transition-all duration-300 ${
+                isOsdVisible || openMenu !== 'none'
+                  ? 'bottom-48 sm:bottom-56'
+                  : 'bottom-8 sm:bottom-10'
+              }`}
+            >
+              <button
+                type="button"
+                data-vod-autonext-btn="true"
+                onClick={() => {
+                  hasTriggeredAutoNextRef.current = true;
+                  setShowNextEpisodePrompt(false);
+                  onNextEpisode();
+                }}
+                className="h-11 sm:h-12 px-5 sm:px-6 mr-2 rounded-full bg-white hover:bg-zinc-100 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] focus:outline-none focus:ring-4 focus:ring-blue-500 focus:scale-105 transition-transform cursor-pointer"
+              >
+                <SkipForward className="w-4 h-4 fill-current shrink-0 mr-2 text-zinc-950" />
+                <span className="text-zinc-950">
+                  Următorul Episod · {nextEpisodeLabel || `Ep. ${episode + 1}`}
                 </span>
-                <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-mono text-xs font-extrabold">
-                  în {Math.max(1, Math.ceil(remainingTimeSec))}s...
+                <span className="ml-2 px-2 py-0.5 rounded-full bg-zinc-900/12 text-zinc-800 font-mono text-[11px] font-bold tabular-nums">
+                  -{formatSeekTime(remainingTimeSec)}
                 </span>
-              </div>
-              <div className="text-sm sm:text-base font-extrabold text-white leading-snug">
-                Urmează: {nextEpisodeLabel || `S${season}:E${episode + 1}`}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  data-vod-autonext-btn="true"
-                  onClick={() => onNextEpisode()}
-                  className="flex-1 h-10 px-4 rounded-2xl bg-blue-400 hover:bg-blue-300 focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-white text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-1.5 shadow-lg cursor-pointer"
-                >
-                  <SkipForward className="w-4 h-4 fill-current shrink-0" />
-                  <span>Redă Acum</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAutoNextDismissed(true)}
-                  className="h-10 px-3.5 rounded-2xl bg-white/10 hover:bg-white/20 focus:bg-white focus:text-zinc-950 text-zinc-300 text-xs font-bold cursor-pointer"
-                >
-                  Anulează
-                </button>
-              </div>
+              </button>
+
+              <button
+                type="button"
+                title="Ascunde butonul"
+                onClick={() => {
+                  setAutoNextDismissed(true);
+                  setShowNextEpisodePrompt(false);
+                }}
+                className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-black/75 hover:bg-black/90 text-white/90 border border-white/25 inline-flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.85)] focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -2420,12 +3284,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }`}
         >
           {/* ROW 1: POSTER & TITLE + APPLE LIQUID GLASS TIMELINE SCRUBBER */}
-          <div className="w-full flex items-center gap-4 sm:gap-5">
+          <div className="w-full flex items-center gap-4 sm:gap-5 mb-3.5 sm:mb-4">
             {/* Clean Apple TV+ Large Pop-Out Poster & Title + Episode Name */}
             {(poster || title) && (
-              <div className="hidden sm:flex items-center gap-4 pr-5 shrink-0 max-w-[520px] overflow-visible">
+              <div className="hidden sm:flex items-center gap-4 pr-6 mr-2 shrink-0 max-w-[540px] overflow-visible">
                 {poster ? (
-                  <div className="relative w-24 h-36 sm:w-32 sm:h-44 -mt-14 sm:-mt-20 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
+                  <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
                     <img
                       src={poster}
                       alt={title || ''}
@@ -2433,17 +3297,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     />
                   </div>
                 ) : null}
-                <div className="min-w-0 flex flex-col justify-center gap-1">
-                  <div className="text-xl sm:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow">
+                <div className="min-w-0 flex flex-col justify-center gap-1 py-1">
+                  <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow mb-1">
                     {title || 'În redare'}
                   </div>
-                  <div className="flex items-center gap-2 min-w-0 text-sm sm:text-lg font-semibold text-white/90">
+                  <div className="flex items-center gap-2 min-w-0 text-sm sm:text-base font-semibold text-white/90">
                     {mediaType === 'series' && (
                       <>
-                        <span className="text-white font-bold shrink-0">
+                        <span className="text-white font-bold shrink-0 mr-2">
                           S{season} · E{episode}
                         </span>
-                        <span className="text-white/40">•</span>
+                        <span className="text-white/40 mr-2">•</span>
                       </>
                     )}
                     <span className="truncate text-white/85">
@@ -2458,7 +3322,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             )}
 
             {/* Elapsed Time (Clean SF Tabular Nums, No Box) */}
-            <span className="text-xs font-medium text-white/80 tabular-nums shrink-0 w-12 text-right">
+            <span className="text-xs font-medium text-white/80 tabular-nums shrink-0 w-12 text-right mr-3">
               {formatSeekTime(
                 scrubPreviewSec !== null ? scrubPreviewSec : displayTimeSec
               )}
@@ -2595,7 +3459,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
             {/* Remaining Time (Clean SF Tabular Nums, No Box) */}
             <span
-              className="text-xs font-medium text-white/65 tabular-nums shrink-0 w-14"
+              className="text-xs font-medium text-white/65 tabular-nums shrink-0 w-14 ml-3"
               title={`Durată totală: ${formatSeekTime(effectiveDurationSec)}`}
             >
               -{formatSeekTime(remainingTimeSec)}
@@ -2624,23 +3488,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 data-vod-play-btn="true"
                 onFocus={() => onWakeOsd?.()}
                 onClick={() => {
-                  const v = videoRef.current;
-                  if (!v) return;
-                  onWakeOsd?.();
-                  if (v.paused) {
-                    v.play().catch(() => {});
-                  } else {
-                    v.pause();
-                  }
+                  handleRemotePlayPause('toggle');
                 }}
-                className="h-9 px-4 rounded-full bg-white hover:bg-white/90 text-zinc-950 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer"
+                className="h-9 px-4 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
               >
                 {isPaused ? (
-                  <Play className="w-3.5 h-3.5 fill-current shrink-0 text-zinc-950" />
+                  <Play className="w-3.5 h-3.5 fill-current shrink-0" />
                 ) : (
-                  <Pause className="w-3.5 h-3.5 fill-current shrink-0 text-zinc-950" />
+                  <Pause className="w-3.5 h-3.5 fill-current shrink-0" />
                 )}
-                <span className="text-zinc-950">{isPaused ? 'Redare' : 'Pauză'}</span>
+                <span>{isPaused ? 'Redare' : 'Pauză'}</span>
               </button>
 
               <button
@@ -2664,7 +3521,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
               >
                 <RotateCw className="w-3.5 h-3.5 shrink-0" />
-                <span>15s</span>
+                <span>+15s</span>
+              </button>
+
+              <button
+                type="button"
+                data-vod-seek-fwd-60="true"
+                onFocus={() => onWakeOsd?.()}
+                onClick={() => triggerSeek(60)}
+                title="Înainte cu 1 minut (+1 min)"
+                className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+              >
+                <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                <span>+1 min</span>
               </button>
 
               {onPrevEpisode && (
@@ -2710,12 +3579,33 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     onWakeOsd?.();
                     onOpenEpisodesDrawer();
                   }}
-                  title="Lista de sezoane și episoade"
+                  title="Lista de sezoane și episoade (Apasă Jos de 2 ori sau Butonul Roșu)"
                   className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                 >
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] shrink-0 mr-1" />
                   <span>Episoade</span>
-                  <span className="text-white/60 text-[11px]">
-                    S{season}·E{episode}
+                  <span className="text-white/60 text-[11px] ml-1">
+                    S{season}·E{episode} (⬇×2)
+                  </span>
+                </button>
+              )}
+
+              {onOpenInfoSheet && (
+                <button
+                  type="button"
+                  data-vod-bottom-info-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={() => {
+                    onWakeOsd?.();
+                    setOpenMenu('none');
+                    onOpenInfoSheet();
+                  }}
+                  title="Descrierea Filmului / Serialului cu Poză și Actori (Butonul Galben)"
+                  className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.95)] shrink-0 mr-1" />
+                  <span>
+                    {mediaType === 'series' ? 'Descriere Serial' : 'Descriere Film'}
                   </span>
                 </button>
               )}
@@ -2723,8 +3613,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
             {/* Right Apple Liquid Glass Controls (Audio, Server, Subtitles, Resolution) */}
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {/* 1. Audio Track Pill */}
-              {audioTracks.length > 0 && (
+              {/* 1. Audio Track Pill (Blue Remote Button) */}
+              {audioTracks.length > 0 ? (
                 <div className="relative">
                   <button
                     type="button"
@@ -2747,18 +3637,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                         }, 40);
                       }
                     }}
+                    title="Pistă Audio (Butonul Albastru)"
                     className={`h-9 px-3.5 rounded-full text-xs font-medium inline-flex items-center gap-2 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
                       openMenu === 'audio'
                         ? 'bg-white text-zinc-950 font-semibold shadow-md'
                         : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
                     }`}
                   >
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0 mr-0.5" />
                     <Languages className="w-3.5 h-3.5 shrink-0 opacity-80" />
                     <span className="max-w-[130px] truncate">
                       {audioTracks.find((t) => t.id === activeAudioTrack)
                         ?.name ||
                         audioTracks[forcedAudioIdx]?.name ||
-                        'Audio'}
+                        'Pistă Audio'}
                     </span>
                   </button>
 
@@ -2768,7 +3660,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       className="absolute right-0 bottom-full mb-3 w-64 max-h-72 overflow-y-auto rounded-2xl tahoe-emerald-osd p-2.5 shadow-2xl space-y-1 z-40"
                     >
                       <div className="px-3 py-1 text-[11px] font-semibold text-white/60">
-                        Pistă Audio
+                        Pistă Audio (🔵 Albastru)
                       </div>
                       {audioTracks.map((trk, idx) => {
                         const active =
@@ -2789,6 +3681,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               }
                               setActiveAudioTrack(trk.id);
                               setForcedAudioIdx(idx);
+                              saveActiveProfileMediaPrefs({
+                                defaultAudioPref: inferAudioPrefFromTrackName(
+                                  trk.name
+                                ),
+                              });
                               onSelectAudioTrackIndex?.(idx);
                               if (dashRef.current) {
                                 const dashTracks =
@@ -2820,7 +3717,24 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     </div>
                   )}
                 </div>
-              )}
+              ) : onOpenInfoSheet ? (
+                <button
+                  type="button"
+                  data-vod-primary-audio-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={() => {
+                    onWakeOsd?.();
+                    setOpenMenu('none');
+                    onOpenInfoSheet();
+                  }}
+                  title="Pistă Audio & Sursă (Butonul Albastru)"
+                  className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-2 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0 mr-0.5" />
+                  <Languages className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                  <span>Pistă Audio</span>
+                </button>
+              ) : null}
 
               {/* 1B. Video Source / Server Pill */}
               {serverOptions.length > 0 && onSelectServer && (
@@ -2900,7 +3814,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 </div>
               )}
 
-              {/* 2. Subtitles Pill (All Size & Sync Controls Inside Popover) */}
+              {/* 2. Subtitles Pill (Green Remote Button — All Size & Sync Controls Inside Popover) */}
               {(onApplyAutoSubtitle ||
                 onOpenSubtitleFinder ||
                 hasActiveSubtitle) && (
@@ -2916,14 +3830,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       if (next === 'subtitles') {
                         const container = e.currentTarget.parentElement;
                         window.setTimeout(() => {
-                          const firstBtn =
+                          const activeBtn =
+                            container?.querySelector<HTMLButtonElement>(
+                              '[data-sub-track-active="true"]'
+                            ) ||
                             container?.querySelector<HTMLButtonElement>(
                               '[data-sub-track-opt="true"]'
                             );
-                          firstBtn?.focus();
+                          activeBtn?.focus();
                         }, 40);
                       }
                     }}
+                    title="Subtitrări (Butonul Verde)"
                     className={`h-9 px-3.5 rounded-full text-xs font-medium inline-flex items-center gap-2 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
                       openMenu === 'subtitles'
                         ? 'bg-white text-zinc-950 font-semibold shadow-md'
@@ -2932,56 +3850,72 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                           : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
                     }`}
                   >
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.95)] shrink-0 mr-0.5" />
                     <Subtitles className="w-3.5 h-3.5 shrink-0 opacity-85" />
                     <span className="max-w-[140px] truncate">
                       {hasActiveSubtitle
-                        ? `${subtitleLabel || 'Subtitrare'}${
+                        ? `${subtitleLabel || 'Subtitrări'}${
                             subOffsetSec !== 0
                               ? ` (${subOffsetSec > 0 ? `+${subOffsetSec.toFixed(1)}s` : `${subOffsetSec.toFixed(1)}s`})`
                               : ''
                           }`
-                        : 'Subtitrare'}
+                        : 'Subtitrări'}
                     </span>
                   </button>
 
                   {openMenu === 'subtitles' && (
                     <div
                       data-vod-menu-popover="true"
-                      className="absolute right-0 bottom-full mb-3 w-72 sm:w-80 max-h-[72vh] overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2.5 z-40"
+                      className="absolute right-0 bottom-full mb-3 w-80 sm:w-[340px] max-h-[78vh] overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2 z-40"
                     >
-                      <div className="flex items-center justify-between px-1">
+                      <div
+                        data-vod-popover-row="true"
+                        className="flex items-center justify-between px-1"
+                      >
                         <span className="text-xs font-semibold text-white/70">
-                          Subtitrări
+                          Subtitrări (Sus/Jos = Rând, Stânga/Dreapta = Opțiune)
                         </span>
                         <button
                           type="button"
+                          onFocus={() => onWakeOsd?.()}
                           onClick={() => setOpenMenu('none')}
-                          className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 text-white/80 inline-flex items-center justify-center focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                          className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 text-white/80 inline-flex items-center justify-center focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white cursor-pointer"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
 
                       {/* Off Button */}
-                      <button
-                        type="button"
-                        data-sub-track-opt="true"
-                        onClick={() => {
-                          setActiveSubTrackId(null);
-                          onClearSubtitle?.();
-                          setOpenMenu('none');
-                        }}
-                        className={`w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                          !hasActiveSubtitle
-                            ? 'bg-white text-zinc-950'
-                            : 'bg-white/10 hover:bg-white/15 text-white/90'
-                        }`}
-                      >
-                        <span>Fără subtitrare</span>
-                        {!hasActiveSubtitle && <Check className="w-3.5 h-3.5" />}
-                      </button>
+                      <div data-vod-popover-row="true">
+                        <button
+                          type="button"
+                          data-sub-track-opt="true"
+                          data-sub-track-active={
+                            !hasActiveSubtitle ? 'true' : undefined
+                          }
+                          onFocus={() => onWakeOsd?.()}
+                          onClick={() => {
+                            setActiveSubTrackId(null);
+                            saveActiveProfileMediaPrefs({
+                              defaultSubLang: 'off',
+                            });
+                            onClearSubtitle?.();
+                            setOpenMenu('none');
+                          }}
+                          className={`w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white cursor-pointer ${
+                            !hasActiveSubtitle
+                              ? 'bg-white/25 text-white border border-white/30'
+                              : 'bg-white/10 hover:bg-white/15 text-white/90'
+                          }`}
+                        >
+                          <span>Fără subtitrare</span>
+                          {!hasActiveSubtitle && (
+                            <Check className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
 
-                      {/* 1-Click Language Rows */}
+                      {/* 1-Click Language Rows (Compact Single-Line Rows for Deterministic Remote Navigation) */}
                       {isLoadingSubsList ? (
                         <div className="py-3 flex items-center justify-center gap-2 text-xs text-white/70">
                           <Loader2 className="w-4 h-4 animate-spin text-white" />
@@ -2995,20 +3929,21 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                             return (
                               <div
                                 key={lang.code}
-                                className="p-2.5 rounded-xl bg-white/[0.07] border border-white/10 space-y-1.5"
+                                data-vod-popover-row="true"
+                                className="px-2.5 py-1.5 rounded-xl bg-white/[0.07] border border-white/10 flex items-center justify-between gap-2"
                               >
-                                <div className="flex items-center justify-between text-xs font-semibold text-white">
-                                  <span className="inline-flex items-center gap-1.5">
-                                    <span className="px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-bold text-white">
-                                      {lang.flag}
-                                    </span>
-                                    <span>{lang.label}</span>
+                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-white shrink-0">
+                                  <span className="px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-bold text-white inline-flex items-center gap-1.5">
+                                    <img
+                                      src={`https://flagcdn.com/w40/${lang.countryIso}.png`}
+                                      alt={lang.flag}
+                                      className="w-4 h-3 rounded-[2px] object-cover shrink-0"
+                                    />
+                                    <span>{lang.flag}</span>
                                   </span>
-                                  <span className="text-[10px] text-white/60">
-                                    {tracks.length}
-                                  </span>
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
+                                  <span>{lang.label}</span>
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
                                   {tracks.map((trk, idx) => {
                                     const isSelected =
                                       activeSubTrackId === trk.id;
@@ -3019,14 +3954,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                                         key={trk.id}
                                         type="button"
                                         data-sub-track-opt="true"
+                                        data-sub-track-active={
+                                          isSelected ? 'true' : undefined
+                                        }
                                         disabled={isDownloading}
+                                        onFocus={() => onWakeOsd?.()}
                                         onClick={() =>
                                           void handleSelectQuickSubTrack(trk)
                                         }
-                                        className={`px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                                        className={`px-2.5 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-105 cursor-pointer ${
                                           isSelected
-                                            ? 'bg-white text-zinc-950 shadow-sm'
-                                            : 'bg-white/10 hover:bg-white/20 text-white/90'
+                                            ? 'bg-emerald-400 text-zinc-950 font-bold shadow-sm'
+                                            : 'bg-white/12 hover:bg-white/20 text-white/95'
                                         }`}
                                       >
                                         {isDownloading ? (
@@ -3045,54 +3984,63 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
                       {/* Subtitle Font Size Controls (A- / A+ & Presets) */}
                       <div className="pt-2 border-t border-white/10 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px] font-medium text-white/70">
+                        <div className="flex items-center justify-between text-[11px] font-medium text-white/75">
                           <span className="inline-flex items-center gap-1.5">
                             <Type className="w-3.5 h-3.5" />
-                            <span>Mărime Text:</span>
+                            <span>Mărime Font Subtitrare:</span>
                           </span>
-                          <span className="tabular-nums text-white font-semibold">
+                          <span className="tabular-nums text-white font-bold">
                             {subFontPx}px
                           </span>
                         </div>
 
                         {/* A- / Reset / A+ Fine Step Buttons */}
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div
+                          data-vod-popover-row="true"
+                          className="grid grid-cols-3 gap-1.5"
+                        >
                           <button
                             type="button"
+                            onFocus={() => onWakeOsd?.()}
                             onClick={() => {
                               const next = Math.max(14, subFontPx - 2);
                               updateSubFontPx(next);
                               showTransportToast(`Mărime subtitrare: ${next}px`);
                             }}
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer"
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white text-xs font-semibold transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
                             A- Micșorează
                           </button>
                           <button
                             type="button"
+                            onFocus={() => onWakeOsd?.()}
                             onClick={() => {
                               updateSubFontPx(24);
                               showTransportToast('Mărime subtitrare: 24px');
                             }}
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/85 text-xs font-medium cursor-pointer"
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white/90 text-xs font-medium transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
                             Reset (24px)
                           </button>
                           <button
                             type="button"
+                            onFocus={() => onWakeOsd?.()}
                             onClick={() => {
                               const next = Math.min(48, subFontPx + 2);
                               updateSubFontPx(next);
                               showTransportToast(`Mărime subtitrare: ${next}px`);
                             }}
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer"
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white text-xs font-semibold transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
                             A+ Mărește
                           </button>
                         </div>
 
                         {/* Quick Presets (Normal / Mare / Max) */}
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div
+                          data-vod-popover-row="true"
+                          className="grid grid-cols-3 gap-1.5"
+                        >
                           {(
                             [
                               { id: 'normal', label: 'Normal', px: 20 },
@@ -3103,16 +4051,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                             <button
                               key={sz.id}
                               type="button"
+                              onFocus={() => onWakeOsd?.()}
                               onClick={() => {
                                 updateSubFontPx(sz.px);
                                 showTransportToast(
                                   `Mărime subtitrare: ${sz.label} (${sz.px}px)`
                                 );
                               }}
-                              className={`py-1.5 rounded-full text-xs font-semibold cursor-pointer ${
+                              className={`py-1.5 rounded-full text-xs font-semibold transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer ${
                                 subFontSize === sz.id
-                                  ? 'bg-white text-zinc-950'
-                                  : 'bg-white/10 hover:bg-white/20 text-white/90'
+                                  ? 'bg-emerald-400 text-zinc-950 font-bold'
+                                  : 'bg-white/12 hover:bg-white/20 text-white/90'
                               }`}
                             >
                               {sz.label}
@@ -3123,44 +4072,61 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
                       {/* Subtitle Timing Offset (-0.5s / 0s / +0.5s) */}
                       <div className="pt-2 border-t border-white/10 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px] font-medium text-white/70">
+                        <div className="flex items-center justify-between text-[11px] font-medium text-white/75">
                           <span className="inline-flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            Sincronizare:
+                            Sincronizare Timp:
                           </span>
-                          <span className="tabular-nums text-white font-semibold">
+                          <span className="tabular-nums text-white font-bold">
                             {subOffsetSec > 0
                               ? `+${subOffsetSec}s`
                               : `${subOffsetSec}s`}
                           </span>
                         </div>
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div
+                          data-vod-popover-row="true"
+                          className="grid grid-cols-3 gap-1.5"
+                        >
                           <button
                             type="button"
-                            onClick={() =>
-                              setSubOffsetSec((s) =>
-                                Number((s - 0.5).toFixed(1))
-                              )
-                            }
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs tabular-nums font-medium cursor-pointer"
+                            onFocus={() => onWakeOsd?.()}
+                            onClick={() => {
+                              setSubOffsetSec((s) => {
+                                const next = Number((s - 0.5).toFixed(1));
+                                showTransportToast(
+                                  `Sincronizare subtitrare: ${next > 0 ? `+${next}s` : `${next}s`}`
+                                );
+                                return next;
+                              });
+                            }}
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white text-xs tabular-nums font-semibold transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
                             -0.5s
                           </button>
                           <button
                             type="button"
-                            onClick={() => setSubOffsetSec(0)}
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/80 text-xs font-medium cursor-pointer"
+                            onFocus={() => onWakeOsd?.()}
+                            onClick={() => {
+                              setSubOffsetSec(0);
+                              showTransportToast('Sincronizare subtitrare: 0s');
+                            }}
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white/90 text-xs font-medium transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
-                            0s
+                            Reset 0s
                           </button>
                           <button
                             type="button"
-                            onClick={() =>
-                              setSubOffsetSec((s) =>
-                                Number((s + 0.5).toFixed(1))
-                              )
-                            }
-                            className="py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs tabular-nums font-medium cursor-pointer"
+                            onFocus={() => onWakeOsd?.()}
+                            onClick={() => {
+                              setSubOffsetSec((s) => {
+                                const next = Number((s + 0.5).toFixed(1));
+                                showTransportToast(
+                                  `Sincronizare subtitrare: ${next > 0 ? `+${next}s` : `${next}s`}`
+                                );
+                                return next;
+                              });
+                            }}
+                            className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white text-xs tabular-nums font-semibold transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                           >
                             +0.5s
                           </button>
@@ -3169,17 +4135,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
                       {/* Open Full Subtitle Search Modal */}
                       {onOpenSubtitleFinder && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenMenu('none');
-                            onOpenSubtitleFinder();
-                          }}
-                          className="w-full py-2 px-3 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 border border-white/15 cursor-pointer"
-                        >
-                          <Search className="w-3.5 h-3.5" />
-                          <span>Căutare Avansată / .SRT</span>
-                        </button>
+                        <div data-vod-popover-row="true">
+                          <button
+                            type="button"
+                            onFocus={() => onWakeOsd?.()}
+                            onClick={() => {
+                              setOpenMenu('none');
+                              onOpenSubtitleFinder();
+                            }}
+                            className="w-full py-2 px-3 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 border border-white/15 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white cursor-pointer"
+                          >
+                            <Search className="w-3.5 h-3.5" />
+                            <span>Căutare Avansată / .SRT</span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}

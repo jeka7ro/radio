@@ -9,6 +9,7 @@ import {
   TvUserProfile,
   loadSharedProfiles,
   saveSharedProfiles,
+  syncSharedProfilesFromServer,
   loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isProfileRememberedOnDevice,
@@ -37,10 +38,12 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
     profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
   const isPinLockRequired = Boolean(
-    activeProfile?.pin &&
-      activeProfile.pin.trim() &&
-      !isProfileRememberedOnDevice(activeProfile) &&
-      unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}`
+    !activeProfile ||
+      !isProfileRememberedOnDevice(activeProfile) ||
+      (activeProfile.pin &&
+        activeProfile.pin.trim() &&
+        unlockedPinProfileKey &&
+        unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}`)
   );
 
   useEffect(() => {
@@ -56,12 +59,10 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
       // ignore
     }
 
-    fetch('/api/tv-profiles')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((serverProfiles) => {
-        if (Array.isArray(serverProfiles) && serverProfiles.length > 0) {
-          setProfiles(serverProfiles);
-          saveSharedProfiles(serverProfiles);
+    syncSharedProfilesFromServer()
+      .then((merged) => {
+        if (Array.isArray(merged) && merged.length > 0) {
+          setProfiles(merged);
         }
       })
       .catch(() => {});
@@ -87,9 +88,14 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
   }, []);
 
   const handleSelectProfile = (id: string) => {
-    const target = profiles.find((p) => p.id === id);
+    const latest = loadSharedProfiles();
+    const target =
+      profiles.find((p) => p.id === id) || latest.find((p) => p.id === id);
     if (target) {
       rememberProfileOnDevice(target);
+      if (!profiles.some((p) => p.id === target.id)) {
+        setProfiles(latest);
+      }
     }
     if (target?.pin && target.pin.trim()) {
       setUnlockedPinProfileKey(`${id}:${target.pin.trim()}`);
@@ -135,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
           <button
             type="button"
             onClick={() => setActiveTab('home')}
-            aria-label="SmartCinema Home"
+            aria-label="Filmio Home"
             className="lg:hidden flex items-center gap-1.5 text-left rounded-xl py-0.5 pr-1 shrink-0"
           >
             <SmartCinemaLogo size="sm" />

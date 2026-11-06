@@ -93,8 +93,9 @@ export const StationAvatar: React.FC<StationAvatarProps> = ({
 
   return (
     <div
-      className={`relative flex-shrink-0 aspect-square overflow-hidden flex items-center justify-center font-bold select-none shadow-sm border border-slate-200/70 dark:border-zinc-800/80 ${SIZE_CLASSES[size]} ${
-        activeImageUrl ? 'bg-white' : palette
+      style={{ borderRadius: size === 'lg' ? '16px' : size === 'xl' ? '24px' : '12px' }}
+      className={`relative flex-shrink-0 overflow-hidden flex items-center justify-center font-bold select-none shadow-sm border border-white/15 ${SIZE_CLASSES[size]} ${
+        activeImageUrl ? 'bg-zinc-900/80' : palette
       } ${className}`}
     >
       {activeImageUrl ? (
@@ -105,7 +106,8 @@ export const StationAvatar: React.FC<StationAvatarProps> = ({
           decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setCandidateIndex((prev) => prev + 1)}
-          className="w-full h-full object-contain p-1"
+          style={{ borderRadius: 'inherit' }}
+          className="w-full h-full object-cover"
         />
       ) : (
         <span aria-hidden="true" className="tracking-wider">
@@ -116,7 +118,7 @@ export const StationAvatar: React.FC<StationAvatarProps> = ({
       {isPlaying && (
         <div
           aria-hidden="true"
-          className="absolute inset-0 bg-brand-950/55 backdrop-blur-[1px] flex items-center justify-center gap-1"
+          className="absolute inset-0 bg-blue-950/45 backdrop-blur-[1px] flex items-center justify-center gap-1"
         >
           <span className="eq-bar w-1 bg-white rounded-full h-3" />
           <span className="eq-bar eq-bar-2 w-1 bg-white rounded-full h-5" />

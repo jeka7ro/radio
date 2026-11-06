@@ -11,6 +11,196 @@ import {
 } from '../types/radio';
 import { detectUserCountryCode } from '../services/geoLanguageService';
 import { detectInitialLanguage } from '../i18n/translations';
+import { DEFAULT_SMART_FAVORITE_TV_CHANNELS } from '../services/tvApi';
+import {
+  loadSharedProfiles,
+  loadSharedActiveProfileId,
+  canProfileAccessAdult,
+} from '../services/deviceContinuityService';
+
+function detectInitialAdultAccess(): boolean {
+  try {
+    const profiles = loadSharedProfiles();
+    const activeId = loadSharedActiveProfileId();
+    const active = profiles.find((p) => p.id === activeId) || profiles[0];
+    return canProfileAccessAdult(active);
+  } catch {
+    return false;
+  }
+}
+
+export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
+  {
+    stationuuid: 'fav-radio-kissfm-ro',
+    name: 'Kiss FM Romania',
+    url: 'https://live.kissfm.ro/kissfm.aacp',
+    url_resolved: 'https://live.kissfm.ro/kissfm.aacp',
+    homepage: 'https://www.kissfm.ro',
+    favicon: 'https://www.kissfm.ro/apple-touch-icon.png',
+    tags: 'pop,dance,top 40,hits',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 12500,
+    codec: 'AAC+',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 9800,
+  },
+  {
+    stationuuid: 'fav-radio-zu-ro',
+    name: 'Radio ZU',
+    url: 'https://live7digi.antenaplay.ro/radiozu/radiozu-48000.m3u8',
+    url_resolved: 'https://live7digi.antenaplay.ro/radiozu/radiozu-48000.m3u8',
+    homepage: 'https://radiozu.ro',
+    favicon: 'https://radiozu.ro/favicon-96x96.png',
+    tags: 'pop,hits,romania,top 40',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 11200,
+    codec: 'AAC',
+    bitrate: 128,
+    hls: 1,
+    clickcount: 9100,
+  },
+  {
+    stationuuid: 'fav-radio-europafm-ro',
+    name: 'Europa FM',
+    url: 'https://astreaming.edi.ro:8443/EuropaFM_aac',
+    url_resolved: 'https://astreaming.edi.ro:8443/EuropaFM_aac',
+    homepage: 'https://www.europafm.ro',
+    favicon: 'https://www.europafm.ro/icons/apple-touch-icon.png',
+    tags: 'pop,rock,news,adult contemporary',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 10400,
+    codec: 'AAC',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 8500,
+  },
+  {
+    stationuuid: 'fav-radio-magicfm-ro',
+    name: 'Magic FM',
+    url: 'https://live.magicfm.ro/magicfm.aacp',
+    url_resolved: 'https://live.magicfm.ro/magicfm.aacp',
+    homepage: 'https://www.magicfm.ro',
+    favicon: 'https://www.magicfm.ro/apple-touch-icon.png',
+    tags: 'soft pop,oldies,80s,90s,love songs',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 9400,
+    codec: 'AAC+',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7800,
+  },
+  {
+    stationuuid: 'fav-radio-digifm-ro',
+    name: 'Digi FM',
+    url: 'https://edge76.rcs-rds.ro/digifm/digifm.mp3',
+    url_resolved: 'https://edge76.rcs-rds.ro/digifm/digifm.mp3',
+    homepage: 'https://www.digi-fm.ro',
+    favicon: 'https://www.digi-fm.ro/static/theme-repo/apple-touch-icon.png',
+    tags: 'news,pop,hits,romania',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 8800,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7200,
+  },
+  {
+    stationuuid: 'fav-radio-virgin-ro',
+    name: 'Virgin Radio Romania',
+    url: 'https://astreaming.edi.ro:8443/VirginRadio_aac',
+    url_resolved: 'https://astreaming.edi.ro:8443/VirginRadio_aac',
+    homepage: 'https://virginradio.ro',
+    favicon: 'https://virginradio.ro/icons/apple-touch-icon.png',
+    tags: 'pop,dance,hip-hop,top 40',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 8200,
+    codec: 'AAC',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 6800,
+  },
+  {
+    stationuuid: 'fav-radio-profm-ro',
+    name: 'ProFM',
+    url: 'https://edge126.rcs-rds.ro/profm/profm.mp3',
+    url_resolved: 'https://edge126.rcs-rds.ro/profm/profm.mp3',
+    homepage: 'https://www.profm.ro',
+    favicon: 'https://www.profm.ro/static/theme-repo/apple-touch-icon.png',
+    tags: 'pop,dance,hits',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 7900,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 6400,
+  },
+  {
+    stationuuid: 'fav-radio-rockfm-ro',
+    name: 'Rock FM',
+    url: 'https://live.rockfm.ro/rockfm.aacp',
+    url_resolved: 'https://live.rockfm.ro/rockfm.aacp',
+    homepage: 'https://www.rockfm.ro',
+    favicon: 'https://www.rockfm.ro/apple-touch-icon.png',
+    tags: 'rock,classic rock,hard rock',
+    country: 'Romania',
+    countrycode: 'RO',
+    language: 'romanian',
+    votes: 7600,
+    codec: 'AAC+',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 6100,
+  },
+  {
+    stationuuid: 'fav-radio-rmc-it',
+    name: 'Radio Monte Carlo',
+    url: 'https://icy.unitedradio.it/RMC.mp3',
+    url_resolved: 'https://icy.unitedradio.it/RMC.mp3',
+    homepage: 'https://www.radiomontecarlo.net',
+    favicon: 'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly9yYWRpbzMub21ueXMuY29tL3dwLWNvbnRlbnQvdXBsb2Fkcy8yMDI1LzA2L2RlZmF1bHQtMS5qcGc/-/0/0?r=91587740ec678bd2765cf54837744f04',
+    tags: 'lounge,pop,jazz,chillout,monte carlo',
+    country: 'Italy',
+    countrycode: 'IT',
+    language: 'italian',
+    votes: 9200,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7400,
+  },
+  {
+    stationuuid: 'fav-radio-europaplus-ru',
+    name: 'Европа Плюс (Europa Plus)',
+    url: 'https://ep256.hostingradio.ru:8052/europaplus256.mp3',
+    url_resolved: 'https://ep256.hostingradio.ru:8052/europaplus256.mp3',
+    homepage: 'https://europaplus.ru',
+    favicon: 'https://top-radio.ru/assets/image/radio/180/europa-plus.png',
+    tags: 'pop,dance,hits,top 40',
+    country: 'Russia',
+    countrycode: 'RU',
+    language: 'russian',
+    votes: 9500,
+    codec: 'MP3',
+    bitrate: 256,
+    hls: 0,
+    clickcount: 7900,
+  },
+];
 
 interface RadioState {
   // Persisted state
@@ -118,9 +308,9 @@ export const useRadioStore = create<RadioState>()(
   persist(
     (set, get) => ({
       selectedCountryCode: detectUserCountryCode(),
-      favorites: [],
+      favorites: DEFAULT_SMART_FAVORITE_RADIO_STATIONS,
       recentlyPlayed: [],
-      favoriteTvChannels: [],
+      favoriteTvChannels: DEFAULT_SMART_FAVORITE_TV_CHANNELS,
       recentTvChannels: [],
       customTvChannels: [],
       radioSearchQuery: '',
@@ -132,7 +322,7 @@ export const useRadioStore = create<RadioState>()(
       isMuted: false,
       language: detectInitialLanguage(),
       theme: 'system',
-      adultContentEnabled: true,
+      adultContentEnabled: detectInitialAdultAccess(),
 
       activeTab: 'home',
       lastMediaTab: 'home',
@@ -715,6 +905,52 @@ export const useRadioStore = create<RadioState>()(
         theme: state.theme,
         adultContentEnabled: state.adultContentEnabled,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState as Partial<RadioState>) || {};
+        const merged = {
+          ...currentState,
+          ...persisted,
+          adultContentEnabled: detectInitialAdultAccess(),
+        };
+        const existingFavs = (
+          Array.isArray(persisted.favoriteTvChannels)
+            ? persisted.favoriteTvChannels
+            : []
+        ).map((ch) =>
+          /пятница/i.test(ch.name) &&
+          /\/(2006|9207|503|5031)\/index\.m3u8/i.test(ch.url)
+            ? {
+                ...ch,
+                id: 'Пятница! HD_http://f88e89c9.rossteleccom.net/iptv/5FSQ7FGUKA3FRZ/5031/index.m3u8',
+                name: 'Пятница! HD',
+                group: 'HD',
+                url: ch.url.replace(
+                  /\/(2006|9207|503|5031)\/index\.m3u8/i,
+                  '/5031/index.m3u8'
+                ),
+              }
+            : ch
+        );
+        const hasPaidSmartFavs =
+          existingFavs.length >= 30 &&
+          existingFavs[0]?.url === DEFAULT_SMART_FAVORITE_TV_CHANNELS[0]?.url &&
+          existingFavs[4]?.url === DEFAULT_SMART_FAVORITE_TV_CHANNELS[4]?.url &&
+          existingFavs[14]?.url === DEFAULT_SMART_FAVORITE_TV_CHANNELS[14]?.url &&
+          existingFavs[15]?.url === DEFAULT_SMART_FAVORITE_TV_CHANNELS[15]?.url &&
+          existingFavs[29]?.url === DEFAULT_SMART_FAVORITE_TV_CHANNELS[29]?.url;
+        if (!hasPaidSmartFavs) {
+          merged.favoriteTvChannels = [...DEFAULT_SMART_FAVORITE_TV_CHANNELS];
+        } else {
+          merged.favoriteTvChannels = existingFavs;
+        }
+        if (
+          !Array.isArray(persisted.favorites) ||
+          persisted.favorites.length === 0
+        ) {
+          merged.favorites = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+        }
+        return merged;
+      },
     }
   )
 );

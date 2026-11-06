@@ -7,7 +7,35 @@ export interface SharedTvProfile {
   avatarBg: string;
   pin?: string; // Optional 4-digit PIN e.g. "1234"
   isKids?: boolean;
+  allowAdultContent?: boolean; // Managed exclusively by Admin profile JEKA
   uiLang?: 'ro' | 'en' | 'ru';
+  defaultAudioPref?: 'original' | 'ro' | 'ru' | 'uk' | 'first';
+  defaultSubLang?: 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off';
+  defaultSubFontSize?: 'normal' | 'large' | 'xlarge';
+  defaultSubFontPx?: number;
+  updatedAt?: number;
+}
+
+export function isAdminJekaProfile(
+  profile?: Partial<SharedTvProfile> | null
+): boolean {
+  if (!profile) return false;
+  return (
+    profile.id === 'p1' ||
+    String(profile.name || '')
+      .trim()
+      .toUpperCase() === 'JEKA'
+  );
+}
+
+export function canProfileAccessAdult(
+  profile?: Partial<SharedTvProfile> | null
+): boolean {
+  if (!profile || profile.isKids) return false;
+  if (typeof profile.allowAdultContent === 'boolean') {
+    return profile.allowAdultContent;
+  }
+  return isAdminJekaProfile(profile);
 }
 
 export type TvUserProfile = SharedTvProfile;
@@ -161,8 +189,8 @@ function makeNetflixCharacterAvatarDataUri(
       break;
     case 'retro_purple':
       inner = `
-        <rect width="240" height="240" fill="#7c3aed"/>
-        <circle cx="120" cy="110" r="92" fill="#9333ea" opacity="0.45"/>
+        <rect width="240" height="240" fill="#1e3a8a"/>
+        <circle cx="120" cy="110" r="92" fill="#2563eb" opacity="0.45"/>
         <!-- Jacket & Collar -->
         <path d="M34 240 C42 178 78 164 120 164 C162 164 198 178 206 240 Z" fill="#1e293b"/>
         <path d="M88 164 L120 208 L152 164 Z" fill="#f8fafc"/>
@@ -336,9 +364,9 @@ export const PHOTO_AVATAR_GALLERY: PhotoAvatarPreset[] = [
   },
   {
     id: 'av_wolf',
-    label: 'Retro Purple',
+    label: 'Classic Blue',
     emoji: 'NW',
-    bg: 'from-purple-600 to-indigo-900',
+    bg: 'from-blue-600 to-blue-900',
     avatarUrl: makeNetflixCharacterAvatarDataUri('retro_purple'),
   },
   {
@@ -430,27 +458,43 @@ export const PHOTO_AVATAR_GALLERY: PhotoAvatarPreset[] = [
 export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
   {
     id: 'p1',
-    name: 'Eugeniu',
-    avatarEmoji: 'VIP',
+    name: 'JEKA',
+    avatarEmoji: 'E',
     avatarUrl: PHOTO_AVATAR_GALLERY[0].avatarUrl,
     avatarBg: 'from-emerald-500 to-teal-700',
+    pin: '1155',
+    isKids: false,
+    allowAdultContent: true,
     uiLang: 'ro',
   },
   {
     id: 'p2',
     name: 'Family',
-    avatarEmoji: 'GL',
+    avatarEmoji: 'F',
     avatarUrl: PHOTO_AVATAR_GALLERY[1].avatarUrl,
     avatarBg: 'from-amber-500 to-orange-700',
-    uiLang: 'ro',
+    isKids: false,
+    allowAdultContent: false,
+    uiLang: 'en',
   },
   {
     id: 'p3',
+    name: 'Guest',
+    avatarEmoji: 'G',
+    avatarUrl: PHOTO_AVATAR_GALLERY[2].avatarUrl,
+    avatarBg: 'from-sky-500 to-blue-700',
+    isKids: false,
+    allowAdultContent: false,
+    uiLang: 'en',
+  },
+  {
+    id: 'p4',
     name: 'Kids',
-    avatarEmoji: 'JR',
+    avatarEmoji: 'K',
     avatarUrl: PHOTO_AVATAR_GALLERY[4].avatarUrl,
     avatarBg: 'from-lime-500 to-emerald-700',
     isKids: true,
+    allowAdultContent: false,
     uiLang: 'ro',
   },
 ];
@@ -458,6 +502,65 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
 export const TV_PROFILES_STORAGE_KEY = 'aether_smart_tv_profiles_v1';
 export const ACTIVE_TV_PROFILE_STORAGE_KEY = 'aether_smart_tv_active_profile_v1';
 export const REMEMBERED_PROFILES_STORAGE_KEY = 'aether_remembered_accounts_v1';
+export const DELETED_PROFILES_STORAGE_KEY = 'aether_deleted_profile_ids_v1';
+export const CURRENT_DEVICE_ID_STORAGE_KEY = 'aether_device_instance_id_v1';
+
+export function loadDeletedProfileIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_PROFILES_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return new Set(parsed.filter((x) => typeof x === 'string'));
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+export function markProfileDeleted(profileId: string): void {
+  if (!profileId || profileId === 'p1') return;
+  try {
+    const set = loadDeletedProfileIds();
+    set.add(profileId);
+    localStorage.setItem(
+      DELETED_PROFILES_STORAGE_KEY,
+      JSON.stringify(Array.from(set))
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export function unmarkProfileDeleted(profileId: string): void {
+  if (!profileId) return;
+  try {
+    const set = loadDeletedProfileIds();
+    if (set.delete(profileId)) {
+      localStorage.setItem(
+        DELETED_PROFILES_STORAGE_KEY,
+        JSON.stringify(Array.from(set))
+      );
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getOrCreateCurrentDeviceId(): string {
+  if (typeof window === 'undefined') return 'dev_server';
+  try {
+    let id = localStorage.getItem(CURRENT_DEVICE_ID_STORAGE_KEY);
+    if (!id) {
+      id = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      localStorage.setItem(CURRENT_DEVICE_ID_STORAGE_KEY, id);
+    }
+    return id;
+  } catch {
+    return 'dev_local';
+  }
+}
 
 export function detectCurrentDeviceName(): string {
   if (typeof navigator === 'undefined') return 'Dispozitiv';
@@ -520,7 +623,21 @@ export function normalizeProfile(p: Partial<SharedTvProfile>, idx = 0): SharedTv
     avatarBg: p.avatarBg || matchedPreset.bg,
     pin: p.pin ? String(p.pin).trim() : undefined,
     isKids: isKidsProf,
+    allowAdultContent: isKidsProf
+      ? false
+      : typeof p.allowAdultContent === 'boolean'
+        ? p.allowAdultContent
+        : isAdminJekaProfile(p),
     uiLang: p.uiLang || 'ro',
+    defaultAudioPref: p.defaultAudioPref,
+    defaultSubLang: p.defaultSubLang,
+    defaultSubFontSize: p.defaultSubFontSize,
+    defaultSubFontPx:
+      typeof p.defaultSubFontPx === 'number' &&
+      Number.isFinite(p.defaultSubFontPx)
+        ? Math.max(14, Math.min(48, Math.round(p.defaultSubFontPx)))
+        : undefined,
+    updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : undefined,
   };
 }
 
@@ -550,7 +667,18 @@ export function loadSharedProfiles(): SharedTvProfile[] {
     if (!raw) return DEFAULT_SHARED_PROFILES;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((p, idx) => normalizeProfile(p, idx));
+      const deletedIds = loadDeletedProfileIds();
+      const filtered = parsed.filter(
+        (p) => p && typeof p.id === 'string' && !deletedIds.has(p.id)
+      );
+      if (filtered.length === 0) return DEFAULT_SHARED_PROFILES;
+      return filtered.map((p, idx) => {
+        // Auto-upgrade legacy un-pinned p1 default "Eugeniu" profile to JEKA (PIN 1155) without losing custom profiles
+        if (idx === 0 && p.id === 'p1' && p.name === 'Eugeniu' && !p.pin) {
+          return normalizeProfile(DEFAULT_SHARED_PROFILES[0], 0);
+        }
+        return normalizeProfile(p, idx);
+      });
     }
     return DEFAULT_SHARED_PROFILES;
   } catch {
@@ -558,26 +686,120 @@ export function loadSharedProfiles(): SharedTvProfile[] {
   }
 }
 
-export function saveSharedProfiles(profiles: SharedTvProfile[]): void {
-  const normalized = profiles.map((p, idx) => normalizeProfile(p, idx));
+export function mergeSharedProfiles(
+  localProfiles: SharedTvProfile[],
+  remoteProfiles: SharedTvProfile[]
+): SharedTvProfile[] {
+  const deletedIds = loadDeletedProfileIds();
+  const byId = new Map<string, SharedTvProfile>();
+
+  const addOrMerge = (p: Partial<SharedTvProfile>, idx: number, isLocal: boolean) => {
+    const norm = normalizeProfile(p, idx);
+    if (!norm.id || deletedIds.has(norm.id)) return;
+    if (norm.id === 'p1' && norm.name === 'Eugeniu' && !norm.pin) {
+      return;
+    }
+    const existing = byId.get(norm.id);
+    if (!existing) {
+      byId.set(norm.id, norm);
+      return;
+    }
+    const existingTs = existing.updatedAt || 0;
+    const incomingTs = norm.updatedAt || 0;
+    if (incomingTs > existingTs || (isLocal && incomingTs >= existingTs)) {
+      byId.set(norm.id, {
+        ...existing,
+        ...norm,
+        updatedAt: Math.max(existingTs, incomingTs) || undefined,
+      });
+    }
+  };
+
+  remoteProfiles.forEach((p, idx) => addOrMerge(p, idx, false));
+  localProfiles.forEach((p, idx) => addOrMerge(p, idx, true));
+
+  const merged = Array.from(byId.values());
+  return merged.length > 0 ? merged : DEFAULT_SHARED_PROFILES;
+}
+
+export function saveSharedProfiles(
+  profiles: SharedTvProfile[],
+  options?: { allowShrink?: boolean }
+): void {
+  const deletedIds = loadDeletedProfileIds();
+  let finalProfiles = profiles
+    .filter((p) => p && !deletedIds.has(p.id))
+    .map((p, idx) => normalizeProfile(p, idx));
+
+  if (!options?.allowShrink) {
+    try {
+      const existingLocal = loadSharedProfiles();
+      finalProfiles = mergeSharedProfiles(finalProfiles, existingLocal);
+    } catch {
+      // ignore
+    }
+  }
+
   try {
-    localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(normalized));
+    localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(finalProfiles));
   } catch {
     // ignore
   }
   try {
     fetch('/api/tv-profiles', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(normalized),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Deleted-Profile-Ids': JSON.stringify(Array.from(deletedIds)),
+      },
+      body: JSON.stringify(finalProfiles),
     }).catch(() => {});
   } catch {
     // ignore
   }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
-      new CustomEvent('aether:profiles-updated', { detail: normalized })
+      new CustomEvent('aether:profiles-updated', { detail: finalProfiles })
     );
+  }
+}
+
+export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]> {
+  const local = loadSharedProfiles();
+  try {
+    const res = await fetch('/api/tv-profiles');
+    if (!res.ok) return local;
+    const remote = await res.json();
+    if (!Array.isArray(remote) || remote.length === 0) return local;
+    const merged = mergeSharedProfiles(local, remote);
+    try {
+      localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(merged));
+    } catch {
+      // ignore
+    }
+    // If local had custom or newer profiles missing on the server, push merged back to server
+    const remoteIds = new Set(remote.map((r: SharedTvProfile) => r?.id));
+    const hasUnsyncedLocal = merged.some((m) => !remoteIds.has(m.id));
+    if (hasUnsyncedLocal) {
+      fetch('/api/tv-profiles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Deleted-Profile-Ids': JSON.stringify(
+            Array.from(loadDeletedProfileIds())
+          ),
+        },
+        body: JSON.stringify(merged),
+      }).catch(() => {});
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('aether:profiles-updated', { detail: merged })
+      );
+    }
+    return merged;
+  } catch {
+    return local;
   }
 }
 
@@ -614,13 +836,42 @@ export function saveSharedActiveProfileId(profileId: string): void {
  * Checks if a PIN-protected profile has already been unlocked & remembered on this device.
  * Once the user enters the PIN the first time on TV, iPad, or Laptop, it remembers it automatically!
  */
+export const SESSION_PROFILE_PICKED_KEY = 'filmio_session_profile_picked_v2';
+
 export function isProfileRememberedOnDevice(profile: SharedTvProfile): boolean {
-  if (!profile.pin || !profile.pin.trim()) return true;
   try {
-    const raw = localStorage.getItem(REMEMBERED_PROFILES_STORAGE_KEY);
-    if (!raw) return false;
-    const map = JSON.parse(raw) as Record<string, string>;
-    return map[profile.id] === profile.pin.trim();
+    const expectedPin = (profile.pin || '').trim();
+    const pickedId = sessionStorage.getItem(SESSION_PROFILE_PICKED_KEY);
+    if (pickedId === profile.id) {
+      if (!expectedPin) return true;
+      const sessionVerified = sessionStorage.getItem(
+        `smartcinema_pin_verified_${profile.id}`
+      );
+      if (sessionVerified === expectedPin) return true;
+    }
+
+    // Also honor persistent localStorage remember-state across page refreshes (F5 / Cmd+R)
+    const activeId = localStorage.getItem(ACTIVE_TV_PROFILE_STORAGE_KEY);
+    const rawRemembered = localStorage.getItem(REMEMBERED_PROFILES_STORAGE_KEY);
+    if (activeId === profile.id && rawRemembered) {
+      const map: Record<string, string> = JSON.parse(rawRemembered);
+      const savedToken = map[profile.id];
+      if (savedToken) {
+        if (!expectedPin && savedToken === 'unlocked') {
+          sessionStorage.setItem(SESSION_PROFILE_PICKED_KEY, profile.id);
+          return true;
+        }
+        if (expectedPin && savedToken === expectedPin) {
+          sessionStorage.setItem(SESSION_PROFILE_PICKED_KEY, profile.id);
+          sessionStorage.setItem(
+            `smartcinema_pin_verified_${profile.id}`,
+            expectedPin
+          );
+          return true;
+        }
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -632,6 +883,13 @@ export function rememberProfileOnDevice(profile: SharedTvProfile): void {
     const map: Record<string, string> = raw ? JSON.parse(raw) : {};
     map[profile.id] = (profile.pin || '').trim() || 'unlocked';
     localStorage.setItem(REMEMBERED_PROFILES_STORAGE_KEY, JSON.stringify(map));
+    sessionStorage.setItem(SESSION_PROFILE_PICKED_KEY, profile.id);
+    if (profile.pin && profile.pin.trim()) {
+      sessionStorage.setItem(
+        `smartcinema_pin_verified_${profile.id}`,
+        profile.pin.trim()
+      );
+    }
   } catch {
     // ignore
   }
@@ -639,6 +897,8 @@ export function rememberProfileOnDevice(profile: SharedTvProfile): void {
 
 export function forgetProfileOnDevice(profileId: string): void {
   try {
+    sessionStorage.removeItem(SESSION_PROFILE_PICKED_KEY);
+    sessionStorage.removeItem(`smartcinema_pin_verified_${profileId}`);
     const raw = localStorage.getItem(REMEMBERED_PROFILES_STORAGE_KEY);
     if (!raw) return;
     const map: Record<string, string> = JSON.parse(raw);
@@ -709,4 +969,166 @@ export async function getLanServerOrigin(): Promise<string> {
     return window.location.origin;
   }
   return 'http://192.168.1.245:8769';
+}
+
+export interface ProfileMediaPreferences {
+  defaultAudioPref: 'original' | 'ro' | 'ru' | 'uk' | 'first';
+  defaultSubLang: 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off';
+  defaultSubFontSize: 'normal' | 'large' | 'xlarge';
+  defaultSubFontPx: number;
+}
+
+const PROFILE_SETTINGS_BASE_KEY = 'aether_smart_tv_settings_v2';
+
+function getProfileSettingsKey(profileId: string): string {
+  return !profileId || profileId === 'p1'
+    ? PROFILE_SETTINGS_BASE_KEY
+    : `${PROFILE_SETTINGS_BASE_KEY}_${profileId}`;
+}
+
+export function getActiveProfileMediaPrefs(
+  explicitProfileId?: string
+): ProfileMediaPreferences {
+  const profileId = explicitProfileId || loadSharedActiveProfileId() || 'p1';
+  const profiles = loadSharedProfiles();
+  const prof = profiles.find((p) => p.id === profileId) || profiles[0];
+
+  let settingsParsed: Record<string, unknown> = {};
+  try {
+    const raw = localStorage.getItem(getProfileSettingsKey(profileId));
+    if (raw) {
+      settingsParsed = JSON.parse(raw) || {};
+    }
+  } catch {
+    // ignore
+  }
+
+  const audioPref = (prof?.defaultAudioPref ||
+    settingsParsed.defaultAudioPref ||
+    'original') as ProfileMediaPreferences['defaultAudioPref'];
+
+  const subLang = (prof?.defaultSubLang ||
+    settingsParsed.defaultSubLang ||
+    'ro') as ProfileMediaPreferences['defaultSubLang'];
+
+  const subFontSize = (prof?.defaultSubFontSize ||
+    settingsParsed.defaultSubFontSize ||
+    'large') as ProfileMediaPreferences['defaultSubFontSize'];
+
+  let subFontPx =
+    typeof prof?.defaultSubFontPx === 'number'
+      ? prof.defaultSubFontPx
+      : typeof settingsParsed.defaultSubFontPx === 'number'
+        ? (settingsParsed.defaultSubFontPx as number)
+        : 0;
+
+  if (!subFontPx || !Number.isFinite(subFontPx)) {
+    try {
+      const legacyPx = Number(
+        localStorage.getItem(`aether_tv_sub_font_px_${profileId}`) ||
+          localStorage.getItem('aether_tv_sub_font_px')
+      );
+      if (Number.isFinite(legacyPx) && legacyPx >= 14 && legacyPx <= 48) {
+        subFontPx = legacyPx;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!subFontPx || !Number.isFinite(subFontPx)) {
+    subFontPx =
+      subFontSize === 'xlarge' ? 32 : subFontSize === 'normal' ? 20 : 26;
+  }
+
+  return {
+    defaultAudioPref: audioPref,
+    defaultSubLang: subLang,
+    defaultSubFontSize: subFontSize,
+    defaultSubFontPx: Math.max(14, Math.min(48, Math.round(subFontPx))),
+  };
+}
+
+export function saveActiveProfileMediaPrefs(
+  partial: Partial<ProfileMediaPreferences>,
+  explicitProfileId?: string
+): ProfileMediaPreferences {
+  const profileId = explicitProfileId || loadSharedActiveProfileId() || 'p1';
+  const current = getActiveProfileMediaPrefs(profileId);
+  const next: ProfileMediaPreferences = {
+    ...current,
+    ...partial,
+  };
+
+  if (typeof partial.defaultSubFontPx === 'number') {
+    const px = Math.max(14, Math.min(48, Math.round(partial.defaultSubFontPx)));
+    next.defaultSubFontPx = px;
+    if (!partial.defaultSubFontSize) {
+      next.defaultSubFontSize =
+        px >= 30 ? 'xlarge' : px >= 23 ? 'large' : 'normal';
+    }
+  } else if (partial.defaultSubFontSize && !partial.defaultSubFontPx) {
+    next.defaultSubFontPx =
+      partial.defaultSubFontSize === 'xlarge'
+        ? 32
+        : partial.defaultSubFontSize === 'normal'
+          ? 20
+          : 26;
+  }
+
+  // 1. Save into per-profile SmartTvSettings in localStorage
+  try {
+    const settingsKey = getProfileSettingsKey(profileId);
+    const raw = localStorage.getItem(settingsKey);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const updatedSettings = {
+      ...parsed,
+      defaultAudioPref: next.defaultAudioPref,
+      defaultSubLang: next.defaultSubLang,
+      defaultSubFontSize: next.defaultSubFontSize,
+      defaultSubFontPx: next.defaultSubFontPx,
+    };
+    localStorage.setItem(settingsKey, JSON.stringify(updatedSettings));
+    localStorage.setItem(
+      `aether_tv_sub_font_px_${profileId}`,
+      String(next.defaultSubFontPx)
+    );
+    localStorage.setItem(
+      'aether_tv_sub_font_px',
+      String(next.defaultSubFontPx)
+    );
+    localStorage.setItem('aether_tv_sub_font_size', next.defaultSubFontSize);
+  } catch {
+    // ignore
+  }
+
+  // 2. Save directly onto the active SharedTvProfile object & sync to /api/tv-profiles
+  try {
+    const profiles = loadSharedProfiles();
+    const updatedProfiles = profiles.map((p) =>
+      p.id === profileId
+        ? {
+            ...p,
+            defaultAudioPref: next.defaultAudioPref,
+            defaultSubLang: next.defaultSubLang,
+            defaultSubFontSize: next.defaultSubFontSize,
+            defaultSubFontPx: next.defaultSubFontPx,
+            updatedAt: Date.now(),
+          }
+        : p
+    );
+    saveSharedProfiles(updatedProfiles);
+  } catch {
+    // ignore
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('aether:profile-media-prefs-changed', {
+        detail: { profileId, prefs: next },
+      })
+    );
+  }
+
+  return next;
 }

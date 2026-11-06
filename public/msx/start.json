@@ -1,6 +1,31 @@
 {
-  "name": "SmartCinema",
-  "version": "1.0.0",
-  "parameter": "content:{PREFIX}/msx/start.json",
-  "action": "link:{PREFIX}/tv"
+  "name": "Filmio",
+  "version": "1.1.0",
+  "parameter": "content:https://filmio.my/msx/start.json",
+  "action": "link:https://filmio.my/tv",
+  "headline": "Filmio",
+  "icon": "msx-blue:play-circle-filled",
+  "image": "https://filmio.my/msx/logo.png",
+  "launcher": {
+    "type": "default",
+    "title": "Filmio",
+    "icon": "blank",
+    "image": "https://filmio.my/msx/logo.png",
+    "color": "msx-black"
+  },
+  "template": {
+    "type": "separate",
+    "layout": "0,0,4,3",
+    "color": "msx-glass"
+  },
+  "items": [
+    {
+      "title": "Filmio",
+      "titleFooter": "Filme 4K, Seriale, TV Live & Muzică",
+      "image": "https://filmio.my/msx/logo.png",
+      "imageFiller": "height-center",
+      "color": "msx-black",
+      "action": "link:https://filmio.my/tv"
+    }
+  ]
 }

@@ -1,6 +1,6 @@
 {
   "type": "pages",
-  "headline": "AetherRadio — Portal Smart TV",
+  "headline": "Filmio — Portal Smart TV",
   "template": {
     "type": "separate",
     "layout": "0,0,4,3",
@@ -9,10 +9,11 @@
   "items": [
     {
       "layout": "0,0,4,3",
-      "title": "AetherRadio Smart TV (Mod Lampa)",
+      "title": "Filmio",
       "titleFooter": "Filme, Seriale, TV Online (iEdem + 18+) & Radio cu Poză",
-      "icon": "msx-white:movie",
-      "color": "purple",
+      "image": "{PREFIX}/msx/logo.png",
+      "imageFiller": "height-center",
+      "color": "msx-black",
       "action": "link:{PREFIX}/tv"
     },
     {
