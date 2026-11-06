@@ -333,12 +333,15 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   inlineEmbeddedMode = false,
 }) => {
   const { t, language, format } = useTranslation();
+  const isMobilePhone =
+    typeof window !== 'undefined' && window.innerWidth < 640;
   const [isFullModeExpanded, setIsFullModeExpanded] = useState(
-    () => isSmartTvFullMode
+    () => !isMobilePhone && isSmartTvFullMode
   );
   const [isSplitFullscreen, setIsSplitFullscreen] = useState(false);
   const effectiveTvFullMode =
-    isFullModeExpanded || (inlineEmbeddedMode ? false : isSmartTvFullMode);
+    !isMobilePhone &&
+    (isFullModeExpanded || (inlineEmbeddedMode ? false : isSmartTvFullMode));
 
   const storeTvChannel = useRadioStore((state) => state.currentTvChannel);
   const tvQueue = useRadioStore((state) => state.tvQueue);
@@ -530,19 +533,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   const [videoResolution, setVideoResolution] = useState<string>('');
   const [isTvOsdVisible, setIsTvOsdVisible] = useState(true);
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(() =>
-    effectiveTvFullMode
-      ? false
-      : inlineEmbeddedMode
-        ? true
-        : typeof window !== 'undefined'
-          ? window.innerWidth >= 1024
-          : true
+    isMobilePhone
+      ? true
+      : effectiveTvFullMode
+        ? false
+        : inlineEmbeddedMode
+          ? true
+          : typeof window !== 'undefined'
+            ? window.innerWidth >= 1024
+            : true
   );
   const [sidePanelTab, setSidePanelTab] = useState<'channels' | 'archive'>(
     'channels'
   );
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(
-    () => !effectiveTvFullMode
+    () => isMobilePhone || !effectiveTvFullMode
   );
 
   const wakeTvOsd = () => {
@@ -556,6 +561,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   };
 
   const enterTvFullMode = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      return;
+    }
     setIsFullModeExpanded(true);
     setIsSidePanelOpen(false);
     setIsInfoPanelOpen(false);
@@ -1321,15 +1329,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
   const handleFullscreen = () => {
     const container = videoContainerRef.current;
-    const video = videoRef.current as
-      | (HTMLVideoElement & {
-        webkitEnterFullscreen?: () => void;
-        webkitExitFullscreen?: () => void;
-        webkitDisplayingFullscreen?: boolean;
-      })
-      | null;
-    if (!video) return;
-
     const doc = document as Document & {
       webkitFullscreenElement?: Element | null;
       webkitExitFullscreen?: () => Promise<void> | void;
@@ -1344,41 +1343,26 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       return;
     }
 
-    if (video.webkitDisplayingFullscreen && video.webkitExitFullscreen) {
-      video.webkitExitFullscreen();
+    if (container && typeof container.requestFullscreen === 'function') {
+      container
+        .requestFullscreen()
+        .then(() => {
+          enterTvFullMode();
+        })
+        .catch(() => {
+          if (effectiveTvFullMode) {
+            exitTvFullMode();
+          } else {
+            enterTvFullMode();
+          }
+        });
       return;
     }
 
-    // On iOS / iPhone Safari, container.requestFullscreen is not supported on divs; use video.webkitEnterFullscreen() directly
-    const isIos =
-      typeof navigator !== 'undefined' &&
-      /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-    if (isIos && typeof video.webkitEnterFullscreen === 'function') {
-      try {
-        video.webkitEnterFullscreen();
-        return;
-      } catch {
-        // fallback below
-      }
-    }
-
-    if (container && typeof container.requestFullscreen === 'function') {
-      container.requestFullscreen().catch(() => {
-        if (typeof video.requestFullscreen === 'function') {
-          void video.requestFullscreen().catch(() => {
-            video.webkitEnterFullscreen?.();
-          });
-        } else {
-          video.webkitEnterFullscreen?.();
-        }
-      });
-    } else if (typeof video.requestFullscreen === 'function') {
-      video.requestFullscreen().catch(() => {
-        video.webkitEnterFullscreen?.();
-      });
-    } else if (typeof video.webkitEnterFullscreen === 'function') {
-      video.webkitEnterFullscreen();
+    if (effectiveTvFullMode) {
+      exitTvFullMode();
+    } else {
+      enterTvFullMode();
     }
   };
 
@@ -1512,8 +1496,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     }
   };
 
-  const showSideColumn =
-    !effectiveTvFullMode && isSidePanelOpen && !isOsdOverlayOpen;
+  const showSideColumn = isMobilePhone
+    ? !isOsdOverlayOpen
+    : !effectiveTvFullMode && isSidePanelOpen && !isOsdOverlayOpen;
 
   return (
     <div
@@ -1551,7 +1536,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
             : inlineEmbeddedMode
               ? 'relative w-full h-[calc(100dvh-7.75rem)] md:h-[calc(100dvh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
-              : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-1 sm:p-3 overflow-y-auto no-scrollbar'
+              : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-0 sm:p-3 overflow-y-auto no-scrollbar'
       }
     >
       <div
@@ -1562,7 +1547,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-[#090d16]'
               : inlineEmbeddedMode
                 ? 'relative flex flex-col w-full h-full flex-1 min-h-0 overflow-hidden bg-[#090d16]'
-                : 'mx-auto mt-10 mb-auto sm:my-auto w-[98vw] sm:w-[96vw] max-w-[1440px] rounded-2xl sm:rounded-3xl bg-[#090d16] text-zinc-100 border border-zinc-800 shadow-2xl flex flex-col max-h-[calc(100dvh-3rem)] sm:max-h-[94vh] overflow-hidden'
+                : 'mx-auto m-0 sm:my-auto w-screen h-[100dvh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94vh] overflow-hidden'
         }
       >
         {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}
@@ -1635,13 +1620,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
+                  if (
+                    typeof window !== 'undefined' &&
+                    (window.innerWidth < 640 ||
+                      /iPhone|iPad|iPod/i.test(navigator.userAgent))
+                  ) {
+                    handleFullscreen();
+                    return;
+                  }
                   setIsFullModeExpanded(true);
                   setIsSidePanelOpen(false);
                   setIsInfoPanelOpen(false);
                   wakeTvOsd();
                 }}
                 aria-label="Full Mode TV"
-                title="Deschide în Full Mode (OK pe ecran deschide grila de canale)"
+                title="Ecran Complet (Player Nativ pe Mobil / Full Mode pe TV)"
                 className="min-w-[38px] min-h-[38px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/80 hover:text-white hover:bg-blue-600 transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
               >
                 <Maximize className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
@@ -1723,6 +1716,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 playsInline
                 autoPlay
                 onClick={() => {
+                  if (typeof window !== 'undefined' && window.innerWidth < 640) {
+                    return;
+                  }
                   if (effectiveTvFullMode) {
                     setOsdViewMode('channels');
                     setIsOsdOverlayOpen(true);
@@ -2468,6 +2464,15 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     onToggleInfoPanel={() => setIsInfoPanelOpen((v) => !v)}
                     isInfoPanelOpen={isInfoPanelOpen}
                     onSelectChannel={(selectedCh) => {
+                      if (
+                        typeof window !== 'undefined' &&
+                        window.innerWidth < 640
+                      ) {
+                        if (selectedCh.id === currentTvChannel.id) {
+                          handleFullscreen();
+                        }
+                        return;
+                      }
                       const isMobileViewport =
                         typeof window !== 'undefined' &&
                         window.innerWidth < 1024;

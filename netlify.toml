@@ -40,6 +40,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/youtube/search"
+  to = "/.netlify/functions/youtube"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/tv-profiles"
   to = "/.netlify/functions/tv-sync"
   status = 200

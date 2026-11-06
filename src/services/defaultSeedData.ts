@@ -56,7 +56,7 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "episode": 1,
       "currentTime": 362,
       "duration": 3482,
-      "server": "vidspark",
+      "server":"kinogram_hls",
       "subLang": "ro",
       "updatedAt": 1793653268234,
       "episodeProgressMap": {
@@ -906,7 +906,7 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "updatedAt": 1793908257156,
       "deviceName": "Smart TV",
       "deviceId": "dev_mw3oczq5_588b2",
-      "isPlayingNow": true,
+      "isPlayingNow":false,
       "totalEpisodesInSeason": 40,
       "totalSeasons": 7,
       "episodeProgressMap": {

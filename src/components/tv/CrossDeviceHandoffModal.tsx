@@ -524,7 +524,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
           )}
 
           {/* Centered Netflix Heading */}
-          <h2 className="text-3xl sm:text-5xl font-bold tracking-tight text-white text-center mb-10 sm:mb-14">
+          <h2 className="text-2xl sm:text-5xl font-bold tracking-tight text-white text-center mb-6 sm:mb-14">
             {isManageMode
               ? tr(
                   'Administrează profilurile:',
@@ -534,9 +534,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               : tr('Cine vizionează?', "Who's watching?", 'Кто смотрит?')}
           </h2>
 
-          {/* Single Horizontal Row: All Profiles + Add Profile */}
-          <div className="w-full overflow-x-auto no-scrollbar py-3">
-            <div className="flex flex-nowrap items-start justify-center gap-5 sm:gap-7 md:gap-8 min-w-max mx-auto px-4">
+          {/* Mobile 3-Column Wrapped Grid / Desktop & TV Horizontal Row: All Profiles + Add Profile Always Visible */}
+          <div className="w-full py-2 sm:py-3">
+            <div className="grid grid-cols-3 gap-x-3 gap-y-5 justify-items-center max-w-sm mx-auto px-2 sm:max-w-none sm:flex sm:flex-wrap sm:items-start sm:justify-center sm:gap-7 md:gap-8 sm:px-4">
               {profiles.map((prof, idx) => {
                 const isActive = prof.id === activeProfileId;
                 const hasPin = Boolean(prof.pin && prof.pin.trim());
@@ -557,7 +557,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                 return (
                   <div
                     key={prof.id}
-                    className="group relative flex flex-col items-center shrink-0 w-28 sm:w-36 md:w-40"
+                    className="group relative flex flex-col items-center shrink-0 w-24 sm:w-36 md:w-40"
                   >
                     <button
                       type="button"
@@ -573,7 +573,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                     >
                       {/* Square Rounded Avatar (Netflix Style) */}
                       <div
-                        className={`relative w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.65)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105 group-hover:ring-4 group-hover:ring-white group-focus:ring-4 group-focus:ring-white bg-zinc-900 ${
+                        className={`relative w-24 h-24 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.65)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105 group-hover:ring-4 group-hover:ring-white group-focus:ring-4 group-focus:ring-white bg-zinc-900 ${
                           isActive && !isManageMode
                             ? 'ring-2 ring-white/80'
                             : ''
@@ -588,22 +588,22 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                         {/* Manage Mode Overlay (Classic Netflix Pencil Overlay) */}
                         {isManageMode && (
                           <div className="absolute inset-0 bg-black/55 flex items-center justify-center transition-opacity">
-                            <div className="w-12 h-12 rounded-full border-2 border-white flex items-center justify-center text-white bg-black/40">
-                              <Pencil className="w-5 h-5" />
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white flex items-center justify-center text-white bg-black/40">
+                              <Pencil className="w-4 h-4 sm:w-5 sm:h-5" />
                             </div>
                           </div>
                         )}
                       </div>
 
                       {/* Profile Name Underneath */}
-                      <span className="mt-3.5 text-base sm:text-lg font-medium text-zinc-400 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
+                      <span className="mt-2 sm:mt-3.5 text-sm sm:text-lg font-medium text-zinc-300 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
                         {prof.name}
                       </span>
 
                       {/* Discreet Lock Icon Underneath Name if PIN-protected */}
                       {hasPin && (
-                        <span className="mt-1 inline-flex items-center gap-1 text-zinc-500 group-hover:text-zinc-300">
-                          <Lock className="w-3.5 h-3.5" />
+                        <span className="mt-0.5 sm:mt-1 inline-flex items-center gap-1 text-zinc-500 group-hover:text-zinc-300">
+                          <Lock className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                         </span>
                       )}
                     </button>
@@ -654,26 +654,26 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           'Edit photo, name or PIN',
                           'Изменить фото, имя или PIN'
                         )}
-                        className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/65 hover:bg-white text-zinc-200 hover:text-zinc-950 border border-white/20 opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center justify-center transition-all cursor-pointer"
+                        className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 z-10 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-black/65 hover:bg-white text-zinc-200 hover:text-zinc-950 border border-white/20 opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center justify-center transition-all cursor-pointer"
                       >
-                        <Pencil className="w-3.5 h-3.5" />
+                        <Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                       </button>
                     )}
                   </div>
                 );
               })}
 
-              {/* Add Profile Square on the Exact Same Row */}
-              <div className="group flex flex-col items-center shrink-0 w-28 sm:w-36 md:w-40">
+              {/* Add Profile Square */}
+              <div className="group flex flex-col items-center shrink-0 w-24 sm:w-36 md:w-40">
                 <button
                   type="button"
                   onClick={startCreateNewAccount}
                   className="w-full flex flex-col items-center focus:outline-none cursor-pointer"
                 >
-                  <div className="w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl bg-white/[0.06] group-hover:bg-white group-focus:bg-white border border-white/15 flex items-center justify-center text-zinc-400 group-hover:text-zinc-950 group-focus:text-zinc-950 shadow-[0_14px_34px_rgba(0,0,0,0.5)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105">
-                    <Plus className="w-12 h-12 sm:w-14 sm:h-14 stroke-[2.2]" />
+                  <div className="w-24 h-24 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl bg-white/[0.06] group-hover:bg-white group-focus:bg-white border border-white/15 flex items-center justify-center text-zinc-400 group-hover:text-zinc-950 group-focus:text-zinc-950 shadow-[0_14px_34px_rgba(0,0,0,0.5)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105">
+                    <Plus className="w-10 h-10 sm:w-14 sm:h-14 stroke-[2.2]" />
                   </div>
-                  <span className="mt-3.5 text-base sm:text-lg font-medium text-zinc-400 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
+                  <span className="mt-2 sm:mt-3.5 text-sm sm:text-lg font-medium text-zinc-400 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
                     {tr('Adaugă profil', 'Add Profile', 'Добавить')}
                   </span>
                 </button>
@@ -682,7 +682,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
           </div>
 
           {/* Bottom Netflix "Manage Profiles" Button */}
-          <div className="mt-10 sm:mt-14 flex flex-wrap items-center justify-center gap-3">
+          <div className="mt-7 sm:mt-14 flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
               onClick={() => setIsManageMode((prev) => !prev)}

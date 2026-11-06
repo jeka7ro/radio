@@ -17,6 +17,12 @@ export interface OfflineMediaItem {
   audioM3u8?: string;
   videoSegCount?: number;
   audioSegCount?: number;
+  savedSubCues?: Array<{ start: number; end: number; text: string }>;
+  savedSubLabel?: string;
+  vodId?: string;
+  mediaKind?: 'movie' | 'series';
+  season?: number;
+  episode?: number;
 }
 
 export interface OfflineDownloadProgress {
@@ -159,10 +165,29 @@ export async function saveLocalFileToOfflineDb(
 }
 
 function resolveRelativeUrl(baseUrl: string, rel: string): string {
+  const trimmedRel = rel.trim();
+  if (!trimmedRel) return trimmedRel;
   try {
-    return new URL(rel.trim(), baseUrl).toString();
+    if (
+      trimmedRel.startsWith('http://') ||
+      trimmedRel.startsWith('https://')
+    ) {
+      return trimmedRel;
+    }
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'https://filmio.my';
+    if (trimmedRel.startsWith('/')) {
+      return new URL(trimmedRel, origin).toString();
+    }
+    const absBase =
+      baseUrl.startsWith('http://') || baseUrl.startsWith('https://')
+        ? baseUrl
+        : new URL(baseUrl, origin).toString();
+    return new URL(trimmedRel, absBase).toString();
   } catch {
-    return rel.trim();
+    return trimmedRel;
   }
 }
 
@@ -287,9 +312,15 @@ export async function downloadHlsToOfflineDb(params: {
   subtitleLabel?: string;
   poster?: string;
   masterM3u8Url: string;
-  preferredHeight?: number; // e.g. 360 or 720
+  preferredHeight?: number; // e.g. 360, 480, 720, 1080
   audioTrackIndex?: number;
   audioLabel?: string;
+  savedSubCues?: Array<{ start: number; end: number; text: string }>;
+  savedSubLabel?: string;
+  vodId?: string;
+  mediaKind?: 'movie' | 'series';
+  season?: number;
+  episode?: number;
   signal?: AbortSignal;
   onProgress?: (prog: OfflineDownloadProgress) => void;
 }): Promise<OfflineMediaItem> {
@@ -299,9 +330,15 @@ export async function downloadHlsToOfflineDb(params: {
     subtitleLabel,
     poster,
     masterM3u8Url,
-    preferredHeight = 360,
+    preferredHeight = 480,
     audioTrackIndex = 0,
-    audioLabel = 'Русский / Original',
+    audioLabel = 'Original / Русский',
+    savedSubCues,
+    savedSubLabel,
+    vodId,
+    mediaKind,
+    season,
+    episode,
     signal,
     onProgress,
   } = params;
@@ -318,7 +355,8 @@ export async function downloadHlsToOfflineDb(params: {
 
   let videoPlaylistUrl = masterM3u8Url;
   let audioPlaylistUrl = '';
-  let chosenResolution = '1280x720';
+  let chosenResolution = '854x480';
+  let chosenHeight = preferredHeight;
   let chosenCodecs = 'avc1.64001f,mp4a.40.2';
 
   if (isMaster) {
@@ -327,8 +365,12 @@ export async function downloadHlsToOfflineDb(params: {
       throw new Error('Nu s-au găsit variante video în playlist');
     }
 
-    // Pick variant closest to preferredHeight
-    const sorted = [...parsed.videoVariants].sort(
+    // Prefer variants <= preferredHeight + 60 so mobile never downloads 4K/1080p when user asked for 360p/480p/720p
+    const withinCap = parsed.videoVariants.filter(
+      (v) => v.height <= preferredHeight + 60
+    );
+    const pool = withinCap.length > 0 ? withinCap : parsed.videoVariants;
+    const sorted = [...pool].sort(
       (a, b) =>
         Math.abs(a.height - preferredHeight) -
         Math.abs(b.height - preferredHeight)
@@ -336,6 +378,7 @@ export async function downloadHlsToOfflineDb(params: {
     const chosenVariant = sorted[0];
     videoPlaylistUrl = chosenVariant.url;
     chosenResolution = chosenVariant.resolution;
+    chosenHeight = chosenVariant.height || preferredHeight;
     chosenCodecs = chosenVariant.codecs || chosenCodecs;
 
     if (parsed.audioTracks.length > 0) {
@@ -465,6 +508,15 @@ export async function downloadHlsToOfflineDb(params: {
   }
   offlineMasterLines.push(`https://offline.local/${encId}/video.m3u8`);
 
+  const resolvedQualityLabel =
+    chosenHeight <= 380 || chosenResolution.includes('360')
+      ? 'SD 360p (Eco)'
+      : chosenHeight <= 540 || chosenResolution.includes('480')
+        ? 'SD+ 480p (Mobil)'
+        : chosenHeight <= 780 || chosenResolution.includes('720')
+          ? 'HD 720p'
+          : 'Full HD 1080p';
+
   const item: OfflineMediaItem = {
     id,
     title,
@@ -474,13 +526,19 @@ export async function downloadHlsToOfflineDb(params: {
     sizeBytes: downloadedBytes,
     duration: parsedVideo.totalDuration,
     createdAt: Date.now(),
-    qualityLabel: chosenResolution.includes('360') ? 'SD 360p' : 'HD 720p',
+    qualityLabel: resolvedQualityLabel,
     audioLabel,
     masterM3u8: offlineMasterLines.join('\n'),
     videoM3u8: parsedVideo.rewrittenM3u8,
     audioM3u8: parsedAudio?.rewrittenM3u8,
     videoSegCount: totalVideoSegs,
     audioSegCount: totalAudioSegs,
+    savedSubCues,
+    savedSubLabel,
+    vodId,
+    mediaKind,
+    season,
+    episode,
   };
 
   await saveOfflineItemMeta(item);
@@ -627,4 +685,84 @@ export function createOfflineAwareHlsLoader() {
     }
   };
 }
+
+/**
+ * Builds a native iOS Safari blob: HLS master playlist URL (and returns cleanup function)
+ * for devices where hls.js MSE is not supported.
+ */
+export async function buildIosNativeOfflineHlsBlobUrl(
+  item: OfflineMediaItem
+): Promise<{ masterBlobUrl: string; revokeAll: () => void }> {
+  const createdUrls: string[] = [];
+  const makeUrl = (blob: Blob) => {
+    const u = URL.createObjectURL(blob);
+    createdUrls.push(u);
+    return u;
+  };
+
+  const rewritePlaylistToBlobUrls = async (
+    m3u8Text: string,
+    kind: 'v' | 'a'
+  ): Promise<string> => {
+    const lines = m3u8Text.split(/\r?\n/);
+    const out: string[] = [];
+    for (const line of lines) {
+      const m = line.match(new RegExp(`/seg/${kind}_(\\d+)\\.ts$`));
+      if (m?.[1]) {
+        const idx = Number(m[1]);
+        const chunk = await getBlobChunk(`${item.id}::${kind}_${idx}`);
+        if (chunk) {
+          const blob =
+            chunk instanceof Blob
+              ? chunk
+              : new Blob([chunk], { type: 'video/mp2t' });
+          out.push(makeUrl(blob));
+        }
+      } else {
+        out.push(line);
+      }
+    }
+    return makeUrl(
+      new Blob([out.join('\n')], { type: 'application/vnd.apple.mpegurl' })
+    );
+  };
+
+  const videoBlobM3u8Url = await rewritePlaylistToBlobUrls(
+    item.videoM3u8 || '',
+    'v'
+  );
+  let masterText = (item.masterM3u8 || '').replace(
+    /https:\/\/offline\.local\/[^/\s]+\/video\.m3u8/g,
+    videoBlobM3u8Url
+  );
+
+  if (item.audioM3u8 && (item.audioSegCount || 0) > 0) {
+    const audioBlobM3u8Url = await rewritePlaylistToBlobUrls(
+      item.audioM3u8,
+      'a'
+    );
+    masterText = masterText.replace(
+      /https:\/\/offline\.local\/[^"'\s]+\/audio\.m3u8/g,
+      audioBlobM3u8Url
+    );
+  }
+
+  const masterBlobUrl = makeUrl(
+    new Blob([masterText], { type: 'application/vnd.apple.mpegurl' })
+  );
+
+  return {
+    masterBlobUrl,
+    revokeAll: () => {
+      for (const u of createdUrls) {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {
+          // ignore
+        }
+      }
+    },
+  };
+}
+
 

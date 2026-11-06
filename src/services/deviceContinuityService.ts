@@ -468,6 +468,18 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     uiLang: 'ro',
   },
   {
+    id: 'acc_1793971115106',
+    name: 'Emma',
+    avatarEmoji: 'DJ',
+    avatarUrl: PHOTO_AVATAR_GALLERY[10].avatarUrl,
+    avatarBg: 'from-cyan-500 to-sky-800',
+    pin: '1212',
+    isKids: false,
+    allowAdultContent: false,
+    uiLang: 'ro',
+    updatedAt: 1793971138770,
+  },
+  {
     id: 'p2',
     name: 'Family',
     avatarEmoji: 'F',
@@ -672,13 +684,34 @@ export function loadSharedProfiles(): SharedTvProfile[] {
         (p) => p && typeof p.id === 'string' && !deletedIds.has(p.id)
       );
       if (filtered.length === 0) return DEFAULT_SHARED_PROFILES;
-      return filtered.map((p, idx) => {
+      const normalized = filtered.map((p, idx) => {
         // Auto-upgrade legacy un-pinned p1 default "Eugeniu" profile to JEKA (PIN 1155) without losing custom profiles
         if (idx === 0 && p.id === 'p1' && p.name === 'Eugeniu' && !p.pin) {
           return normalizeProfile(DEFAULT_SHARED_PROFILES[0], 0);
         }
         return normalizeProfile(p, idx);
       });
+      // Always ensure Emma is present if not explicitly deleted
+      const hasEmma = normalized.some(
+        (p) =>
+          p.id === 'acc_1793971115106' ||
+          p.name.trim().toLowerCase() === 'emma'
+      );
+      if (!hasEmma && !deletedIds.has('acc_1793971115106')) {
+        normalized.splice(1, 0, normalizeProfile(DEFAULT_SHARED_PROFILES[1], 1));
+      } else {
+        // Place Emma right after JEKA so both primary profiles are always first
+        const emmaIdx = normalized.findIndex(
+          (p) =>
+            p.id === 'acc_1793971115106' ||
+            p.name.trim().toLowerCase() === 'emma'
+        );
+        if (emmaIdx > 1) {
+          const [emmaProf] = normalized.splice(emmaIdx, 1);
+          normalized.splice(1, 0, emmaProf);
+        }
+      }
+      return normalized;
     }
     return DEFAULT_SHARED_PROFILES;
   } catch {
@@ -719,7 +752,16 @@ export function mergeSharedProfiles(
   localProfiles.forEach((p, idx) => addOrMerge(p, idx, true));
 
   const merged = Array.from(byId.values());
-  return merged.length > 0 ? merged : DEFAULT_SHARED_PROFILES;
+  if (merged.length === 0) return DEFAULT_SHARED_PROFILES;
+  const emmaIdx = merged.findIndex(
+    (p) =>
+      p.id === 'acc_1793971115106' || p.name.trim().toLowerCase() === 'emma'
+  );
+  if (emmaIdx > 1) {
+    const [emmaProf] = merged.splice(emmaIdx, 1);
+    merged.splice(1, 0, emmaProf);
+  }
+  return merged;
 }
 
 export function saveSharedProfiles(

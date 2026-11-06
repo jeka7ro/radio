@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
+  Delete,
   Disc,
   Flame,
   Heart,
+  Keyboard,
   Loader2,
+  Music,
   Pause,
   Play,
   Radio,
@@ -690,13 +693,27 @@ export const SmartTvMusicSpotifySection: React.FC<
       };
     }, [isVideoClipMode, heroTrack]);
 
-    const handleRunSearch = (customQuery?: string, customLabel?: string) => {
+    const handleRunSearch = (
+      customQuery?: string,
+      customLabel?: string,
+      scrollToTop = true
+    ) => {
       const q = (customQuery ?? searchQuery).trim();
-      if (!q) return;
-      setSearchQuery(q);
+      if (!q) {
+        setActivePlaylistId('pl_global_hits');
+        return;
+      }
+      if (customQuery !== undefined) {
+        setSearchQuery(q);
+      }
       setCustomSearchHeader(customLabel || q);
       setActivePlaylistId('search_results');
       setIsLoadingTracks(true);
+      if (scrollToTop && typeof document !== 'undefined') {
+        document
+          .querySelector('main')
+          ?.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       fetch(
         `/api/youtube/music-catalog?q=${encodeURIComponent(
           q
@@ -767,6 +784,23 @@ export const SmartTvMusicSpotifySection: React.FC<
           setIsLoadingTracks(false);
         });
     };
+
+    // Live Spotify-style debounced search as the user types
+    useEffect(() => {
+      const trimmed = searchQuery.trim();
+      if (!trimmed) {
+        if (activePlaylistId === 'search_results') {
+          setActivePlaylistId('pl_global_hits');
+        }
+        return;
+      }
+      if (trimmed.length < 2) return;
+      const timer = window.setTimeout(() => {
+        handleRunSearch(trimmed, trimmed, false);
+      }, 350);
+      return () => window.clearTimeout(timer);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchQuery]);
 
     const handleOpenAlbumCard = async (
       albumName: string,
@@ -1002,14 +1036,205 @@ export const SmartTvMusicSpotifySection: React.FC<
     const isHeroLiked = likedTracks.some((t) => t.id === heroTrack.id);
 
     return (
-      <div className="space-y-5 pb-12">
+      <div className="space-y-4 pb-12">
         {/* ====================================================================
-          1. COMPACT HERO PLAYER CARD — OFFICIAL HI-RES / FLAC LOGOS + ICON CONTROLS
+          1. STICKY SPOTIFY PLAYER + SEARCH + FILTER PILLS (PINNED ON SCROLL)
          ==================================================================== */}
         <div
           data-top-hero-card="true"
-          className="relative rounded-2xl overflow-hidden tahoe-emerald-osd p-3.5 sm:p-4 lg:p-5 shadow-[0_18px_45px_rgba(0,0,0,0.8)]"
+          className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-1 pb-2.5 bg-[#090d16]/95 backdrop-blur-2xl border-b border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.85)] space-y-2"
         >
+          {/* 1A-MOBILE: COMPACT SPOTIFY STICKY PLAYER BAR (< 640px) */}
+          <div className="sm:hidden relative rounded-2xl overflow-hidden tahoe-emerald-osd p-2.5 shadow-lg border border-white/10">
+            <img
+              src={proxyMusicCover(heroTrack.cover)}
+              alt=""
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-20 blur-2xl scale-125"
+            />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#0c0e14]/95 via-[#11141d]/90 to-[#0c0e14]/95" />
+
+            <div className="relative z-10 space-y-2">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleOpenAlbumCard(
+                      heroTrack.album || heroTrack.title,
+                      heroTrack.artist,
+                      heroTrack
+                    )
+                  }
+                  className="w-11 h-11 rounded-xl overflow-hidden border border-white/15 shadow-md shrink-0 bg-zinc-900 cursor-pointer"
+                >
+                  <img
+                    src={proxyMusicCover(heroTrack.coverSmall || heroTrack.cover)}
+                    alt={heroTrack.title}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-bold text-white truncate leading-tight">
+                    {heroTrack.title}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300 truncate mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRunSearch(heroTrack.artist)}
+                      className="text-amber-300 font-semibold truncate hover:underline cursor-pointer"
+                    >
+                      {heroTrack.artist}
+                    </button>
+                    {heroTrack.album && (
+                      <>
+                        <span className="text-zinc-600">•</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleOpenAlbumCard(
+                              heroTrack.album,
+                              heroTrack.artist,
+                              heroTrack
+                            )
+                          }
+                          className="text-zinc-400 truncate hover:text-white cursor-pointer"
+                        >
+                          {tr('Album', 'Album', 'Альбом')}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Mobile Single-Row Spotify Transport Controls */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onToggleLikeTrack(heroTrack)}
+                    className={`w-8 h-8 rounded-full inline-flex items-center justify-center cursor-pointer ${
+                      isHeroLiked ? 'text-rose-400' : 'text-zinc-300'
+                    }`}
+                  >
+                    <Heart
+                      className={`w-4 h-4 ${isHeroLiked ? 'fill-current' : ''}`}
+                    />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onPrevTrack}
+                    className="w-8 h-8 rounded-full text-white inline-flex items-center justify-center cursor-pointer"
+                  >
+                    <SkipBack className="w-4 h-4 fill-current" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!currentTrack) {
+                        onPlayTrack(heroTrack, tracksList);
+                      } else {
+                        onTogglePlayPause();
+                      }
+                    }}
+                    style={{ backgroundColor: '#ffffff', color: '#090d16' }}
+                    className="w-9 h-9 rounded-full bg-white text-[#090d16] inline-flex items-center justify-center shadow-md cursor-pointer shrink-0"
+                  >
+                    {isPlaying && currentTrack?.id === heroTrack.id ? (
+                      <Pause className="w-4 h-4 fill-current text-[#090d16]" />
+                    ) : (
+                      <Play className="w-4 h-4 fill-current text-[#090d16] ml-0.5" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onNextTrack}
+                    className="w-8 h-8 rounded-full text-white inline-flex items-center justify-center cursor-pointer"
+                  >
+                    <SkipForward className="w-4 h-4 fill-current" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsVideoClipMode((v) => !v)}
+                    className={`w-8 h-8 rounded-full inline-flex items-center justify-center cursor-pointer ${
+                      isVideoClipMode
+                        ? 'bg-white text-[#090d16]'
+                        : 'text-zinc-300'
+                    }`}
+                  >
+                    <Tv className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Mobile Compact Timeline Scrubber */}
+              <div className="flex items-center gap-2 w-full">
+                <span className="text-[10px] font-medium text-white/70 tabular-nums shrink-0 w-7">
+                  {formatMusicDuration(elapsedSec)}
+                </span>
+                <div
+                  role="slider"
+                  tabIndex={0}
+                  aria-label="Music Timeline Mobile"
+                  aria-valuemin={0}
+                  aria-valuemax={effectiveDuration}
+                  aria-valuenow={Math.floor(elapsedSec)}
+                  onPointerDown={(e) => {
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    if (rect.width > 0) {
+                      const ratio = Math.min(
+                        1,
+                        Math.max(0, (e.clientX - rect.left) / rect.width)
+                      );
+                      onSeek(ratio * effectiveDuration);
+                    }
+                  }}
+                  onPointerMove={(e) => {
+                    if (
+                      e.buttons === 1 ||
+                      e.currentTarget.hasPointerCapture?.(e.pointerId)
+                    ) {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      if (rect.width > 0) {
+                        const ratio = Math.min(
+                          1,
+                          Math.max(0, (e.clientX - rect.left) / rect.width)
+                        );
+                        onSeek(ratio * effectiveDuration);
+                      }
+                    }
+                  }}
+                  onPointerUp={(e) => {
+                    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    }
+                  }}
+                  className="relative flex-1 h-4 cursor-pointer flex items-center"
+                >
+                  <div className="relative w-full h-1 rounded-full bg-white/20 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-white"
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+                  <div
+                    className="pointer-events-none absolute w-2.5 h-2.5 rounded-full bg-white shadow -ml-1"
+                    style={{ left: `${progressPct}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-medium text-white/60 tabular-nums shrink-0 w-7 text-right">
+                  {formatMusicDuration(effectiveDuration)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 1A-DESKTOP/TV: STUDIO MASTER PLAYER CARD (>= 640px) */}
+          <div className="hidden sm:block relative rounded-2xl overflow-hidden tahoe-emerald-osd p-3 sm:p-3.5 lg:p-4 shadow-[0_14px_35px_rgba(0,0,0,0.8)]">
           {/* Dynamic Blurred Album Cover Backdrop */}
           <img
             src={proxyMusicCover(heroTrack.cover)}
@@ -1019,7 +1244,7 @@ export const SmartTvMusicSpotifySection: React.FC<
           />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#0c0e14]/95 via-[#11141d]/90 to-[#0c0e14]/95" />
 
-          <div className="relative z-10 flex flex-col md:flex-row items-center gap-4 lg:gap-6">
+          <div className="relative z-10 flex flex-row items-center gap-4 lg:gap-5">
             {/* Left: Compact Album Art + Spinning Vinyl Disc (Click to open Album Card) */}
             <button
               type="button"
@@ -1037,7 +1262,7 @@ export const SmartTvMusicSpotifySection: React.FC<
               )}
               className="relative flex items-center shrink-0 group cursor-pointer focus:outline-none"
             >
-              <div className="relative w-24 h-24 sm:w-28 sm:h-28 lg:w-32 lg:h-32 rounded-xl overflow-hidden shadow-[0_12px_30px_rgba(0,0,0,0.85)] ring-1 ring-white/20 group-hover:ring-amber-400/70 z-10 bg-zinc-900 transition-all">
+              <div className="relative w-20 h-20 lg:w-24 lg:h-24 rounded-xl overflow-hidden shadow-[0_12px_30px_rgba(0,0,0,0.85)] ring-1 ring-white/20 group-hover:ring-amber-400/70 z-10 bg-zinc-900 transition-all">
                 <img
                   src={proxyMusicCover(heroTrack.cover)}
                   alt={heroTrack.title}
@@ -1046,7 +1271,7 @@ export const SmartTvMusicSpotifySection: React.FC<
               </div>
 
               {/* Compact Spinning Vinyl Record — ONLY the vinyl disc spins, NOT the center cover photo */}
-              <div className="hidden sm:flex -ml-9 w-24 h-24 sm:w-28 sm:h-28 lg:w-32 lg:h-32 rounded-full shadow-[0_10px_28px_rgba(0,0,0,0.9)] items-center justify-center relative shrink-0">
+              <div className="hidden sm:flex -ml-8 w-20 h-20 lg:w-24 lg:h-24 rounded-full shadow-[0_10px_28px_rgba(0,0,0,0.9)] items-center justify-center relative shrink-0">
                 <div
                   className={`absolute inset-0 rounded-full border-2 border-zinc-800/90 ${
                     isPlaying ? 'animate-[spin_4s_linear_infinite]' : ''
@@ -1550,9 +1775,11 @@ export const SmartTvMusicSpotifySection: React.FC<
             </div>
           </div>
 
-          {/* Optional Official HD Music Video Clip Drawer inside Hero Card */}
+          </div>
+
+          {/* Optional Official HD Music Video Clip Drawer inside Sticky Header */}
           {isVideoClipMode && resolvedClipVideoId && (
-            <div className="relative z-10 mt-4 rounded-xl overflow-hidden border border-white/15 bg-black h-[220px] sm:h-[320px] lg:h-[360px] max-w-3xl mx-auto w-full shadow-2xl">
+            <div className="relative z-10 rounded-xl overflow-hidden border border-white/15 bg-black h-[190px] sm:h-[280px] lg:h-[320px] max-w-3xl mx-auto w-full shadow-2xl">
               <video
                 key={`clip_${resolvedClipVideoId}`}
                 src={`/api/youtube/stream?id=${encodeURIComponent(
@@ -1565,10 +1792,164 @@ export const SmartTvMusicSpotifySection: React.FC<
               />
             </div>
           )}
+
+          {/* 1B. SPOTIFY SEARCH BAR + LIKED SONGS PILL (PINNED INSIDE STICKY HEADER) */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleRunSearch();
+                  }
+                }}
+                placeholder={tr(
+                  'Caută piesă, artist sau album...',
+                  'Search song, artist, or album...',
+                  'Поиск треков, артистов или альбомов...'
+                )}
+                className="w-full h-9 sm:h-10 pl-9 pr-24 rounded-full tahoe-emerald-card text-xs sm:text-sm text-white placeholder-zinc-400 focus:ring-2 focus:ring-amber-400"
+              />
+              {searchQuery.trim().length > 0 && (
+                <button
+                  type="button"
+                  title={tr('Șterge căutarea', 'Clear search', 'Очистить поиск')}
+                  onClick={() => {
+                    setSearchQuery('');
+                    setActivePlaylistId('pl_global_hits');
+                  }}
+                  className="absolute right-[70px] top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/15 hover:bg-white/30 text-zinc-200 inline-flex items-center justify-center cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleRunSearch()}
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 sm:h-8 px-3 rounded-full bg-white hover:bg-amber-300 text-[#090d16] text-xs font-bold cursor-pointer"
+              >
+                {tr('Caută', 'Search', 'Найти')}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              title={tr('Tastatură TV', 'TV Keyboard', 'ТВ Клавиатура')}
+              onClick={() => setIsTvKeyboardOpen((v) => !v)}
+              className="hidden sm:inline-flex h-10 w-10 rounded-full tahoe-emerald-card hover:bg-white hover:text-[#090d16] focus:bg-white focus:text-[#090d16] text-xs font-bold text-zinc-200 items-center justify-center shrink-0 cursor-pointer"
+            >
+              <Keyboard className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setActivePlaylistId('liked_songs');
+              }}
+              className={`h-9 sm:h-10 px-3.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1.5 shrink-0 transition-all cursor-pointer ${
+                activePlaylistId === 'liked_songs'
+                  ? 'bg-rose-500 text-white shadow-md'
+                  : 'tahoe-emerald-card text-zinc-200 hover:bg-white hover:text-[#090d16]'
+              }`}
+            >
+              <Heart className="w-3.5 h-3.5 fill-current text-rose-400" />
+              <span>{likedTracks.length}</span>
+            </button>
+          </div>
+
+          {/* On-Screen Smart TV Keyboard for Remote Search */}
+          {isTvKeyboardOpen && (
+            <div className="p-2.5 rounded-xl tahoe-emerald-osd space-y-2">
+              <div className="flex flex-wrap gap-1">
+                {'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('').map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => setSearchQuery((prev) => prev + ch)}
+                    className="w-8 h-8 rounded-lg tahoe-emerald-card hover:bg-white hover:text-[#090d16] focus:bg-white focus:text-[#090d16] text-xs font-bold text-white inline-flex items-center justify-center cursor-pointer"
+                  >
+                    {ch}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery((prev) => prev + ' ')}
+                  className="px-3 h-8 rounded-lg tahoe-emerald-card hover:bg-white hover:text-[#090d16] text-xs font-bold text-white cursor-pointer"
+                >
+                  SPACE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery((prev) => prev.slice(0, -1))}
+                  className="px-2.5 h-8 rounded-lg tahoe-emerald-card hover:bg-rose-500 text-xs font-bold text-white inline-flex items-center justify-center cursor-pointer"
+                >
+                  <Delete className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRunSearch()}
+                  className="px-3 h-8 rounded-lg bg-amber-400 text-[#090d16] text-xs font-bold cursor-pointer"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 1C. SINGLE-ROW COMPACT SPOTIFY FILTER CHIPS */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            {activePlaylistId === 'search_results' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setActivePlaylistId('pl_global_hits');
+                }}
+                className="h-8 px-3 rounded-full bg-amber-400 text-[#090d16] text-xs font-bold inline-flex items-center gap-1.5 shrink-0 cursor-pointer shadow"
+              >
+                <Search className="w-3 h-3" />
+                <span className="max-w-[140px] truncate">
+                  {customSearchHeader || searchQuery}
+                </span>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {SPOTIFY_PLAYLISTS.map((pl) => {
+              const isSelected = activePlaylistId === pl.id;
+              return (
+                <button
+                  key={`chip_${pl.id}`}
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setActivePlaylistId(pl.id);
+                  }}
+                  className={`h-8 pl-1.5 pr-3 rounded-full flex items-center gap-1.5 shrink-0 text-xs font-semibold transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/60 ${
+                    isSelected
+                      ? 'bg-white text-[#090d16] font-bold shadow'
+                      : 'bg-white/[0.08] hover:bg-white/[0.16] text-zinc-200'
+                  }`}
+                >
+                  <img
+                    src={proxyMusicCover(pl.cover)}
+                    alt=""
+                    className="w-5 h-5 rounded-full object-cover shrink-0"
+                  />
+                  <span className="whitespace-nowrap">
+                    {tr(pl.titleRo, pl.titleEn, pl.titleRu)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* ====================================================================
-          1B. CARDUL ALBUMULUI (ALBUM DETAIL CARD — SCURTE DETALII, ANUL PRODUCȚIEI & LISTA DE PIESE)
+          2. CARDUL ALBUMULUI (ALBUM DETAIL CARD — SCURTE DETALII, ANUL PRODUCȚIEI & LISTA DE PIESE)
          ==================================================================== */}
         {activeAlbumCard && (
           <div className="relative rounded-2xl overflow-hidden tahoe-emerald-osd p-4 sm:p-5 lg:p-6 shadow-[0_22px_55px_rgba(0,0,0,0.85)] border border-amber-400/25">
@@ -1667,16 +2048,20 @@ export const SmartTvMusicSpotifySection: React.FC<
                         </span>
                       </span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.07] text-zinc-200 font-medium">
-                        🎵 {activeAlbumCard.genre}
+                        <Music className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{activeAlbumCard.genre}</span>
                       </span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.07] text-zinc-200 font-medium">
-                        💿 {activeAlbumCard.trackCount}{' '}
-                        {tr('piese', 'tracks', 'треков')} •{' '}
-                        {Math.max(
-                          1,
-                          Math.round(activeAlbumCard.totalDurationSec / 60)
-                        )}{' '}
-                        min
+                        <Disc className="w-3.5 h-3.5 text-amber-400" />
+                        <span>
+                          {activeAlbumCard.trackCount}{' '}
+                          {tr('piese', 'tracks', 'треков')} •{' '}
+                          {Math.max(
+                            1,
+                            Math.round(activeAlbumCard.totalDurationSec / 60)
+                          )}{' '}
+                          min
+                        </span>
                       </span>
                     </div>
                   </div>
@@ -1860,178 +2245,8 @@ export const SmartTvMusicSpotifySection: React.FC<
         )}
 
         {/* ====================================================================
-          2. COMPACT SEARCH BAR + LIKED SONGS PILL
-         ==================================================================== */}
-        <div className="flex items-center gap-2.5">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleRunSearch();
-                }
-              }}
-              placeholder={tr(
-                'Caută piesă, artist sau album...',
-                'Search song, artist, or album...',
-                'Поиск треков, артистов или альбомов...'
-              )}
-              className="w-full h-10 pl-10 pr-20 rounded-full tahoe-emerald-card text-xs sm:text-sm text-white placeholder-zinc-400 focus:ring-2 focus:ring-amber-400"
-            />
-            <button
-              type="button"
-              onClick={() => handleRunSearch()}
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-8 px-3.5 rounded-full bg-white hover:bg-amber-300 text-[#090d16] text-xs font-bold cursor-pointer"
-            >
-              {tr('Caută', 'Search', 'Найти')}
-            </button>
-          </div>
-
-          <button
-            type="button"
-            title={tr('Tastatură TV', 'TV Keyboard', 'ТВ Клавиатура')}
-            onClick={() => setIsTvKeyboardOpen((v) => !v)}
-            className="h-10 w-10 rounded-full tahoe-emerald-card hover:bg-white hover:text-[#090d16] focus:bg-white focus:text-[#090d16] text-xs font-bold text-zinc-200 inline-flex items-center justify-center shrink-0 cursor-pointer"
-          >
-            ⌨️
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActivePlaylistId('liked_songs')}
-            className={`h-10 px-4 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1.5 shrink-0 transition-all cursor-pointer ${
-              activePlaylistId === 'liked_songs'
-                ? 'bg-rose-500 text-white shadow-md'
-                : 'tahoe-emerald-card text-zinc-200 hover:bg-white hover:text-[#090d16]'
-            }`}
-          >
-            <Heart className="w-3.5 h-3.5 fill-current text-rose-400" />
-            <span>{likedTracks.length}</span>
-          </button>
-        </div>
-
-        {/* On-Screen Smart TV Keyboard for Remote Search */}
-        {isTvKeyboardOpen && (
-          <div className="p-3 rounded-xl tahoe-emerald-osd space-y-2">
-            <div className="flex flex-wrap gap-1">
-              {'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('').map((ch) => (
-                <button
-                  key={ch}
-                  type="button"
-                  onClick={() => setSearchQuery((prev) => prev + ch)}
-                  className="w-8 h-8 rounded-lg tahoe-emerald-card hover:bg-white hover:text-[#090d16] focus:bg-white focus:text-[#090d16] text-xs font-bold text-white inline-flex items-center justify-center cursor-pointer"
-                >
-                  {ch}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setSearchQuery((prev) => prev + ' ')}
-                className="px-3 h-8 rounded-lg tahoe-emerald-card hover:bg-white hover:text-[#090d16] text-xs font-bold text-white cursor-pointer"
-              >
-                SPACE
-              </button>
-              <button
-                type="button"
-                onClick={() => setSearchQuery((prev) => prev.slice(0, -1))}
-                className="px-2.5 h-8 rounded-lg tahoe-emerald-card hover:bg-rose-500 text-xs font-bold text-white cursor-pointer"
-              >
-                ⌫
-              </button>
-              <button
-                type="button"
-                onClick={() => handleRunSearch()}
-                className="px-3 h-8 rounded-lg bg-amber-400 text-[#090d16] text-xs font-bold cursor-pointer"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ====================================================================
-          3. COMPACT QUICK-PICK BAR (2x4 SPOTIFY SHORTCUTS)
-         ==================================================================== */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-2">
-          {SPOTIFY_PLAYLISTS.map((pl) => {
-            const isSelected = activePlaylistId === pl.id;
-            return (
-              <button
-                key={`small_${pl.id}`}
-                type="button"
-                onClick={() => setActivePlaylistId(pl.id)}
-                className={`h-12 rounded-md overflow-hidden flex items-center pr-2.5 transition-colors cursor-pointer group focus:outline-none focus:ring-2 focus:ring-white/60 ${
-                  isSelected
-                    ? 'bg-white/[0.18] ring-1 ring-white/30'
-                    : 'bg-white/[0.07] hover:bg-white/[0.14]'
-                }`}
-              >
-                <img
-                  src={proxyMusicCover(pl.cover)}
-                  alt={pl.titleRo}
-                  className="w-12 h-12 object-cover shrink-0 shadow-[4px_0_12px_rgba(0,0,0,0.45)]"
-                />
-                <div className="pl-2.5 text-left min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-white truncate">
-                    {tr(pl.titleRo, pl.titleEn, pl.titleRu)}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ====================================================================
-          4. COMPACT PLAYLIST CARDS ("POSTURI & MIXURI RECOMANDATE")
-         ==================================================================== */}
-        <div className="space-y-2.5">
-          <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-            {tr(
-              'Mixuri Recomandate',
-              'Recommended Mixes',
-              'Рекомендуемые миксы'
-            )}
-          </h2>
-
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
-            {SPOTIFY_PLAYLISTS.map((pl) => {
-              const isSelected = activePlaylistId === pl.id;
-              return (
-                <button
-                  key={`med_${pl.id}`}
-                  type="button"
-                  onClick={() => setActivePlaylistId(pl.id)}
-                  className={`p-2 rounded-xl text-left transition-colors flex flex-col justify-between group cursor-pointer focus:outline-none focus:ring-2 focus:ring-white/60 ${
-                    isSelected
-                      ? 'bg-white/[0.12] ring-1 ring-white/25'
-                      : 'bg-transparent hover:bg-white/[0.06]'
-                  }`}
-                >
-                  <div className="space-y-1.5 w-full">
-                    <div className="relative aspect-square w-full rounded-lg overflow-hidden bg-zinc-900 shadow-md">
-                      <img
-                        src={proxyMusicCover(pl.cover)}
-                        alt={pl.titleRo}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                      />
-                    </div>
-
-                    <div className="text-xs font-semibold text-white truncate">
-                      {tr(pl.titleRo, pl.titleEn, pl.titleRu)}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ====================================================================
-          5. MAIN SPLIT VIEW:
-             - LEFT (2/3): ACTIVE PLAYLIST TRACKLIST TABLE
+          3. MAIN SPLIT VIEW (IMMEDIATELY BELOW STICKY PLAYER & SEARCH BAR):
+             - LEFT (2/3): ACTIVE PLAYLIST / SEARCH RESULTS TRACKLIST TABLE
              - RIGHT (1/3): SMART SUGGESTIONS + ARTISTS
          ==================================================================== */}
         <div
@@ -2040,7 +2255,7 @@ export const SmartTvMusicSpotifySection: React.FC<
         >
           {/* LEFT COLUMN (8 cols): Interactive Playlist Tracklist — matched height with Right Column */}
           <div className="lg:col-span-8 flex flex-col">
-            <div className="h-full rounded-2xl tahoe-emerald-osd p-4 sm:p-5 flex flex-col">
+            <div className="h-full rounded-2xl tahoe-emerald-osd p-3 sm:p-5 flex flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3 shrink-0">
                 <div className="flex items-center gap-3 min-w-0">
                   <img
@@ -2142,7 +2357,7 @@ export const SmartTvMusicSpotifySection: React.FC<
               </div>
 
               {/* Tracklist Rows — Compact, Clean, Minimal Text */}
-              <div className="mt-3 space-y-0.5 flex-1 min-h-0 max-h-[620px] overflow-y-auto pr-1 no-scrollbar">
+              <div className="mt-3 space-y-0.5 flex-1 min-h-0 sm:max-h-[620px] sm:overflow-y-auto pr-1 no-scrollbar">
                 {tracksList.map((track, idx) => {
                   const isCurrent = currentTrack?.id === track.id;
                   const isLiked = likedTracks.some((t) => t.id === track.id);

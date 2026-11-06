@@ -335,9 +335,9 @@ export async function resolveDirectVodStreamClient(params: {
     return null;
   };
 
-  // On Local LAN or Smart TV WebViews (where Let's Encrypt root CAs on older WebOS/Tizen fail direct browser fetches),
+  // On Local LAN (where the local Node server shares the same home IP as the Smart TV / browser),
   // resolve immediately via `/api/vod-stream` first!
-  if (isLocalLan || isSmartTvUa) {
+  if (isLocalLan) {
     const backendFirst = await fetchFromBackend();
     if (backendFirst) return backendFirst;
   }

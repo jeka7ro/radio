@@ -45,7 +45,19 @@ import {
   Calendar,
   Sun,
   Moon,
+  Download,
+  CheckCircle2,
+  HardDriveDownload,
 } from 'lucide-react';
+import {
+  downloadHlsToOfflineDb,
+  listOfflineItems,
+  deleteOfflineItem,
+  exportOfflineItemToDeviceFile,
+  formatBytes,
+  type OfflineMediaItem,
+  type OfflineDownloadProgress,
+} from '../services/offlineMediaService';
 import { useRadioStore } from '../store/useRadioStore';
 import {
   StreamingPlatformLogo,
@@ -339,7 +351,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         audioEl.play().catch(() => {
           if (track.previewUrl && audioEl.src !== track.previewUrl) {
             audioEl.src = track.previewUrl;
-            audioEl.play().catch(() => {});
+            audioEl.play().catch(() => { });
           }
         });
       }
@@ -360,7 +372,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (currentTvChannel) {
         closeTvPlayer();
       }
-      audioEl.play().catch(() => {});
+      audioEl.play().catch(() => { });
       setIsMusicPlaying(true);
     } else {
       audioEl.pause();
@@ -783,8 +795,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ...item,
           releaseInfo:
             releaseStr.includes('2025') ||
-            releaseStr.includes('2026') ||
-            releaseStr.includes('2027')
+              releaseStr.includes('2026') ||
+              releaseStr.includes('2027')
               ? item.releaseInfo
               : String(y || '2026'),
         });
@@ -1147,10 +1159,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [ytSearchQuery, setYtSearchQuery] = useState<string>('');
   const [isYtKeyboardOpen, setIsYtKeyboardOpen] = useState<boolean>(false);
   const [activeYtDurationSec, setActiveYtDurationSec] = useState<number>(0);
-  const [ytUseEmbedFallback, setYtUseEmbedFallback] = useState<boolean>(false);
+  const [ytUseEmbedFallback, setYtUseEmbedFallback] = useState<boolean>(() => !isLocalHomeServer());
+  const [fallbackYtVideoId, setFallbackYtVideoId] = useState<string | null>(null);
   const [activeServer, setActiveServer] = useState<VodServerId>(() =>
     tvSettings.defaultVodServer === 'auto_best' ||
-    (tvSettings.defaultVodServer === 'filelist_torrent' && !isLocalHomeServer())
+      (tvSettings.defaultVodServer === 'filelist_torrent' && !isLocalHomeServer())
       ? 'kinogram_hls'
       : tvSettings.defaultVodServer
   );
@@ -1352,6 +1365,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       osdTimerRef.current = null;
     }
     setIsVodOsdVisible(false);
+    const floatingBtn =
+      playerBoxRef.current?.querySelector<HTMLButtonElement>(
+        '[data-vod-skip-intro-btn="true"], [data-vod-autonext-btn="true"]'
+      );
+    if (floatingBtn) {
+      try {
+        floatingBtn.focus({ preventScroll: true });
+      } catch {
+        floatingBtn.focus();
+      }
+      return;
+    }
     const activeEl = document.activeElement as HTMLElement | null;
     if (activeEl && playerBoxRef.current?.contains(activeEl)) {
       activeEl.blur();
@@ -1377,6 +1402,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
       setIsVodOsdVisible(false);
+      const floatingBtn =
+        playerBoxRef.current?.querySelector<HTMLButtonElement>(
+          '[data-vod-skip-intro-btn="true"], [data-vod-autonext-btn="true"]'
+        );
+      if (floatingBtn) {
+        try {
+          floatingBtn.focus({ preventScroll: true });
+        } catch {
+          floatingBtn.focus();
+        }
+        return;
+      }
       const activeEl = document.activeElement as HTMLElement | null;
       if (activeEl && playerBoxRef.current?.contains(activeEl)) {
         activeEl.blur();
@@ -1384,15 +1421,411 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }, timeoutMs);
   }, [tvSettings.osdAutoHideSec]);
 
+  // Offline / Local Device Downloads (IndexedDB + Device Export)
+  const [offlineItems, setOfflineItems] = useState<OfflineMediaItem[]>([]);
+  const [selectedOfflineSeriesId, setSelectedOfflineSeriesId] = useState<string | null>(null);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadQualityHeight, setDownloadQualityHeight] = useState<
+    360 | 480 | 720 | 1080
+  >(480);
+  const [downloadModalSeason, setDownloadModalSeason] = useState<number>(1);
+  const [selectedDownloadEpisodes, setSelectedDownloadEpisodes] = useState<
+    number[]
+  >([1]);
+  const [activeDownloadProgress, setActiveDownloadProgress] =
+    useState<OfflineDownloadProgress | null>(null);
+  const [activeDownloadTargetId, setActiveDownloadTargetId] = useState<
+    string | null
+  >(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadAbortRef = useRef<AbortController | null>(null);
+
+  const refreshOfflineLibrary = useCallback(async () => {
+    try {
+      const list = await listOfflineItems();
+      setOfflineItems(list);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshOfflineLibrary();
+  }, [refreshOfflineLibrary]);
+
+  const currentVodOfflineId = useMemo(() => {
+    if (!activeVodItem) return '';
+    return activeVodItem.type === 'series'
+      ? `vod_${activeVodItem.id}_S${selectedSeason}E${selectedEpisode}`
+      : `vod_${activeVodItem.id}`;
+  }, [activeVodItem, selectedSeason, selectedEpisode]);
+
+  const matchedOfflineVodItem = useMemo(
+    () =>
+      currentVodOfflineId
+        ? offlineItems.find((x) => x.id === currentVodOfflineId) || null
+        : null,
+    [offlineItems, currentVodOfflineId]
+  );
+
+  const handleStartOfflineDownload = useCallback(
+    async (
+      preferredHeightOverride?: 360 | 480 | 720 | 1080,
+      seasonOverride?: number,
+      episodesOverride?: number[]
+    ) => {
+      if (!activeVodItem) return;
+      if (activeDownloadProgress) return;
+
+      const targetHeight = preferredHeightOverride || downloadQualityHeight;
+      const isSeries = activeVodItem.type === 'series';
+      const targetSeason = isSeries
+        ? (seasonOverride ?? downloadModalSeason ?? selectedSeason)
+        : 1;
+      const targetEpisodes = isSeries
+        ? episodesOverride && episodesOverride.length > 0
+          ? [...episodesOverride].sort((a, b) => a - b)
+          : [selectedEpisode]
+        : [1];
+
+      setDownloadError(null);
+      const controller = new AbortController();
+      downloadAbortRef.current = controller;
+
+      const kpId =
+        activeVodItem.kpId ||
+        detailedMeta?.kpId ||
+        (activeVodItem.id.startsWith('kp_')
+          ? activeVodItem.id.replace('kp_', '')
+          : '');
+      const imdbId = activeVodItem.id.startsWith('tt')
+        ? activeVodItem.id
+        : detailedMeta?.imdbId || '';
+      const yearStr = String(
+        detailedMeta?.releaseInfo || activeVodItem.releaseInfo || ''
+      ).slice(0, 4);
+
+      try {
+        for (let idx = 0; idx < targetEpisodes.length; idx++) {
+          if (controller.signal.aborted) break;
+          const epNum = targetEpisodes[idx];
+          const offlineId = isSeries
+            ? `vod_${activeVodItem.id}_S${targetSeason}E${epNum}`
+            : `vod_${activeVodItem.id}`;
+          setActiveDownloadTargetId(offlineId);
+
+          const batchPrefix =
+            isSeries && targetEpisodes.length > 1
+              ? `[${idx + 1}/${targetEpisodes.length} • S${targetSeason}:E${epNum}] `
+              : isSeries
+                ? `[S${targetSeason}:E${epNum}] `
+                : '';
+
+          setActiveDownloadProgress({
+            percent: 1,
+            downloadedBytes: 0,
+            totalSegments: 0,
+            completedSegments: 0,
+            stage: `${batchPrefix}${tr(
+              'Se rezolvă streamul video...',
+              'Resolving video stream...',
+              'Поиск видеопотока...'
+            )}`,
+          });
+
+          let hlsTarget =
+            !isSeries ||
+              (targetSeason === selectedSeason && epNum === selectedEpisode)
+              ? resolvedDirectStream?.hlsUrl
+              : undefined;
+          let epAudioNames = resolvedDirectStream?.audioNames;
+
+          if (!hlsTarget) {
+            const resolvedEp = await resolveDirectVodStreamClient({
+              kp: kpId,
+              imdb: imdbId,
+              title: detailedMeta?.nameOriginal || activeVodItem.name,
+              type: activeVodItem.type,
+              year: yearStr,
+              season: targetSeason,
+              episode: epNum,
+            });
+            hlsTarget = resolvedEp?.hlsUrl || resolvedEp?.proxyHlsUrl;
+            if (resolvedEp?.audioNames?.length) {
+              epAudioNames = resolvedEp.audioNames;
+            }
+          }
+
+          if (!hlsTarget) {
+            throw new Error(
+              isSeries
+                ? tr(
+                  `Streamul HLS nu este disponibil pentru S${targetSeason}:E${epNum}.`,
+                  `HLS stream unavailable for S${targetSeason}:E${epNum}.`,
+                  `Поток HLS недоступен для S${targetSeason}:E${epNum}.`
+                )
+                : tr(
+                  'Streamul direct HLS nu este disponibil pentru descărcare locală la acest titlu.',
+                  'Direct HLS stream is unavailable for offline download on this title.',
+                  'Прямой поток HLS недоступен для скачивания.'
+                )
+            );
+          }
+
+          let epSubCues =
+            !isSeries ||
+              (targetSeason === selectedSeason && epNum === selectedEpisode)
+              ? activeSubCues
+              : [];
+          let epSubLabel =
+            !isSeries ||
+              (targetSeason === selectedSeason && epNum === selectedEpisode)
+              ? activeSubLabel
+              : '';
+
+          if (
+            isSeries &&
+            epSubCues.length === 0 &&
+            tvSettings.defaultSubLang !== 'off'
+          ) {
+            try {
+              const autoSub = await autoResolveAndFetchBestRoRuSubtitle({
+                imdbId,
+                title: detailedMeta?.name || activeVodItem.name,
+                nameOriginal: detailedMeta?.nameOriginal || activeVodItem.name,
+                type: 'series',
+                season: targetSeason,
+                episode: epNum,
+                preferredLang:
+                  tvSettings.defaultSubLang === 'ru'
+                    ? 'ru'
+                    : tvSettings.defaultSubLang === 'en'
+                      ? 'en'
+                      : 'ro',
+              });
+              if (autoSub?.cues?.length) {
+                epSubCues = autoSub.cues;
+                epSubLabel = autoSub.track?.langLabel || 'Subtitrare';
+              }
+            } catch {
+              // ignore subtitle fetch error
+            }
+          }
+
+          const subtitleText = isSeries
+            ? `Sezonul ${targetSeason} • Episodul ${epNum}`
+            : detailedMeta?.releaseInfo || activeVodItem.releaseInfo || 'Film';
+
+          const audioIdx = Math.max(0, selectedAudioTrackIdx);
+          await downloadHlsToOfflineDb({
+            id: offlineId,
+            title: detailedMeta?.name || activeVodItem.name,
+            subtitleLabel: subtitleText,
+            poster:
+              detailedMeta?.poster ||
+              activeVodItem.poster ||
+              `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`,
+            masterM3u8Url: hlsTarget,
+            preferredHeight: targetHeight,
+            audioTrackIndex: audioIdx,
+            audioLabel:
+              epAudioNames?.[audioIdx] ||
+              resolvedDirectStream?.audioNames?.[audioIdx] ||
+              'Original / Audio 1',
+            savedSubCues: epSubCues.length > 0 ? epSubCues : undefined,
+            savedSubLabel: epSubLabel || undefined,
+            vodId: activeVodItem.id,
+            mediaKind: activeVodItem.type,
+            season: isSeries ? targetSeason : undefined,
+            episode: isSeries ? epNum : undefined,
+            signal: controller.signal,
+            onProgress: (prog) =>
+              setActiveDownloadProgress({
+                ...prog,
+                stage: `${batchPrefix}${prog.stage}`,
+              }),
+          });
+
+          await refreshOfflineLibrary();
+        }
+
+        window.setTimeout(() => {
+          setActiveDownloadProgress(null);
+          setActiveDownloadTargetId(null);
+        }, 1600);
+      } catch (err) {
+        setActiveDownloadProgress(null);
+        setActiveDownloadTargetId(null);
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          setDownloadError(
+            tr(
+              'Descărcarea a fost oprită.',
+              'Download cancelled.',
+              'Загрузка отменена.'
+            )
+          );
+        } else {
+          setDownloadError(
+            err instanceof Error
+              ? err.message
+              : tr(
+                'Eroare la descărcarea locală.',
+                'Local download error.',
+                'Ошибка загрузки.'
+              )
+          );
+        }
+      } finally {
+        downloadAbortRef.current = null;
+      }
+    },
+    [
+      activeVodItem,
+      activeDownloadProgress,
+      resolvedDirectStream,
+      downloadQualityHeight,
+      downloadModalSeason,
+      selectedSeason,
+      selectedEpisode,
+      detailedMeta,
+      selectedAudioTrackIdx,
+      activeSubCues,
+      activeSubLabel,
+      tvSettings.defaultSubLang,
+      refreshOfflineLibrary,
+      tr,
+    ]
+  );
+
+  const handleCancelOfflineDownload = useCallback(() => {
+    downloadAbortRef.current?.abort();
+    downloadAbortRef.current = null;
+    setActiveDownloadProgress(null);
+    setActiveDownloadTargetId(null);
+  }, []);
+
+  const [isMobileCustomFullscreen, setIsMobileCustomFullscreen] = useState(false);
+  const [isPortraitViewport, setIsPortraitViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false
+  );
+  const [isMobilePhone, setIsMobilePhone] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    if (
+      document.documentElement.classList.contains('smart-tv-mode') ||
+      window.location.pathname.toLowerCase().startsWith('/tv')
+    ) {
+      return false;
+    }
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const isIpadOs =
+      /iPad/i.test(ua) ||
+      (typeof navigator !== 'undefined' &&
+        navigator.platform === 'MacIntel' &&
+        navigator.maxTouchPoints > 1);
+    if (/iPhone|iPod|Android.*Mobile/i.test(ua) || isIpadOs) return true;
+    return (
+      window.innerWidth < 640 ||
+      (window.innerHeight < 540 && window.innerWidth < 1024)
+    );
+  });
+
+  useEffect(() => {
+    const syncViewportFlags = () => {
+      setIsPortraitViewport(window.innerHeight > window.innerWidth);
+      if (
+        document.documentElement.classList.contains('smart-tv-mode') ||
+        window.location.pathname.toLowerCase().startsWith('/tv')
+      ) {
+        setIsMobilePhone(false);
+        return;
+      }
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+      const isIpadOs =
+        /iPad/i.test(ua) ||
+        (typeof navigator !== 'undefined' &&
+          navigator.platform === 'MacIntel' &&
+          navigator.maxTouchPoints > 1);
+      if (/iPhone|iPod|Android.*Mobile/i.test(ua) || isIpadOs) {
+        setIsMobilePhone(true);
+      } else {
+        setIsMobilePhone(
+          window.innerWidth < 640 ||
+            (window.innerHeight < 540 && window.innerWidth < 1024)
+        );
+      }
+    };
+    const onOpenHandoff = () => setIsHandoffModalOpen(true);
+    window.addEventListener('resize', syncViewportFlags);
+    window.addEventListener('orientationchange', syncViewportFlags);
+    window.addEventListener('aether:open-handoff-modal', onOpenHandoff);
+    return () => {
+      window.removeEventListener('resize', syncViewportFlags);
+      window.removeEventListener('orientationchange', syncViewportFlags);
+      window.removeEventListener('aether:open-handoff-modal', onOpenHandoff);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isPlayingVod) {
+      setIsMobileCustomFullscreen(false);
+    }
+  }, [isPlayingVod]);
+
+  useEffect(() => {
+    const onCustomFsToggle = (ev: Event) => {
+      const customEv = ev as CustomEvent<{ force?: boolean }>;
+      if (typeof customEv.detail?.force === 'boolean') {
+        setIsMobileCustomFullscreen(customEv.detail.force);
+      } else {
+        setIsMobileCustomFullscreen((prev) => !prev);
+      }
+    };
+    window.addEventListener(
+      'aether:vod-custom-fullscreen-toggle',
+      onCustomFsToggle
+    );
+    return () => {
+      window.removeEventListener(
+        'aether:vod-custom-fullscreen-toggle',
+        onCustomFsToggle
+      );
+    };
+  }, []);
+
   const requestTvFullscreen = useCallback(() => {
     try {
-      if (
-        typeof document !== 'undefined' &&
-        !document.fullscreenElement &&
-        document.documentElement.requestFullscreen
-      ) {
-        void document.documentElement.requestFullscreen().catch(() => { });
+      const box = playerBoxRef.current;
+
+      if (typeof document !== 'undefined' && document.fullscreenElement) {
+        void document.exitFullscreen?.().catch(() => { });
+        setIsMobileCustomFullscreen(false);
+        return;
       }
+
+      const fsTarget = box || document.documentElement;
+      if (fsTarget && typeof fsTarget.requestFullscreen === 'function') {
+        fsTarget
+          .requestFullscreen()
+          .then(() => {
+            try {
+              (
+                screen.orientation as unknown as {
+                  lock?: (mode: string) => Promise<void>;
+                }
+              )
+                ?.lock?.('landscape')
+                ?.catch(() => { });
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => {
+            setIsMobileCustomFullscreen((prev) => !prev);
+          });
+        return;
+      }
+
+      setIsMobileCustomFullscreen((prev) => !prev);
     } catch {
       // ignore
     }
@@ -1904,7 +2337,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       );
       const isFocusInSidebarOrHeader = Boolean(
         !isTvInFullMode &&
-          (focusedNow?.closest('aside') || focusedNow?.closest('header'))
+        (focusedNow?.closest('aside') || focusedNow?.closest('header'))
       );
       if (currentTvChannel && (section !== 'tv' || !isFocusInSidebarOrHeader)) {
         return;
@@ -2093,10 +2526,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setIsInfoSheetOpen(false);
           const hasNativeAudioPopover = Boolean(
             vodMenuEl &&
-              (resolvedDirectStream?.audioNames?.length ||
-                playerBoxRef.current?.querySelector(
-                  '[data-vod-primary-audio-btn="true"]'
-                ))
+            (resolvedDirectStream?.audioNames?.length ||
+              playerBoxRef.current?.querySelector(
+                '[data-vod-primary-audio-btn="true"]'
+              ))
           );
           if (vodMenuEl) {
             window.dispatchEvent(
@@ -2104,8 +2537,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 detail: {
                   menu:
                     hasNativeAudioPopover &&
-                    resolvedDirectStream?.audioNames &&
-                    resolvedDirectStream.audioNames.length > 0
+                      resolvedDirectStream?.audioNames &&
+                      resolvedDirectStream.audioNames.length > 0
                       ? 'audio'
                       : 'server',
                 },
@@ -2158,6 +2591,70 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               '[data-vod-bottom-row="true"] button:not([disabled])'
             ) || []
           ).filter((btn) => !btn.closest('[data-vod-menu-popover="true"]'));
+
+        const skipIntroBtn =
+          playerBoxRef.current?.querySelector<HTMLButtonElement>(
+            '[data-vod-skip-intro-btn="true"]'
+          ) || null;
+        const skipIntroCloseBtn =
+          playerBoxRef.current?.querySelector<HTMLButtonElement>(
+            '[data-vod-skip-intro-close-btn="true"]'
+          ) || null;
+        const autoNextBtn =
+          playerBoxRef.current?.querySelector<HTMLButtonElement>(
+            '[data-vod-autonext-btn="true"]'
+          ) || null;
+        const floatingPrimaryBtn = skipIntroBtn || autoNextBtn;
+
+        // Direct 1-Click Remote OK ("Enter") for "Sari peste Intro" / "Următorul Episod" when visible
+        if (!isAnyVodOverlayOpen && floatingPrimaryBtn) {
+          const isFocusedOnFloating =
+            activeEl === skipIntroBtn ||
+            activeEl === skipIntroCloseBtn ||
+            activeEl === autoNextBtn;
+
+          if (
+            (e.key === 'Enter' || kc === 13) &&
+            (isFocusedOnFloating || !isOsdControlFocused)
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (skipIntroCloseBtn && activeEl === skipIntroCloseBtn) {
+              skipIntroCloseBtn.click();
+            } else if (autoNextBtn && activeEl === autoNextBtn) {
+              autoNextBtn.click();
+            } else {
+              floatingPrimaryBtn.click();
+            }
+            return;
+          }
+
+          if (isFocusedOnFloating) {
+            if (e.key === 'ArrowRight' && activeEl === skipIntroBtn && skipIntroCloseBtn) {
+              e.preventDefault();
+              e.stopPropagation();
+              skipIntroCloseBtn.focus();
+              return;
+            }
+            if (e.key === 'ArrowLeft' && activeEl === skipIntroCloseBtn && skipIntroBtn) {
+              e.preventDefault();
+              e.stopPropagation();
+              skipIntroBtn.focus();
+              return;
+            }
+            if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+              e.preventDefault();
+              e.stopPropagation();
+              wakeVodOsd();
+              const playBtn =
+                playerBoxRef.current?.querySelector<HTMLButtonElement>(
+                  '[data-vod-play-btn="true"]'
+                );
+              (playBtn || getBottomRowBtns()[0])?.focus();
+              return;
+            }
+          }
+        }
 
         // Deterministic Row-by-Row TV Remote Navigation inside VOD Popover Menus (Subtitles, Audio, Server, Quality)
         const vodPopoverEl =
@@ -2328,6 +2825,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             const bottomBtns = getBottomRowBtns();
             if (e.key === 'ArrowUp') {
               (
+                floatingPrimaryBtn ||
                 topEpisodesBtn ||
                 topBackBtn ||
                 playBtn ||
@@ -2336,6 +2834,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               )?.focus();
             } else {
               (
+                floatingPrimaryBtn ||
                 playBtn ||
                 seekFwdBtn ||
                 nextEpBtn ||
@@ -2424,7 +2923,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               e.preventDefault();
               e.stopPropagation();
               wakeVodOsd();
-              (timelineBtn || topEpisodesBtn || topBackBtn)?.focus();
+              (floatingPrimaryBtn || timelineBtn || topEpisodesBtn || topBackBtn)?.focus();
               return;
             }
             if (e.key === 'ArrowDown') {
@@ -4049,7 +4548,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (tvSettings.autoFullscreenOnPlay) {
         requestTvFullscreen();
       }
-      setYtUseEmbedFallback(false);
+      setYtUseEmbedFallback(!isLocalHomeServer());
       setActiveYtDurationSec(ytVideo.durationSec || 0);
       setResumeStartSeconds(0);
       setPendingResumePromptSec(null);
@@ -4080,7 +4579,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       explicitSeason?: number,
       explicitEpisode?: number
     ) => {
-      if (autoPlayImmediately && tvSettings.autoFullscreenOnPlay) {
+      if (
+        autoPlayImmediately &&
+        tvSettings.autoFullscreenOnPlay &&
+        typeof window !== 'undefined' &&
+        window.innerWidth >= 640
+      ) {
         requestTvFullscreen();
       }
       const saved = watchProgressMap[item.id];
@@ -4132,6 +4636,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsDirectStreamLoading(true);
       setResolvedDirectStream(null);
       setResolvedFileListStream(null);
+      setFallbackYtVideoId(null);
       setActiveVodItem(normalizedItem);
       setIsSidebarOpen(false);
       setIsPlayingVod(autoPlayImmediately);
@@ -4145,12 +4650,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setSelectedEpisode(targetEpisode);
       const canUseLocalFl = isLocalHomeServer();
       const savedSrv =
-        saved?.server === 'filelist_torrent' && !canUseLocalFl
-          ? undefined
-          : saved?.server;
+        saved?.server === 'kinogram_hls' ||
+          (saved?.server === 'filelist_torrent' && canUseLocalFl)
+          ? saved.server
+          : undefined;
       const defaultSrv =
         tvSettings.defaultVodServer === 'auto_best' ||
-        (tvSettings.defaultVodServer === 'filelist_torrent' && !canUseLocalFl)
+          (tvSettings.defaultVodServer === 'filelist_torrent' && !canUseLocalFl)
           ? 'kinogram_hls'
           : tvSettings.defaultVodServer;
       setActiveServer(
@@ -4206,7 +4712,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handleStartVodPlayback = useCallback(
     (customStartSec?: number, openAudioSheet = false) => {
-      if (tvSettings.autoFullscreenOnPlay) {
+      if (
+        tvSettings.autoFullscreenOnPlay &&
+        typeof window !== 'undefined' &&
+        window.innerWidth >= 640
+      ) {
         requestTvFullscreen();
       }
       if (typeof customStartSec === 'number') {
@@ -4484,10 +4994,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const itemKey = activeVodItem.id;
     const epKey = `S${selectedSeason}E${selectedEpisode}`;
+    setFallbackYtVideoId(null);
     if (lastResolvedItemKeyRef.current !== itemKey) {
       lastResolvedItemKeyRef.current = itemKey;
       lastResolvedEpKeyRef.current = epKey;
-      userManuallySelectedServerRef.current = Boolean(activeVodItem.flTorrentId);
+      userManuallySelectedServerRef.current = Boolean(
+        activeVodItem.flTorrentId && isLocalHomeServer()
+      );
       const relMatch = String(
         activeVodItem.releaseTitle || activeVodItem.name || ''
       ).match(/\bS(\d{1,2})[.\s_-]*E(\d{1,2})\b/i);
@@ -4497,7 +5010,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         (Number(relMatch[1]) === selectedSeason &&
           Number(relMatch[2]) === selectedEpisode);
       userSelectedFlTorrentIdRef.current =
-        matchesCurrentEp && activeVodItem.flTorrentId
+        matchesCurrentEp && activeVodItem.flTorrentId && isLocalHomeServer()
           ? Number(activeVodItem.flTorrentId)
           : null;
     } else if (lastResolvedEpKeyRef.current !== epKey) {
@@ -4594,7 +5107,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
           }
         })
-        .catch(() => {})
+        .catch(() => { })
         .finally(() => {
           if (!cancelled) setIsDirectStreamLoading(false);
         });
@@ -4643,19 +5156,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 if (cancelled || !kpData) return;
                 const resolvedImdb =
                   typeof kpData.imdbId === 'string' &&
-                  kpData.imdbId.startsWith('tt')
+                    kpData.imdbId.startsWith('tt')
                     ? kpData.imdbId
                     : undefined;
                 const countriesStr = Array.isArray(kpData.countries)
                   ? kpData.countries
-                      .map((c: { country: string }) => c.country)
-                      .filter(Boolean)
-                      .join(', ')
+                    .map((c: { country: string }) => c.country)
+                    .filter(Boolean)
+                    .join(', ')
                   : undefined;
                 const genresArr = Array.isArray(kpData.genres)
                   ? kpData.genres
-                      .map((g: { genre: string }) => g.genre)
-                      .filter(Boolean)
+                    .map((g: { genre: string }) => g.genre)
+                    .filter(Boolean)
                   : undefined;
                 const ageStr = kpData.ratingAgeLimits
                   ? `${String(kpData.ratingAgeLimits).replace(/^age/i, '')}+`
@@ -4695,7 +5208,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 });
               });
           })
-          .catch(() => {});
+          .catch(() => { });
       }
 
       return () => {
@@ -4710,8 +5223,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         : '');
     const rawImdbFromItem = String(
       (activeVodItem as { imdbId?: string; imdb_id?: string }).imdbId ||
-        (activeVodItem as { imdbId?: string; imdb_id?: string }).imdb_id ||
-        ''
+      (activeVodItem as { imdbId?: string; imdb_id?: string }).imdb_id ||
+      ''
     ).trim();
     const imdb = activeVodItem.id.startsWith('tt')
       ? activeVodItem.id.split(':')[0]
@@ -5035,6 +5548,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (cancelled) return;
         setResolvedDirectStream(data);
         directResolvedOk = Boolean(data?.ok && (data.dashUrl || data.hlsUrl));
+        if (
+          !directResolvedOk &&
+          !isLocalHomeServer() &&
+          (imdb === 'tt10295772' ||
+            activeVodItem.isRo ||
+            Boolean(activeVodItem.flTorrentId))
+        ) {
+          const ytQuery =
+            activeVodItem.type === 'series'
+              ? `${activeVodItem.name} Sezonul ${selectedSeason} Episodul ${selectedEpisode}`
+              : `${activeVodItem.name} ${activeVodItem.releaseInfo || ''} film complet`;
+          fetch(`/api/youtube/search?q=${encodeURIComponent(ytQuery.trim())}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((ytData) => {
+              if (cancelled || !Array.isArray(ytData?.items) || ytData.items.length === 0) {
+                return;
+              }
+              const bestYt =
+                ytData.items.find((x: { durationSec?: number }) => (x.durationSec || 0) >= 600) ||
+                ytData.items[0];
+              if (bestYt?.videoId) {
+                setFallbackYtVideoId(String(bestYt.videoId));
+              }
+            })
+            .catch(() => { });
+        }
         // Never override activeServer or audio track if user already picked FileList or another server!
         if (
           userManuallySelectedServerRef.current ||
@@ -5626,11 +6165,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setWatchProgressMap((prev) => {
             const merged = { ...prev };
             let changed = false;
+            const localFl = isLocalHomeServer();
             for (const [k, v] of Object.entries(remote)) {
-              if (!v || typeof v !== 'object') continue;
-              const cleanEntry = v.deviceName
-                ? { ...v, deviceName: sanitizeDeviceName(v.deviceName) }
-                : v;
+              if (!v || typeof v !== 'object' || !v.item) continue;
+              const cleanEntry: VodWatchProgressEntry = {
+                ...v,
+                deviceName: v.deviceName
+                  ? sanitizeDeviceName(v.deviceName)
+                  : v.deviceName,
+                server:
+                  !localFl &&
+                    (v.server === 'filelist_torrent' || v.server === 'vidspark')
+                    ? 'kinogram_hls'
+                    : v.server,
+              };
               const existing = merged[k];
               if (
                 !existing ||
@@ -5942,8 +6490,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         <div className="flex items-center justify-between gap-1">
           <span
             className={`px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] font-extrabold tabular-nums transition-colors ${isLiveActive
-                ? 'bg-[#1e3a8a] text-white border border-[#3b82f6]/50 shadow-[0_2px_12px_rgba(96,165,250,0.55)] ring-1 ring-blue-300'
-                : 'bg-white text-[#141414] shadow'
+              ? 'bg-[#1e3a8a] text-white border border-[#3b82f6]/50 shadow-[0_2px_12px_rgba(96,165,250,0.55)] ring-1 ring-blue-300'
+              : 'bg-white text-[#141414] shadow'
               }`}
           >
             ▶ {formatWatchSeconds(entry.currentTime)} /{' '}
@@ -5951,8 +6499,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           </span>
           <span
             className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold tabular-nums ${isLiveActive
-                ? 'bg-[#0d1f38]/95 border border-[#60a5fa]/50 text-[#93c5fd]'
-                : 'bg-[#0b182b]/90 border border-[#60a5fa]/35 text-[#93c5fd]'
+              ? 'bg-[#0d1f38]/95 border border-[#60a5fa]/50 text-[#93c5fd]'
+              : 'bg-[#0b182b]/90 border border-[#60a5fa]/35 text-[#93c5fd]'
               }`}
           >
             {pct}%
@@ -5974,8 +6522,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         <div className="w-full h-1.5 rounded-full bg-white/25 overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-500 ${isLiveActive
-                ? 'bg-gradient-to-r from-[#172554] via-[#1e3a8a] to-[#2563eb] shadow-[0_0_10px_rgba(96,165,250,0.9)]'
-                : 'bg-gradient-to-r from-[#172554] via-[#1e3a8a] to-[#2563eb]'
+              ? 'bg-gradient-to-r from-[#172554] via-[#1e3a8a] to-[#2563eb] shadow-[0_0_10px_rgba(96,165,250,0.9)]'
+              : 'bg-gradient-to-r from-[#172554] via-[#1e3a8a] to-[#2563eb]'
               }`}
             style={{ width: `${pct}%` }}
           />
@@ -6164,7 +6712,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             )}
 
             {!currentStation && currentMusicTrack && (
-              <div className="inline-flex items-center rounded-full bg-[#2563eb]/20 border border-[#60a5fa]/45 overflow-hidden shadow">
+              <div
+                className={`${section === 'music' && !activeVodItem
+                    ? 'hidden sm:inline-flex'
+                    : 'inline-flex'
+                  } items-center rounded-full bg-[#2563eb]/20 border border-[#60a5fa]/45 overflow-hidden shadow`}
+              >
                 <button
                   type="button"
                   onClick={() => {
@@ -6184,9 +6737,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   <img
                     src={currentMusicTrack.coverSmall || currentMusicTrack.cover}
                     alt=""
-                    className={`w-5 h-5 rounded-full object-cover shrink-0 border border-[#60a5fa]/40 ${
-                      isMusicPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
-                    }`}
+                    className={`w-5 h-5 rounded-full object-cover shrink-0 border border-[#60a5fa]/40 ${isMusicPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
+                      }`}
                   />
                   <span className="hidden sm:inline max-w-[180px] truncate">
                     {currentMusicTrack.artist} — {currentMusicTrack.title}
@@ -6319,21 +6871,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               title={
                 tvSettings.tvTheme === 'ambient'
                   ? tr(
-                      'Temă activă: Deschisă (Ambient Slate TV) — Click pentru Întunecat',
-                      'Active Theme: Ambient Slate TV — Click for Dark Mode',
-                      'Тема: Светлая (Ambient Slate TV) — Нажмите для Темной'
-                    )
+                    'Temă activă: Deschisă (Ambient Slate TV) — Click pentru Întunecat',
+                    'Active Theme: Ambient Slate TV — Click for Dark Mode',
+                    'Тема: Светлая (Ambient Slate TV) — Нажмите для Темной'
+                  )
                   : tr(
-                      'Temă activă: Întunecată (Cinema Dark) — Click pentru Deschisă (Ambient TV)',
-                      'Active Theme: Cinema Dark — Click for Ambient Light TV',
-                      'Тема: Темная (Cinema Dark) — Нажмите для Светлой (Ambient TV)'
-                    )
+                    'Temă activă: Întunecată (Cinema Dark) — Click pentru Deschisă (Ambient TV)',
+                    'Active Theme: Cinema Dark — Click for Ambient Light TV',
+                    'Тема: Темная (Cinema Dark) — Нажмите для Светлой (Ambient TV)'
+                  )
               }
-              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer ${
-                tvSettings.tvTheme === 'ambient'
+              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer ${tvSettings.tvTheme === 'ambient'
                   ? 'bg-amber-400/20 border-amber-300/50 text-amber-200 hover:bg-amber-400/30 shadow-sm'
                   : 'bg-white/10 border-white/15 text-zinc-300 hover:text-white hover:bg-white/15'
-              }`}
+                }`}
             >
               {tvSettings.tvTheme === 'ambient' ? (
                 <Sun className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" />
@@ -6523,6 +7074,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     Icon: Bookmark,
                   },
                   {
+                    id: 'downloads',
+                    label: tr('Descărcate', 'Downloads', 'Скачанное'),
+                    Icon: HardDriveDownload,
+                  },
+                  {
                     id: 'calendar',
                     label: tr('Calendar', 'Calendar', 'Календарь'),
                     Icon: Calendar,
@@ -6608,7 +7164,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     ) : (
                       <Icon className="w-5 h-5 mr-3.5 shrink-0 stroke-[1.8]" />
                     )}
-                    <span className="inline truncate">{label}</span>
+                    <span className="inline truncate flex-1 text-left">
+                      {label}
+                    </span>
+                    {id === 'downloads' &&
+                      (activeDownloadProgress ? (
+                        <Loader2 className="w-4 h-4 ml-1.5 text-blue-400 animate-spin shrink-0" />
+                      ) : offlineItems.length > 0 ? (
+                        <span className="ml-1.5 px-1.5 py-0.5 rounded-md bg-blue-500/25 border border-blue-400/40 text-blue-200 text-[10px] font-extrabold tabular-nums shrink-0">
+                          {offlineItems.length}
+                        </span>
+                      ) : null)}
                   </button>
                 );
               })}
@@ -6862,34 +7428,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="relative flex h-2 w-2 shrink-0">
                           <span
-                            className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-90 ${
-                              isLiveNow ? 'bg-emerald-400' : 'bg-blue-400'
-                            }`}
+                            className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-90 ${isLiveNow ? 'bg-emerald-400' : 'bg-blue-400'
+                              }`}
                           />
                           <span
-                            className={`relative inline-flex rounded-full h-2 w-2 ${
-                              isLiveNow ? 'bg-emerald-400' : 'bg-blue-400'
-                            }`}
+                            className={`relative inline-flex rounded-full h-2 w-2 ${isLiveNow ? 'bg-emerald-400' : 'bg-blue-400'
+                              }`}
                           />
                         </span>
                         <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 group-focus/remotecard:text-[#1e3a8a] truncate">
                           {isLiveNow
                             ? tr(
-                                `Rulează • ${devLabel}`,
-                                `Playing • ${devLabel}`,
-                                `Играет • ${devLabel}`
-                              )
+                              `Rulează • ${devLabel}`,
+                              `Playing • ${devLabel}`,
+                              `Играет • ${devLabel}`
+                            )
                             : isFromAnotherDevice
                               ? tr(
-                                  `Alt device • ${devLabel}`,
-                                  `Other device • ${devLabel}`,
-                                  `Устройство • ${devLabel}`
-                                )
+                                `Alt device • ${devLabel}`,
+                                `Other device • ${devLabel}`,
+                                `Устройство • ${devLabel}`
+                              )
                               : tr(
-                                  `Activ • ${devLabel}`,
-                                  `Active • ${devLabel}`,
-                                  `Активно • ${devLabel}`
-                                )}
+                                `Activ • ${devLabel}`,
+                                `Active • ${devLabel}`,
+                                `Активно • ${devLabel}`
+                              )}
                         </span>
                       </div>
                       <Monitor className="w-3.5 h-3.5 text-zinc-400 group-focus/remotecard:text-[#141414] shrink-0" />
@@ -6985,12 +7549,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 }}
                 onClick={wakeVodOsd}
                 data-vod-full-player="true"
-                className="fixed inset-0 z-[200] w-screen h-screen bg-[#090b10] flex flex-col overflow-hidden"
+                className={
+                  isMobileCustomFullscreen && isPortraitViewport
+                    ? "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[100dvh] h-[100vw] rotate-90 z-[9999] bg-black flex flex-col overflow-hidden"
+                    : "fixed inset-0 z-[200] w-full h-[100dvh] sm:w-screen sm:h-screen bg-[#090b10] flex flex-col overflow-hidden"
+                }
               >
                 {/* MINIMAL FLOATING TOP CONTROLS (No duplicated title/poster — Cinema Card is in Bottom Dock) */}
                 <div
                   onMouseEnter={wakeVodOsd}
-                  className={`absolute top-3 sm:top-5 inset-x-3 sm:inset-x-7 z-30 flex items-center justify-between gap-3 transition-all duration-300 pointer-events-none ${isVodOsdVisible ||
+                  className={`absolute top-3 sm:top-5 inset-x-3 sm:inset-x-7 z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 pointer-events-none ${isVodOsdVisible ||
                     isEpisodesDrawerOpen ||
                     isInfoSheetOpen ||
                     (!activeVodItem.id.startsWith('yt_') &&
@@ -7015,8 +7583,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     : 'opacity-0 -translate-y-2'
                     }`}
                 >
-                  {/* Left: Clean Floating Back Button (macOS Tahoe Deep Navy-Emerald) */}
-                  <div className="flex items-center gap-2.5 pointer-events-auto">
+                  {/* Left: Clean Floating Back Button + Mobile Title */}
+                  <div className="flex items-center gap-2 min-w-0 pointer-events-auto">
                     <button
                       type="button"
                       data-vod-top-back-btn="true"
@@ -7027,13 +7595,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           setIsSidebarOpen(true);
                         }
                       }}
-                      className="h-10 sm:h-11 px-4 sm:px-5 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 transition-all shrink-0 cursor-pointer group"
+                      className="h-9 sm:h-11 px-3.5 sm:px-5 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold text-xs sm:text-sm inline-flex items-center gap-1.5 sm:gap-2 transition-all shrink-0 cursor-pointer group"
                     >
                       <ArrowLeft className="w-4 h-4 text-[#60a5fa] group-focus:text-[#081220]" />
                       <span>
                         {tr('Înapoi', 'Back', 'Назад')}
                       </span>
                     </button>
+
+                    {/* Mobile-Only Title + Episode Badge in Top Bar */}
+                    <div className={`${isMobilePhone ? 'flex' : 'flex sm:hidden'} items-center gap-1.5 min-w-0 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10`}>
+                      <span className="text-xs font-extrabold text-white truncate max-w-[180px]">
+                        {detailedMeta?.name || activeVodItem.name}
+                      </span>
+                      {activeVodItem.type === 'series' && (
+                        <span className="px-1.5 py-0.5 rounded bg-[#2563eb]/35 text-[10px] font-black text-blue-200 shrink-0">
+                          S{selectedSeason}:E{selectedEpisode}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Right: Minimal Utility Pills */}
@@ -7046,14 +7626,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             setResumeStartSeconds(0);
                             setPendingResumePromptSec(null);
                           }}
-                          className="h-10 px-4 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-white focus:text-[#081220] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
+                          className="h-9 sm:h-10 px-3 sm:px-4 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-white focus:text-[#081220] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                           <span>
                             {tr(
-                              'De la început (00:00)',
-                              'From start (00:00)',
-                              'С начала (00:00)'
+                              'De la 00:00',
+                              'From 00:00',
+                              'С 00:00'
                             )}
                           </span>
                         </button>
@@ -7080,7 +7660,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               }, 50);
                             }
                           }}
-                          className={`h-10 px-4 rounded-full text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-[#1e3a8a] focus:text-white cursor-pointer ${isInfoSheetOpen
+                          className={`h-9 sm:h-10 px-3.5 sm:px-4 rounded-full text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-[#1e3a8a] focus:text-white cursor-pointer ${isInfoSheetOpen
                             ? 'bg-[#1e3a8a] text-white border border-[#3b82f6]/50 border border-[#bfdbfe]'
                             : 'tahoe-emerald-card hover:bg-[#193144] text-white'
                             }`}
@@ -7092,23 +7672,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </button>
                       )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSettingsSubMenu(null);
-                        setIsSettingsDrawerOpen(true);
-                      }}
-                      title={tr('Setări Smart TV', 'Smart TV Settings', 'Настройки')}
-                      className="h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] inline-flex items-center justify-center cursor-pointer"
-                    >
-                      <Settings className="w-4 h-4" />
-                    </button>
+                    {!isMobilePhone && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSettingsSubMenu(null);
+                          setIsSettingsDrawerOpen(true);
+                        }}
+                        title={tr('Setări Smart TV', 'Smart TV Settings', 'Настройки')}
+                        className="hidden sm:inline-flex h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer"
+                      >
+                        <Settings className="w-4 h-4" />
+                      </button>
+                    )}
 
                     <button
                       type="button"
                       onClick={requestTvFullscreen}
                       title={tr('Ecran Complet', 'Fullscreen', 'Полный экран')}
-                      className="h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] inline-flex items-center justify-center cursor-pointer"
+                      className={`${isMobilePhone ? 'inline-flex h-9 w-9' : 'hidden sm:inline-flex h-10 w-10'} rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer`}
                     >
                       <Maximize2 className="w-4 h-4" />
                     </button>
@@ -7187,6 +7769,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           sourceQualityBadge="YT PREMIUM • 1080p • FĂRĂ RECLAME"
                           onResolutionChange={setLiveVodResolution}
                           onWakeOsd={wakeVodOsd}
+                        onHideOsd={() => {
+                          lastBackHideOsdAtRef.current = Date.now();
+                          setIsVodOsdVisible(false);
+                        }}
                           prevEpisodeLabel={prevYt ? '◀ Clip Anterior' : undefined}
                           nextEpisodeLabel={nextYt ? 'Clip Următor ▶' : undefined}
                           onPrevEpisode={
@@ -7251,9 +7837,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           selectedAudioTrackIdx >= 0
                             ? selectedAudioTrackIdx
                             : resolveAudioTrackIndexByPreference(
-                                resolvedFileListStream.audioNames || [],
-                                tvSettings.defaultAudioPref
-                              )
+                              resolvedFileListStream.audioNames || [],
+                              tvSettings.defaultAudioPref
+                            )
                         }
                         preferredQuality={tvSettings.defaultVideoQuality}
                         initialSubFontSize={tvSettings.defaultSubFontSize}
@@ -7282,8 +7868,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         subtitle={
                           (activeVodItem.type === 'series'
                             ? episodesForSeason.find(
-                                (ep) => ep.episode === selectedEpisode
-                              )?.name
+                              (ep) => ep.episode === selectedEpisode
+                            )?.name
                             : '') ||
                           detailedMeta?.releaseInfo ||
                           activeVodItem.releaseInfo
@@ -7292,8 +7878,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           activeVodItem.id.startsWith('tt')
                             ? activeVodItem.id
                             : detailedMeta?.imdbId ||
-                              resolvedFileListStream.selectedTorrent?.imdbId ||
-                              activeVodItem.id
+                            resolvedFileListStream.selectedTorrent?.imdbId ||
+                            activeVodItem.id
+                        }
+                        tmdbId={
+                          detailedMeta?.moviedb_id || activeVodItem.moviedb_id
                         }
                         mediaType={activeVodItem.type}
                         season={selectedSeason}
@@ -7311,6 +7900,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         externalQualityOptions={flQualityOptions}
                         onResolutionChange={setLiveVodResolution}
                         onWakeOsd={wakeVodOsd}
+                        onHideOsd={() => {
+                          lastBackHideOsdAtRef.current = Date.now();
+                          setIsVodOsdVisible(false);
+                        }}
                         prevEpisodeLabel={
                           activeVodItem.type === 'series' && selectedEpisode > 1
                             ? `Ep. ${selectedEpisode - 1}`
@@ -7450,22 +8043,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       </div>
                     )
                   ) : activeServer === 'kinogram_hls' ||
-                    activeServer === 'filelist_torrent' ? (
-                    isDirectStreamLoading ? (
+                    activeServer === 'filelist_torrent' ||
+                    Boolean(matchedOfflineVodItem) ? (
+                    isDirectStreamLoading && !matchedOfflineVodItem ? (
                       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 text-zinc-200">
                         <Loader2 className="w-10 h-10 text-amber-400 animate-spin" />
                         <p className="text-sm font-bold">
                           Pornire automată Full Mode HD pentru Smart TV...
                         </p>
                       </div>
-                    ) : resolvedDirectStream?.ok &&
-                      (resolvedDirectStream.dashUrl ||
-                        resolvedDirectStream.hlsUrl) ? (
+                    ) : matchedOfflineVodItem ||
+                      (resolvedDirectStream?.ok &&
+                        (resolvedDirectStream.dashUrl ||
+                          resolvedDirectStream.hlsUrl)) ? (
                       <VodNativeHlsPlayer
-                        dashUrl={resolvedDirectStream.dashUrl}
-                        hlsUrl={resolvedDirectStream.hlsUrl}
-                        onStreamError={() => setActiveServer('vidspark')}
+                        offlineItem={matchedOfflineVodItem}
+                        dashUrl={resolvedDirectStream?.dashUrl}
+                        hlsUrl={resolvedDirectStream?.hlsUrl}
+                        onStreamError={() => {
+                          if (!resolvedDirectStream?.ok && !matchedOfflineVodItem) {
+                            setActiveServer('vidspark');
+                          }
+                        }}
                         durationHintSec={(() => {
+                          if (
+                            matchedOfflineVodItem?.duration &&
+                            matchedOfflineVodItem.duration > 60
+                          ) {
+                            return matchedOfflineVodItem.duration;
+                          }
                           const rawRt = String(detailedMeta?.runtime || '');
                           const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
                           if (hmMatch) {
@@ -7483,7 +8089,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           if (savedDur && savedDur > 60) return savedDur;
                           return activeVodItem.type === 'series' ? 2700 : 7200;
                         })()}
-                        audioTrackLabels={resolvedDirectStream.audioNames}
+                        audioTrackLabels={resolvedDirectStream?.audioNames}
                         initialAudioTrackIndex={effectiveAudioTrackIdx}
                         preferredQuality={tvSettings.defaultVideoQuality}
                         initialSubFontSize={tvSettings.defaultSubFontSize}
@@ -7512,8 +8118,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         subtitle={
                           (activeVodItem.type === 'series'
                             ? episodesForSeason.find(
-                                (ep) => ep.episode === selectedEpisode
-                              )?.name
+                              (ep) => ep.episode === selectedEpisode
+                            )?.name
                             : '') ||
                           detailedMeta?.releaseInfo ||
                           activeVodItem.releaseInfo
@@ -7522,21 +8128,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           activeVodItem.id.startsWith('tt')
                             ? activeVodItem.id
                             : detailedMeta?.imdbId ||
-                              resolvedFileListStream?.selectedTorrent?.imdbId ||
-                              activeVodItem.id
+                            resolvedFileListStream?.selectedTorrent?.imdbId ||
+                            activeVodItem.id
+                        }
+                        tmdbId={
+                          detailedMeta?.moviedb_id || activeVodItem.moviedb_id
                         }
                         mediaType={activeVodItem.type}
                         season={selectedSeason}
                         episode={selectedEpisode}
                         subtitleVttUrl={activeSubVttUrl}
-                        subtitleLabel={activeSubLabel}
-                        subtitleCues={activeSubCues}
+                        subtitleLabel={
+                          activeSubLabel ||
+                          matchedOfflineVodItem?.savedSubLabel ||
+                          ''
+                        }
+                        subtitleCues={
+                          activeSubCues.length > 0
+                            ? activeSubCues
+                            : matchedOfflineVodItem?.savedSubCues || []
+                        }
                         isOsdVisible={isVodOsdVisible}
                         activeServerId={activeServer}
                         serverOptions={VOD_SERVERS}
                         externalQualityOptions={flQualityOptions}
                         onResolutionChange={setLiveVodResolution}
                         onWakeOsd={wakeVodOsd}
+                        onHideOsd={() => {
+                          lastBackHideOsdAtRef.current = Date.now();
+                          setIsVodOsdVisible(false);
+                        }}
                         prevEpisodeLabel={
                           activeVodItem.type === 'series' && selectedEpisode > 1
                             ? `Ep. ${selectedEpisode - 1}`
@@ -7649,11 +8270,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           }
                         }}
                       />
+                    ) : fallbackYtVideoId ? (
+                      <iframe
+                        key={`yt_fallback_${fallbackYtVideoId}`}
+                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
+                          fallbackYtVideoId
+                        )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
+                        title={activeVodItem.name}
+                        className="relative z-10 w-full h-full border-0"
+                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                        allowFullScreen
+                      />
                     ) : (
                       <iframe
                         src={buildVodEmbedUrl(
                           'vidspark',
-                          activeVodItem,
+                          detailedMeta || activeVodItem,
                           selectedSeason,
                           selectedEpisode,
                           preferredSubLang,
@@ -7666,11 +8298,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         allowFullScreen
                       />
                     )
+                  ) : fallbackYtVideoId && activeServer === 'vidspark' ? (
+                    <iframe
+                      key={`yt_fallback_srv_${fallbackYtVideoId}`}
+                      src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
+                        fallbackYtVideoId
+                      )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
+                      title={activeVodItem.name}
+                      className="relative z-10 w-full h-full border-0"
+                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
                   ) : (
                     <iframe
                       src={buildVodEmbedUrl(
                         activeServer,
-                        activeVodItem,
+                        detailedMeta || activeVodItem,
                         selectedSeason,
                         selectedEpisode,
                         preferredSubLang,
@@ -7701,68 +8344,67 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     !isDirectStreamLoading && (
                       <div
                         data-vod-bottom-dock="true"
-                        className={`absolute inset-x-3 sm:inset-x-8 bottom-3 sm:bottom-6 z-30 overflow-visible rounded-[28px] tahoe-emerald-osd px-4 sm:px-6 py-3.5 sm:py-4 flex flex-col gap-3 transition-all duration-300 ${
-                          isVodOsdVisible
+                        className={`absolute inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 z-30 overflow-visible rounded-2xl sm:rounded-[28px] tahoe-emerald-osd px-3 sm:px-6 py-2.5 sm:py-4 flex flex-col gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible
                             ? 'opacity-100 translate-y-0 pointer-events-auto'
                             : 'opacity-0 translate-y-2 pointer-events-none'
-                        }`}
+                          }`}
                       >
                         <div
                           data-vod-bottom-row="true"
-                          className="w-full flex flex-wrap items-center justify-between gap-3"
+                          className="w-full flex flex-wrap items-center justify-between gap-1.5 sm:gap-3"
                         >
-                          <div className="flex flex-wrap items-center gap-2.5">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5">
                             {/* Clean Apple TV+ Large Pop-Out Poster & Title + Episode Name inside Bottom Dock */}
                             {(detailedMeta?.poster ||
                               activeVodItem.poster ||
                               detailedMeta?.background ||
                               activeVodItem.background) && (
-                              <div className="hidden sm:flex items-center gap-4 pr-6 mr-2 mb-2 shrink-0 max-w-[540px] overflow-visible">
-                                <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
-                                  <img
-                                    src={
-                                      detailedMeta?.poster ||
-                                      activeVodItem.poster ||
-                                      detailedMeta?.background ||
-                                      activeVodItem.background
-                                    }
-                                    alt={activeVodItem.name}
-                                    className="w-full h-full object-cover"
-                                  />
-                                </div>
-                                <div className="min-w-0 flex flex-col justify-center gap-1 py-1">
-                                  <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow mb-1">
-                                    {uiLang !== 'ru'
-                                      ? detailedMeta?.nameOriginal ||
+                                <div className="hidden sm:flex items-center gap-4 pr-6 mr-2 mb-2 shrink-0 max-w-[540px] overflow-visible">
+                                  <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
+                                    <img
+                                      src={
+                                        detailedMeta?.poster ||
+                                        activeVodItem.poster ||
+                                        detailedMeta?.background ||
+                                        activeVodItem.background
+                                      }
+                                      alt={activeVodItem.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                  <div className="min-w-0 flex flex-col justify-center gap-1 py-1">
+                                    <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow mb-1">
+                                      {uiLang !== 'ru'
+                                        ? detailedMeta?.nameOriginal ||
                                         detailedMeta?.name ||
                                         activeVodItem.nameOriginal ||
                                         activeVodItem.name
-                                      : detailedMeta?.name || activeVodItem.name}
-                                  </div>
-                                  <div className="flex items-center gap-2 min-w-0 text-sm sm:text-base font-semibold text-white/90">
-                                    {activeVodItem.type === 'series' && (
-                                      <>
-                                        <span className="text-white font-bold shrink-0 mr-2">
-                                          S{selectedSeason} · E{selectedEpisode}
-                                        </span>
-                                        <span className="text-white/40 mr-2">•</span>
-                                      </>
-                                    )}
-                                    <span className="truncate text-white/85">
-                                      {(activeVodItem.type === 'series'
-                                        ? episodesForSeason.find(
+                                        : detailedMeta?.name || activeVodItem.name}
+                                    </div>
+                                    <div className="flex items-center gap-2 min-w-0 text-sm sm:text-base font-semibold text-white/90">
+                                      {activeVodItem.type === 'series' && (
+                                        <>
+                                          <span className="text-white font-bold shrink-0 mr-2">
+                                            S{selectedSeason} · E{selectedEpisode}
+                                          </span>
+                                          <span className="text-white/40 mr-2">•</span>
+                                        </>
+                                      )}
+                                      <span className="truncate text-white/85">
+                                        {(activeVodItem.type === 'series'
+                                          ? episodesForSeason.find(
                                             (ep) =>
                                               ep.episode === selectedEpisode
                                           )?.name
-                                        : '') ||
-                                        detailedMeta?.releaseInfo ||
-                                        activeVodItem.releaseInfo ||
-                                        'Cinema 4K'}
-                                    </span>
+                                          : '') ||
+                                          detailedMeta?.releaseInfo ||
+                                          activeVodItem.releaseInfo ||
+                                          'Cinema 4K'}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            )}
+                              )}
 
                             <button
                               type="button"
@@ -7775,9 +8417,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   Math.max(0, s - 15)
                                 );
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                              <RotateCcw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
                               <span>15s</span>
                             </button>
 
@@ -7789,9 +8431,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 wakeVodOsd();
                                 setResumeStartSeconds((s) => s + 15);
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                              <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
                               <span>+15s</span>
                             </button>
 
@@ -7803,9 +8445,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 wakeVodOsd();
                                 setResumeStartSeconds((s) => s + 60);
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <RotateCw className="w-3.5 h-3.5 shrink-0" />
+                              <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
                               <span>+1 min</span>
                             </button>
 
@@ -7821,7 +8463,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     setSelectedEpisode(selectedEpisode - 1);
                                     setResumeStartSeconds(0);
                                   }}
-                                  className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                  className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                                 >
                                   <span>Ep. {selectedEpisode - 1}</span>
                                 </button>
@@ -7838,7 +8480,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   setSelectedEpisode(selectedEpisode + 1);
                                   setResumeStartSeconds(0);
                                 }}
-                                className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                               >
                                 <span>Ep. {selectedEpisode + 1}</span>
                               </button>
@@ -7853,11 +8495,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   setIsInfoSheetOpen(false);
                                   setIsEpisodesDrawerOpen((v) => !v);
                                 }}
-                                className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                               >
-                                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] shrink-0 mr-1" />
+                                <span className="w-2.5 h-2.5 max-sm:w-2 max-sm:h-2 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] shrink-0 mr-1 max-sm:mr-0.5" />
                                 <span>Episoade</span>
-                                <span className="text-white/60 text-[11px] ml-1">
+                                <span className="hidden sm:inline text-white/60 text-[11px] ml-1">
                                   S{selectedSeason}·E{selectedEpisode} (⬇×2)
                                 </span>
                               </button>
@@ -7871,10 +8513,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setIsEpisodesDrawerOpen(false);
                                 setIsInfoSheetOpen((v) => !v);
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.95)] shrink-0 mr-1" />
-                              <span>
+                              <span className="w-2.5 h-2.5 max-sm:w-2 max-sm:h-2 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.95)] shrink-0 mr-1 max-sm:mr-0.5" />
+                              <span className="sm:hidden">Info</span>
+                              <span className="hidden sm:inline">
                                 {activeVodItem.type === 'series'
                                   ? 'Descriere Serial'
                                   : 'Descriere Film'}
@@ -7882,7 +8525,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </button>
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                             <button
                               type="button"
                               onFocus={wakeVodOsd}
@@ -7891,11 +8534,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setIsEpisodesDrawerOpen(false);
                                 setIsInfoSheetOpen((v) => !v);
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <span className="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0 mr-0.5" />
-                              <Layers className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                              <span>Pistă Audio & Sursă</span>
+                              <span className="w-2.5 h-2.5 max-sm:w-2 max-sm:h-2 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0 mr-0.5" />
+                              <Layers className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0 opacity-80" />
+                              <span className="sm:hidden">Sursă</span>
+                              <span className="hidden sm:inline">Pistă Audio & Sursă</span>
                             </button>
                             <button
                               type="button"
@@ -7904,10 +8548,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 wakeVodOsd();
                                 setIsSubFinderOpen(true);
                               }}
-                              className="h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                             >
-                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.95)] shrink-0 mr-0.5" />
+                              <span className="w-2.5 h-2.5 max-sm:w-2 max-sm:h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.95)] shrink-0 mr-0.5" />
                               <span>Subtitrări</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={requestTvFullscreen}
+                              className="sm:hidden h-8 px-2.5 rounded-full bg-blue-600/90 hover:bg-blue-500 text-white text-[11px] font-bold inline-flex items-center gap-1 shadow-md cursor-pointer"
+                            >
+                              <Maximize2 className="w-3 h-3 shrink-0" />
+                              <span>Ecran Complet</span>
                             </button>
                           </div>
                         </div>
@@ -8362,11 +9014,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   className="flex flex-col lg:flex-row items-start w-full"
                 >
                   {/* Left Main Column: Poster + Metadata/Actions on top, and Detalii & Sinopsis immediately underneath Poster */}
-                  <div className="flex-1 min-w-0 space-y-5 w-full lg:mr-8 mb-6 lg:mb-0">
-                    <div className="flex flex-col sm:flex-row items-start w-full">
-                      {/* Left Poster (macOS Tahoe Super-Rounded Squircle Poster with Specular Ring) */}
-                      <div className="w-44 sm:w-52 lg:w-[225px] shrink-0 mx-auto sm:mx-0 sm:mr-7 lg:mr-8 mb-5 sm:mb-0">
-                        <div className="aspect-[2/3] w-full rounded-[28px] overflow-hidden bg-[#1e1e1e] ring-1 ring-white/25 shadow-[0_24px_60px_rgba(0,0,0,0.75)] relative">
+                  <div className="flex-1 min-w-0 space-y-5 max-sm:space-y-3.5 w-full lg:mr-8 mb-6 max-sm:mb-4 lg:mb-0">
+                    <div className="flex flex-row items-start w-full">
+                      {/* Left Poster (macOS Tahoe Super-Rounded Squircle Poster with Specular Ring — compact side-by-side on mobile) */}
+                      <div className="w-28 sm:w-52 lg:w-[225px] shrink-0 mr-3.5 sm:mr-7 lg:mr-8 mb-0">
+                        <div className="aspect-[2/3] w-full rounded-2xl sm:rounded-[28px] overflow-hidden bg-[#1e1e1e] ring-1 ring-white/25 shadow-[0_24px_60px_rgba(0,0,0,0.75)] relative">
                           <img
                             src={
                               detailedMeta?.poster ||
@@ -8380,10 +9032,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       </div>
 
                       {/* Middle Column: Year/Country + Single Original Provider Logo, Huge Title, TMDB/IMDB/KP Row, Runtime/Genres, Action Pills */}
-                      <div className="flex-1 min-w-0 space-y-3.5 pt-1 w-full">
+                      <div className="flex-1 min-w-0 space-y-3.5 max-sm:space-y-2 pt-1 max-sm:pt-0 w-full">
                         {/* Line 1: Year, Country + Single Original Streaming Provider Logo (above the Title) */}
                         <div className="flex flex-wrap items-center">
-                          <span className="text-sm sm:text-[15px] text-zinc-200 font-medium mr-3 mb-1.5">
+                          <span className="text-xs sm:text-[15px] text-zinc-200 font-medium mr-2.5 sm:mr-3 mb-1 sm:mb-1.5">
                             {[
                               detailedMeta?.releaseInfo ||
                               activeVodItem.releaseInfo ||
@@ -8412,7 +9064,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     setSection(activeVodDetectedProvider);
                                     setActiveVodItem(null);
                                   }}
-                                  className="inline-flex items-center pl-1.5 pr-3 py-1 mb-1.5 rounded-full bg-black/55 hover:bg-white/20 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 shadow-[0_6px_20px_rgba(0,0,0,0.45)] text-xs font-extrabold text-white transition-all cursor-pointer"
+                                  className="inline-flex items-center pl-1.5 pr-3 py-1 mb-1 sm:mb-1.5 rounded-full bg-black/55 hover:bg-white/20 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 shadow-[0_6px_20px_rgba(0,0,0,0.45)] text-[11px] sm:text-xs font-extrabold text-white transition-all cursor-pointer"
                                 >
                                   <StreamingPlatformLogo
                                     platformId={activeVodDetectedProvider}
@@ -8428,13 +9080,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             <ProducerStudioLogoBadge
                               studio={activeVodDetectedStudios[0]}
                               size="sm"
-                              className="mb-1.5"
+                              className="mb-1 sm:mb-1.5"
                             />
                           ) : null}
                         </div>
 
                         {/* Line 2: Huge Bold Title */}
-                        <h1 className="text-3xl sm:text-5xl font-bold text-white tracking-tight leading-tight">
+                        <h1 className="text-xl sm:text-5xl font-bold text-white tracking-tight leading-tight line-clamp-2 sm:line-clamp-none">
                           {detailedMeta?.name || activeVodItem.name}
                         </h1>
 
@@ -8453,30 +9105,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
                             return (
                               <>
-                                <span className="inline-flex items-baseline mr-2.5 mb-2 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
-                                  <strong className="text-sm sm:text-[15px] font-bold mr-1.5">
+                                <span className="inline-flex items-baseline mr-1.5 sm:mr-2.5 mb-1.5 sm:mb-2 px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
+                                  <strong className="text-xs sm:text-[15px] font-bold mr-1 sm:mr-1.5">
                                     {displayRating}
                                   </strong>
-                                  <span className="text-[10px] text-zinc-300 uppercase font-semibold tracking-wider">
+                                  <span className="text-[9px] sm:text-[10px] text-zinc-300 uppercase font-semibold tracking-wider">
                                     TMDB
                                   </span>
                                 </span>
 
-                                <span className="inline-flex items-baseline mr-2.5 mb-2 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
-                                  <strong className="text-sm sm:text-[15px] font-bold mr-1.5">
+                                <span className="inline-flex items-baseline mr-1.5 sm:mr-2.5 mb-1.5 sm:mb-2 px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
+                                  <strong className="text-xs sm:text-[15px] font-bold mr-1 sm:mr-1.5">
                                     {displayRating}
                                   </strong>
-                                  <span className="text-[10px] text-amber-400 uppercase font-extrabold tracking-wider">
+                                  <span className="text-[9px] sm:text-[10px] text-amber-400 uppercase font-extrabold tracking-wider">
                                     IMDb
                                   </span>
                                 </span>
 
                                 {numKp > 0 && (
-                                  <span className="inline-flex items-baseline mr-2.5 mb-2 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
-                                    <strong className="text-sm sm:text-[15px] font-bold mr-1.5">
+                                  <span className="inline-flex items-baseline mr-1.5 sm:mr-2.5 mb-1.5 sm:mb-2 px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] text-white">
+                                    <strong className="text-xs sm:text-[15px] font-bold mr-1 sm:mr-1.5">
                                       {rawKp}
                                     </strong>
-                                    <span className="text-[10px] text-zinc-300 uppercase font-semibold tracking-wider">
+                                    <span className="text-[9px] sm:text-[10px] text-zinc-300 uppercase font-semibold tracking-wider">
                                       KP
                                     </span>
                                   </span>
@@ -8485,17 +9137,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             );
                           })()}
 
-                          <span className="mr-2.5 mb-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/30 text-xs text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
+                          <span className="mr-1.5 sm:mr-2.5 mb-1.5 sm:mb-2 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/30 text-[11px] sm:text-xs text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
                             {detailedMeta?.ageRating || '16+'}
                           </span>
 
-                          <span className="mb-2 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/30 text-xs text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
+                          <span className="hidden sm:inline-flex mb-2 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xl border border-white/30 text-xs text-white font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.22)]">
                             {tr('Lansat', 'Released', 'Выпущенный')}
                           </span>
                         </div>
 
                         {/* Line 4: Runtime • Genres separated by | */}
-                        <div className="text-sm sm:text-[15px] text-zinc-200 font-normal pt-0.5">
+                        <div className="text-xs sm:text-[15px] text-zinc-200 font-normal pt-0.5 line-clamp-1 sm:line-clamp-none">
                           {[
                             detailedMeta?.runtime || '01:43',
                             (
@@ -8511,7 +9163,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </div>
 
                         {/* Line 5: Action Buttons Row (macOS Tahoe Pill Buttons — NO fake emoji reactions) */}
-                        <div className="flex flex-wrap items-center pt-2">
+                        <div className="flex flex-wrap items-center pt-1.5 sm:pt-2">
                           {/* Primary White Play Pill ("Play") */}
                           {(() => {
                             const savedProg = watchProgressMap[activeVodItem.id];
@@ -8544,10 +9196,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   backgroundColor: '#1e3a8a',
                                   color: '#ffffff',
                                 }}
-                                className="group/vodplay mr-2.5 mb-2.5 h-12 px-7 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-[#1e3a8a] text-white hover:text-white focus:text-white border-2 border-white/90 focus:border-white focus:ring-4 focus:ring-white font-extrabold text-sm sm:text-[15px] inline-flex items-center shadow-[0_8px_25px_rgba(30,58,138,0.55)] cursor-pointer"
+                                className="group/vodplay mr-2 sm:mr-2.5 mb-2 sm:mb-2.5 h-10 sm:h-12 px-4 sm:px-7 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-[#1e3a8a] text-white hover:text-white focus:text-white border-2 border-white/90 focus:border-white focus:ring-4 focus:ring-white font-extrabold text-xs sm:text-[15px] inline-flex items-center shadow-[0_8px_25px_rgba(30,58,138,0.55)] cursor-pointer"
                               >
                                 <Play
-                                  className="w-4 h-4 mr-2.5 fill-current text-white shrink-0"
+                                  className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2.5 fill-current text-white shrink-0"
                                   style={{ color: '#ffffff' }}
                                 />
                                 <span
@@ -8566,13 +9218,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             );
                           })()}
 
-                          {/* Clapperboard Pill — Official Trailer (Трейлер / Trailer) */}
+                          {/* Clapperboard Icon Pill — Official Trailer (Fără text) */}
                           <button
                             type="button"
                             title={tr('Trailer', 'Trailer', 'Трейлер')}
                             aria-label={tr('Trailer', 'Trailer', 'Трейлер')}
                             onClick={() => void handleOpenTrailer()}
-                            className="mr-2.5 mb-2.5 h-12 px-5 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white inline-flex items-center justify-center font-semibold text-sm sm:text-[15px] transition-all cursor-pointer"
+                            className="mr-2 sm:mr-2.5 mb-2 sm:mb-2.5 h-10 w-10 sm:h-12 sm:w-14 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white flex items-center justify-center transition-all cursor-pointer"
                           >
                             <svg
                               viewBox="0 0 24 24"
@@ -8581,24 +9233,67 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               strokeWidth="1.75"
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              className="w-5 h-5 mr-2.5 shrink-0"
+                              className="w-4 h-4 sm:w-5 sm:h-5 shrink-0"
                               aria-hidden="true"
                             >
-                              {/* Tilted top clapper bar */}
                               <path d="M3.6 9.5 18.8 4.6l1.1 3.3L4.7 12.8" />
                               <path d="m7.8 8.1 2.1 2.6" />
                               <path d="m12.3 6.7 2.1 2.6" />
                               <path d="m16.7 5.3 2.1 2.6" />
-                              {/* Hinge circle on the left */}
                               <circle cx="3.8" cy="11.8" r="1.5" />
-                              {/* Horizontal lower clapper bar + slate box */}
                               <path d="M5.2 12.8H20a1 1 0 0 1 1 1v6.2a1.2 1.2 0 0 1-1.2 1.2H5.2A1.2 1.2 0 0 1 4 20v-6.2" />
                               <path d="M4 16h17" />
                               <path d="m8.5 12.8-1.8 3.2" />
                               <path d="m13.2 12.8-1.8 3.2" />
                               <path d="m17.9 12.8-1.8 3.2" />
                             </svg>
-                            <span>{tr('Trailer', 'Trailer', 'Трейлер')}</span>
+                          </button>
+
+                          {/* Local / Offline Download Icon Pill (Fără text) */}
+                          <button
+                            type="button"
+                            title={tr(
+                              'Descarcă Local (Offline)',
+                              'Download Locally (Offline)',
+                              'Скачать локально (Офлайн)'
+                            )}
+                            aria-label={tr(
+                              'Descarcă Local (Offline)',
+                              'Download Locally (Offline)',
+                              'Скачать локально (Офлайн)'
+                            )}
+                            onClick={() => {
+                              setDownloadError(null);
+                              setDownloadModalSeason(selectedSeason);
+                              setSelectedDownloadEpisodes([selectedEpisode]);
+                              setIsDownloadModalOpen(true);
+                            }}
+                            className={`mr-2 sm:mr-2.5 mb-2 sm:mb-2.5 h-10 w-10 sm:h-12 sm:w-14 rounded-full border flex items-center justify-center transition-all cursor-pointer ${matchedOfflineVodItem ||
+                                offlineItems.some(
+                                  (x) => x.vodId === activeVodItem.id
+                                )
+                                ? 'bg-[#2563eb] text-white border-blue-400 shadow-[0_6px_20px_rgba(37,99,235,0.45)]'
+                                : activeDownloadProgress &&
+                                  activeDownloadTargetId?.startsWith(
+                                    `vod_${activeVodItem.id}`
+                                  )
+                                  ? 'bg-blue-600 text-white border-blue-400 shadow-lg'
+                                  : 'bg-white/10 backdrop-blur-xl border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white'
+                              }`}
+                          >
+                            {activeDownloadProgress &&
+                              activeDownloadTargetId?.startsWith(
+                                `vod_${activeVodItem.id}`
+                              ) ? (
+                              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin shrink-0" />
+                            ) : matchedOfflineVodItem ||
+                              offlineItems.some(
+                                (x) => x.vodId === activeVodItem.id
+                              ) ? (
+                              <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                            ) : (
+                              <Download className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                            )}
                           </button>
 
                           {/* Bookmark Icon Pill (Избранное / Favorite) */}
@@ -8606,13 +9301,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             type="button"
                             title={tr('Adaugă la Favorite', 'Add to Favorites', 'В Избранное')}
                             onClick={() => toggleSaveVodItem(activeVodItem)}
-                            className={`mr-2.5 mb-2.5 h-12 w-14 rounded-full border flex items-center justify-center transition-all cursor-pointer ${savedVodItems.some((x) => x.id === activeVodItem.id)
+                            className={`mr-2 sm:mr-2.5 mb-2 sm:mb-2.5 h-10 w-10 sm:h-12 sm:w-14 rounded-full border flex items-center justify-center transition-all cursor-pointer ${savedVodItems.some((x) => x.id === activeVodItem.id)
                               ? 'bg-white text-[#141414] border-white shadow-md'
                               : 'bg-white/10 backdrop-blur-xl border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white'
                               }`}
                           >
                             <Bookmark
-                              className={`w-5 h-5 ${savedVodItems.some((x) => x.id === activeVodItem.id)
+                              className={`w-4 h-4 sm:w-5 sm:h-5 ${savedVodItems.some((x) => x.id === activeVodItem.id)
                                 ? 'fill-current'
                                 : ''
                                 }`}
@@ -8624,31 +9319,540 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             type="button"
                             title={tr('Subtitrări Online', 'Online Subtitles', 'Субтитры')}
                             onClick={() => setIsSubFinderOpen(true)}
-                            className={`mr-2.5 mb-2.5 h-12 w-14 rounded-full border flex items-center justify-center transition-all cursor-pointer ${activeSubLabel || activeSubCues.length > 0
+                            className={`mb-2 sm:mb-2.5 h-10 w-10 sm:h-12 sm:w-14 rounded-full border flex items-center justify-center transition-all cursor-pointer ${activeSubLabel || activeSubCues.length > 0
                               ? 'bg-white text-[#141414] border-white'
                               : 'bg-white/10 backdrop-blur-xl border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white'
                               }`}
                           >
-                            <Layers className="w-5 h-5" />
-                          </button>
-
-                          {/* Three Dots (•••) Options Pill — Opens Extended Player with Audio & Subtitles Selector */}
-                          <button
-                            type="button"
-                            title={tr('Audio, Server & Subtitrări (Mod Extins)', 'Audio, Server & Subtitles (Extended Mode)', 'Озвучка, Сервер и Субтитры')}
-                            onClick={() => handleStartVodPlayback(undefined, true)}
-                            className="mb-2.5 h-12 w-14 rounded-full bg-white/10 backdrop-blur-xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white flex items-center justify-center transition-all cursor-pointer"
-                          >
-                            <span className="text-lg font-black tracking-widest leading-none">
-                              •••
-                            </span>
+                            <Layers className="w-4 h-4 sm:w-5 sm:h-5" />
                           </button>
                         </div>
                       </div>
                     </div>
 
+                    {/* LOCAL / OFFLINE DOWNLOAD MODAL OVERLAY (Sezon & Episoade + Piste Audio + Calitate Video) */}
+                    {isDownloadModalOpen &&
+                      (() => {
+                        const isSeriesVod = activeVodItem.type === 'series';
+                        const modalSeasonsList =
+                          availableSeasons.length > 0 ? availableSeasons : [1];
+                        const activeModalSeason = modalSeasonsList.includes(
+                          downloadModalSeason
+                        )
+                          ? downloadModalSeason
+                          : modalSeasonsList[0];
+                        const modalSeasonEpisodes =
+                          seasonsMap.get(activeModalSeason) || [
+                            {
+                              season: activeModalSeason,
+                              episode: 1,
+                              title: 'Episodul 1',
+                            },
+                          ];
+                        const savedForThisVod = offlineItems.filter(
+                          (x) =>
+                            x.vodId === activeVodItem.id ||
+                            x.id === `vod_${activeVodItem.id}` ||
+                            x.id.startsWith(`vod_${activeVodItem.id}_`)
+                        );
+                        const isDownloadingThisVod = Boolean(
+                          activeDownloadProgress &&
+                          activeDownloadTargetId?.startsWith(
+                            `vod_${activeVodItem.id}`
+                          )
+                        );
+                        const audioTrackList =
+                          resolvedDirectStream?.audioNames &&
+                            resolvedDirectStream.audioNames.length > 0
+                            ? resolvedDirectStream.audioNames
+                            : ['Original / Audio 1'];
+
+                        return (
+                          <div
+                            className="fixed inset-0 z-[260] bg-black/80 backdrop-blur-xl flex items-center justify-center p-2.5 sm:p-4"
+                            onClick={(e) => {
+                              if (e.target === e.currentTarget) {
+                                setIsDownloadModalOpen(false);
+                              }
+                            }}
+                          >
+                            <div className="w-full max-w-xl max-h-[88vh] flex flex-col rounded-2xl sm:rounded-3xl bg-[#10141d]/98 border border-white/15 shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden">
+                              {/* Ultra-Compact Modal Header */}
+                              <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between gap-2 bg-white/[0.03]">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <HardDriveDownload className="w-4 h-4 text-blue-400 shrink-0" />
+                                  <h3 className="text-xs sm:text-sm font-extrabold text-white truncate">
+                                    {detailedMeta?.name || activeVodItem.name}
+                                  </h3>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setIsDownloadModalOpen(false)}
+                                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              {/* Compact Scrollable Body: 1. Quality -> 2. Audio/Sub -> 3. Season & Episodes */}
+                              <div className="p-3.5 sm:p-4 overflow-y-auto space-y-3">
+                                {/* 1. VIDEO QUALITY (Compact Single-Line 4-Column Row) */}
+                                <div className="space-y-1.5">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400 block">
+                                    {tr(
+                                      '1. Calitate Video',
+                                      '1. Video Quality',
+                                      '1. Качество видео'
+                                    )}
+                                  </span>
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {(
+                                      [
+                                        {
+                                          h: 360 as const,
+                                          label: '360p',
+                                          size: isSeriesVod
+                                            ? '~110MB'
+                                            : '~280MB',
+                                        },
+                                        {
+                                          h: 480 as const,
+                                          label: '480p',
+                                          size: isSeriesVod
+                                            ? '~180MB'
+                                            : '~450MB',
+                                        },
+                                        {
+                                          h: 720 as const,
+                                          label: '720p',
+                                          size: isSeriesVod
+                                            ? '~320MB'
+                                            : '~750MB',
+                                        },
+                                        {
+                                          h: 1080 as const,
+                                          label: '1080p',
+                                          size: isSeriesVod
+                                            ? '~650MB'
+                                            : '~1.5GB',
+                                        },
+                                      ]
+                                    ).map((qOpt) => {
+                                      const active =
+                                        downloadQualityHeight === qOpt.h;
+                                      return (
+                                        <button
+                                          key={qOpt.h}
+                                          type="button"
+                                          onClick={() =>
+                                            setDownloadQualityHeight(qOpt.h)
+                                          }
+                                          className={`py-2 px-2 rounded-xl border text-center transition-all cursor-pointer ${active
+                                              ? 'bg-[#2563eb] border-blue-400 text-white shadow-sm'
+                                              : 'bg-white/[0.05] hover:bg-white/[0.1] border-white/10 text-zinc-300'
+                                            }`}
+                                        >
+                                          <div className="text-xs font-extrabold text-white leading-tight">
+                                            {qOpt.label}
+                                          </div>
+                                          <div
+                                            className={`text-[10px] font-bold tabular-nums leading-tight mt-0.5 ${
+                                              active
+                                                ? 'text-blue-100'
+                                                : 'text-zinc-400'
+                                            }`}
+                                          >
+                                            {qOpt.size}
+                                          </div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                {/* 2. AUDIO & SUBTITLE (Wrapped Grid — Never Cut Off) */}
+                                <div className="space-y-1.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400">
+                                      {tr(
+                                        'Audio & Subtitrare',
+                                        'Audio & Subtitle',
+                                        'Озвучка и субтитры'
+                                      )}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsSubFinderOpen(true)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-[11px] font-bold text-blue-300 cursor-pointer"
+                                    >
+                                      <Languages className="w-3.5 h-3.5 shrink-0" />
+                                      <span className="truncate max-w-[180px]">
+                                        {activeSubLabel ||
+                                          tr(
+                                            'Subtitrare Auto',
+                                            'Auto Subtitle',
+                                            'Авто-субтитры'
+                                          )}
+                                      </span>
+                                    </button>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {audioTrackList.map((aName, idx) => {
+                                      const active =
+                                        Math.max(0, selectedAudioTrackIdx) ===
+                                        idx;
+                                      return (
+                                        <button
+                                          key={`${aName}-${idx}`}
+                                          type="button"
+                                          onClick={() =>
+                                            setSelectedAudioTrackIdx(idx)
+                                          }
+                                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+                                            active
+                                              ? 'bg-[#2563eb] text-white border-blue-400 shadow-sm'
+                                              : 'bg-white/[0.05] hover:bg-white/10 text-zinc-300 border-white/10'
+                                            }`}
+                                        >
+                                          <Volume2 className="w-3 h-3 shrink-0" />
+                                          <span className="truncate max-w-[200px]">
+                                            {aName}
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                {/* 3. SERIES: Season & Episode Multi-Selector (Placed AFTER Quality) */}
+                                {isSeriesVod && (
+                                  <div className="space-y-2 pt-1 border-t border-white/10">
+                                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400 mr-1">
+                                          {tr(
+                                            '2. Episoade',
+                                            '2. Episodes',
+                                            '2. Серии'
+                                          )}
+                                        </span>
+                                        {modalSeasonsList.map((sNum) => {
+                                          const active =
+                                            activeModalSeason === sNum;
+                                          return (
+                                            <button
+                                              key={sNum}
+                                              type="button"
+                                              onClick={() => {
+                                                setDownloadModalSeason(sNum);
+                                                const firstEp =
+                                                  seasonsMap.get(sNum)?.[0]
+                                                    ?.episode || 1;
+                                                setSelectedDownloadEpisodes([
+                                                  firstEp,
+                                                ]);
+                                              }}
+                                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold shrink-0 border transition-all cursor-pointer ${active
+                                                  ? 'bg-white text-zinc-950 border-white'
+                                                  : 'bg-white/[0.06] hover:bg-white/12 text-zinc-300 border-white/15'
+                                                }`}
+                                            >
+                                              S{sNum}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setSelectedDownloadEpisodes(
+                                              modalSeasonEpisodes.map(
+                                                (ep) => ep.episode
+                                              )
+                                            )
+                                          }
+                                          className="px-2.5 py-1 rounded-lg bg-[#2563eb]/25 hover:bg-[#2563eb]/40 border border-blue-400/40 text-[10px] font-bold text-blue-200 cursor-pointer"
+                                        >
+                                          {tr(
+                                            `Tot S${activeModalSeason} (${modalSeasonEpisodes.length})`,
+                                            `All S${activeModalSeason} (${modalSeasonEpisodes.length})`,
+                                            `Все (${modalSeasonEpisodes.length})`
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setSelectedDownloadEpisodes([
+                                              selectedEpisode,
+                                            ])
+                                          }
+                                          className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 text-[10px] font-semibold text-zinc-200 cursor-pointer"
+                                        >
+                                          {tr(
+                                            `Doar E${selectedEpisode}`,
+                                            `Only E${selectedEpisode}`,
+                                            `Сер. ${selectedEpisode}`
+                                          )}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Compact Episode Grid */}
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-44 overflow-y-auto pr-0.5">
+                                      {modalSeasonEpisodes.map((ep) => {
+                                        const isChecked =
+                                          selectedDownloadEpisodes.includes(
+                                            ep.episode
+                                          );
+                                        const epOfflineId = `vod_${activeVodItem.id}_S${activeModalSeason}E${ep.episode}`;
+                                        const isAlreadySaved =
+                                          offlineItems.some(
+                                            (x) => x.id === epOfflineId
+                                          );
+                                        return (
+                                          <button
+                                            key={ep.episode}
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedDownloadEpisodes(
+                                                (prev) =>
+                                                  prev.includes(ep.episode)
+                                                    ? prev.length > 1
+                                                      ? prev.filter(
+                                                        (n) =>
+                                                          n !== ep.episode
+                                                      )
+                                                      : prev
+                                                    : [...prev, ep.episode]
+                                              );
+                                            }}
+                                            className={`px-2.5 py-1.5 rounded-xl border text-left flex items-center justify-between gap-1.5 transition-all cursor-pointer ${isChecked
+                                                ? 'bg-[#2563eb]/30 border-blue-400 text-white'
+                                                : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
+                                              }`}
+                                          >
+                                            <div className="min-w-0">
+                                              <div className="flex items-center gap-1">
+                                                <span className="text-xs font-extrabold text-white">
+                                                  E{ep.episode}
+                                                </span>
+                                                {isAlreadySaved && (
+                                                  <span className="px-1 py-0.2 rounded bg-blue-500/35 text-[8px] font-bold text-blue-200">
+                                                    OK
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="text-[10px] text-zinc-400 truncate">
+                                                {ep.title ||
+                                                  `Ep. ${ep.episode}`}
+                                              </div>
+                                            </div>
+                                            <CheckCircle2
+                                              className={`w-3.5 h-3.5 shrink-0 ${isChecked
+                                                  ? 'text-blue-400'
+                                                  : 'text-white/15'
+                                                }`}
+                                            />
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Live Progress Bar while downloading */}
+                                {isDownloadingThisVod &&
+                                  activeDownloadProgress && (
+                                    <div className="space-y-1.5 p-2.5 rounded-xl bg-blue-950/50 border border-blue-400/40">
+                                      <div className="flex items-center justify-between text-[11px] font-bold text-white tabular-nums">
+                                        <span className="truncate">
+                                          {activeDownloadProgress.stage}
+                                        </span>
+                                        <span className="shrink-0 ml-2 text-blue-300">
+                                          {activeDownloadProgress.percent}% •{' '}
+                                          {formatBytes(
+                                            activeDownloadProgress.downloadedBytes
+                                          )}
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-2 rounded-full bg-white/15 overflow-hidden">
+                                        <div
+                                          className="h-full bg-[#2563eb] transition-all duration-200"
+                                          style={{
+                                            width: `${activeDownloadProgress.percent}%`,
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                {downloadError && (
+                                  <div className="p-2 rounded-xl bg-rose-950/60 border border-rose-500/40 text-[11px] font-semibold text-rose-200">
+                                    {downloadError}
+                                  </div>
+                                )}
+
+                                {/* Already Downloaded Items for this Movie / Series */}
+                                {savedForThisVod.length > 0 && (
+                                  <div className="space-y-1.5 pt-2 border-t border-white/10">
+                                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-blue-300 block">
+                                      {tr(
+                                        `Salvate Local (${savedForThisVod.length})`,
+                                        `Saved Locally (${savedForThisVod.length})`,
+                                        `Сохранено (${savedForThisVod.length})`
+                                      )}
+                                    </span>
+                                    <div className="space-y-1 max-h-28 overflow-y-auto pr-0.5">
+                                      {savedForThisVod.map((savedItem) => (
+                                        <div
+                                          key={savedItem.id}
+                                          className="px-2.5 py-1.5 rounded-xl bg-white/[0.05] border border-white/10 flex items-center justify-between gap-2"
+                                        >
+                                          <div className="min-w-0 text-[11px] font-bold text-white truncate">
+                                            {savedItem.subtitleLabel ||
+                                              savedItem.title}{' '}
+                                            <span className="text-blue-300">
+                                              • {savedItem.qualityLabel} (
+                                              {formatBytes(savedItem.sizeBytes)}
+                                              )
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                if (
+                                                  typeof savedItem.season ===
+                                                  'number' &&
+                                                  typeof savedItem.episode ===
+                                                  'number'
+                                                ) {
+                                                  setSelectedSeason(
+                                                    savedItem.season
+                                                  );
+                                                  setSelectedEpisode(
+                                                    savedItem.episode
+                                                  );
+                                                }
+                                                setIsDownloadModalOpen(false);
+                                                handleStartVodPlayback();
+                                              }}
+                                              className="h-7 px-2.5 rounded-lg bg-[#2563eb] hover:bg-blue-500 text-white text-[10px] font-extrabold inline-flex items-center gap-1 cursor-pointer"
+                                            >
+                                              <Play className="w-3 h-3 fill-current" />
+                                              <span>
+                                                {tr('Redă', 'Play', 'Играть')}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              title={tr(
+                                                'Salvează Fișier',
+                                                'Save File',
+                                                'Файл'
+                                              )}
+                                              onClick={() =>
+                                                void exportOfflineItemToDeviceFile(
+                                                  savedItem
+                                                )
+                                              }
+                                              className="h-7 w-7 rounded-lg bg-white/10 hover:bg-white/20 text-blue-300 inline-flex items-center justify-center border border-white/15 cursor-pointer"
+                                            >
+                                              <HardDriveDownload className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              title={tr(
+                                                'Șterge',
+                                                'Delete',
+                                                'Удалить'
+                                              )}
+                                              onClick={async () => {
+                                                await deleteOfflineItem(
+                                                  savedItem.id
+                                                );
+                                                await refreshOfflineLibrary();
+                                              }}
+                                              className="h-7 w-7 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-500/35 inline-flex items-center justify-center cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Compact Modal Footer Actions */}
+                              <div className="px-4 py-2.5 border-t border-white/10 bg-white/[0.03] flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsDownloadModalOpen(false)}
+                                  className="h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/15 text-zinc-200 text-xs font-bold cursor-pointer"
+                                >
+                                  {tr('Închide', 'Close', 'Закрыть')}
+                                </button>
+
+                                {isDownloadingThisVod ? (
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelOfflineDownload}
+                                    className="h-9 px-4 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold inline-flex items-center gap-1.5 shadow cursor-pointer"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>
+                                      {tr(
+                                        'Oprește',
+                                        'Stop',
+                                        'Остановить'
+                                      )}
+                                    </span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      isDirectStreamLoading && !isSeriesVod
+                                    }
+                                    onClick={() =>
+                                      void handleStartOfflineDownload(
+                                        downloadQualityHeight,
+                                        activeModalSeason,
+                                        selectedDownloadEpisodes
+                                      )
+                                    }
+                                    className="h-9 px-5 rounded-full bg-[#2563eb] hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-extrabold inline-flex items-center gap-1.5 shadow-[0_6px_20px_rgba(37,99,235,0.45)] cursor-pointer"
+                                  >
+                                    <Download className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      {isSeriesVod
+                                        ? tr(
+                                          `Copiază (${selectedDownloadEpisodes.length} ep. • S${activeModalSeason} • ${downloadQualityHeight}p)`,
+                                          `Download (${selectedDownloadEpisodes.length} ep. • S${activeModalSeason} • ${downloadQualityHeight}p)`,
+                                          `Скачать (${selectedDownloadEpisodes.length} сер. • S${activeModalSeason} • ${downloadQualityHeight}p)`
+                                        )
+                                        : tr(
+                                          `Copiază (${downloadQualityHeight}p)`,
+                                          `Download (${downloadQualityHeight}p)`,
+                                          `Скачать (${downloadQualityHeight}p)`
+                                        )}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                     {/* "Подробно" DETAILS SECTION — Placed IMMEDIATELY under the Movie Poster ("poza") in a macOS Tahoe Liquid Glass Container */}
-                    <div className="p-5 sm:p-6 rounded-[28px] tahoe-glass space-y-4 max-w-4xl">
+                    <div className="p-4 sm:p-6 rounded-2xl sm:rounded-[28px] tahoe-glass space-y-3 sm:space-y-4 max-w-4xl">
                       <div className="flex flex-wrap items-center justify-between">
                         <h2 className="text-xl sm:text-[22px] font-semibold text-white tracking-tight">
                           {tr('Detalii & Sinopsis', 'Details & Synopsis', 'Подробно')}
@@ -9165,21 +10369,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             data-vod-compact-open-box={
                               isFlOpen ? 'true' : undefined
                             }
-                            className={`w-full rounded-2xl tahoe-glass transition-all ${
-                              isFlOpen
+                            className={`w-full rounded-2xl tahoe-glass transition-all ${isFlOpen
                                 ? 'border border-[#60a5fa]/60 p-2.5 space-y-2'
                                 : 'p-1'
-                            }`}
+                              }`}
                           >
                             <button
                               type="button"
                               data-vod-compact-trigger="filelist"
                               onClick={() => toggleVodCompactPanel('filelist')}
-                              className={`w-full px-3.5 py-2 rounded-xl flex items-center justify-between gap-2 text-left transition-all focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-white focus:text-[#141414] cursor-pointer group ${
-                                isFlOpen
+                              className={`w-full px-3.5 py-2 rounded-xl flex items-center justify-between gap-2 text-left transition-all focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-white focus:text-[#141414] cursor-pointer group ${isFlOpen
                                   ? 'bg-white/15 text-white'
                                   : 'hover:bg-white/10 text-zinc-100'
-                              }`}
+                                }`}
                             >
                               <div className="min-w-0 flex items-center gap-2">
                                 <Sparkles className="w-3.5 h-3.5 text-[#60a5fa] group-focus:text-blue-700 shrink-0" />
@@ -9655,7 +10857,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             return (
                               <div
                                 data-top-hero-card="true"
-                                className="relative w-full min-h-[300px] sm:min-h-[395px] rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-5 sm:p-9"
+                                className="relative w-full min-h-[245px] sm:min-h-[395px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-4 sm:p-9"
                               >
                                 {/* Full-Bleed Widescreen Backdrop */}
                                 <img
@@ -9727,8 +10929,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               handleFocusVodItem(hItem);
                                             }}
                                             className={`h-2.5 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${isCurrentHero
-                                                ? 'w-7 bg-[#E50914]'
-                                                : 'w-2.5 bg-white/35 hover:bg-white/70'
+                                              ? 'w-7 bg-[#E50914]'
+                                              : 'w-2.5 bg-white/35 hover:bg-white/70'
                                               }`}
                                           />
                                         );
@@ -9738,8 +10940,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 </div>
 
                                 {/* Middle & Bottom: Display Title/Logo + Metadata + Play & More Info + Bottom-Right Badges */}
-                                <div className="relative z-10 mt-8 sm:mt-12 flex flex-col gap-4">
-                                  <div className="max-w-2xl space-y-2.5">
+                                <div className="relative z-10 mt-5 sm:mt-12 flex flex-col gap-3 sm:gap-4">
+                                  <div className="max-w-2xl space-y-2 sm:space-y-2.5">
                                     {!failedHeroLogoIds[heroItem.id] ? (
                                       <img
                                         key={`hero_logo_${heroItem.id}`}
@@ -9751,10 +10953,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                             [heroItem.id]: true,
                                           }))
                                         }
-                                        className="max-h-16 sm:max-h-24 max-w-[300px] sm:max-w-[420px] w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]"
+                                        className="max-h-12 sm:max-h-24 max-w-[220px] sm:max-w-[420px] w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]"
                                       />
                                     ) : (
-                                      <h2 className="text-3xl sm:text-5xl font-black uppercase tracking-tight text-white leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.95)]">
+                                      <h2 className="text-2xl sm:text-5xl font-black uppercase tracking-tight text-white leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.95)] line-clamp-2">
                                         {heroItem.name}
                                       </h2>
                                     )}
@@ -9812,8 +11014,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   </div>
 
                                   {/* Bottom Action Bar: Left (Play + More Info) & Right (Recently Added + TOP 10 #1) */}
-                                  <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
-                                    <div className="flex flex-row items-center gap-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 pt-1">
+                                    <div className="flex flex-row items-center gap-2 sm:gap-3">
                                       <button
                                         type="button"
                                         onFocus={() =>
@@ -9825,9 +11027,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         onClick={() =>
                                           handleOpenVod(heroItem, true)
                                         }
-                                        className="group/heroplay w-auto shrink-0 h-11 sm:h-12 px-7 sm:px-8 rounded-full bg-white hover:bg-zinc-200 focus:bg-[#1e3a8a] text-[#081220] hover:text-[#081220] focus:text-white border border-white/80 focus:border-[#3b82f6]/50 text-sm sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all focus:outline-none focus:ring-4 focus:ring-white focus:scale-105 cursor-pointer whitespace-nowrap"
+                                        className="group/heroplay w-auto shrink-0 h-10 sm:h-12 px-5 sm:px-8 rounded-full bg-white hover:bg-zinc-200 focus:bg-[#1e3a8a] text-[#081220] hover:text-[#081220] focus:text-white border border-white/80 focus:border-[#3b82f6]/50 text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 sm:gap-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all focus:outline-none focus:ring-4 focus:ring-white focus:scale-105 cursor-pointer whitespace-nowrap"
                                       >
-                                        <Play className="w-5 h-5 fill-current text-[#081220] group-focus/heroplay:text-white shrink-0" />
+                                        <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current text-[#081220] group-focus/heroplay:text-white shrink-0" />
                                         <span className="text-[#081220] group-focus/heroplay:text-white font-extrabold">
                                           {tr('Redă', 'Play', 'Смотреть')}
                                         </span>
@@ -9844,7 +11046,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         onClick={() =>
                                           handleOpenVod(heroItem, false)
                                         }
-                                        className="w-auto shrink-0 h-11 sm:h-12 px-6 sm:px-7 rounded-full bg-zinc-700/75 hover:bg-zinc-600/85 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 text-white text-sm sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer whitespace-nowrap"
+                                        className="w-auto shrink-0 h-10 sm:h-12 px-4 sm:px-7 rounded-full bg-zinc-700/75 hover:bg-zinc-600/85 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 text-white text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer whitespace-nowrap"
                                       >
                                         <span>
                                           {tr(
@@ -9944,8 +11146,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     >
                                       <div
                                         className={`aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden transition-all duration-200 group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] ${isLiveCard
-                                            ? 'ring-2 ring-blue-400 shadow-[0_0_28px_rgba(37, 99, 235,0.42)]'
-                                            : 'shadow-lg'
+                                          ? 'ring-2 ring-blue-400 shadow-[0_0_28px_rgba(37, 99, 235,0.42)]'
+                                          : 'shadow-lg'
                                           }`}
                                       >
                                         <img
@@ -9996,8 +11198,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       <div className="mt-2 px-0.5">
                                         <div
                                           className={`text-sm sm:text-[15px] leading-snug line-clamp-1 ${isLiveCard
-                                              ? 'font-bold text-[#60a5fa] group-focus:text-white'
-                                              : 'font-normal text-zinc-100 group-focus:text-white'
+                                            ? 'font-bold text-[#60a5fa] group-focus:text-white'
+                                            : 'font-normal text-zinc-100 group-focus:text-white'
                                             }`}
                                         >
                                           {item.name}
@@ -10559,6 +11761,436 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     onNavigateToSection={setSection}
                   />
                 )}
+
+                {section === 'downloads' && (() => {
+                  // Group downloaded items by series/movie cleanVodId so a series appears as ONE SINGLE CARD
+                  const groupsMap = new Map<
+                    string,
+                    {
+                      cleanVodId: string;
+                      title: string;
+                      poster: string;
+                      isSeries: boolean;
+                      qualityLabel: string;
+                      totalBytes: number;
+                      items: OfflineMediaItem[];
+                    }
+                  >();
+
+                  for (const item of offlineItems) {
+                    const cleanVodId =
+                      item.vodId ||
+                      item.id.replace(/^vod_/, '').replace(/_S\d+E\d+$/, '');
+                    const isSeries =
+                      item.mediaKind === 'series' || Boolean(item.season);
+                    const existing = groupsMap.get(cleanVodId);
+                    if (existing) {
+                      existing.items.push(item);
+                      existing.totalBytes += item.sizeBytes || 0;
+                      if (!existing.poster && item.poster) {
+                        existing.poster = item.poster;
+                      }
+                    } else {
+                      groupsMap.set(cleanVodId, {
+                        cleanVodId,
+                        title: item.title,
+                        poster: item.poster || '',
+                        isSeries,
+                        qualityLabel: item.qualityLabel || 'HD',
+                        totalBytes: item.sizeBytes || 0,
+                        items: [item],
+                      });
+                    }
+                  }
+
+                  const groupedList = Array.from(groupsMap.values()).map((g) => ({
+                    ...g,
+                    items: [...g.items].sort((a, b) => {
+                      const sDiff = (a.season || 1) - (b.season || 1);
+                      if (sDiff !== 0) return sDiff;
+                      return (a.episode || 1) - (b.episode || 1);
+                    }),
+                  }));
+
+                  const activeSeriesGroup = selectedOfflineSeriesId
+                    ? groupedList.find((g) => g.cleanVodId === selectedOfflineSeriesId) || null
+                    : null;
+
+                  return (
+                    <div className="space-y-6 pb-20">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h1 className="text-xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
+                            <HardDriveDownload className="w-6 h-6 sm:w-7 sm:h-7 text-blue-400 shrink-0" />
+                            <span>
+                              {tr(
+                                `Descărcate Offline (${groupedList.length})`,
+                                `Offline Downloads (${groupedList.length})`,
+                                `Скачанные офлайн (${groupedList.length})`
+                              )}
+                            </span>
+                          </h1>
+                          <p className="text-xs sm:text-sm text-zinc-400 mt-1">
+                            {tr(
+                              `${offlineItems.length} fișiere salvate • Spațiu ocupat: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`,
+                              `${offlineItems.length} files • Used: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`,
+                              `${offlineItems.length} файлов • Занято: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`
+                            )}
+                          </p>
+                        </div>
+
+                        {offlineItems.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              for (const it of offlineItems) {
+                                await deleteOfflineItem(it.id);
+                              }
+                              setSelectedOfflineSeriesId(null);
+                              await refreshOfflineLibrary();
+                            }}
+                            className="h-9 sm:h-10 px-4 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-500/40 text-xs font-extrabold inline-flex items-center gap-2 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>
+                              {tr('Șterge tot', 'Delete All', 'Удалить все')}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {activeDownloadProgress && (
+                        <div className="p-4 rounded-2xl bg-[#111726] border border-blue-500/35 space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs sm:text-sm font-extrabold text-blue-300 flex items-center gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                              <span>
+                                {tr(
+                                  'Descărcare în curs...',
+                                  'Downloading...',
+                                  'Загрузка...'
+                                )}
+                              </span>
+                            </div>
+                            {downloadAbortRef.current && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  downloadAbortRef.current?.abort();
+                                  downloadAbortRef.current = null;
+                                  setActiveDownloadProgress(null);
+                                  setActiveDownloadTargetId(null);
+                                }}
+                                className="h-7 px-3 rounded-lg bg-rose-900/70 hover:bg-rose-800 text-white text-[11px] font-bold cursor-pointer"
+                              >
+                                {tr('Oprește', 'Stop', 'Стоп')}
+                              </button>
+                            )}
+                          </div>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs text-zinc-300 font-bold">
+                              <span className="truncate">
+                                {activeDownloadTargetId || 'Descărcare'}
+                              </span>
+                              <span className="tabular-nums text-blue-300">
+                                {activeDownloadProgress.percent}% •{' '}
+                                {formatBytes(activeDownloadProgress.downloadedBytes)}
+                              </span>
+                            </div>
+                            <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
+                              <div
+                                style={{ width: `${activeDownloadProgress.percent}%` }}
+                                className="h-full bg-[#2563eb] rounded-full transition-all"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {groupedList.length === 0 ? (
+                        <div className="p-10 rounded-3xl bg-[#111622] border border-white/10 text-center space-y-3">
+                          <HardDriveDownload className="w-12 h-12 text-zinc-500 mx-auto" />
+                          <div className="text-base sm:text-lg font-extrabold text-white">
+                            {tr(
+                              'Nu ai niciun film sau serial descărcat',
+                              'No downloaded movies or series yet',
+                              'Нет скачанных фильмов или сериалов'
+                            )}
+                          </div>
+                          <p className="text-xs sm:text-sm text-zinc-400 max-w-md mx-auto">
+                            {tr(
+                              'Deschide orice film sau serial și apasă iconița de descărcare pentru a salva episoadele offline.',
+                              'Open any movie or series and tap the download icon to save episodes offline.',
+                              'Откройте любой фильм или сериал и нажмите иконку скачивания.'
+                            )}
+                          </p>
+                        </div>
+                      ) : activeSeriesGroup ? (
+                        /* INSIDE A DOWNLOADED SERIES CARD: PICK EPISODE TO PLAY OR DELETE */
+                        <div className="space-y-4 p-4 sm:p-6 rounded-3xl bg-[#111622] border border-white/12 shadow-2xl">
+                          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-white/10">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedOfflineSeriesId(null)}
+                                className="h-9 px-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                              >
+                                <ArrowLeft className="w-4 h-4 text-blue-400" />
+                                <span>{tr('Înapoi', 'Back', 'Назад')}</span>
+                              </button>
+                              <div className="min-w-0">
+                                <h2 className="text-base sm:text-xl font-black text-white truncate">
+                                  {activeSeriesGroup.title}
+                                </h2>
+                                <p className="text-xs text-blue-300 font-bold">
+                                  {activeSeriesGroup.items.length} episoade descărcate •{' '}
+                                  {formatBytes(activeSeriesGroup.totalBytes)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleOpenVod(
+                                    {
+                                      id: activeSeriesGroup.cleanVodId,
+                                      name: activeSeriesGroup.title,
+                                      type: 'series',
+                                      poster: activeSeriesGroup.poster,
+                                    },
+                                    false,
+                                    activeSeriesGroup.items[0]?.season || 1,
+                                    activeSeriesGroup.items[0]?.episode || 1
+                                  )
+                                }
+                                className="h-9 px-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <span>{tr('Detalii Serial', 'Series Page', 'О сериале')}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  for (const epItem of activeSeriesGroup.items) {
+                                    await deleteOfflineItem(epItem.id);
+                                  }
+                                  setSelectedOfflineSeriesId(null);
+                                  await refreshOfflineLibrary();
+                                }}
+                                className="h-9 px-3.5 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-500/30 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>{tr('Șterge serialul', 'Delete Series', 'Удалить сериал')}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                            {activeSeriesGroup.items.map((epItem) => (
+                              <div
+                                key={epItem.id}
+                                className="p-3 rounded-2xl bg-[#171d2b] border border-white/10 hover:border-blue-500/45 flex items-center justify-between gap-3 transition-colors"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenVod(
+                                      {
+                                        id: activeSeriesGroup.cleanVodId,
+                                        name: activeSeriesGroup.title,
+                                        type: 'series',
+                                        poster: activeSeriesGroup.poster,
+                                      },
+                                      true,
+                                      epItem.season || 1,
+                                      epItem.episode || 1
+                                    )
+                                  }
+                                  className="flex-1 min-w-0 flex items-center gap-3 text-left cursor-pointer"
+                                >
+                                  <div className="w-10 h-10 rounded-xl bg-[#2563eb] text-white font-black text-xs flex items-center justify-center shrink-0 shadow">
+                                    E{epItem.episode || 1}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-xs sm:text-sm font-extrabold text-white truncate">
+                                      Sezonul {epItem.season || 1} • Episodul {epItem.episode || 1}
+                                    </div>
+                                    <div className="text-[11px] text-zinc-400 font-semibold flex items-center gap-2 mt-0.5">
+                                      <span className="text-blue-300 font-bold">{epItem.qualityLabel}</span>
+                                      <span>•</span>
+                                      <span>{formatBytes(epItem.sizeBytes)}</span>
+                                    </div>
+                                  </div>
+                                </button>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenVod(
+                                        {
+                                          id: activeSeriesGroup.cleanVodId,
+                                          name: activeSeriesGroup.title,
+                                          type: 'series',
+                                          poster: activeSeriesGroup.poster,
+                                        },
+                                        true,
+                                        epItem.season || 1,
+                                        epItem.episode || 1
+                                      )
+                                    }
+                                    className="h-8 px-3 rounded-lg bg-[#2563eb] hover:bg-blue-500 text-white text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span>Play</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title={tr('Salvează în Fișiere', 'Save File', 'Сохранить файл')}
+                                    onClick={() => void exportOfflineItemToDeviceFile(epItem)}
+                                    className="h-8 w-8 rounded-lg bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title={tr('Șterge episodul', 'Delete Episode', 'Удалить серию')}
+                                    onClick={async () => {
+                                      await deleteOfflineItem(epItem.id);
+                                      await refreshOfflineLibrary();
+                                    }}
+                                    className="h-8 w-8 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 inline-flex items-center justify-center cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        /* MAIN DOWNLOADS GRID: 1 SINGLE CARD PER SERIES OR MOVIE */
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+                          {groupedList.map((group) => {
+                            const firstItem = group.items[0];
+                            return (
+                              <div
+                                key={`dl_group_${group.cleanVodId}`}
+                                className="p-2.5 sm:p-3 rounded-2xl bg-[#141923] border border-white/10 hover:border-blue-500/40 flex flex-col justify-between gap-2.5 shadow-lg transition-colors"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (group.isSeries) {
+                                      setSelectedOfflineSeriesId(group.cleanVodId);
+                                    } else {
+                                      handleOpenVod(
+                                        {
+                                          id: group.cleanVodId,
+                                          name: group.title,
+                                          type: 'movie',
+                                          poster: group.poster,
+                                        },
+                                        true,
+                                        1,
+                                        1
+                                      );
+                                    }
+                                  }}
+                                  className="group text-left focus:outline-none cursor-pointer"
+                                >
+                                  <div className="aspect-[2/3] w-full rounded-xl bg-zinc-900 relative overflow-hidden mb-2">
+                                    {group.poster ? (
+                                      <img
+                                        src={group.poster}
+                                        alt={group.title}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                      />
+                                    ) : null}
+                                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#2563eb] text-white text-[10px] font-black uppercase shadow">
+                                      {group.isSeries
+                                        ? `${group.items.length} EP. • ${group.qualityLabel}`
+                                        : group.qualityLabel}
+                                    </span>
+                                    <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/80 text-white text-[10px] font-bold tabular-nums">
+                                      {formatBytes(group.totalBytes)}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs sm:text-sm font-bold text-white line-clamp-1">
+                                    {group.title}
+                                  </div>
+                                  <div className="text-[11px] text-blue-300 font-semibold truncate mt-0.5">
+                                    {group.isSeries
+                                      ? `Sezonul ${firstItem?.season || 1} • ${group.items.length} episoade`
+                                      : 'Film salvat offline'}
+                                  </div>
+                                </button>
+
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (group.isSeries) {
+                                        setSelectedOfflineSeriesId(group.cleanVodId);
+                                      } else {
+                                        handleOpenVod(
+                                          {
+                                            id: group.cleanVodId,
+                                            name: group.title,
+                                            type: 'movie',
+                                            poster: group.poster,
+                                          },
+                                          true,
+                                          1,
+                                          1
+                                        );
+                                      }
+                                    }}
+                                    className="flex-1 h-8 rounded-lg bg-[#2563eb] hover:bg-blue-500 text-white text-[11px] font-extrabold inline-flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span>
+                                      {group.isSeries
+                                        ? `Episoade (${group.items.length})`
+                                        : 'Play'}
+                                    </span>
+                                  </button>
+
+                                  {!group.isSeries && firstItem && (
+                                    <button
+                                      type="button"
+                                      title={tr('Salvează în Fișiere', 'Save File', 'Сохранить файл')}
+                                      onClick={() => void exportOfflineItemToDeviceFile(firstItem)}
+                                      className="h-8 px-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[11px] font-bold inline-flex items-center justify-center cursor-pointer"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    title={tr('Șterge', 'Delete', 'Удалить')}
+                                    onClick={async () => {
+                                      for (const it of group.items) {
+                                        await deleteOfflineItem(it.id);
+                                      }
+                                      await refreshOfflineLibrary();
+                                    }}
+                                    className="h-8 px-2.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 text-[11px] font-bold inline-flex items-center justify-center cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <SmartTvCatalogSections
                   section={section}

@@ -48,6 +48,7 @@ export type TvSectionId =
   | 'catalog'
   | 'filter'
   | 'saved'
+  | 'downloads'
   | 'calendar'
   | 'history'
   | 'search';
@@ -501,6 +502,28 @@ export function loadWatchProgressMap(
       VodWatchProgressEntry
     >) || {};
   try {
+    const localFl = isLocalHomeServer();
+    const sanitizeMap = (
+      m: Record<string, VodWatchProgressEntry>
+    ): Record<string, VodWatchProgressEntry> => {
+      const out: Record<string, VodWatchProgressEntry> = {};
+      for (const [key, val] of Object.entries(m)) {
+        if (!val || typeof val !== 'object' || !val.item) continue;
+        const nextVal: VodWatchProgressEntry = { ...val };
+        if (nextVal.deviceName) {
+          nextVal.deviceName = sanitizeDeviceName(nextVal.deviceName);
+        }
+        if (
+          !localFl &&
+          (nextVal.server === 'filelist_torrent' ||
+            nextVal.server === 'vidspark')
+        ) {
+          nextVal.server = 'kinogram_hls';
+        }
+        out[key] = nextVal;
+      }
+      return out;
+    };
     const storageKey = getWatchProgressKeyForProfile(profileId);
     const seedAppliedKey = `filmio_seed_progress_v2_${profileId}`;
     const raw = localStorage.getItem(storageKey);
@@ -513,23 +536,14 @@ export function loadWatchProgressMap(
         !localStorage.getItem(seedAppliedKey))
     ) {
       if (Object.keys(seedMap).length > 0) {
-        const cloned = { ...seedMap };
+        const cloned = sanitizeMap(seedMap);
         localStorage.setItem(storageKey, JSON.stringify(cloned));
         localStorage.setItem(seedAppliedKey, '1');
         return cloned;
       }
       return {};
     }
-    const localFl = isLocalHomeServer();
-    for (const key of Object.keys(parsed)) {
-      if (parsed[key]?.deviceName) {
-        parsed[key].deviceName = sanitizeDeviceName(parsed[key].deviceName);
-      }
-      if (!localFl && parsed[key]?.server === 'filelist_torrent') {
-        parsed[key].server = 'kinogram_hls';
-      }
-    }
-    return parsed;
+    return sanitizeMap(parsed);
   } catch {
     return { ...seedMap };
   }
@@ -653,9 +667,13 @@ export function buildVodEmbedUrl(
         params.set('startAt', String(start));
         params.set('t', String(start));
       }
+      const targetVidsparkId =
+        imdbId === 'tt10295772' && item.moviedb_id
+          ? String(item.moviedb_id)
+          : imdbId || tmdbOrImdbId;
       return isSeries
-        ? `https://vidspark.to/tv/${imdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidspark.to/movie/${imdbId}?${params.toString()}`;
+        ? `https://vidspark.to/tv/${targetVidsparkId}/${season}/${episode}?${params.toString()}`
+        : `https://vidspark.to/movie/${targetVidsparkId}?${params.toString()}`;
     }
     case 'vidzee': {
       const params = new URLSearchParams();

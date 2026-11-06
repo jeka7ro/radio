@@ -1682,7 +1682,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                 {epgChannel.name}
               </div>
               <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
-                🟢 EPG Detaliat • Informații Emisiune
+                EPG Detaliat • Informații Emisiune
               </div>
             </div>
           </div>
@@ -2254,19 +2254,19 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
             type="button"
             data-osd-action-btn="true"
             onClick={() => changeGroupPage(-1)}
-            className="h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
+            className="hidden sm:inline-flex h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 items-center justify-center transition-all cursor-pointer"
             title="Pagina anterioară din grup (Săgeată Stânga)"
           >
             ◀ Pag
           </button>
-          <span className="h-8 px-2.5 rounded-full bg-white/[0.04] border border-white/10 text-[11px] font-extrabold text-sky-300 tabular-nums whitespace-nowrap shrink-0 inline-flex items-center justify-center">
+          <span className="hidden sm:inline-flex h-8 px-2.5 rounded-full bg-white/[0.04] border border-white/10 text-[11px] font-extrabold text-sky-300 tabular-nums whitespace-nowrap shrink-0 items-center justify-center">
             {currentGroupPage}/{totalGroupPages}
           </span>
           <button
             type="button"
             data-osd-action-btn="true"
             onClick={() => changeGroupPage(1)}
-            className="h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
+            className="hidden sm:inline-flex h-8 px-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 text-xs font-bold text-zinc-200 whitespace-nowrap shrink-0 items-center justify-center transition-all cursor-pointer"
             title="Pagina următoare din grup (Săgeată Dreapta)"
           >
             Pag ▶
@@ -2336,7 +2336,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
               <button
                 type="button"
                 onClick={() => setIsOsdKeyboardOpen((v) => !v)}
-                className="h-9 px-3.5 rounded-full bg-white/[0.08] border border-white/15 text-xs font-bold text-white whitespace-nowrap shrink-0 focus:bg-white focus:text-black cursor-pointer"
+                className="hidden sm:inline-flex items-center h-9 px-3.5 rounded-full bg-white/[0.08] border border-white/15 text-xs font-bold text-white whitespace-nowrap shrink-0 focus:bg-white focus:text-black cursor-pointer"
               >
                 Tastatură TV
               </button>
