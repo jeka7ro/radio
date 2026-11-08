@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import {
   SfEpisodesIcon,
+  SfVideoCameraIcon,
   SfCaptionsBubbleIcon,
   SfInfoIcon,
   SfSpeakerWaveIcon,
@@ -3473,11 +3474,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const customEv = ev as CustomEvent<{
         menu?: 'subtitles' | 'audio' | 'server' | 'quality';
       }>;
-      const targetMenu = customEv.detail?.menu;
-      if (!targetMenu) return;
+      const rawTargetMenu = customEv.detail?.menu;
+      if (!rawTargetMenu) return;
+      const targetMenu =
+        rawTargetMenu === 'server' ? 'quality' : rawTargetMenu;
       onWakeOsd?.();
       setOpenMenu((prev) => {
-        const next = prev === targetMenu ? 'none' : targetMenu;
+        const currentNormalized = prev === 'server' ? 'quality' : prev;
+        const next = currentNormalized === targetMenu ? 'none' : targetMenu;
         if (next !== 'none') {
           window.setTimeout(() => {
             const rootEl = playerRootRef.current;
@@ -4538,6 +4542,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                           ? `Episodul ${episode}`
                           : 'Cinema 4K')}
                     </span>
+                    <span className="px-2 py-0.5 rounded-md bg-white/15 border border-white/20 text-[11px] font-bold text-white tracking-wide shrink-0">
+                      {resolutionReport.badgeLabel}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -4718,6 +4725,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               -{formatSeekTime(remainingTimeSec)}
             </span>
 
+            {/* Active Resolution Badge in Timeline Row */}
+            {!isMobilePhone && (
+              <div
+                title="Rezoluție video activă"
+                className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-white/12 border border-white/20 text-white/95 text-[11px] font-semibold tracking-wide shrink-0 items-center"
+              >
+                <span>
+                  {activeQuality === -1 && qualityLevels.length > 1
+                    ? `Auto · ${resolutionReport.badgeLabel}`
+                    : resolutionReport.badgeLabel}
+                </span>
+              </div>
+            )}
+
             {/* Subtle Torrent Speed Pill (only if active) */}
             {torrentLiveStats && (
               <div
@@ -4838,44 +4859,241 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   <SkipForward className="w-3.5 h-3.5 shrink-0" />
                 </button>
               )}
+
+              {mediaType === 'series' && onOpenEpisodesDrawer && (
+                <button
+                  type="button"
+                  data-vod-bottom-episodes-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={() => {
+                    onWakeOsd?.();
+                    setOpenMenu('none');
+                    onOpenEpisodesDrawer();
+                  }}
+                  title={`Episoade S${season}·E${episode}`}
+                  aria-label={`Episoade S${season}·E${episode}`}
+                  className="h-8 sm:h-9 px-2.5 sm:px-3 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-[11px] sm:text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
+                >
+                  <SfEpisodesIcon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Episoade</span>
+                </button>
+              )}
             </div>
 
-            {/* Right Apple Liquid Glass Controls (Roșu: Episoade, Verde: Subtitrări, Galben: Descriere, Albastru: Audio + Server, Calitate, AirPlay) */}
+            {/* Right Apple Liquid Glass Controls (Roșu: Sursă Video, Verde: Subtitrări, Galben: Descriere, Albastru: Audio + AirPlay) */}
             <div
               className={`flex items-center justify-end flex-nowrap shrink-0 ${
                 isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
               }`}
             >
-              {/* 1. Red Remote Button: Episoade / Sursă Video (Apple SF Symbol — play.rectangle.on.rectangle.fill) */}
-              <button
-                type="button"
-                data-vod-bottom-episodes-btn="true"
-                onFocus={() => onWakeOsd?.()}
-                onClick={() => {
-                  onWakeOsd?.();
-                  if (mediaType === 'series' && onOpenEpisodesDrawer) {
-                    setOpenMenu('none');
-                    onOpenEpisodesDrawer();
-                  } else {
-                    setOpenMenu(openMenu === 'quality' ? 'none' : 'quality');
-                  }
-                }}
-                title={
-                  mediaType === 'series'
-                    ? `Episoade S${season}·E${episode} (Butonul Roșu)`
-                    : 'Stream-uri & Calitate Video (Butonul Roșu)'
-                }
-                aria-label={
-                  mediaType === 'series'
-                    ? `Episoade S${season}·E${episode}`
-                    : 'Stream-uri & Calitate Video'
-                }
-                className={`${
-                  isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
-                } rounded-full bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FF453A] focus:text-white shrink-0 cursor-pointer`}
-              >
-                <SfEpisodesIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
-              </button>
+              {/* 1. Red Remote Button: Sursă & Calitate Video (Apple SF Symbol — video.fill) */}
+              <div className="relative">
+                <button
+                  ref={qualityBtnRef}
+                  type="button"
+                  data-vod-primary-quality-btn="true"
+                  data-vod-primary-server-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={(e) => {
+                    onWakeOsd?.();
+                    const next =
+                      openMenu === 'quality' || openMenu === 'server'
+                        ? 'none'
+                        : 'quality';
+                    setOpenMenu(next);
+                    if (next === 'quality') {
+                      const container = e.currentTarget.parentElement;
+                      window.setTimeout(() => {
+                        const activeBtn =
+                          container?.querySelector<HTMLButtonElement>(
+                            '[data-quality-opt-active="true"]'
+                          ) ||
+                          container?.querySelector<HTMLButtonElement>(
+                            '[data-quality-opt="true"]'
+                          );
+                        activeBtn?.focus();
+                      }, 40);
+                    }
+                  }}
+                  title={`Sursă & Calitate Video · ${resolutionReport.badgeLabel} (Butonul Roșu)`}
+                  aria-label="Sursă & Calitate Video (Butonul Roșu)"
+                  className={`${
+                    isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                  } rounded-full inline-flex items-center justify-center transition-all backdrop-blur-2xl focus:outline-none focus:bg-[#FF453A] focus:text-white shrink-0 cursor-pointer ${
+                    openMenu === 'quality' || openMenu === 'server'
+                      ? 'bg-[#FF453A] text-white border border-[#FF453A] shadow-[0_0_16px_rgba(255,69,58,0.55)]'
+                      : 'bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)]'
+                  }`}
+                >
+                  <SfVideoCameraIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+                </button>
+
+                {(openMenu === 'quality' || openMenu === 'server') && (
+                  <div
+                    data-vod-menu-popover="true"
+                    className={`${
+                      isMobilePhone
+                        ? 'absolute right-0 bottom-full mb-2 w-72 max-h-[calc(min(100dvh,100dvw)-92px)]'
+                        : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-80 max-h-[72vh]'
+                    } overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2.5 z-50`}
+                  >
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-xs font-semibold text-white/75">
+                        Sursă & Calitate Video · {resolutionReport.badgeLabel}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setOpenMenu('none')}
+                        className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 text-white/80 inline-flex items-center justify-center focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* 1. Native Stream Resolutions (HLS / DASH Levels) */}
+                    {qualityLevels.length > 0 && (
+                      <div className="space-y-1">
+                        {qualityLevels.map((q) => {
+                          const active = activeQuality === q.index;
+                          const tierText = formatQualityTierLabel(q.height);
+                          return (
+                            <button
+                              key={q.index}
+                              type="button"
+                              data-quality-opt="true"
+                              data-quality-opt-active={
+                                active ? 'true' : undefined
+                              }
+                              onClick={() => {
+                                handleSelectQualityLevel(q.index);
+                                setOpenMenu('none');
+                              }}
+                              className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                                active
+                                  ? 'bg-white text-zinc-950 font-semibold'
+                                  : 'text-white/90 hover:bg-white/15'
+                              }`}
+                            >
+                              <span className="truncate">{tierText}</span>
+                              {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+
+                        {qualityLevels.length > 1 && (
+                          <button
+                            type="button"
+                            data-quality-opt="true"
+                            data-quality-opt-active={
+                              activeQuality === -1 ? 'true' : undefined
+                            }
+                            onClick={() => {
+                              handleSelectQualityLevel(-1);
+                              setOpenMenu('none');
+                            }}
+                            className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                              activeQuality === -1
+                                ? 'bg-white text-zinc-950 font-semibold'
+                                : 'text-white/90 hover:bg-white/15'
+                            }`}
+                          >
+                            <span className="inline-flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                              <span>Auto ({resolutionReport.badgeLabel})</span>
+                            </span>
+                            {activeQuality === -1 && (
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 2. External Source Resolution Variants */}
+                    {!offlineItem && externalQualityOptions.length > 0 && (
+                      <div className="space-y-1.5 pt-1.5 border-t border-white/10">
+                        <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
+                          Stream-uri Video ({externalQualityOptions.length})
+                        </div>
+                        {externalQualityOptions.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            data-quality-opt="true"
+                            data-quality-opt-active={
+                              opt.active ? 'true' : undefined
+                            }
+                            onClick={() => {
+                              opt.onSelect();
+                              setOpenMenu('none');
+                            }}
+                            className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                              opt.active
+                                ? 'bg-white text-zinc-950 font-semibold'
+                                : 'text-white/90 hover:bg-white/15'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate leading-snug">{opt.label}</span>
+                                {opt.badge && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                                      opt.active
+                                        ? 'bg-zinc-950/15 text-zinc-950'
+                                        : 'bg-white/15 text-white'
+                                    }`}
+                                  >
+                                    {opt.badge}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {opt.active && (
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 3. Video Servers (Unified inside the same menu) */}
+                    {!offlineItem && serverOptions.length > 0 && onSelectServer && (
+                      <div className="space-y-1 pt-1.5 border-t border-white/10">
+                        <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
+                          Servere Alternative ({serverOptions.length})
+                        </div>
+                        {serverOptions.map((srv) => {
+                          const active = srv.id === activeServerId;
+                          return (
+                            <button
+                              key={srv.id}
+                              type="button"
+                              data-quality-opt="true"
+                              data-server-opt="true"
+                              data-server-opt-active={active ? 'true' : undefined}
+                              onClick={() => {
+                                onSelectServer(srv.id);
+                                setOpenMenu('none');
+                              }}
+                              className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                                active
+                                  ? 'bg-white text-zinc-950 font-semibold'
+                                  : 'text-white/90 hover:bg-white/15'
+                              }`}
+                            >
+                              <span className="truncate leading-snug">
+                                {srv.label.replace(/^[^\w\d\s]+\s*/, '')}
+                              </span>
+                              {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* 2. Green Remote Button: Subtitles (Apple SF Symbol — captions.bubble.fill) */}
               {(onApplyAutoSubtitle ||
@@ -5435,213 +5653,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 </button>
               ) : null}
 
-              {/* 5. Unified Video Quality & Source Pill (Desktop & Smart TV) */}
-              {!isMobilePhone && (
-                <div className="hidden sm:block relative">
-                  <button
-                    ref={qualityBtnRef}
-                    type="button"
-                    data-vod-primary-quality-btn="true"
-                    data-vod-primary-server-btn="true"
-                    onFocus={() => onWakeOsd?.()}
-                    onClick={(e) => {
-                      const next =
-                        openMenu === 'quality' || openMenu === 'server'
-                          ? 'none'
-                          : 'quality';
-                      setOpenMenu(next);
-                      if (next === 'quality') {
-                        const container = e.currentTarget.parentElement;
-                        window.setTimeout(() => {
-                          const activeBtn =
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-quality-opt-active="true"]'
-                            ) ||
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-quality-opt="true"]'
-                            );
-                          activeBtn?.focus();
-                        }, 40);
-                      }
-                    }}
-                    className={`h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer ${
-                      openMenu === 'quality' || openMenu === 'server'
-                        ? 'bg-white text-zinc-950 font-semibold shadow-md'
-                        : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
-                    }`}
-                  >
-                    <span>
-                      {activeQuality === -1 && qualityLevels.length > 1
-                        ? `Auto · ${resolutionReport.badgeLabel}`
-                        : resolutionReport.badgeLabel}
-                    </span>
-                  </button>
-
-                  {(openMenu === 'quality' || openMenu === 'server') && (
-                    <div
-                      data-vod-menu-popover="true"
-                      className="max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-80 max-h-[72vh] overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2.5 z-50"
-                    >
-                      <div className="flex items-center justify-between px-1">
-                        <span className="text-xs font-semibold text-white/75">
-                          Calitate & Sursă Video
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setOpenMenu('none')}
-                          className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 text-white/80 inline-flex items-center justify-center focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      {/* 1. Native Stream Resolutions (HLS / DASH Levels) */}
-                      {qualityLevels.length > 0 && (
-                        <div className="space-y-1">
-                          {qualityLevels.map((q) => {
-                            const active = activeQuality === q.index;
-                            const tierText = formatQualityTierLabel(q.height);
-                            return (
-                              <button
-                                key={q.index}
-                                type="button"
-                                data-quality-opt="true"
-                                data-quality-opt-active={
-                                  active ? 'true' : undefined
-                                }
-                                onClick={() => {
-                                  handleSelectQualityLevel(q.index);
-                                  setOpenMenu('none');
-                                }}
-                                className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                                  active
-                                    ? 'bg-white text-zinc-950 font-semibold'
-                                    : 'text-white/90 hover:bg-white/15'
-                                }`}
-                              >
-                                <span className="truncate">{tierText}</span>
-                                {active && <Check className="w-3.5 h-3.5 shrink-0" />}
-                              </button>
-                            );
-                          })}
-
-                          {qualityLevels.length > 1 && (
-                            <button
-                              type="button"
-                              data-quality-opt="true"
-                              data-quality-opt-active={
-                                activeQuality === -1 ? 'true' : undefined
-                              }
-                              onClick={() => {
-                                handleSelectQualityLevel(-1);
-                                setOpenMenu('none');
-                              }}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                                activeQuality === -1
-                                  ? 'bg-white text-zinc-950 font-semibold'
-                                  : 'text-white/90 hover:bg-white/15'
-                              }`}
-                            >
-                              <span className="inline-flex items-center gap-1.5">
-                                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                                <span>Auto ({resolutionReport.badgeLabel})</span>
-                              </span>
-                              {activeQuality === -1 && (
-                                <Check className="w-3.5 h-3.5 shrink-0" />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      )}
-
-                      {/* 2. External Source Resolution Variants */}
-                      {!offlineItem && externalQualityOptions.length > 0 && (
-                        <div className="space-y-1.5 pt-1.5 border-t border-white/10">
-                          <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
-                            Stream-uri Video ({externalQualityOptions.length})
-                          </div>
-                          {externalQualityOptions.map((opt) => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              data-quality-opt="true"
-                              data-quality-opt-active={
-                                opt.active ? 'true' : undefined
-                              }
-                              onClick={() => {
-                                opt.onSelect();
-                                setOpenMenu('none');
-                              }}
-                              className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                                opt.active
-                                  ? 'bg-white text-zinc-950 font-semibold'
-                                  : 'text-white/90 hover:bg-white/15'
-                              }`}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="truncate leading-snug">{opt.label}</span>
-                                  {opt.badge && (
-                                    <span
-                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
-                                        opt.active
-                                          ? 'bg-zinc-950/15 text-zinc-950'
-                                          : 'bg-white/15 text-white'
-                                      }`}
-                                    >
-                                      {opt.badge}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              {opt.active && (
-                                <Check className="w-3.5 h-3.5 shrink-0" />
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* 3. Video Servers (Unified inside the same menu) */}
-                      {!offlineItem && serverOptions.length > 0 && onSelectServer && (
-                        <div className="space-y-1 pt-1.5 border-t border-white/10">
-                          <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
-                            Servere Alternative ({serverOptions.length})
-                          </div>
-                          {serverOptions.map((srv) => {
-                            const active = srv.id === activeServerId;
-                            return (
-                              <button
-                                key={srv.id}
-                                type="button"
-                                data-quality-opt="true"
-                                data-server-opt="true"
-                                data-server-opt-active={active ? 'true' : undefined}
-                                onClick={() => {
-                                  onSelectServer(srv.id);
-                                  setOpenMenu('none');
-                                }}
-                                className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                                  active
-                                    ? 'bg-white text-zinc-950 font-semibold'
-                                    : 'text-white/90 hover:bg-white/15'
-                                }`}
-                              >
-                                <span className="truncate leading-snug">
-                                  {srv.label.replace(/^[^\w\d\s]+\s*/, '')}
-                                </span>
-                                {active && <Check className="w-3.5 h-3.5 shrink-0" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 4. AirPlay / Cast Icon Button (Always visible on all devices) + Mobile Fullscreen Icon Button */}
+              {/* 5. AirPlay / Cast Icon Button (Always visible on all devices) + Mobile Fullscreen Icon Button */}
               <button
                 type="button"
                 data-vod-airplay-btn="true"

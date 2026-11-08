@@ -2764,37 +2764,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           return;
         }
 
-        // 4. RED BUTTON (403 / F1 / ColorF0Red): Toggle Upcoming Episodes Drawer (Series) or Description Sheet (Movie)
+        // 4. RED BUTTON (403 / F1 / ColorF0Red): Toggle Video Source & Quality Menu directly
         if (kc === 403 || k === 'F1' || k === 'ColorF0Red') {
           e.preventDefault();
           e.stopPropagation();
           wakeVodOsd();
-          window.dispatchEvent(new CustomEvent('aether:vod-close-menu'));
-          if (activeVodItem?.type === 'series') {
+          setIsEpisodesDrawerOpen(false);
+          if (vodMenuEl) {
             setIsInfoSheetOpen(false);
-            setIsEpisodesDrawerOpen((prev) => {
-              const nextOpen = !prev;
-              if (nextOpen) {
-                window.setTimeout(() => {
-                  const targetBtn =
-                    playerBoxRef.current?.querySelector<HTMLElement>(
-                      '[data-episodes-drawer="true"] [data-drawer-next-ep="true"]'
-                    ) ||
-                    playerBoxRef.current?.querySelector<HTMLElement>(
-                      '[data-episodes-drawer="true"] [data-drawer-initial-focus="true"]'
-                    ) ||
-                    playerBoxRef.current?.querySelector<HTMLElement>(
-                      '[data-episodes-drawer="true"] button'
-                    );
-                  targetBtn?.focus();
-                  targetBtn?.scrollIntoView({
-                    block: 'nearest',
-                    behavior: 'smooth',
-                  });
-                }, 45);
-              }
-              return nextOpen;
-            });
+            window.dispatchEvent(
+              new CustomEvent('aether:vod-open-menu', {
+                detail: { menu: 'quality' },
+              })
+            );
           } else {
             setIsInfoSheetOpen((prev) => !prev);
           }
@@ -9686,20 +9668,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               )}
 
                             {activeVodItem.type === 'series' && (
-                              <button
-                                type="button"
-                                data-vod-next-ep-btn="true"
-                                onFocus={wakeVodOsd}
-                                onClick={() => {
-                                  wakeVodOsd();
-                                  userSelectedFlTorrentIdRef.current = null;
-                                  setSelectedEpisode(selectedEpisode + 1);
-                                  setResumeStartSeconds(0);
-                                }}
-                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                              >
-                                <span>Ep. {selectedEpisode + 1}</span>
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  data-vod-next-ep-btn="true"
+                                  onFocus={wakeVodOsd}
+                                  onClick={() => {
+                                    wakeVodOsd();
+                                    userSelectedFlTorrentIdRef.current = null;
+                                    setSelectedEpisode(selectedEpisode + 1);
+                                    setResumeStartSeconds(0);
+                                  }}
+                                  className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                >
+                                  <span>Ep. {selectedEpisode + 1}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  data-vod-bottom-episodes-btn="true"
+                                  onFocus={wakeVodOsd}
+                                  onClick={() => {
+                                    wakeVodOsd();
+                                    setIsInfoSheetOpen(false);
+                                    setIsEpisodesDrawerOpen((v) => !v);
+                                  }}
+                                  title={`Episoade S${selectedSeason}·E${selectedEpisode}`}
+                                  className="h-9 max-sm:h-8 px-3 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                >
+                                  <SfEpisodesIcon className="w-3.5 h-3.5 shrink-0" />
+                                  <span className="hidden sm:inline">Episoade</span>
+                                </button>
+                              </>
                             )}
 
                           </div>
@@ -9710,22 +9709,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               onFocus={wakeVodOsd}
                               onClick={() => {
                                 wakeVodOsd();
-                                if (activeVodItem.type === 'series') {
-                                  setIsInfoSheetOpen(false);
-                                  setIsEpisodesDrawerOpen((v) => !v);
-                                } else {
-                                  setIsInfoSheetOpen((v) => !v);
-                                }
+                                setIsEpisodesDrawerOpen(false);
+                                setIsInfoSheetOpen((v) => !v);
                               }}
-                              title={
-                                activeVodItem.type === 'series'
-                                  ? `Episoade S${selectedSeason}·E${selectedEpisode} (Butonul Roșu)`
-                                  : 'Stream-uri & Sursă Video (Butonul Roșu)'
-                              }
-                              aria-label="Butonul Roșu"
+                              title="Sursă & Calitate Video (Butonul Roșu)"
+                              aria-label="Sursă & Calitate Video (Butonul Roșu)"
                               className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FF453A] focus:text-white cursor-pointer"
                             >
-                              <SfEpisodesIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              <SfVideoCameraIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
                             </button>
                             <button
                               type="button"
