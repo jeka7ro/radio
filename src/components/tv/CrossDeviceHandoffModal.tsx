@@ -17,6 +17,7 @@ import {
   SharedTvProfile,
   PHOTO_AVATAR_GALLERY,
   detectCurrentDeviceName,
+  loadSharedProfiles,
   saveSharedProfiles,
   saveSharedActiveProfileId,
   isProfileRememberedOnDevice,
@@ -61,7 +62,7 @@ const ON_SCREEN_KEYS = [
 export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = ({
   isOpen,
   onClose,
-  profiles,
+  profiles: profilesProp,
   activeProfileId,
   onSelectProfile,
   onProfilesChange,
@@ -69,9 +70,35 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   initialMode = 'list',
   isPinLockRequired = false,
 }) => {
+  const [profiles, setLocalProfiles] = useState<SharedTvProfile[]>(() =>
+    Array.isArray(profilesProp) && profilesProp.length > 0
+      ? profilesProp
+      : loadSharedProfiles()
+  );
   const [viewMode, setViewMode] = useState<'list' | 'pin_prompt' | 'edit'>('list');
   const [isManageMode, setIsManageMode] = useState<boolean>(false);
   const [deviceLabel, setDeviceLabel] = useState<string>('Dispozitiv');
+  const [focusedCardId, setFocusedCardId] = useState<string | null>(activeProfileId);
+  const modalRootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (Array.isArray(profilesProp) && profilesProp.length > 0) {
+      setLocalProfiles(profilesProp);
+    }
+  }, [profilesProp]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const syncLocal = () => {
+      const latest = loadSharedProfiles();
+      if (latest.length > 0) {
+        setLocalProfiles(latest);
+      }
+    };
+    syncLocal();
+    window.addEventListener('aether:profiles-updated', syncLocal);
+    return () => window.removeEventListener('aether:profiles-updated', syncLocal);
+  }, [isOpen]);
 
   // PIN unlock state
   const [targetPinProfile, setTargetPinProfile] = useState<SharedTvProfile | null>(null);
@@ -127,8 +154,39 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
       setTargetPinProfile(null);
       setEnteredPin('');
       setPinError('');
+      setFocusedCardId(activeProfile?.id || profiles[0]?.id || null);
     }
   }, [isOpen, initialMode, isPinLockRequired, activeProfile?.id]);
+
+  // Auto-focus the currently active profile card whenever 'list' view opens
+  useEffect(() => {
+    if (!isOpen || viewMode !== 'list') return;
+    const focusActiveCard = () => {
+      const root = modalRootRef.current;
+      if (!root) return;
+      const targetBtn =
+        root.querySelector<HTMLButtonElement>(
+          `[data-profile-card-id="${activeProfileId}"]`
+        ) ||
+        root.querySelector<HTMLButtonElement>('[data-profile-row-btn="true"]');
+      if (targetBtn) {
+        try {
+          targetBtn.focus({ preventScroll: true });
+        } catch {
+          targetBtn.focus();
+        }
+        setFocusedCardId(
+          targetBtn.getAttribute('data-profile-card-id') || activeProfileId
+        );
+      }
+    };
+    const t1 = window.setTimeout(focusActiveCard, 35);
+    const t2 = window.setTimeout(focusActiveCard, 120);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [isOpen, viewMode, activeProfileId]);
 
   useEffect(() => {
     if (!isOpen || viewMode !== 'pin_prompt') return;
@@ -138,11 +196,12 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     return () => window.clearTimeout(t);
   }, [isOpen, viewMode, targetPinProfile?.id]);
 
-  // Allow typing digits 0-9, Backspace, or Escape/Back directly on the TV remote / keyboard
+  // Deterministic TV Remote D-Pad & Back navigation across all views ('list', 'pin_prompt', 'edit')
   useEffect(() => {
-    if (!isOpen || viewMode === 'list') return;
+    if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
+      const activeEl = document.activeElement as HTMLElement | null;
+      const activeTag = activeEl?.tagName;
       const isBackKey =
         e.key === 'Escape' ||
         e.key === 'GoBack' ||
@@ -150,6 +209,157 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         e.keyCode === 27 ||
         e.keyCode === 461 ||
         e.keyCode === 10009;
+
+      if (viewMode === 'list') {
+        if (isBackKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isManageMode) {
+            setIsManageMode(false);
+            window.setTimeout(() => {
+              const btn = modalRootRef.current?.querySelector<HTMLButtonElement>(
+                `[data-profile-card-id="${activeProfileId}"]`
+              );
+              btn?.focus();
+            }, 30);
+            return;
+          }
+          if (!isPinLockRequired) {
+            onClose();
+          }
+          return;
+        }
+
+        if (
+          e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight' ||
+          e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown'
+        ) {
+          const root = modalRootRef.current;
+          if (!root) return;
+          e.preventDefault();
+          e.stopPropagation();
+
+          const rowBtns = Array.from(
+            root.querySelectorAll<HTMLButtonElement>('[data-profile-row-btn="true"]')
+          );
+          const bottomBtns = Array.from(
+            root.querySelectorAll<HTMLButtonElement>('[data-bottom-action-btn="true"]')
+          );
+          const closeBtn = root.querySelector<HTMLButtonElement>(
+            '[data-handoff-close-btn="true"]'
+          );
+
+          if (!activeEl || !root.contains(activeEl)) {
+            const initial =
+              root.querySelector<HTMLButtonElement>(
+                `[data-profile-card-id="${activeProfileId}"]`
+              ) || rowBtns[0];
+            initial?.focus();
+            return;
+          }
+
+          const rowIdx = rowBtns.indexOf(activeEl as HTMLButtonElement);
+          if (rowIdx !== -1) {
+            if (e.key === 'ArrowRight') {
+              const next = rowBtns[(rowIdx + 1) % rowBtns.length];
+              next?.focus();
+              return;
+            }
+            if (e.key === 'ArrowLeft') {
+              const prev = rowBtns[(rowIdx - 1 + rowBtns.length) % rowBtns.length];
+              prev?.focus();
+              return;
+            }
+            if (e.key === 'ArrowDown') {
+              const cardId = activeEl.getAttribute('data-profile-card-id');
+              if (cardId && cardId !== 'ADD_NEW') {
+                const subBtn = root.querySelector<HTMLButtonElement>(
+                  `[data-manage-sub-btn="${cardId}"]`
+                );
+                if (subBtn) {
+                  subBtn.focus();
+                  return;
+                }
+              }
+              (bottomBtns[0] || closeBtn)?.focus();
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              closeBtn?.focus();
+              return;
+            }
+          }
+
+          if (activeEl === closeBtn) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+              const target =
+                root.querySelector<HTMLButtonElement>(
+                  `[data-profile-card-id="${focusedCardId || activeProfileId}"]`
+                ) || rowBtns[0];
+              target?.focus();
+            }
+            return;
+          }
+
+          const bottomIdx = bottomBtns.indexOf(activeEl as HTMLButtonElement);
+          if (bottomIdx !== -1) {
+            if (e.key === 'ArrowRight') {
+              const next = bottomBtns[(bottomIdx + 1) % bottomBtns.length];
+              next?.focus();
+              return;
+            }
+            if (e.key === 'ArrowLeft') {
+              const prev =
+                bottomBtns[(bottomIdx - 1 + bottomBtns.length) % bottomBtns.length];
+              prev?.focus();
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              const target =
+                root.querySelector<HTMLButtonElement>(
+                  `[data-profile-card-id="${focusedCardId || activeProfileId}"]`
+                ) || rowBtns[0];
+              target?.focus();
+              return;
+            }
+          }
+
+          // Fallback if focused on a manage-mode sub-button
+          const allManageSubBtns = Array.from(
+            root.querySelectorAll<HTMLButtonElement>('[data-manage-sub-item="true"]')
+          );
+          const subIdx = allManageSubBtns.indexOf(activeEl as HTMLButtonElement);
+          if (subIdx !== -1) {
+            if (e.key === 'ArrowRight') {
+              (allManageSubBtns[subIdx + 1] || bottomBtns[0])?.focus();
+              return;
+            }
+            if (e.key === 'ArrowLeft') {
+              (allManageSubBtns[subIdx - 1] || allManageSubBtns[0])?.focus();
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              const parentId = activeEl.getAttribute('data-manage-parent-id');
+              const parentCard =
+                (parentId &&
+                  root.querySelector<HTMLButtonElement>(
+                    `[data-profile-card-id="${parentId}"]`
+                  )) ||
+                rowBtns[0];
+              parentCard?.focus();
+              return;
+            }
+            if (e.key === 'ArrowDown') {
+              bottomBtns[0]?.focus();
+              return;
+            }
+          }
+        }
+        return;
+      }
+
       if (isBackKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -173,14 +383,30 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [isOpen, viewMode, targetPinProfile?.id, pendingPinAction]);
+  }, [
+    isOpen,
+    viewMode,
+    isManageMode,
+    isPinLockRequired,
+    activeProfileId,
+    focusedCardId,
+    targetPinProfile?.id,
+    pendingPinAction,
+  ]);
 
   const applyUpdatedProfiles = (
     nextList: SharedTvProfile[],
     options?: { allowShrink?: boolean }
   ) => {
+    setLocalProfiles(nextList);
     saveSharedProfiles(nextList, options);
-    onProfilesChange?.(nextList);
+    const stored = loadSharedProfiles();
+    if (stored.length > 0) {
+      setLocalProfiles(stored);
+      onProfilesChange?.(stored);
+    } else {
+      onProfilesChange?.(nextList);
+    }
   };
 
   const openEditorForProfile = (prof: SharedTvProfile) => {
@@ -294,7 +520,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
       return;
     }
 
-    if (candidate === expected || isJekaAdminOverride) {
+    if (candidate === expected) {
       rememberProfileOnDevice(targetPinProfile);
       try {
         sessionStorage.setItem(
@@ -326,9 +552,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     } else {
       setPinError(
         tr(
-          'Cod PIN incorect! Poți folosi și PIN-ul Admin JEKA.',
-          'Incorrect PIN code! You can also use Admin JEKA PIN.',
-          'Неверный PIN-код! Можно также ввести PIN админа JEKA.'
+          'Cod PIN incorect!',
+          'Incorrect PIN code!',
+          'Неверный PIN-код!'
         )
       );
       setEnteredPin('');
@@ -412,18 +638,9 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
       unmarkProfileDeleted(newProf.id);
       const nextList = [...profiles, newProf];
       applyUpdatedProfiles(nextList);
-      rememberProfileOnDevice(newProf);
-      if (cleanPin) {
-        try {
-          sessionStorage.setItem(`smartcinema_pin_verified_${newProf.id}`, cleanPin);
-        } catch {
-          // ignore
-        }
-      }
-      saveSharedActiveProfileId(newProf.id);
-      onSelectProfile(newProf.id);
+      setFocusedCardId(newProf.id);
+      setEditingProfileId(null);
       setViewMode('list');
-      onClose();
     } else if (editingProfileId) {
       const existingProf = profiles.find((p) => p.id === editingProfileId);
       const updatedProf: SharedTvProfile = {
@@ -443,17 +660,26 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         p.id === editingProfileId ? updatedProf : p
       );
       applyUpdatedProfiles(nextList);
-      if (cleanPin) {
-        rememberProfileOnDevice(updatedProf);
-        try {
-          sessionStorage.setItem(`smartcinema_pin_verified_${updatedProf.id}`, cleanPin);
-        } catch {
-          // ignore
+      if (updatedProf.id === activeProfileId) {
+        if (cleanPin) {
+          rememberProfileOnDevice(updatedProf);
+          try {
+            sessionStorage.setItem(
+              `smartcinema_pin_verified_${updatedProf.id}`,
+              cleanPin
+            );
+          } catch {
+            // ignore
+          }
+        } else {
+          forgetProfileOnDevice(updatedProf.id);
+          rememberProfileOnDevice(updatedProf);
         }
       } else {
         forgetProfileOnDevice(updatedProf.id);
-        rememberProfileOnDevice(updatedProf);
       }
+      setFocusedCardId(updatedProf.id);
+      setEditingProfileId(null);
       setViewMode('list');
     }
   };
@@ -499,69 +725,115 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   return createPortal(
     <div
+      ref={modalRootRef}
       data-handoff-modal="true"
-      className="fixed inset-0 z-[250] bg-[radial-gradient(ellipse_at_top,_rgba(110,14,14,0.45)_0%,_rgba(12,12,12,0.97)_55%,_#080808_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
+      className="fixed inset-0 z-[250] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(12,12,12,0.98)_55%,_#060606_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
       onClick={() => {
         if (!isPinLockRequired && viewMode === 'list') onClose();
       }}
     >
-      {/* VIEW 1: NETFLIX-STYLE FULLSCREEN "WHO'S WATCHING?" ON A SINGLE HORIZONTAL ROW */}
+      {/* VIEW 1: FULLSCREEN "CINE VIZIONEAZĂ?" — LOGIN PRIORITY #1 + CRYSTAL-CLEAR ACTIVE & TV FOCUS */}
       {viewMode === 'list' ? (
         <div
-          className="relative w-full max-w-6xl my-auto flex flex-col items-center justify-center py-8 sm:py-12"
+          className="relative w-full max-w-6xl my-auto flex flex-col items-center justify-center py-6 sm:py-10"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Top-Right Close Button */}
           {!isPinLockRequired && (
             <button
               type="button"
+              data-handoff-close-btn="true"
               onClick={onClose}
-              className="fixed top-6 right-6 sm:top-8 sm:right-8 h-10 px-4 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:outline-none text-zinc-300 text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-all cursor-pointer"
+              className="fixed top-5 right-5 sm:top-7 sm:right-8 h-11 px-5 rounded-full bg-white/15 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-white/60 focus:outline-none text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 transition-all cursor-pointer shadow-lg"
             >
               <X className="w-4 h-4" />
               <span>{tr('Închide', 'Close', 'Закрыть')}</span>
             </button>
           )}
 
-          {/* Centered Netflix Heading */}
-          <h2 className="text-2xl sm:text-5xl font-bold tracking-tight text-white text-center mb-6 sm:mb-14">
+          {/* Crystal-Clear Active Profile Indicator Banner at Top */}
+          {activeProfile && (
+            <div className="mb-4 sm:mb-6 inline-flex items-center gap-3 px-4 sm:px-5 py-2 rounded-full bg-emerald-500/20 border-2 border-emerald-400/80 shadow-[0_0_28px_rgba(16,185,129,0.35)]">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="text-xs sm:text-sm font-bold uppercase tracking-wider text-emerald-200">
+                {tr('Conectat acum pe:', 'Currently active:', 'Активный профиль:')}
+              </span>
+              <div className="flex items-center gap-2 pl-1 pr-2 py-0.5 rounded-full bg-emerald-400 text-zinc-950 font-black text-xs sm:text-sm shadow">
+                <img
+                  src={
+                    activeProfile.avatarUrl ||
+                    PHOTO_AVATAR_GALLERY[0].avatarUrl
+                  }
+                  alt={activeProfile.name}
+                  className="w-5 h-5 sm:w-6 sm:h-6 rounded-full object-cover border border-zinc-950/30"
+                />
+                <span>{activeProfile.name}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Centered Heading + Clear TV Remote Sub-instruction */}
+          <h2 className="text-2xl sm:text-5xl font-extrabold tracking-tight text-white text-center mb-2">
             {isManageMode
               ? tr(
-                  'Administrează profilurile:',
-                  'Manage Profiles:',
-                  'Управление профилями:'
+                  'Editează profilurile',
+                  'Manage Profiles',
+                  'Управление профилями'
                 )
-              : tr('Cine vizionează?', "Who's watching?", 'Кто смотрит?')}
+              : tr(
+                  'Alege profilul (Cine vizionează?)',
+                  "Choose Profile (Who's watching?)",
+                  'Выберите профиль (Кто смотрит?)'
+                )}
           </h2>
+          <p className="text-xs sm:text-base font-medium text-zinc-300 text-center mb-6 sm:mb-10 max-w-xl px-4">
+            {isManageMode
+              ? tr(
+                  'Selectează un profil pentru a-i schimba numele, poza sau codul PIN.',
+                  'Select a profile to change its name, photo, or PIN code.',
+                  'Выберите профиль для изменения имени, фото или PIN-кода.'
+                )
+              : tr(
+                  'Folosește săgețile Stânga / Dreapta și apasă OK pe telecomandă pentru a te conecta instant pe profil.',
+                  'Use Left / Right arrows and press OK on your remote to sign in to a profile immediately.',
+                  'Используйте стрелки Влево / Вправо и нажмите OK для входа в профиль.'
+                )}
+          </p>
 
-          {/* Mobile 3-Column Wrapped Grid / Desktop & TV Horizontal Row: All Profiles + Add Profile Always Visible */}
-          <div className="w-full py-2 sm:py-3">
-            <div className="grid grid-cols-3 gap-x-3 gap-y-5 justify-items-center max-w-sm mx-auto px-2 sm:max-w-none sm:flex sm:flex-wrap sm:items-start sm:justify-center sm:gap-7 md:gap-8 sm:px-4">
+          {/* Profiles Row: Priority #1 is Instant Login / Switch User */}
+          <div className="w-full py-2 sm:py-4">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch justify-center gap-4 sm:gap-8 md:gap-10 max-w-md sm:max-w-none mx-auto px-3 sm:px-6">
               {profiles.map((prof, idx) => {
                 const isActive = prof.id === activeProfileId;
+                const isFocused = focusedCardId === prof.id;
                 const hasPin = Boolean(prof.pin && prof.pin.trim());
                 const isKidsProf =
                   Boolean(prof.isKids) || prof.name.toLowerCase() === 'kids';
                 const kidsPreset =
                   PHOTO_AVATAR_GALLERY.find((g) => g.id === 'av_kids') ||
                   PHOTO_AVATAR_GALLERY[4];
-                const avatarSrc = isKidsProf &&
+                const avatarSrc =
+                  isKidsProf &&
                   (!prof.avatarUrl ||
                     prof.avatarUrl.includes('font-size%3D%2244%22') ||
                     prof.avatarUrl.includes('JUNIOR'))
-                  ? kidsPreset.avatarUrl
-                  : prof.avatarUrl ||
-                    PHOTO_AVATAR_GALLERY[idx % PHOTO_AVATAR_GALLERY.length]
-                      .avatarUrl;
+                    ? kidsPreset.avatarUrl
+                    : prof.avatarUrl ||
+                      PHOTO_AVATAR_GALLERY[idx % PHOTO_AVATAR_GALLERY.length]
+                        .avatarUrl;
 
                 return (
                   <div
                     key={prof.id}
-                    className="group relative flex flex-col items-center shrink-0 w-24 sm:w-36 md:w-40"
+                    className="relative flex flex-col items-center shrink-0 w-36 sm:w-44 md:w-48"
                   >
                     <button
                       type="button"
-                      autoFocus={isActive || idx === 0}
+                      data-profile-row-btn="true"
+                      data-profile-card-id={prof.id}
+                      data-drawer-initial-focus={isActive ? 'true' : undefined}
+                      onFocus={() => setFocusedCardId(prof.id)}
+                      onMouseEnter={() => setFocusedCardId(prof.id)}
                       onClick={(e) => {
                         if (isManageMode) {
                           startEditAccount(prof, e);
@@ -569,14 +841,22 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           handleAccountClick(prof);
                         }
                       }}
-                      className="w-full flex flex-col items-center focus:outline-none cursor-pointer"
+                      className={`group w-full p-2 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
+                        isFocused
+                          ? 'scale-105 -translate-y-1'
+                          : isActive
+                            ? 'opacity-100'
+                            : 'opacity-80 hover:opacity-100'
+                      }`}
                     >
-                      {/* Square Rounded Avatar (Netflix Style) */}
+                      {/* Square Rounded Avatar */}
                       <div
-                        className={`relative w-24 h-24 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.65)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105 group-hover:ring-4 group-hover:ring-white group-focus:ring-4 group-focus:ring-white bg-zinc-900 ${
-                          isActive && !isManageMode
-                            ? 'ring-2 ring-white/80'
-                            : ''
+                        className={`relative w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-2xl overflow-hidden transition-all duration-200 bg-zinc-900 ${
+                          isFocused
+                            ? 'ring-2 ring-white shadow-xl'
+                            : isActive
+                              ? 'ring-2 ring-emerald-400 shadow-lg'
+                              : 'ring-1 ring-white/15 group-hover:ring-white/40'
                         }`}
                       >
                         <img
@@ -585,95 +865,122 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           className="w-full h-full object-cover"
                         />
 
-                        {/* Manage Mode Overlay (Classic Netflix Pencil Overlay) */}
+                        {isActive && !isManageMode && (
+                          <span className="absolute top-2 right-2 w-6 h-6 rounded-full bg-emerald-400 text-zinc-950 flex items-center justify-center shadow-md">
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </span>
+                        )}
+
+                        {/* Manage Mode Overlay (ONLY when user explicitly turns on Edit Mode) */}
                         {isManageMode && (
-                          <div className="absolute inset-0 bg-black/55 flex items-center justify-center transition-opacity">
-                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white flex items-center justify-center text-white bg-black/40">
-                              <Pencil className="w-4 h-4 sm:w-5 sm:h-5" />
+                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity">
+                            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-white flex items-center justify-center text-white bg-black/50">
+                              <Pencil className="w-5 h-5" />
                             </div>
                           </div>
                         )}
                       </div>
 
-                      {/* Profile Name Underneath */}
-                      <span className="mt-2 sm:mt-3.5 text-sm sm:text-lg font-medium text-zinc-300 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
-                        {prof.name}
+                      {/* Profile Name Pill */}
+                      <span
+                        className={`mt-3 px-3.5 py-1 rounded-full text-sm sm:text-lg font-extrabold transition-all truncate max-w-full inline-flex items-center gap-1.5 ${
+                          isFocused
+                            ? 'bg-white text-zinc-950 shadow-md'
+                            : isActive
+                              ? 'text-emerald-300'
+                              : 'text-zinc-200 group-hover:text-white'
+                        }`}
+                      >
+                        <span className="truncate">{prof.name}</span>
+                        {hasPin && (
+                          <Lock
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              isFocused ? 'text-zinc-950' : 'text-amber-300'
+                            }`}
+                          />
+                        )}
                       </span>
-
-                      {/* Discreet Lock Icon Underneath Name if PIN-protected */}
-                      {hasPin && (
-                        <span className="mt-0.5 sm:mt-1 inline-flex items-center gap-1 text-zinc-500 group-hover:text-zinc-300">
-                          <Lock className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                        </span>
-                      )}
                     </button>
 
-                    {/* Quick Edit / Reset PIN / Delete mini pill on hover or in Manage Mode */}
-                    {isManageMode ? (
-                      <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => startEditAccount(prof, e)}
-                          className="h-7 px-2.5 rounded-lg bg-white/10 hover:bg-white hover:text-zinc-950 text-[11px] font-bold text-zinc-200 inline-flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Pencil className="w-3 h-3" />
-                          <span>{tr('Editează / PIN', 'Edit / PIN', 'Изм. / PIN')}</span>
-                        </button>
-                        {hasPin && (
-                          <button
-                            type="button"
-                            onClick={(e) => handleResetPinByAdmin(prof, e)}
-                            title={tr(
-                              'Resetează PIN-ul (ca Admin JEKA)',
-                              'Reset PIN (as Admin JEKA)',
-                              'Сбросить PIN (Админ JEKA)'
-                            )}
-                            className="h-7 px-2 rounded-lg bg-amber-500/20 hover:bg-amber-400 text-amber-300 hover:text-zinc-950 text-[11px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer"
-                          >
-                            <Unlock className="w-3 h-3" />
-                            <span>{tr('Reset PIN', 'Reset PIN', 'Сброс PIN')}</span>
-                          </button>
-                        )}
-                        {profiles.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteAccount(prof.id, e)}
-                            title={tr('Șterge profilul', 'Delete profile', 'Удалить')}
-                            className="h-7 w-7 rounded-lg bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white inline-flex items-center justify-center transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    ) : (
+                    {/* Direct Edit / Delete Actions Under Each Profile Card */}
+                    <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
                       <button
                         type="button"
+                        data-manage-sub-item="true"
+                        data-manage-sub-btn={prof.id}
+                        data-manage-parent-id={prof.id}
                         onClick={(e) => startEditAccount(prof, e)}
-                        title={tr(
-                          'Editează poza, numele sau PIN-ul',
-                          'Edit photo, name or PIN',
-                          'Изменить фото, имя или PIN'
-                        )}
-                        className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2 z-10 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-black/65 hover:bg-white text-zinc-200 hover:text-zinc-950 border border-white/20 opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center justify-center transition-all cursor-pointer"
+                        className="h-8 px-3 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:outline-none text-xs font-extrabold text-zinc-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer border border-white/10"
                       >
-                        <Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>{tr('Editează', 'Edit', 'Изм.')}</span>
                       </button>
-                    )}
+                      {hasPin && isManageMode && (
+                        <button
+                          type="button"
+                          data-manage-sub-item="true"
+                          data-manage-parent-id={prof.id}
+                          onClick={(e) => handleResetPinByAdmin(prof, e)}
+                          title={tr(
+                            'Resetează PIN-ul (ca Admin JEKA)',
+                            'Reset PIN (as Admin JEKA)',
+                            'Сбросить PIN (Админ JEKA)'
+                          )}
+                          className="h-8 px-2.5 rounded-full bg-amber-500/20 hover:bg-amber-400 focus:bg-amber-400 focus:text-zinc-950 focus:outline-none text-amber-300 hover:text-zinc-950 text-xs font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <Unlock className="w-3.5 h-3.5" />
+                          <span>{tr('Reset PIN', 'Reset PIN', 'Сброс PIN')}</span>
+                        </button>
+                      )}
+                      {profiles.length > 1 && prof.id !== 'p1' && (
+                        <button
+                          type="button"
+                          data-manage-sub-item="true"
+                          data-manage-parent-id={prof.id}
+                          onClick={(e) => handleDeleteAccount(prof.id, e)}
+                          title={tr('Șterge profilul', 'Delete profile', 'Удалить')}
+                          className="h-8 w-8 rounded-full bg-rose-500/15 hover:bg-rose-600 focus:bg-rose-600 focus:text-white focus:outline-none text-rose-300 hover:text-white inline-flex items-center justify-center transition-colors cursor-pointer border border-rose-500/25"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
 
-              {/* Add Profile Square */}
-              <div className="group flex flex-col items-center shrink-0 w-24 sm:w-36 md:w-40">
+              {/* Add Profile Card */}
+              <div className="relative flex flex-col items-center shrink-0 w-36 sm:w-44 md:w-48">
                 <button
                   type="button"
+                  data-profile-row-btn="true"
+                  data-profile-card-id="ADD_NEW"
+                  onFocus={() => setFocusedCardId('ADD_NEW')}
+                  onMouseEnter={() => setFocusedCardId('ADD_NEW')}
                   onClick={startCreateNewAccount}
-                  className="w-full flex flex-col items-center focus:outline-none cursor-pointer"
+                  className={`group w-full p-2 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
+                    focusedCardId === 'ADD_NEW'
+                      ? 'scale-105 -translate-y-1'
+                      : 'opacity-80 hover:opacity-100'
+                  }`}
                 >
-                  <div className="w-24 h-24 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-2xl bg-white/[0.06] group-hover:bg-white group-focus:bg-white border border-white/15 flex items-center justify-center text-zinc-400 group-hover:text-zinc-950 group-focus:text-zinc-950 shadow-[0_14px_34px_rgba(0,0,0,0.5)] transition-all duration-200 group-hover:scale-105 group-focus:scale-105">
-                    <Plus className="w-10 h-10 sm:w-14 sm:h-14 stroke-[2.2]" />
+                  <div
+                    className={`w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+                      focusedCardId === 'ADD_NEW'
+                        ? 'bg-white text-zinc-950 ring-2 ring-white shadow-xl'
+                        : 'bg-white/[0.07] text-zinc-300 border border-white/15 group-hover:bg-white group-hover:text-zinc-950'
+                    }`}
+                  >
+                    <Plus className="w-12 h-12 sm:w-14 sm:h-14 stroke-[2.4]" />
                   </div>
-                  <span className="mt-2 sm:mt-3.5 text-sm sm:text-lg font-medium text-zinc-400 group-hover:text-white group-focus:text-white transition-colors truncate max-w-full">
+
+                  <span
+                    className={`mt-3 px-3.5 py-1 rounded-full text-sm sm:text-lg font-extrabold transition-all truncate max-w-full ${
+                      focusedCardId === 'ADD_NEW'
+                        ? 'bg-white text-zinc-950 shadow-md'
+                        : 'text-zinc-300 group-hover:text-white'
+                    }`}
+                  >
                     {tr('Adaugă profil', 'Add Profile', 'Добавить')}
                   </span>
                 </button>
@@ -681,38 +988,48 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
             </div>
           </div>
 
-          {/* Bottom Netflix "Manage Profiles" Button */}
-          <div className="mt-7 sm:mt-14 flex flex-wrap items-center justify-center gap-3">
+          {/* Secondary Bottom Bar: Manage / Edit Profiles (Explicitly Separated from Login!) */}
+          <div className="mt-7 sm:mt-10 flex flex-wrap items-center justify-center gap-3">
             <button
               type="button"
+              data-bottom-action-btn="true"
+              data-manage-profiles-btn="true"
               onClick={() => setIsManageMode((prev) => !prev)}
-              className={`h-10 px-7 rounded-md text-xs sm:text-sm font-semibold tracking-[0.16em] uppercase transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-white ${
+              className={`h-11 px-6 rounded-full text-xs sm:text-sm font-extrabold tracking-wider uppercase inline-flex items-center gap-2 transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-zinc-950 ${
                 isManageMode
-                  ? 'bg-white text-zinc-950 hover:bg-zinc-200 font-extrabold'
-                  : 'border border-zinc-500 hover:border-white text-zinc-400 hover:text-white bg-transparent'
+                  ? 'bg-emerald-400 text-zinc-950 hover:bg-emerald-300 shadow-lg'
+                  : 'border border-white/25 bg-white/[0.06] hover:bg-white/15 text-zinc-300 hover:text-white'
               }`}
             >
-              {isManageMode
-                ? tr('Gata', 'Done', 'Готово')
-                : tr(
-                    'Administrează profilurile',
-                    'Manage Profiles',
-                    'Управление профилями'
-                  )}
+              <Pencil className="w-4 h-4" />
+              <span>
+                {isManageMode
+                  ? tr(
+                      'Gata — Înapoi la Conectare',
+                      'Done — Back to Sign In',
+                      'Готово — К выбору профиля'
+                    )
+                  : tr(
+                      'Editează profilurile (Nume / Poză / PIN)',
+                      'Edit Profiles (Name / Photo / PIN)',
+                      'Изменить профили (Имя / Фото / PIN)'
+                    )}
+              </span>
             </button>
 
             {activeProfile?.pin && (
               <button
                 type="button"
+                data-bottom-action-btn="true"
                 onClick={() => {
                   forgetProfileOnDevice(activeProfile.id);
                   setTargetPinProfile(activeProfile);
                   setEnteredPin('');
                   setViewMode('pin_prompt');
                 }}
-                className="h-10 px-5 rounded-md border border-zinc-600 hover:border-amber-400 text-zinc-400 hover:text-amber-300 text-xs sm:text-sm font-semibold tracking-wider uppercase inline-flex items-center gap-2 transition-all cursor-pointer"
+                className="h-11 px-5 rounded-full border border-white/25 bg-white/[0.06] hover:border-amber-400 text-zinc-300 hover:text-amber-300 focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-white focus:outline-none text-xs sm:text-sm font-extrabold tracking-wider uppercase inline-flex items-center gap-2 transition-all cursor-pointer"
               >
-                <Lock className="w-3.5 h-3.5" />
+                <Lock className="w-4 h-4" />
                 <span>{tr('Blochează PIN', 'Lock PIN', 'Заблокировать')}</span>
               </button>
             )}

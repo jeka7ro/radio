@@ -1,10 +1,38 @@
-const CACHE_NAME = 'aether-radio-v8';
+const CACHE_NAME = 'aether-radio-v9';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
   '/icons/favicon.svg',
   '/icons/icon-192.svg',
   '/icons/icon-512.svg',
 ];
+
+function openOfflineDbSw() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('aether_offline_media_db_v1', 1);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getOfflineItemSw(id) {
+  const db = await openOfflineDbSw();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('items', 'readonly');
+    const req = tx.objectStore('items').get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getOfflineBlobSw(key) {
+  const db = await openOfflineDbSw();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('blobs', 'readonly');
+    const req = tx.objectStore('blobs').get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -27,8 +55,64 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Never intercept live audio/video streams, local API endpoints, Vite dev modules, or non-GET requests
   if (request.method !== 'GET') return;
+
+  // Serve downloaded Offline HLS manifests & .ts segments directly from IndexedDB for iOS native AVPlayer
+  if (url.pathname.startsWith('/offline-hls/')) {
+    event.respondWith(
+      (async () => {
+        try {
+          const parts = url.pathname.replace(/^\/offline-hls\//, '').split('/').filter(Boolean);
+          const itemId = decodeURIComponent(parts[0] || '');
+          const subPath = parts.slice(1).join('/');
+          const encId = encodeURIComponent(itemId);
+
+          if (subPath.endsWith('.m3u8')) {
+            const meta = await getOfflineItemSw(itemId);
+            if (!meta) return new Response('Not found', { status: 404 });
+            let manifest = '';
+            if (subPath === 'master.m3u8') manifest = meta.masterM3u8 || '';
+            else if (subPath === 'video.m3u8') manifest = meta.videoM3u8 || '';
+            else if (subPath === 'audio.m3u8') manifest = meta.audioM3u8 || '';
+
+            const rewritten = manifest.replace(
+              new RegExp(`https://offline\\.local/${encId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g'),
+              `${url.origin}/offline-hls/${encId}/`
+            );
+            return new Response(rewritten, {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/vnd.apple.mpegurl',
+                'Cache-Control': 'no-store',
+              },
+            });
+          }
+
+          const segMatch = subPath.match(/^seg\/([va]_\d+)\.ts$/);
+          if (segMatch && segMatch[1]) {
+            const chunk = await getOfflineBlobSw(`${itemId}::${segMatch[1]}`);
+            if (!chunk) return new Response('Segment not found', { status: 404 });
+            const ab = chunk instanceof Blob ? await chunk.arrayBuffer() : chunk;
+            return new Response(ab, {
+              status: 200,
+              headers: {
+                'Content-Type': 'video/mp2t',
+                'Content-Length': String(ab.byteLength),
+                'Cache-Control': 'no-store',
+              },
+            });
+          }
+
+          return new Response('Invalid offline path', { status: 404 });
+        } catch (err) {
+          return new Response(String(err), { status: 500 });
+        }
+      })()
+    );
+    return;
+  }
+
+  // Never intercept live audio/video streams, local API endpoints, Vite dev modules, or non-GET requests
   if (
     url.hostname === 'localhost' ||
     url.hostname === '127.0.0.1' ||

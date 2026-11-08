@@ -107,7 +107,7 @@ export default async (req) => {
     }
 
     if (isM3u8) {
-      const text = await upstreamRes.text();
+      let text = await upstreamRes.text();
       if (rawMode) {
         return new Response(text, {
           status: 200,
@@ -129,6 +129,46 @@ export default async (req) => {
             headers: {
               'Access-Control-Allow-Origin': '*',
               Location: buildProxyUrl(firstStreamLine),
+            },
+          });
+        }
+      }
+
+      const hasSegmentOrVariant = (m3uText) =>
+        m3uText
+          .split(/\r?\n/)
+          .some((l) => {
+            const t = l.trim();
+            return (t && !t.startsWith('#')) || /URI="[^"]+"/i.test(t);
+          });
+      if (text.includes('#EXT-X-') && !hasSegmentOrVariant(text)) {
+        await new Promise((r) => setTimeout(r, 450));
+        try {
+          const retryRes = await fetch(targetUrl, {
+            method: 'GET',
+            headers: {
+              'User-Agent':
+                customUa ||
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              Referer: refererHeader,
+              Origin: originHeader,
+              Accept: '*/*',
+            },
+            redirect: 'follow',
+          });
+          if (retryRes.ok) {
+            text = await retryRes.text();
+          }
+        } catch {
+          // ignore retry error
+        }
+        if (!hasSegmentOrVariant(text)) {
+          return new Response('Upstream HLS playlist has 0 active segments', {
+            status: 503,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': 'text/plain; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
             },
           });
         }

@@ -35,6 +35,11 @@ import {
   fetchAdultTvChannels,
   isAdultTvChannel,
 } from '../../services/tvApi';
+import {
+  loadSharedProfiles,
+  loadSharedActiveProfileId,
+  canProfileAccessIedem,
+} from '../../services/deviceContinuityService';
 
 const OSD_COUNTRY_TABS: Array<{
   id: string;
@@ -246,6 +251,31 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   const adultContentEnabled = useRadioStore(
     (state) => state.adultContentEnabled
   );
+  const [iedemContentEnabled, setIedemContentEnabled] = useState<boolean>(() => {
+    const profiles = loadSharedProfiles();
+    const activeId = loadSharedActiveProfileId();
+    const active = profiles.find((p) => p.id === activeId) || profiles[0];
+    return canProfileAccessIedem(active);
+  });
+
+  useEffect(() => {
+    const syncIedemPerm = () => {
+      const profiles = loadSharedProfiles();
+      const activeId = loadSharedActiveProfileId();
+      const active = profiles.find((p) => p.id === activeId) || profiles[0];
+      const allowed = canProfileAccessIedem(active);
+      setIedemContentEnabled(allowed);
+      if (!allowed) {
+        setSelectedCountryId((prev) => (prev === 'IEDEM' ? 'RO' : prev));
+      }
+    };
+    window.addEventListener('aether:active-profile-changed', syncIedemPerm);
+    window.addEventListener('aether:profiles-updated', syncIedemPerm);
+    return () => {
+      window.removeEventListener('aether:active-profile-changed', syncIedemPerm);
+      window.removeEventListener('aether:profiles-updated', syncIedemPerm);
+    };
+  }, []);
 
   // Subscribe to EPG service updates so rows re-render immediately when EPG XML feeds finish loading
   useChannelEpg(currentChannel);
@@ -1001,9 +1031,11 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
   const visibleCountryTabs = useMemo(
     () =>
       OSD_COUNTRY_TABS.filter(
-        (reg) => adultContentEnabled || reg.id !== 'ADULT'
+        (reg) =>
+          (adultContentEnabled || reg.id !== 'ADULT') &&
+          (iedemContentEnabled || reg.id !== 'IEDEM')
       ),
-    [adultContentEnabled]
+    [adultContentEnabled, iedemContentEnabled]
   );
 
   const cycleCountrySource = (dir: -1 | 1) => {

@@ -173,16 +173,6 @@ function parseKinogramHtml(
     }> | null;
 
     if (Array.isArray(rawSeasons) && rawSeasons.length > 0) {
-      const targetSeason =
-        rawSeasons.find((s) => Number(s.season) === Number(season)) ||
-        rawSeasons[0];
-      const episodes = Array.isArray(targetSeason?.episodes)
-        ? targetSeason.episodes
-        : [];
-      const targetEp =
-        episodes.find((e) => Number(e.episode) === Number(episode)) ||
-        episodes[0];
-
       const cleanSeasons = rawSeasons.map((s) => ({
         season: Number(s.season) || 1,
         episodes: (Array.isArray(s.episodes) ? s.episodes : []).map((ep) => ({
@@ -194,6 +184,25 @@ function parseKinogramHtml(
             : ['Русский'],
         })),
       }));
+
+      const targetSeason = rawSeasons.find(
+        (s) => Number(s.season) === Number(season)
+      );
+      const episodes = Array.isArray(targetSeason?.episodes)
+        ? targetSeason.episodes
+        : [];
+      const targetEp = episodes.find(
+        (e) => Number(e.episode) === Number(episode)
+      );
+
+      if (!targetSeason || !targetEp) {
+        return {
+          ok: false,
+          type: 'series',
+          sourcePath: usedPath,
+          seasons: cleanSeasons,
+        };
+      }
 
       if (targetEp?.hls || targetEp?.dash) {
         const dashUrl = targetEp.dash
@@ -220,6 +229,13 @@ function parseKinogramHtml(
           seasons: cleanSeasons,
         };
       }
+
+      return {
+        ok: false,
+        type: 'series',
+        sourcePath: usedPath,
+        seasons: cleanSeasons,
+      };
     }
   }
 

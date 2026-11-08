@@ -1,10 +1,9 @@
 <!doctype html>
-<html lang="ro">
+<html lang="ro" class="dark" style="background-color:#000000;color-scheme:dark;">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <!-- MANDATORY: Declare support for both light and dark themes -->
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark" />
     <script>
       // Polyfills for Smart TV WebViews (LG webOS / Samsung Tizen / Android TV / MSX)
       if (typeof window.globalThis === 'undefined') {
@@ -85,12 +84,11 @@
         var storedScheme = null;
         try { storedScheme = localStorage.getItem('color-scheme'); } catch (e) {}
         var meta = document.querySelector('meta[name="color-scheme"]');
-        if (meta && (storedScheme === 'light' || storedScheme === 'dark')) {
-          meta.content = storedScheme;
+        var isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top) || /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(navigator.userAgent || '');
+        var isDark = storedScheme !== 'light';
+        if (meta) {
+          meta.content = isDark ? 'dark' : 'light';
         }
-        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        var isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top);
-        var isDark = isTvRoute || storedScheme === 'dark' || (!storedScheme && prefersDark);
         if (isDark) {
           document.documentElement.classList.add('dark');
         } else {
@@ -126,8 +124,9 @@
         } catch (e) {}
       });
     </script>
-    <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#000000" />
     <meta
       name="description"
       content="Filmio — Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web."
@@ -157,7 +156,7 @@
     />
     <title>Filmio</title>
   </head>
-  <body class="bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white" style="background-color:#09090b;color:#f4f4f5;">
+  <body class="bg-black text-slate-900 dark:bg-black dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white" style="background-color:#000000;color:#f4f4f5;">
     <div id="root">
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#070e1a;color:#f4f4f5;font-family:sans-serif;text-align:center;padding:24px;">
         <img src="/icons/icon-192.svg" alt="Filmio" style="width:76px;height:76px;margin-bottom:16px;filter:drop-shadow(0 0 24px rgba(56, 189, 248, 0.45));" />

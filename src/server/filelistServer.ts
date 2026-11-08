@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 // @ts-expect-error torrent-stream has no official types
@@ -81,6 +82,16 @@ interface ActiveTorrentEngine {
   >;
 }
 
+interface ActiveHlsSession {
+  key: string;
+  sessionId: string;
+  dir: string;
+  proc: ChildProcess | null;
+  exited: boolean;
+  startedAt: number;
+  lastAccessed: number;
+}
+
 interface GlobalFileListState {
   activeEngines: Map<number, ActiveTorrentEngine>;
   magnetMetaById: Map<
@@ -93,6 +104,7 @@ interface GlobalFileListState {
     }
   >;
   activeStreamProcess: ChildProcess | null;
+  activeHlsSession: ActiveHlsSession | null;
   internalRangeServerPort: number;
   rangePrioritySeq: number;
 }
@@ -103,6 +115,7 @@ const gState: GlobalFileListState =
     activeEngines: new Map<number, ActiveTorrentEngine>(),
     magnetMetaById: new Map(),
     activeStreamProcess: null,
+    activeHlsSession: null,
     internalRangeServerPort: 0,
     rangePrioritySeq: 10,
   });
@@ -152,6 +165,157 @@ function saveSession(session: FileListSession) {
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+interface SimpleFetchResponse {
+  ok: boolean;
+  status: number;
+  headers: {
+    getSetCookie: () => string[];
+  };
+  text: () => Promise<string>;
+  json: () => Promise<any>;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+}
+
+function httpsFallbackFetch(
+  urlStr: string,
+  init?: RequestInit,
+  timeoutMs = 9000,
+  redirectsLeft = 3
+): Promise<SimpleFetchResponse> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const isHttps = u.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const rawHeaders: Record<string, string> = {};
+    if (init?.headers) {
+      for (const [k, v] of Object.entries(init.headers as Record<string, string>)) {
+        if (v !== undefined) rawHeaders[k] = String(v);
+      }
+    }
+    const bodyBuf =
+      typeof init?.body === 'string'
+        ? Buffer.from(init.body, 'utf8')
+        : init?.body instanceof Buffer
+          ? init.body
+          : null;
+    if (bodyBuf && !rawHeaders['Content-Length'] && !rawHeaders['content-length']) {
+      rawHeaders['Content-Length'] = String(bodyBuf.length);
+    }
+
+    const req = mod.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || (isHttps ? 443 : 80),
+        path: `${u.pathname}${u.search}`,
+        method: init?.method || 'GET',
+        headers: rawHeaders,
+        family: 4,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode || 500;
+        const location = res.headers.location;
+        if (
+          init?.redirect !== 'manual' &&
+          (status === 301 || status === 302 || status === 303 || status === 307 || status === 308) &&
+          location &&
+          redirectsLeft > 0
+        ) {
+          res.resume();
+          const nextUrl = new URL(location, urlStr).toString();
+          httpsFallbackFetch(
+            nextUrl,
+            { ...init, method: status === 303 ? 'GET' : init?.method, body: status === 303 ? undefined : init?.body },
+            timeoutMs,
+            redirectsLeft - 1
+          )
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(Buffer.from(c)));
+        res.on('end', () => {
+          const fullBuf = Buffer.concat(chunks);
+          const rawSetCookie = res.headers['set-cookie'];
+          const cookieArr = Array.isArray(rawSetCookie)
+            ? rawSetCookie
+            : rawSetCookie
+              ? [rawSetCookie]
+              : [];
+          resolve({
+            ok: status >= 200 && status < 300,
+            status,
+            headers: {
+              getSetCookie: () => cookieArr,
+            },
+            text: async () => fullBuf.toString('utf8'),
+            json: async () => JSON.parse(fullBuf.toString('utf8')),
+            arrayBuffer: async () =>
+              fullBuf.buffer.slice(fullBuf.byteOffset, fullBuf.byteOffset + fullBuf.byteLength),
+          });
+        });
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('Request timeout'));
+    });
+    req.on('error', reject);
+    if (bodyBuf) req.write(bodyBuf);
+    req.end();
+  });
+}
+
+async function safeFetch(
+  urlStr: string,
+  init?: RequestInit,
+  retries = 3,
+  timeoutMs = 8500
+): Promise<SimpleFetchResponse> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(urlStr, {
+          ...init,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        return {
+          ok: res.ok,
+          status: res.status,
+          headers: {
+            getSetCookie: () =>
+              typeof res.headers.getSetCookie === 'function'
+                ? res.headers.getSetCookie()
+                : [],
+          },
+          text: () => res.text(),
+          json: () => res.json(),
+          arrayBuffer: () => res.arrayBuffer(),
+        };
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
+      }
+    } catch (err) {
+      lastErr = err;
+      try {
+        return await httpsFallbackFetch(urlStr, init, timeoutMs);
+      } catch (fbErr) {
+        lastErr = fbErr;
+      }
+      if (attempt + 1 < retries) {
+        await new Promise((r) => setTimeout(r, 220 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Network request failed');
+}
+
 export async function authenticateFileList(
   username?: string,
   password?: string
@@ -161,7 +325,7 @@ export async function authenticateFileList(
   const pass = password || current.password || DEFAULT_FL_CREDENTIALS.password;
 
   try {
-    const res1 = await fetch('https://filelist.io/login.php', {
+    const res1 = await safeFetch('https://filelist.io/login.php', {
       headers: { 'User-Agent': USER_AGENT },
     });
     const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
@@ -178,7 +342,7 @@ export async function authenticateFileList(
       unlock: '1',
     });
 
-    const res2 = await fetch('https://filelist.io/takelogin.php', {
+    const res2 = await safeFetch('https://filelist.io/takelogin.php', {
       method: 'POST',
       headers: {
         'User-Agent': USER_AGENT,
@@ -202,7 +366,7 @@ export async function authenticateFileList(
 
     let passkey = current.passkey;
     if (combinedCookie.includes('uid=')) {
-      const resMy = await fetch('https://filelist.io/my.php', {
+      const resMy = await safeFetch('https://filelist.io/my.php', {
         headers: { 'User-Agent': USER_AGENT, Cookie: combinedCookie },
       });
       const htmlMy = await resMy.text();
@@ -321,16 +485,20 @@ async function scrapeBrowsePhp(
   }
 
   const url = `https://filelist.io/browse.php?${params.toString()}`;
-  let res = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT, Cookie: session.cookie },
-    redirect: 'manual',
-  });
-
-  if (res.status === 302 || res.status === 403) {
-    session = await authenticateFileList();
-    res = await fetch(url, {
+  let res: SimpleFetchResponse;
+  try {
+    res = await safeFetch(url, {
       headers: { 'User-Agent': USER_AGENT, Cookie: session.cookie },
+      redirect: 'manual',
     });
+    if (res.status === 302 || res.status === 403) {
+      session = await authenticateFileList();
+      res = await safeFetch(url, {
+        headers: { 'User-Agent': USER_AGENT, Cookie: session.cookie },
+      });
+    }
+  } catch {
+    return [];
   }
 
   const html = await res.text();
@@ -426,18 +594,28 @@ async function fetchFileListApi(
     return `https://filelist.io/api.php?${p.toString()}`;
   };
 
-  let res = await fetch(buildUrl(session), {
-    headers: { 'User-Agent': USER_AGENT },
-  });
-  if (res.status === 401 || res.status === 403) {
-    session = await authenticateFileList();
-    res = await fetch(buildUrl(session), {
+  let res: SimpleFetchResponse;
+  try {
+    res = await safeFetch(buildUrl(session), {
       headers: { 'User-Agent': USER_AGENT },
     });
+    if (res.status === 401 || res.status === 403) {
+      session = await authenticateFileList();
+      res = await safeFetch(buildUrl(session), {
+        headers: { 'User-Agent': USER_AGENT },
+      });
+    }
+  } catch {
+    return [];
   }
 
   if (!res.ok) return [];
-  const data = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    return [];
+  }
   if (!Array.isArray(data)) return [];
 
   return data.map((row: any) => {
@@ -485,6 +663,9 @@ async function fetchFileListApi(
   });
 }
 
+const catalogCache = new Map<string, { ts: number; items: FileListTorrentCard[] }>();
+const inFlightCatalog = new Map<string, Promise<FileListTorrentCard[]>>();
+
 export async function getFileListCatalog(options: {
   section?: string;
   query?: string;
@@ -497,100 +678,138 @@ export async function getFileListCatalog(options: {
   const imdb = (options.imdb || '').trim();
   const sort = options.sort || 'seeders';
   const page = options.page || 1;
+  const cacheKey = `${section}|${imdb}|${query.toLowerCase()}|${sort}|${page}`;
 
-  // Map section to FileList category IDs:
-  // 19 = Filme HD-RO, 4 = Filme HD, 6 = Filme 4K, 20 = Filme Blu-Ray, 21 = Seriale HD, 27 = Seriale 4K, 15 = Desene, 24 = Anime
-  const catMap: Record<string, string> = {
-    ro: '19',
-    movies_hd: '4',
-    movies_4k: '6',
-    series_hd: '21',
-    series_4k: '27',
-    cartoons: '15',
-    anime: '24',
-    all_movies: '19,4,6',
-    all_series: '21,27',
-    top: '19',
-  };
-  const catIds = catMap[section] || '19';
-
-  if (imdb) {
-    const cleanImdb = imdb.startsWith('tt') ? imdb : `tt${imdb}`;
-    const apiItems = await fetchFileListApi('search-torrents', {
-      type: 'imdb',
-      query: cleanImdb,
-    });
-    return apiItems.sort((a, b) => b.seeders - a.seeders);
+  const cached = catalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 90_000) {
+    return cached.items;
+  }
+  const existingFlight = inFlightCatalog.get(cacheKey);
+  if (existingFlight) {
+    return existingFlight;
   }
 
-  if (query) {
-    const [apiItems, browseItems] = await Promise.all([
-      fetchFileListApi('search-torrents', {
+  const work = (async (): Promise<FileListTorrentCard[]> => {
+    // Map section to FileList category IDs:
+    // 19 = Filme HD-RO, 4 = Filme HD, 6 = Filme 4K, 20 = Filme Blu-Ray, 21 = Seriale HD, 27 = Seriale 4K, 15 = Desene, 24 = Anime
+    const catMap: Record<string, string> = {
+      ro: '19',
+      movies_hd: '4',
+      movies_4k: '6',
+      series_hd: '21',
+      series_4k: '27',
+      cartoons: '15',
+      anime: '24',
+      xxx: '7',
+      all_movies: '19,4,6',
+      all_series: '21,27',
+      top: '19',
+    };
+    const catIds = catMap[section] || '19';
+
+    if (imdb) {
+      const cleanImdb = imdb.startsWith('tt') ? imdb : `tt${imdb}`;
+      const apiItems = await fetchFileListApi('search-torrents', {
+        type: 'imdb',
+        query: cleanImdb,
+      }).catch(() => []);
+      return apiItems.sort((a, b) => b.seeders - a.seeders);
+    }
+
+    if (query) {
+      // FileList only indexes Latin/English release names — skip Cyrillic queries
+      if (/[а-яА-ЯёЁ]/.test(query) && !/[a-zA-Z]/.test(query)) {
+        return [];
+      }
+      const searchExtra: Record<string, string> = {
         type: 'name',
         query,
-      }).catch(() => []),
-      scrapeBrowsePhp('', query, 'seeders', 1).catch(() => []),
+      };
+      if (section === 'xxx') {
+        searchExtra.category = '7';
+      }
+      const [apiItems, browseItems] = await Promise.all([
+        fetchFileListApi('search-torrents', searchExtra).catch(() => []),
+        section === 'xxx'
+          ? Promise.resolve([])
+          : scrapeBrowsePhp('', query, 'seeders', 1).catch(() => []),
+      ]);
+
+      const byId = new Map<number, FileListTorrentCard>();
+      for (const item of [...apiItems, ...browseItems]) {
+        const existing = byId.get(item.id);
+        if (!existing) {
+          byId.set(item.id, item);
+        } else {
+          byId.set(item.id, {
+            ...existing,
+            ...item,
+            imdbId: existing.imdbId || item.imdbId,
+            poster: item.poster || existing.poster,
+            seeders: Math.max(existing.seeders, item.seeders),
+          });
+        }
+      }
+      return Array.from(byId.values())
+        .filter((i) =>
+          section === 'xxx'
+            ? /xxx|adult/i.test(i.category)
+            : /movie|film|serial|tv|hd|4k|desene|anime|ro/i.test(i.category)
+        )
+        .sort((a, b) => b.seeders - a.seeders);
+    }
+
+    // Combine browse.php (which has TMDB posters + Top Seeded sort) with api.php (which has IMDb IDs + latest torrents)
+    const [browseItems, apiItems] = await Promise.all([
+      section === 'xxx'
+        ? Promise.resolve([])
+        : scrapeBrowsePhp(catIds.split(',')[0], '', sort, page).catch(() => []),
+      page === 1 || section === 'xxx'
+        ? fetchFileListApi('latest-torrents', {
+            category: catIds,
+            limit: section === 'xxx' ? '80' : '40',
+          }).catch(() => [])
+        : Promise.resolve([]),
     ]);
 
-    const byId = new Map<number, FileListTorrentCard>();
-    for (const item of [...apiItems, ...browseItems]) {
-      const existing = byId.get(item.id);
+    const mergedMap = new Map<number, FileListTorrentCard>();
+    const primaryList = sort === 'seeders' ? [...browseItems, ...apiItems] : [...apiItems, ...browseItems];
+
+    for (const item of primaryList) {
+      const existing = mergedMap.get(item.id);
       if (!existing) {
-        byId.set(item.id, item);
+        mergedMap.set(item.id, item);
       } else {
-        byId.set(item.id, {
+        mergedMap.set(item.id, {
           ...existing,
-          ...item,
           imdbId: existing.imdbId || item.imdbId,
-          poster: item.poster || existing.poster,
+          poster:
+            (existing.poster && existing.poster.includes('tmdb.org')
+              ? existing.poster
+              : item.poster) || existing.poster,
           seeders: Math.max(existing.seeders, item.seeders),
+          freeleech: existing.freeleech || item.freeleech,
         });
       }
     }
-    return Array.from(byId.values())
-      .filter((i) =>
-        /movie|film|serial|tv|hd|4k|desene|anime|ro/i.test(i.category)
-      )
-      .sort((a, b) => b.seeders - a.seeders);
-  }
 
-  // Combine browse.php (which has TMDB posters + Top Seeded sort) with api.php (which has IMDb IDs + latest torrents)
-  const [browseItems, apiItems] = await Promise.all([
-    scrapeBrowsePhp(catIds.split(',')[0], '', sort, page).catch(() => []),
-    page === 1
-      ? fetchFileListApi('latest-torrents', {
-          category: catIds,
-          limit: '40',
-        }).catch(() => [])
-      : Promise.resolve([]),
-  ]);
-
-  const mergedMap = new Map<number, FileListTorrentCard>();
-  const primaryList = sort === 'seeders' ? [...browseItems, ...apiItems] : [...apiItems, ...browseItems];
-
-  for (const item of primaryList) {
-    const existing = mergedMap.get(item.id);
-    if (!existing) {
-      mergedMap.set(item.id, item);
-    } else {
-      mergedMap.set(item.id, {
-        ...existing,
-        imdbId: existing.imdbId || item.imdbId,
-        poster:
-          (existing.poster && existing.poster.includes('tmdb.org')
-            ? existing.poster
-            : item.poster) || existing.poster,
-        seeders: Math.max(existing.seeders, item.seeders),
-        freeleech: existing.freeleech || item.freeleech,
-      });
+    const finalItems = Array.from(mergedMap.values());
+    if (sort === 'seeders') {
+      finalItems.sort((a, b) => b.seeders - a.seeders);
     }
-  }
+    return finalItems;
+  })();
 
-  const finalItems = Array.from(mergedMap.values());
-  if (sort === 'seeders') {
-    finalItems.sort((a, b) => b.seeders - a.seeders);
+  inFlightCatalog.set(cacheKey, work);
+  try {
+    const res = await work;
+    if (res.length > 0) {
+      catalogCache.set(cacheKey, { ts: Date.now(), items: res });
+    }
+    return res;
+  } finally {
+    inFlightCatalog.delete(cacheKey);
   }
-  return finalItems;
 }
 
 const DEFAULT_PUBLIC_TRACKERS = [
@@ -724,6 +943,8 @@ async function fetchTorrentioStreams(
   }
 }
 
+const inFlightEngines = new Map<number, Promise<ActiveTorrentEngine>>();
+
 async function getOrStartTorrentEngine(
   torrentId: number,
   explicitInfoHash?: string
@@ -732,147 +953,188 @@ async function getOrStartTorrentEngine(
   const existing = activeEngines.get(torrentId);
   if (existing) {
     existing.lastAccessed = Date.now();
-    await existing.readyPromise;
-    return existing;
-  }
-
-  // Clean up old engines if more than 3 are open
-  if (activeEngines.size >= 3) {
-    let oldestKey: number | null = null;
-    let oldestTime = Infinity;
-    for (const [k, v] of activeEngines.entries()) {
-      if (v.lastAccessed < oldestTime) {
-        oldestTime = v.lastAccessed;
-        oldestKey = k;
-      }
-    }
-    if (oldestKey !== null) {
-      const old = activeEngines.get(oldestKey);
-      activeEngines.delete(oldestKey);
+    try {
+      await existing.readyPromise;
+      return existing;
+    } catch {
+      activeEngines.delete(torrentId);
       try {
-        old?.engine.destroy();
+        existing.engine?.destroy();
       } catch {
         // ignore
       }
     }
   }
 
-  const peerId =
-    '-qB4650-' +
-    Math.random()
-      .toString(36)
-      .slice(2, 14)
-      .padEnd(12, '0');
-
-  let engine: any;
-  const magnetMeta =
-    torrentId < 0
-      ? magnetMetaById.get(torrentId) ||
-        (explicitInfoHash
-          ? { infoHash: explicitInfoHash, trackers: DEFAULT_PUBLIC_TRACKERS }
-          : undefined)
-      : undefined;
-
-  if (magnetMeta && magnetMeta.infoHash) {
-    const trQuery = Array.from(
-      new Set([...(magnetMeta.trackers || []), ...DEFAULT_PUBLIC_TRACKERS])
-    )
-      .slice(0, 16)
-      .map((tr) => `tr=${encodeURIComponent(tr)}`)
-      .join('&');
-    const magnetUri = `magnet:?xt=urn:btih:${magnetMeta.infoHash}&${trQuery}`;
-    engine = torrentStream(magnetUri, {
-      tmp: TORRENT_CACHE_DIR,
-      id: peerId,
-      dht: true,
-      tracker: true,
-      trackers: DEFAULT_PUBLIC_TRACKERS,
-      connections: 75,
-      uploads: 2,
-    });
-  } else {
-    const session = loadSession();
-    const torrentFilePath = path.join(TORRENT_CACHE_DIR, `${torrentId}.torrent`);
-    let torrentBuf: Buffer;
-
-    if (fs.existsSync(torrentFilePath) && fs.statSync(torrentFilePath).size > 200) {
-      torrentBuf = fs.readFileSync(torrentFilePath);
-    } else {
-      const dlUrl = `https://filelist.io/download.php?id=${torrentId}&passkey=${session.passkey}`;
-      const res = await fetch(dlUrl, {
-        headers: {
-          'User-Agent': USER_AGENT,
-          Cookie: session.cookie,
-        },
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to download .torrent #${torrentId} (HTTP ${res.status})`);
-      }
-      torrentBuf = Buffer.from(await res.arrayBuffer());
-      if (torrentBuf.length < 100 || torrentBuf.toString('utf8', 0, 15).includes('<!DOCTYPE')) {
-        // Re-authenticate once and retry
-        const refreshed = await authenticateFileList();
-        const retryRes = await fetch(
-          `https://filelist.io/download.php?id=${torrentId}&passkey=${refreshed.passkey}`,
-          {
-            headers: {
-              'User-Agent': USER_AGENT,
-              Cookie: refreshed.cookie,
-            },
-          }
-        );
-        torrentBuf = Buffer.from(await retryRes.arrayBuffer());
-      }
-      fs.writeFileSync(torrentFilePath, torrentBuf);
-    }
-
-    engine = torrentStream(torrentBuf, {
-      tmp: TORRENT_CACHE_DIR,
-      id: peerId,
-      dht: false,
-      tracker: true,
-      connections: 60,
-      uploads: 2,
-    });
+  const inFlight = inFlightEngines.get(torrentId);
+  if (inFlight) {
+    return inFlight;
   }
 
-  const entry: ActiveTorrentEngine = {
-    id: torrentId,
-    engine,
-    ready: false,
-    readyPromise: Promise.resolve(),
-    lastAccessed: Date.now(),
-    activeStreams: new Set(),
-    files: [],
-    probeCache: new Map(),
-  };
+  const startPromise = (async (): Promise<ActiveTorrentEngine> => {
+    // Clean up old engines if more than 3 are open
+    if (activeEngines.size >= 3) {
+      let oldestKey: number | null = null;
+      let oldestTime = Infinity;
+      for (const [k, v] of activeEngines.entries()) {
+        if (v.lastAccessed < oldestTime) {
+          oldestTime = v.lastAccessed;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey !== null) {
+        const old = activeEngines.get(oldestKey);
+        activeEngines.delete(oldestKey);
+        try {
+          old?.engine.destroy();
+        } catch {
+          // ignore
+        }
+      }
+    }
 
-  entry.readyPromise = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Torrent metadata timeout'));
-    }, 15000);
+    const peerId =
+      '-qB4650-' +
+      Math.random()
+        .toString(36)
+        .slice(2, 14)
+        .padEnd(12, '0');
 
-    engine.on('ready', () => {
-      clearTimeout(timeout);
-      entry.ready = true;
-      entry.files = (engine.files || []).map((f: any, idx: number) => ({
-        index: idx,
-        name: String(f.name || ''),
-        path: String(f.path || f.name || ''),
-        length: Number(f.length || 0),
-      }));
-      resolve();
+    let engine: any;
+    const magnetMeta =
+      torrentId < 0
+        ? magnetMetaById.get(torrentId) ||
+          (explicitInfoHash
+            ? { infoHash: explicitInfoHash, trackers: DEFAULT_PUBLIC_TRACKERS }
+            : undefined)
+        : undefined;
+
+    if (magnetMeta && magnetMeta.infoHash) {
+      const trQuery = Array.from(
+        new Set([...(magnetMeta.trackers || []), ...DEFAULT_PUBLIC_TRACKERS])
+      )
+        .slice(0, 16)
+        .map((tr) => `tr=${encodeURIComponent(tr)}`)
+        .join('&');
+      const magnetUri = `magnet:?xt=urn:btih:${magnetMeta.infoHash}&${trQuery}`;
+      engine = torrentStream(magnetUri, {
+        tmp: TORRENT_CACHE_DIR,
+        id: peerId,
+        dht: true,
+        tracker: true,
+        trackers: DEFAULT_PUBLIC_TRACKERS,
+        connections: 75,
+        uploads: 2,
+        verify: false,
+      });
+    } else {
+      const session = loadSession();
+      const torrentFilePath = path.join(TORRENT_CACHE_DIR, `${torrentId}.torrent`);
+      let torrentBuf: Buffer;
+
+      if (fs.existsSync(torrentFilePath) && fs.statSync(torrentFilePath).size > 200) {
+        torrentBuf = fs.readFileSync(torrentFilePath);
+      } else {
+        const dlUrl = `https://filelist.io/download.php?id=${torrentId}&passkey=${session.passkey}`;
+        const res = await safeFetch(dlUrl, {
+          headers: {
+            'User-Agent': USER_AGENT,
+            Cookie: session.cookie,
+          },
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to download .torrent #${torrentId} (HTTP ${res.status})`);
+        }
+        torrentBuf = Buffer.from(await res.arrayBuffer());
+        if (torrentBuf.length < 100 || torrentBuf.toString('utf8', 0, 15).includes('<!DOCTYPE')) {
+          // Re-authenticate once and retry
+          const refreshed = await authenticateFileList();
+          const retryRes = await safeFetch(
+            `https://filelist.io/download.php?id=${torrentId}&passkey=${refreshed.passkey}`,
+            {
+              headers: {
+                'User-Agent': USER_AGENT,
+                Cookie: refreshed.cookie,
+              },
+            }
+          );
+          torrentBuf = Buffer.from(await retryRes.arrayBuffer());
+        }
+        if (torrentBuf.length > 100 && !torrentBuf.toString('utf8', 0, 15).includes('<!DOCTYPE')) {
+          fs.writeFileSync(torrentFilePath, torrentBuf);
+        } else {
+          throw new Error(`Invalid .torrent file received for #${torrentId}`);
+        }
+      }
+
+      engine = torrentStream(torrentBuf, {
+        tmp: TORRENT_CACHE_DIR,
+        id: peerId,
+        dht: false,
+        tracker: true,
+        connections: 60,
+        uploads: 2,
+        verify: false,
+      });
+    }
+
+    const entry: ActiveTorrentEngine = {
+      id: torrentId,
+      engine,
+      ready: false,
+      readyPromise: Promise.resolve(),
+      lastAccessed: Date.now(),
+      activeStreams: new Set(),
+      files: [],
+      probeCache: new Map(),
+    };
+
+    entry.readyPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        activeEngines.delete(torrentId);
+        try {
+          engine.destroy();
+        } catch {
+          // ignore
+        }
+        reject(new Error('Torrent metadata timeout'));
+      }, 15000);
+
+      engine.on('ready', () => {
+        clearTimeout(timeout);
+        entry.ready = true;
+        entry.files = (engine.files || []).map((f: any, idx: number) => ({
+          index: idx,
+          name: String(f.name || ''),
+          path: String(f.path || f.name || ''),
+          length: Number(f.length || 0),
+        }));
+        resolve();
+      });
+
+      engine.on('error', (err: any) => {
+        clearTimeout(timeout);
+        activeEngines.delete(torrentId);
+        try {
+          engine.destroy();
+        } catch {
+          // ignore
+        }
+        reject(err);
+      });
     });
 
-    engine.on('error', (err: any) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
+    activeEngines.set(torrentId, entry);
+    await entry.readyPromise;
+    return entry;
+  })();
 
-  activeEngines.set(torrentId, entry);
-  await entry.readyPromise;
-  return entry;
+  inFlightEngines.set(torrentId, startPromise);
+  try {
+    return await startPromise;
+  } finally {
+    inFlightEngines.delete(torrentId);
+  }
 }
 
 async function probeTorrentVideoFile(
@@ -901,27 +1163,6 @@ async function probeTorrentVideoFile(
     };
   }
 
-  // Also pre-warm the tail 1.5MB of the video file in the background for fast MKV seeking
-  try {
-    if (rawFile.length > 4 * 1024 * 1024) {
-      const tailStream = rawFile.createReadStream({
-        start: Math.max(0, rawFile.length - 1536 * 1024),
-        end: rawFile.length - 1,
-      });
-      tailStream.on('data', () => {});
-      tailStream.on('error', () => {});
-      setTimeout(() => {
-        try {
-          tailStream.destroy();
-        } catch {
-          // ignore
-        }
-      }, 6000);
-    }
-  } catch {
-    // ignore
-  }
-
   return new Promise((resolve) => {
     const ff = spawn(ffmpegPath as string, ['-hide_banner', '-i', 'pipe:0']);
     let stderr = '';
@@ -933,9 +1174,26 @@ async function probeTorrentVideoFile(
     const rs = rawFile.createReadStream({ start: 0, end: probeBytes });
     rs.pipe(ff.stdin).on('error', () => {});
 
+    // Pre-warm the tail 1.5MB of the MKV file (where Matroska Cues seek index resides) for instant seeking
+    let tailStream: any = null;
+    if (rawFile.length > 4 * 1024 * 1024) {
+      try {
+        const tailStart = Math.max(0, rawFile.length - 1536 * 1024);
+        tailStream = rawFile.createReadStream({
+          start: tailStart,
+          end: rawFile.length - 1,
+        });
+        tailStream.on('data', () => {});
+        tailStream.on('error', () => {});
+      } catch {
+        // ignore
+      }
+    }
+
     const timer = setTimeout(() => {
       try {
         rs.destroy();
+        tailStream?.destroy();
         ff.kill('SIGKILL');
       } catch {
         // ignore
@@ -944,6 +1202,11 @@ async function probeTorrentVideoFile(
 
     ff.on('close', () => {
       clearTimeout(timer);
+      try {
+        tailStream?.destroy();
+      } catch {
+        // ignore
+      }
       let durationSec = 0;
       const durMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
       if (durMatch) {
@@ -953,8 +1216,15 @@ async function probeTorrentVideoFile(
           parseFloat(durMatch[3]);
       }
 
+      const nameImpliesHevc = /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(
+        rawFile.name || ''
+      );
       const videoMatch = stderr.match(/Stream #\d+:\d+.*?Video:\s*([a-zA-Z0-9_]+)/i);
-      const videoCodec = videoMatch ? videoMatch[1].toLowerCase() : 'h264';
+      const videoCodec = videoMatch
+        ? videoMatch[1].toLowerCase()
+        : nameImpliesHevc
+          ? 'hevc'
+          : 'h264';
 
       const audioTracks: Array<{
         index: number;
@@ -995,7 +1265,9 @@ async function probeTorrentVideoFile(
       }
 
       const result = { durationSec, videoCodec, audioTracks };
-      entry.probeCache.set(fileIdx, result);
+      if (videoMatch && durationSec > 0) {
+        entry.probeCache.set(fileIdx, result);
+      }
       resolve(result);
     });
   });
@@ -1014,14 +1286,6 @@ function ensureInternalRangeServer(): Promise<number> {
         const entry = await getOrStartTorrentEngine(id);
         if (!entry.activeStreams) {
           entry.activeStreams = new Set();
-        }
-        // Close any previous Range stream on this engine since ffmpeg reads sequentially from one Range request at a time
-        for (const closeOld of Array.from(entry.activeStreams)) {
-          try {
-            closeOld();
-          } catch {
-            // ignore
-          }
         }
         const videoFile = entry.engine.files[fileIdx];
         if (!videoFile) {
@@ -1053,20 +1317,18 @@ function ensureInternalRangeServer(): Promise<number> {
         }
 
         const s = videoFile.createReadStream({ start, end });
+        // Close any previous open Range streams on this engine so torrent-stream focuses 100% of peer bandwidth on the active seek offset
+        for (const closeOld of Array.from(entry.activeStreams)) {
+          try {
+            closeOld();
+          } catch {
+            // ignore
+          }
+        }
+        entry.activeStreams.clear();
         try {
           if (typeof s.startPiece === 'number' && entry.engine.critical) {
-            entry.engine.critical(s.startPiece, 4);
-          }
-          if (Array.isArray(entry.engine.selection)) {
-            const topPrio = ++gState.rangePrioritySeq;
-            for (const sel of entry.engine.selection) {
-              if (sel.from === s.startPiece && sel.to === s.endPiece) {
-                sel.priority = topPrio;
-              }
-            }
-            entry.engine.selection.sort(
-              (a: any, b: any) => (b.priority || 0) - (a.priority || 0)
-            );
+            entry.engine.critical(s.startPiece, 12);
           }
         } catch {
           // ignore
@@ -1331,7 +1593,7 @@ export async function handleFileListRequest(
       torrentioTorrents = tioStreams;
 
       if (matchingTorrents.length === 0 && queryParam) {
-        matchingTorrents = await getFileListCatalog({ query: queryParam });
+        matchingTorrents = await getFileListCatalog({ query: queryParam }).catch(() => []);
       }
 
       const getQualityScore = (q: string) =>
@@ -1379,29 +1641,62 @@ export async function handleFileListRequest(
           }
         }
 
-        const seasonPacks = matchingTorrents.filter((t) =>
-          seasonPackRegex.test(t.releaseTitle)
+        const seasonPacks = matchingTorrents.filter(
+          (t) =>
+            seasonPackRegex.test(t.releaseTitle) &&
+            !/\bS\d{1,2}[.\s_-]*E\d{1,3}\b/i.test(t.releaseTitle)
         );
-        if (exactEp.length > 0 || seasonPacks.length > 0) {
-          const sortedExact = sortByQualityAndSeeders(exactEp);
-          const sortedPacks = sortByQualityAndSeeders(seasonPacks);
-          matchingTorrents = [
-            ...sortedExact,
-            ...sortedPacks,
-            ...matchingTorrents,
-          ].filter((v, i, a) => a.findIndex((x) => x.id === v.id) === i);
+        const sortedExact = sortByQualityAndSeeders(exactEp);
+        const sortedPacks = sortByQualityAndSeeders(seasonPacks);
+        const episodeMatchedList = [...sortedExact, ...sortedPacks].filter(
+          (v, i, a) => a.findIndex((x) => x.id === v.id) === i
+        );
 
-          if (targetTorrentId > 0 && epRegex) {
+        const pickBestDefaultTorrentId = (list: FileListTorrentCard[]) => {
+          const best4kNonDoVi = list.find(
+            (t) =>
+              t.quality === '4K UHD' &&
+              t.seeders >= 2 &&
+              !/\bdovi\b/i.test(t.releaseTitle)
+          );
+          const best4kAny = list.find(
+            (t) => t.quality === '4K UHD' && t.seeders >= 2
+          );
+          const fastH264 = list.find(
+            (t) =>
+              t.quality === '1080p Full HD' &&
+              t.seeders >= 2 &&
+              !/\b(hevc|x265|h\.?265|dovi)\b/i.test(t.releaseTitle)
+          );
+          const nonDoVi = list.find(
+            (t) => t.seeders >= 2 && !/\bdovi\b/i.test(t.releaseTitle)
+          );
+          return (
+            best4kNonDoVi ||
+            best4kAny ||
+            fastH264 ||
+            nonDoVi ||
+            list[0]
+          )?.id || 0;
+        };
+
+        const hasExplicitId = Boolean(idParam && targetTorrentId !== 0);
+        if (episodeMatchedList.length > 0) {
+          matchingTorrents = episodeMatchedList;
+          if (!hasExplicitId) {
             const matchesRequestedEp =
-              sortedExact.some((t) => t.id === targetTorrentId) ||
-              sortedPacks.some((t) => t.id === targetTorrentId);
+              targetTorrentId > 0 &&
+              episodeMatchedList.some((t) => t.id === targetTorrentId);
             if (!matchesRequestedEp) {
-              targetTorrentId =
-                sortedExact[0]?.id ||
-                sortedPacks[0]?.id ||
-                matchingTorrents[0]?.id ||
-                targetTorrentId;
+              targetTorrentId = pickBestDefaultTorrentId(
+                sortedExact.length > 0 ? sortedExact : episodeMatchedList
+              );
             }
+          }
+        } else {
+          matchingTorrents = [];
+          if (!hasExplicitId && targetTorrentId > 0) {
+            targetTorrentId = 0;
           }
         }
       }
@@ -1412,7 +1707,34 @@ export async function handleFileListRequest(
       }
 
       if (!targetTorrentId && matchingTorrents.length > 0) {
-        targetTorrentId = matchingTorrents[0].id;
+        const flOnly = matchingTorrents.filter((t) => t.id > 0);
+        const pool = flOnly.length > 0 ? flOnly : matchingTorrents;
+        const best4kNonDoVi = pool.find(
+          (t) =>
+            t.quality === '4K UHD' &&
+            t.seeders >= 2 &&
+            !/\bdovi\b/i.test(t.releaseTitle)
+        );
+        const best4kAny = pool.find(
+          (t) => t.quality === '4K UHD' && t.seeders >= 2
+        );
+        const fastH264 = pool.find(
+          (t) =>
+            t.quality === '1080p Full HD' &&
+            t.seeders >= 2 &&
+            !/\b(hevc|x265|h\.?265|dovi)\b/i.test(t.releaseTitle)
+        );
+        const nonDoVi = pool.find(
+          (t) => t.seeders >= 2 && !/\bdovi\b/i.test(t.releaseTitle)
+        );
+        targetTorrentId = (
+          best4kNonDoVi ||
+          best4kAny ||
+          fastH264 ||
+          nonDoVi ||
+          pool[0] ||
+          matchingTorrents[0]
+        ).id;
       }
 
       if (!targetTorrentId) {
@@ -1483,7 +1805,43 @@ export async function handleFileListRequest(
         return true;
       }
 
-      const entry = await getOrStartTorrentEngine(targetTorrentId);
+      let entry: ActiveTorrentEngine | null = null;
+      let lastEngineErr: unknown = null;
+      const hasExplicitRequestedId = Boolean(idParam && targetTorrentId !== 0);
+      const altCandidates = hasExplicitRequestedId
+        ? [targetTorrentId]
+        : [
+            targetTorrentId,
+            ...matchingTorrents
+              .filter((t) => t.id !== targetTorrentId && t.id > 0)
+              .slice(0, 2)
+              .map((t) => t.id),
+          ];
+      for (const candidateId of altCandidates) {
+        try {
+          entry = await getOrStartTorrentEngine(candidateId);
+          targetTorrentId = candidateId;
+          break;
+        } catch (err) {
+          lastEngineErr = err;
+        }
+      }
+      if (!entry) {
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error: (lastEngineErr as Error)?.message || 'Torrent metadata timeout',
+            torrentId: targetTorrentId,
+            selectedTorrent: selectedTorrentMeta,
+            torrents: matchingTorrents.slice(0, 35),
+          })
+        );
+        return true;
+      }
       const videoFiles = entry.files.filter(
         (f) => /\.(mkv|mp4|avi|m4v|ts|webm)$/i.test(f.name) && !/\bsample\b/i.test(f.name)
       );
@@ -1498,12 +1856,23 @@ export async function handleFileListRequest(
       const selectedFile =
         entry.files.find((f) => f.index === selectedFileIdx) || entry.files[0];
 
+      if (
+        /\b(2160p|4k|uhd)\b/i.test(selectedFile?.name || '') ||
+        /\b(2160p|4k|uhd)\b/i.test(selectedTorrentMeta.releaseTitle || '')
+      ) {
+        selectedTorrentMeta.quality = '4K UHD';
+      }
+
       // Use cached probe if available; otherwise infer codec immediately so resolve responds in <1s and warm probeCache in background
-      const cachedProbe = entry.probeCache.get(selectedFileIdx);
+      let cachedProbe = entry.probeCache.get(selectedFileIdx);
+      if (cachedProbe && !cachedProbe.durationSec) {
+        entry.probeCache.delete(selectedFileIdx);
+        cachedProbe = undefined;
+      }
       if (!cachedProbe) {
         probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
       }
-      const inferredCodec = /\b(hevc|x265|h\.?265)\b/i.test(
+      const inferredCodec = /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(
         selectedFile?.name || ''
       )
         ? 'hevc'
@@ -1609,13 +1978,23 @@ export async function handleFileListRequest(
         return true;
       }
 
-      const cachedProbe = entry.probeCache.get(fileIdx);
+      let cachedProbe = entry.probeCache.get(fileIdx);
+      if (cachedProbe && !cachedProbe.durationSec) {
+        entry.probeCache.delete(fileIdx);
+        cachedProbe = undefined;
+      }
       if (!cachedProbe) {
         probeTorrentVideoFile(entry, fileIdx).catch(() => {});
       }
-      const isHevc = cachedProbe
-        ? /hevc|h265/i.test(cachedProbe.videoCodec)
-        : /\b(hevc|x265|h\.?265)\b/i.test(rawFile.name || '');
+      const isHevc =
+        (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
+        /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(rawFile.name || '');
+      const safeAudioIdx =
+        cachedProbe && cachedProbe.audioTracks.length > 0
+          ? audioIdx < cachedProbe.audioTracks.length
+            ? audioIdx
+            : 0
+          : 0;
 
       const streamHeaders: Record<string, string> = {
         'Content-Type': 'video/mp4',
@@ -1631,42 +2010,84 @@ export async function handleFileListRequest(
       }
       res.writeHead(200, streamHeaders);
 
-      const rangePort = await ensureInternalRangeServer();
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
+      const useDirectPipe = startSec <= 1;
 
-      if (startSec > 1) {
-        if (!isHevc) {
-          ffArgs.push('-noaccurate_seek');
-        }
-        ffArgs.push('-ss', String(Math.floor(startSec)));
+      if (!useDirectPipe) {
+        const rangePort = await ensureInternalRangeServer();
+        ffArgs.push(
+          '-noaccurate_seek',
+          '-ss',
+          String(Math.floor(startSec)),
+          '-i',
+          `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
+        );
+      } else {
+        ffArgs.push('-i', 'pipe:0');
       }
+
       ffArgs.push(
-        '-i',
-        `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`,
         '-map',
         '0:v:0',
         '-map',
-        `0:a:${audioIdx}?`
+        `0:a:${safeAudioIdx}?`,
+        '-map_metadata',
+        '-1',
+        '-map_chapters',
+        '-1',
+        '-dn',
+        '-sn'
       );
 
       if (isHevc) {
-        // Transcode HEVC to H.264 1080p so Chrome, Safari, and LG webOS Smart TV play 4K/HEVC torrents without black screen
-        ffArgs.push(
-          '-c:v',
-          'libx264',
-          '-preset',
-          'ultrafast',
-          '-tune',
-          'zerolatency',
-          '-crf',
-          '21',
-          '-vf',
-          'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
-          '-maxrate',
-          '8M',
-          '-bufsize',
-          '16M'
-        );
+        const is4kSource = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
+        const maxScaleW = is4kSource ? 3840 : 1920;
+        const sdrFilter = `scale='min(${maxScaleW},iw)':trunc(ow/a/2)*2,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`;
+        if (process.platform === 'darwin') {
+          ffArgs.push(
+            '-c:v',
+            'h264_videotoolbox',
+            '-realtime',
+            'true',
+            '-b:v',
+            is4kSource ? '15M' : '8M',
+            '-maxrate',
+            is4kSource ? '20M' : '10M',
+            '-bufsize',
+            is4kSource ? '30M' : '16M',
+            '-vf',
+            sdrFilter,
+            '-color_primaries',
+            'bt709',
+            '-color_trc',
+            'bt709',
+            '-colorspace',
+            'bt709'
+          );
+        } else {
+          ffArgs.push(
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-tune',
+            'zerolatency',
+            '-crf',
+            '21',
+            '-vf',
+            sdrFilter,
+            '-color_primaries',
+            'bt709',
+            '-color_trc',
+            'bt709',
+            '-colorspace',
+            'bt709',
+            '-maxrate',
+            is4kSource ? '15M' : '8M',
+            '-bufsize',
+            is4kSource ? '30M' : '16M'
+          );
+        }
       } else {
         // Direct bitstream copy for H.264 (0% CPU, original BluRay/WEB-DL quality, 150ms startup!)
         ffArgs.push('-c:v', 'copy');
@@ -1681,6 +2102,8 @@ export async function handleFileListRequest(
         '192k',
         '-f',
         'mp4',
+        '-brand',
+        'isom',
         '-use_editlist',
         '0',
         '-avoid_negative_ts',
@@ -1695,9 +2118,55 @@ export async function handleFileListRequest(
       const ff = spawn(ffmpegPath as string, ffArgs);
       gState.activeStreamProcess = ff;
 
-      ff.stdout.pipe(res);
+      let directReadStream: any = null;
+      if (useDirectPipe) {
+        directReadStream = rawFile.createReadStream();
+        try {
+          if (typeof directReadStream.startPiece === 'number' && entry.engine.critical) {
+            entry.engine.critical(directReadStream.startPiece, 12);
+          }
+        } catch {
+          // ignore
+        }
+        const closeDirect = () => {
+          try {
+            directReadStream?.destroy();
+          } catch {
+            // ignore
+          }
+        };
+        entry.activeStreams.add(closeDirect);
+        directReadStream.on('error', () => {});
+        ff.stdin.on('error', () => {});
+        directReadStream.pipe(ff.stdin);
+      }
+
+      let patchedFtyp = false;
+      ff.stdout.on('data', (chunk: Buffer) => {
+        let outChunk = chunk;
+        if (!patchedFtyp && chunk.length >= 32) {
+          patchedFtyp = true;
+          const dbyIdx = chunk.indexOf('dby1', 0, 'ascii');
+          if (dbyIdx >= 0 && dbyIdx < 64) {
+            outChunk = Buffer.from(chunk);
+            outChunk.write('iso5', dbyIdx, 'ascii');
+          }
+        }
+        res.write(outChunk);
+      });
+      ff.stdout.on('end', () => {
+        res.end();
+      });
 
       const cleanup = () => {
+        if (directReadStream) {
+          try {
+            directReadStream.destroy();
+          } catch {
+            // ignore
+          }
+          directReadStream = null;
+        }
         try {
           ff.kill('SIGKILL');
         } catch {
@@ -1715,6 +2184,362 @@ export async function handleFileListRequest(
         res.writeHead(500, { 'Content-Type': 'text/plain' });
       }
       res.end((err as Error).message);
+    }
+    return true;
+  }
+
+  // 6. GET /api/filelist/hls.m3u8 — Live Remuxed HLS (.m3u8 + .ts) for iOS (iPhone / iPad AVPlayer) & Universal Fallback
+  if (pathname === '/api/filelist/hls.m3u8' && req.method === 'GET') {
+    try {
+      const id = parseInt(parsedUrl.searchParams.get('id') || '0', 10);
+      const fileIdx = parseInt(parsedUrl.searchParams.get('fileIdx') || '0', 10);
+      const startSec = Math.max(
+        0,
+        Math.floor(parseFloat(parsedUrl.searchParams.get('start') || '0') || 0)
+      );
+      const audioIdx = Math.max(
+        0,
+        parseInt(parsedUrl.searchParams.get('audio') || '0', 10) || 0
+      );
+
+      if (!id) {
+        res.writeHead(400);
+        res.end('Missing torrent id');
+        return true;
+      }
+
+      const sessionKey = `${id}:${fileIdx}:${startSec}:${audioIdx}`;
+      let hlsSession = gState.activeHlsSession;
+      const m3u8ExistingPath = hlsSession
+        ? path.join(hlsSession.dir, 'stream.m3u8')
+        : '';
+
+      const needsNewSession =
+        !hlsSession ||
+        hlsSession.key !== sessionKey ||
+        (hlsSession.exited && !fs.existsSync(m3u8ExistingPath));
+
+      if (needsNewSession) {
+        if (gState.activeHlsSession) {
+          try {
+            gState.activeHlsSession.proc?.kill('SIGKILL');
+          } catch {
+            // ignore
+          }
+          try {
+            fs.rmSync(gState.activeHlsSession.dir, {
+              recursive: true,
+              force: true,
+            });
+          } catch {
+            // ignore
+          }
+          gState.activeHlsSession = null;
+        }
+        if (gState.activeStreamProcess) {
+          try {
+            gState.activeStreamProcess.kill('SIGKILL');
+          } catch {
+            // ignore
+          }
+          gState.activeStreamProcess = null;
+        }
+
+        const entry = await getOrStartTorrentEngine(id);
+        if (entry.activeStreams) {
+          for (const closeOld of Array.from(entry.activeStreams)) {
+            try {
+              closeOld();
+            } catch {
+              // ignore
+            }
+          }
+          entry.activeStreams.clear();
+        }
+        const rawFile = entry.engine.files[fileIdx] || entry.engine.files[0];
+        if (!rawFile) {
+          res.writeHead(404);
+          res.end('Video file not found in torrent');
+          return true;
+        }
+
+        let cachedProbe = entry.probeCache.get(fileIdx);
+        if (cachedProbe && !cachedProbe.durationSec) {
+          entry.probeCache.delete(fileIdx);
+          cachedProbe = undefined;
+        }
+        if (!cachedProbe) {
+          probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+        }
+        const isHevc =
+          (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
+          /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(rawFile.name || '');
+        const safeAudioIdx =
+          cachedProbe && cachedProbe.audioTracks.length > 0
+            ? audioIdx < cachedProbe.audioTracks.length
+              ? audioIdx
+              : 0
+            : 0;
+
+        ensureTmpDir();
+        const sessionId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        const sessionDir = path.join(TORRENT_CACHE_DIR, `hls_${sessionId}`);
+        fs.mkdirSync(sessionDir, { recursive: true });
+
+        const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
+        const useDirectPipeHls = startSec <= 1;
+
+        if (!useDirectPipeHls) {
+          const rangePort = await ensureInternalRangeServer();
+          ffArgs.push(
+            '-noaccurate_seek',
+            '-ss',
+            String(startSec),
+            '-i',
+            `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
+          );
+        } else {
+          ffArgs.push('-i', 'pipe:0');
+        }
+
+        ffArgs.push(
+          '-map',
+          '0:v:0',
+          '-map',
+          `0:a:${safeAudioIdx}?`,
+          '-map_metadata',
+          '-1',
+          '-map_chapters',
+          '-1',
+          '-dn',
+          '-sn'
+        );
+
+        if (isHevc) {
+          const is4kHls = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
+          const maxScaleHls = is4kHls ? 3840 : 1920;
+          const sdrFilter = `scale='min(${maxScaleHls},iw)':trunc(ow/a/2)*2,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`;
+          if (process.platform === 'darwin') {
+            ffArgs.push(
+              '-c:v',
+              'h264_videotoolbox',
+              '-realtime',
+              'true',
+              '-b:v',
+              is4kHls ? '15M' : '8M',
+              '-maxrate',
+              is4kHls ? '20M' : '10M',
+              '-bufsize',
+              is4kHls ? '30M' : '16M',
+              '-vf',
+              sdrFilter,
+              '-color_primaries',
+              'bt709',
+              '-color_trc',
+              'bt709',
+              '-colorspace',
+              'bt709',
+              '-g',
+              '48'
+            );
+          } else {
+            ffArgs.push(
+              '-c:v',
+              'libx264',
+              '-preset',
+              'ultrafast',
+              '-tune',
+              'zerolatency',
+              '-crf',
+              '21',
+              '-vf',
+              sdrFilter,
+              '-color_primaries',
+              'bt709',
+              '-color_trc',
+              'bt709',
+              '-colorspace',
+              'bt709',
+              '-maxrate',
+              '8M',
+              '-bufsize',
+              '16M',
+              '-g',
+              '48',
+              '-sc_threshold',
+              '0'
+            );
+          }
+        } else {
+          ffArgs.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
+        }
+
+        ffArgs.push(
+          '-c:a',
+          'aac',
+          '-ac',
+          '2',
+          '-b:a',
+          '192k',
+          '-f',
+          'hls',
+          '-hls_time',
+          '3',
+          '-hls_list_size',
+          '0',
+          '-hls_playlist_type',
+          'event',
+          '-hls_flags',
+          'independent_segments+temp_file',
+          '-hls_segment_filename',
+          path.join(sessionDir, 'seg_%05d.ts'),
+          path.join(sessionDir, 'stream.m3u8')
+        );
+
+        const ff = spawn(ffmpegPath as string, ffArgs);
+        let directHlsReadStream: any = null;
+        if (useDirectPipeHls) {
+          directHlsReadStream = rawFile.createReadStream();
+          try {
+            if (
+              typeof directHlsReadStream.startPiece === 'number' &&
+              entry.engine.critical
+            ) {
+              entry.engine.critical(directHlsReadStream.startPiece, 12);
+            }
+          } catch {
+            // ignore
+          }
+          const closeDirect = () => {
+            try {
+              directHlsReadStream?.destroy();
+            } catch {
+              // ignore
+            }
+          };
+          entry.activeStreams.add(closeDirect);
+          directHlsReadStream.on('error', () => {});
+          ff.stdin.on('error', () => {});
+          directHlsReadStream.pipe(ff.stdin);
+        }
+        const newSession: ActiveHlsSession = {
+          key: sessionKey,
+          sessionId,
+          dir: sessionDir,
+          proc: ff,
+          exited: false,
+          startedAt: Date.now(),
+          lastAccessed: Date.now(),
+        };
+        ff.on('close', () => {
+          if (directHlsReadStream) {
+            try {
+              directHlsReadStream.destroy();
+            } catch {
+              // ignore
+            }
+            directHlsReadStream = null;
+          }
+          newSession.exited = true;
+          newSession.proc = null;
+        });
+        gState.activeHlsSession = newSession;
+        hlsSession = newSession;
+      } else if (hlsSession) {
+        hlsSession.lastAccessed = Date.now();
+      }
+
+      const activeSess = hlsSession!;
+      const m3u8Path = path.join(activeSess.dir, 'stream.m3u8');
+
+      const waitStart = Date.now();
+      while (Date.now() - waitStart < 14000) {
+        if (fs.existsSync(m3u8Path)) {
+          try {
+            const txt = fs.readFileSync(m3u8Path, 'utf8');
+            if (txt.includes('seg_00000.ts')) {
+              break;
+            }
+          } catch {
+            // wait
+          }
+        }
+        if (activeSess.exited && !fs.existsSync(m3u8Path)) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 80));
+      }
+
+      if (!fs.existsSync(m3u8Path)) {
+        res.writeHead(504, { 'Content-Type': 'text/plain' });
+        res.end('HLS playlist generation timeout');
+        return true;
+      }
+
+      const rawPlaylist = fs.readFileSync(m3u8Path, 'utf8');
+      const rewrittenPlaylist = rawPlaylist.replace(
+        /^(seg_\d+\.ts)\s*$/gm,
+        `/api/filelist/hls-seg?s=${encodeURIComponent(activeSess.sessionId)}&f=$1`
+      );
+
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      });
+      res.end(rewrittenPlaylist);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+      }
+      res.end((err as Error).message);
+    }
+    return true;
+  }
+
+  // 7. GET /api/filelist/hls-seg — Serve MPEG-TS segment for HLS stream
+  if (pathname === '/api/filelist/hls-seg' && req.method === 'GET') {
+    const s = (parsedUrl.searchParams.get('s') || '').replace(/[^a-zA-Z0-9_]/g, '');
+    const f = (parsedUrl.searchParams.get('f') || '').replace(/[^a-zA-Z0-9_.]/g, '');
+    if (!s || !/^seg_\d+\.ts$/.test(f)) {
+      res.writeHead(400);
+      res.end('Invalid segment');
+      return true;
+    }
+    if (gState.activeHlsSession && gState.activeHlsSession.sessionId === s) {
+      gState.activeHlsSession.lastAccessed = Date.now();
+    }
+    const segPath = path.join(TORRENT_CACHE_DIR, `hls_${s}`, f);
+    if (!fs.existsSync(segPath)) {
+      res.writeHead(404);
+      res.end('Segment not found');
+      return true;
+    }
+    const stat = fs.statSync(segPath);
+    const total = stat.size;
+    const range = req.headers.range;
+    if (range) {
+      const start = parseInt(range.replace(/bytes=/, '').split('-')[0], 10) || 0;
+      const endPart = range.replace(/bytes=/, '').split('-')[1] || '';
+      const end = endPart ? Math.min(total - 1, parseInt(endPart, 10)) : total - 1;
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${total}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': end - start + 1,
+        'Content-Type': 'video/mp2t',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=300',
+      });
+      fs.createReadStream(segPath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': total,
+        'Accept-Ranges': 'bytes',
+        'Content-Type': 'video/mp2t',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=300',
+      });
+      fs.createReadStream(segPath).pipe(res);
     }
     return true;
   }

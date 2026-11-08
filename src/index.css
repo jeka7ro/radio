@@ -34,8 +34,9 @@
     --brand-color: light-dark(var(--brand-accent-light), var(--brand-accent-dark));
   }
 
-  /* MANDATORY: Automatically adapt native UI to user system preferences */
-  color-scheme: light dark;
+  /* MANDATORY: Dark native UI so iOS Chrome / Safari never shows a white URL bar */
+  color-scheme: dark;
+  background-color: #000000;
 
   &:has(> head > meta[name="color-scheme"][content="dark"]) {
     color-scheme: dark;
@@ -58,6 +59,8 @@ body,
   overflow-x: hidden;
   overscroll-behavior-x: none;
   position: relative;
+  background-color: #000000;
+  color-scheme: dark;
 }
 
 body {
@@ -571,9 +574,14 @@ html.no-flex-gap .flex.flex-col.gap-4 > *:not(:last-child):not([class*="mb-"]) {
 html.smart-tv-mode button[data-vod-card="true"],
 html.smart-tv-mode button[data-watched-poster-btn="true"],
 html.smart-tv-mode button[data-tv-channel-card="true"] {
-  transition-duration: 140ms !important;
+  transition-property: transform, opacity, border-color, background-color, color !important;
+  transition-duration: 120ms !important;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
+}
+
+html.smart-tv-mode button {
+  transition-property: transform, opacity, border-color, background-color, color !important;
 }
 
 html.smart-tv-mode button[data-vod-card="true"] img,
@@ -649,6 +657,19 @@ html.smart-tv-mode button[data-tv-channel-card="true"] img {
 }
 
 /* Force-hide navigation sidebar and header whenever any Full Mode player (Live TV or VOD) is active */
+html[data-tv-full-mode="true"],
+html[data-tv-full-mode="true"] body,
+html[data-tv-full-mode="true"] #root,
+html[data-vod-full-mode="true"],
+html[data-vod-full-mode="true"] body,
+html[data-vod-full-mode="true"] #root {
+  background: #000000 !important;
+  background-color: #000000 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overscroll-behavior: none !important;
+}
+
 html[data-tv-full-mode="true"] aside,
 html[data-tv-full-mode="true"] header,
 html[data-vod-full-mode="true"] aside,

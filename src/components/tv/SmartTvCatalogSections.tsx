@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Loader2,
   SlidersHorizontal,
@@ -19,6 +19,7 @@ import {
   Film,
   X,
   Sparkles,
+  Lock,
 } from "lucide-react";
 import { isAdultTvChannel } from "../../services/tvApi";
 import { resolveChannelEpg, getEpgTimingStats } from "../../services/epgService";
@@ -28,6 +29,7 @@ import { StationAvatar } from "../common/StationAvatar";
 import { toggleRadioPip } from "../player/RadioPipPlayer";
 import { StreamingPlatformLogo } from "../common/StreamingPlatformLogo";
 import { getCountryFlagEmoji } from "../../services/geoLanguageService";
+import { SmartTvKlubnichkaSection } from "./SmartTvKlubnichkaSection";
 import {
   CinemetaItem,
   TV_LIVE_REGIONS,
@@ -39,6 +41,12 @@ import {
   isStreamingPlatformSection,
   YOUTUBE_CATEGORIES,
   sanitizeDeviceName,
+  SeriesEpisodeStats,
+  resolveSeriesEpisodeStats,
+  formatSeriesCardBadgeText,
+  formatSeriesCardSubtitleText,
+  getVodCardRatingInfo,
+  isAdminJekaProfile,
 } from "../../views/smartTvLampaHelpers";
 
 export const SmartTvCatalogSections: React.FC<any> = React.memo(({
@@ -138,6 +146,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   handlePlayMusicTrack,
   handleToggleMusicPlayPause,
   handleToggleLikeMusicTrack,
+  seriesEpStatsMap = {},
 }: Record<string, any> & {
   vodItems: any[];
   savedVodItems: any[];
@@ -174,6 +183,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
       }
     >
   >({});
+  const [isKlubnichkaOpen, setIsKlubnichkaOpen] = React.useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (section !== 'torrents' || !isAdminJekaProfile(activeProfile)) {
+      setIsKlubnichkaOpen(false);
+    }
+  }, [section, activeProfile]);
 
   React.useEffect(() => {
     if (currentStation?.stationuuid && activeRadioTrack?.title) {
@@ -264,6 +280,45 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   const [uhdItems, setUhdItems] = React.useState<CinemetaItem[]>([]);
   const [isUhdLoading, setIsUhdLoading] = React.useState<boolean>(false);
   const uhdSearchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [uhdSeriesEpStats, setUhdSeriesEpStats] = React.useState<Record<string, SeriesEpisodeStats>>({});
+
+  React.useEffect(() => {
+    if (section !== 'uhd_4k' || uhdItems.length === 0) return;
+    const toFetch = uhdItems
+      .filter(
+        (it) =>
+          it.type === 'series' &&
+          !seriesEpStatsMap[it.id] &&
+          !uhdSeriesEpStats[it.id]
+      )
+      .slice(0, 36);
+    if (toFetch.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const batchSize = 6;
+      for (let i = 0; i < toFetch.length; i += batchSize) {
+        if (cancelled) break;
+        const batch = toFetch.slice(i, i + batchSize);
+        const res = await Promise.all(
+          batch.map(async (it) => ({
+            id: it.id,
+            stats: await resolveSeriesEpisodeStats(it),
+          }))
+        );
+        if (cancelled) break;
+        setUhdSeriesEpStats((prev) => {
+          const next = { ...prev };
+          for (const r of res) {
+            if (r.stats) next[r.id] = r.stats;
+          }
+          return next;
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [section, uhdItems, seriesEpStatsMap, uhdSeriesEpStats]);
 
   React.useEffect(() => {
     if (section !== 'uhd_4k') return;
@@ -310,7 +365,19 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
           const addUnique = (item: CinemetaItem) => {
             if (!item?.id || !item?.name) return;
             const normName = `${item.type}:${item.name.toLowerCase().trim()}`;
-            if (seenIds.has(item.id) || seenNames.has(normName)) return;
+            if (seenIds.has(item.id) || seenNames.has(normName)) {
+              const existing = combined.find(
+                (x) =>
+                  x.id === item.id ||
+                  `${x.type}:${x.name.toLowerCase().trim()}` === normName
+              );
+              if (existing) {
+                if (!existing.imdbRating && item.imdbRating) existing.imdbRating = item.imdbRating;
+                if (!existing.ratingKinopoisk && item.ratingKinopoisk) existing.ratingKinopoisk = item.ratingKinopoisk;
+                if (!existing.country && item.country) existing.country = item.country;
+              }
+              return;
+            }
             seenIds.add(item.id);
             seenNames.add(normName);
             combined.push({
@@ -356,6 +423,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
               const isSer =
                 f.type === 'TV_SERIES' || f.type === 'MINI_SERIES' || f.type === 'TV_SHOW';
               const ratingNum = parseFloat(String(f.rating || '0'));
+              const countryStr = Array.isArray(f.countries)
+                ? f.countries.map((c: any) => c.country).filter(Boolean).join(', ')
+                : undefined;
               addUnique({
                 id: `kp_${f.filmId}`,
                 kpId: String(f.filmId),
@@ -364,6 +434,8 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                 nameOriginal: f.nameEn || undefined,
                 releaseInfo: f.year && f.year !== 'null' ? String(f.year) : '2026',
                 imdbRating: ratingNum > 0 ? String(ratingNum) : undefined,
+                ratingKinopoisk: ratingNum > 0 ? String(ratingNum) : undefined,
+                country: countryStr,
                 poster: f.posterUrlPreview || f.posterUrl,
                 qualityBadge: '4K UHD',
               });
@@ -418,7 +490,19 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
         const addUnique = (item: CinemetaItem) => {
           if (!item?.id || !item?.name) return;
           const normName = `${item.type}:${item.name.toLowerCase().trim()}`;
-          if (seenIds.has(item.id) || seenNames.has(normName)) return;
+          if (seenIds.has(item.id) || seenNames.has(normName)) {
+            const existing = combined.find(
+              (x) =>
+                x.id === item.id ||
+                `${x.type}:${x.name.toLowerCase().trim()}` === normName
+            );
+            if (existing) {
+              if (!existing.imdbRating && item.imdbRating) existing.imdbRating = item.imdbRating;
+              if (!existing.ratingKinopoisk && item.ratingKinopoisk) existing.ratingKinopoisk = item.ratingKinopoisk;
+              if (!existing.country && item.country) existing.country = item.country;
+            }
+            return;
+          }
           seenIds.add(item.id);
           seenNames.add(normName);
           combined.push({
@@ -454,14 +538,20 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
             const isSer =
               f.type === 'TV_SERIES' || f.type === 'MINI_SERIES' || f.type === 'TV_SHOW';
             const validImdb = f.imdbId && /^tt\d+$/.test(f.imdbId) ? f.imdbId : '';
-            const ratingVal = f.ratingKinopoisk || f.ratingImdb;
+            const ratingVal = f.ratingImdb || f.ratingKinopoisk;
+            const countryStr = Array.isArray(f.countries)
+              ? f.countries.map((c: any) => c.country).filter(Boolean).join(', ')
+              : undefined;
             addUnique({
               id: validImdb || `kp_${f.kinopoiskId}`,
               kpId: String(f.kinopoiskId),
               type: isSer ? 'series' : 'movie',
               name: f.nameOriginal || f.nameEn || f.nameRu || `Film #${f.kinopoiskId}`,
+              nameOriginal: f.nameOriginal || f.nameEn || undefined,
               releaseInfo: f.year && String(f.year) !== 'null' ? String(f.year) : '2026',
               imdbRating: ratingVal ? String(ratingVal) : undefined,
+              ratingKinopoisk: f.ratingKinopoisk ? String(f.ratingKinopoisk) : undefined,
+              country: countryStr,
               poster: validImdb
                 ? `https://images.metahub.space/poster/medium/${validImdb}/img`
                 : f.posterUrlPreview || f.posterUrl,
@@ -526,6 +616,34 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                   section === 'series' ||
                   isStreamingPlatformSection(section)) && (
                     <div className="space-y-6 pb-16">
+                      {/* MOBILE-ONLY SEGMENTED SWITCHER FOR UNIFIED "FILME & SERIALE" TAB (< 768px) */}
+                      {(section === 'movies' || section === 'series') && (
+                        <div className="md:hidden flex items-center gap-2 p-1 rounded-2xl bg-white/[0.06] border border-white/10">
+                          <button
+                            type="button"
+                            onClick={() => setSection('movies')}
+                            className={`flex-1 h-10 rounded-xl text-xs font-extrabold inline-flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                              section === 'movies'
+                                ? 'bg-white text-[#141414] shadow-md'
+                                : 'text-zinc-300 hover:text-white'
+                            }`}
+                          >
+                            <span>{tr('Filme', 'Movies', 'Фильмы')}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSection('series')}
+                            className={`flex-1 h-10 rounded-xl text-xs font-extrabold inline-flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                              section === 'series'
+                                ? 'bg-white text-[#141414] shadow-md'
+                                : 'text-zinc-300 hover:text-white'
+                            }`}
+                          >
+                            <span>{tr('Seriale', 'TV Series', 'Сериалы')}</span>
+                          </button>
+                        </div>
+                      )}
+
                       {isStreamingPlatformSection(section) && (() => {
                         const activePlat =
                           STREAMING_PLATFORMS.find((p) => p.id === section) ||
@@ -717,24 +835,32 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         }}
                                         className="w-full h-full object-cover"
                                       />
-                                      <span
-                                        className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
-                                            ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                            : 'bg-amber-500/90 text-zinc-950'
-                                          }`}
-                                      >
-                                        {item.type === 'series'
-                                          ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
-                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                      </span>
+                                      {(() => {
+                                        const rInfo = getVodCardRatingInfo(item);
+                                        return (
+                                          <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                            <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                              <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                                {rInfo.source}
+                                              </span>
+                                              <span>{rInfo.value}</span>
+                                            </span>
+                                            <span
+                                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                                  ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                                  : 'bg-amber-500/90 text-zinc-950'
+                                                }`}
+                                            >
+                                              {item.type === 'series'
+                                                ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                                : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                            </span>
+                                          </div>
+                                        );
+                                      })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                           ❤
-                                        </span>
-                                      )}
-                                      {item.imdbRating && (
-                                        <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                          {item.imdbRating}
                                         </span>
                                       )}
                                     </div>
@@ -743,7 +869,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         {item.name}
                                       </div>
                                       <div className="text-xs text-zinc-400 mt-0.5">
-                                        {item.releaseInfo || '2026'}
+                                        {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
                                       </div>
                                     </div>
                                   </button>
@@ -799,24 +925,32 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           }}
                                           className="w-full h-full object-cover"
                                         />
-                                        <span
-                                          className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
-                                              ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                              : 'bg-amber-500/90 text-zinc-950'
-                                            }`}
-                                        >
-                                          {item.type === 'series'
-                                            ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
-                                            : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                        </span>
+                                        {(() => {
+                                          const rInfo = getVodCardRatingInfo(item);
+                                          return (
+                                            <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                              <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                                <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                                  {rInfo.source}
+                                                </span>
+                                                <span>{rInfo.value}</span>
+                                              </span>
+                                              <span
+                                                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                                    ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                                    : 'bg-amber-500/90 text-zinc-950'
+                                                  }`}
+                                              >
+                                                {item.type === 'series'
+                                                  ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                                  : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                              </span>
+                                            </div>
+                                          );
+                                        })()}
                                         {isFav && (
                                           <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                             ❤
-                                          </span>
-                                        )}
-                                        {item.imdbRating && (
-                                          <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                            {item.imdbRating}
                                           </span>
                                         )}
                                       </div>
@@ -825,7 +959,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           {item.name}
                                         </div>
                                         <div className="text-xs text-zinc-400 mt-0.5">
-                                          <span>{item.releaseInfo || '2026'}</span>
+                                          <span>{formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}</span>
                                         </div>
                                       </div>
                                     </button>
@@ -1081,25 +1215,33 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       }}
                                       className="w-full h-full object-cover"
                                     />
-                                    <span
-                                      className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
-                                        item.type === 'series'
-                                          ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                          : 'bg-amber-500/90 text-zinc-950'
-                                      }`}
-                                    >
-                                      {item.type === 'series'
-                                        ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
-                                        : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                    </span>
+                                    {(() => {
+                                      const rInfo = getVodCardRatingInfo(item);
+                                      return (
+                                        <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                          <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                            <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                              {rInfo.source}
+                                            </span>
+                                            <span>{rInfo.value}</span>
+                                          </span>
+                                          <span
+                                            className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                              item.type === 'series'
+                                                ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                                : 'bg-amber-500/90 text-zinc-950'
+                                            }`}
+                                          >
+                                            {item.type === 'series'
+                                              ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                              : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                          </span>
+                                        </div>
+                                      );
+                                    })()}
                                     {isFav && (
                                       <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                         ❤
-                                      </span>
-                                    )}
-                                    {item.imdbRating && (
-                                      <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                        {item.imdbRating}
                                       </span>
                                     )}
                                   </div>
@@ -1108,7 +1250,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       {item.name}
                                     </div>
                                     <div className="text-xs text-zinc-400 mt-0.5">
-                                      {item.releaseInfo || '2026'}
+                                      {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
                                     </div>
                                   </div>
                                 </button>
@@ -1156,25 +1298,33 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         }}
                                         className="w-full h-full object-cover"
                                       />
-                                      <span
-                                        className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
-                                          item.type === 'series'
-                                            ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                            : 'bg-amber-500/90 text-zinc-950'
-                                        }`}
-                                      >
-                                        {item.type === 'series'
-                                          ? tr('SERIAL', 'SERIES', 'СЕРИАЛ')
-                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                      </span>
+                                      {(() => {
+                                        const rInfo = getVodCardRatingInfo(item);
+                                        return (
+                                          <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                            <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                              <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                                {rInfo.source}
+                                              </span>
+                                              <span>{rInfo.value}</span>
+                                            </span>
+                                            <span
+                                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                                item.type === 'series'
+                                                  ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                                  : 'bg-amber-500/90 text-zinc-950'
+                                              }`}
+                                            >
+                                              {item.type === 'series'
+                                                ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                                : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                            </span>
+                                          </div>
+                                        );
+                                      })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                           ❤
-                                        </span>
-                                      )}
-                                      {item.imdbRating && (
-                                        <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                          {item.imdbRating}
                                         </span>
                                       )}
                                     </div>
@@ -1183,7 +1333,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         {item.name}
                                       </div>
                                       <div className="text-xs text-zinc-400 mt-0.5">
-                                        <span>{item.releaseInfo || '2026'}</span>
+                                        <span>{formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}</span>
                                       </div>
                                     </div>
                                   </button>
@@ -1295,14 +1445,33 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     loading="lazy"
                                     className="w-full h-full object-cover"
                                   />
+                                  {(() => {
+                                    const rInfo = getVodCardRatingInfo(item);
+                                    return (
+                                      <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                        <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                          <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                            {rInfo.source}
+                                          </span>
+                                          <span>{rInfo.value}</span>
+                                        </span>
+                                        <span
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                            item.type === 'series'
+                                              ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                              : 'bg-amber-500/90 text-zinc-950'
+                                          }`}
+                                        >
+                                          {item.type === 'series'
+                                            ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                            : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                        </span>
+                                      </div>
+                                    );
+                                  })()}
                                   {isFav && (
                                     <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                       ❤
-                                    </span>
-                                  )}
-                                  {item.imdbRating && (
-                                    <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                      {item.imdbRating}
                                     </span>
                                   )}
                                 </div>
@@ -1311,7 +1480,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     {item.name}
                                   </div>
                                   <div className="text-xs text-zinc-400 mt-0.5">
-                                    {item.releaseInfo || '2026'}
+                                    {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
                                   </div>
                                 </div>
                               </button>
@@ -2356,18 +2525,37 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   loading="lazy"
                                   className="w-full h-full object-cover"
                                 />
-                                {item.imdbRating && (
-                                  <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                    {item.imdbRating}
-                                  </span>
-                                )}
+                                {(() => {
+                                  const rInfo = getVodCardRatingInfo(item);
+                                  return (
+                                    <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                      <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                        <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                          {rInfo.source}
+                                        </span>
+                                        <span>{rInfo.value}</span>
+                                      </span>
+                                      <span
+                                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                          item.type === 'series'
+                                            ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                            : 'bg-amber-500/90 text-zinc-950'
+                                        }`}
+                                      >
+                                        {item.type === 'series'
+                                          ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                               <div className="mt-2.5 px-0.5">
                                 <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
                                   {item.name}
                                 </div>
                                 <div className="text-xs text-zinc-400 mt-0.5">
-                                  {item.releaseInfo || '2026'}
+                                  {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
                                 </div>
                               </div>
                             </button>
@@ -2626,12 +2814,35 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                   </div>
                 )}
 
-                {/* SECTION 5B: FILELIST.IO LIVE TORRENTS CATALOG ("Торренты FileList") */}
+                {/* SECTION 5B: FILELIST.IO LIVE TORRENTS CATALOG ("Торренты FileList") + HIDDEN KLUBNICHKA 18+ FOR JEKA */}
                 {section === 'torrents' && (
+                  isKlubnichkaOpen && isAdminJekaProfile(activeProfile) ? (
+                    <SmartTvKlubnichkaSection
+                      tr={tr}
+                      uiLang={
+                        activeProfile?.uiLang === 'ru'
+                          ? 'ru'
+                          : activeProfile?.uiLang === 'en'
+                            ? 'en'
+                            : 'ro'
+                      }
+                      onExitKlubnichka={() => {
+                        setIsKlubnichkaOpen(false);
+                        window.setTimeout(() => {
+                          const btn = document.querySelector<HTMLElement>(
+                            '[data-open-klubnichka-btn="true"]'
+                          );
+                          btn?.focus({ preventScroll: true });
+                        }, 40);
+                      }}
+                      onFocusVodItem={handleFocusVodItem}
+                      onOpenVodItem={handleOpenVod}
+                    />
+                  ) : (
                   <div className="space-y-4 pb-16">
-                    {/* Top Bar: Connected Account Badge + Category Pills + Sort Toggle */}
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                    {/* Top Bar: Category Pills + Hidden Klubnichka 18+ for JEKA + Sort Toggle + Account Badge */}
+                    <div className="flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
                         {(
                           [
                             {
@@ -2689,11 +2900,12 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             <button
                               key={cat.id}
                               type="button"
+                              data-top-pill="true"
                               onClick={() => {
                                 setFlSearchQuery('');
                                 setFlCategory(cat.id);
                               }}
-                              className={`h-10 px-4 rounded-full text-xs sm:text-sm font-bold shrink-0 transition-all cursor-pointer ${active
+                              className={`h-10 px-4 rounded-full text-xs sm:text-sm font-bold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${active
                                   ? 'bg-gradient-to-r from-[#60a5fa] to-[#bfdbfe] text-[#141414] font-extrabold shadow-lg'
                                   : 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 border border-white/10'
                                 }`}
@@ -2702,21 +2914,36 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             </button>
                           );
                         })}
-                      </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="px-3.5 py-1.5 rounded-full bg-[#60a5fa]/15 border border-[#60a5fa]/35 text-[#60a5fa] text-xs font-extrabold inline-flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
-                          <span>FileList.io • jeka7ro</span>
-                        </span>
+                        {isAdminJekaProfile(activeProfile) && (
+                          <button
+                            type="button"
+                            data-top-pill="true"
+                            data-open-klubnichka-btn="true"
+                            onClick={() => setIsKlubnichkaOpen(true)}
+                            title="Klubnichka 18+ (Disponibil exclusiv pentru profilul JEKA)"
+                            className="h-10 px-4 rounded-full bg-rose-500/15 hover:bg-rose-500/25 focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-rose-300 border border-rose-500/35 text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shrink-0 transition-all cursor-pointer"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-rose-400" />
+                            <span>
+                              {tr(
+                                'Klubnichka 18+',
+                                'Klubnichka 18+',
+                                'Клубничка 18+'
+                              )}
+                            </span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
+                          data-top-pill="true"
                           onClick={() =>
                             setFlSort((prev) =>
                               prev === 'seeders' ? 'latest' : 'seeders'
                             )
                           }
-                          className="h-10 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.12] focus:bg-white focus:text-[#141414] text-zinc-100 text-xs font-extrabold border border-white/10 cursor-pointer"
+                          className="h-10 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.12] focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs sm:text-sm font-extrabold border border-white/10 shrink-0 cursor-pointer"
                         >
                           {flSort === 'seeders'
                             ? tr(
@@ -2730,6 +2957,11 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               'По дате (Новинки)'
                             )}
                         </button>
+
+                        <span className="px-3.5 py-1.5 rounded-full bg-[#60a5fa]/15 border border-[#60a5fa]/35 text-[#60a5fa] text-xs font-extrabold inline-flex items-center gap-1.5 shrink-0">
+                          <span className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
+                          <span>FileList.io • jeka7ro</span>
+                        </span>
                       </div>
                     </div>
 
@@ -2933,6 +3165,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       </div>
                     )}
                   </div>
+                  )
                 )}
 
                 {/* SECTION 6: WATCH HISTORY ("История / Continuă vizionarea / Watch History" — All Watched Items + TV Remote Delete Buttons) */}
@@ -3030,21 +3263,29 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       </span>
                                     </div>
                                   )}
-                                  <span
-                                    className={`absolute top-2.5 right-2.5 z-10 px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
-                                        ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                        : 'bg-amber-500/90 text-zinc-950'
-                                      }`}
-                                  >
-                                    {item.type === 'series'
-                                      ? `${tr('SERIAL', 'SERIES', 'СЕРИАЛ')} S${entry.season}:E${entry.episode}`
-                                      : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                  </span>
-                                  {item.imdbRating && (
-                                    <span className="absolute bottom-3.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                      {item.imdbRating}
-                                    </span>
-                                  )}
+                                  {(() => {
+                                    const rInfo = getVodCardRatingInfo(item);
+                                    return (
+                                      <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                        <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                          <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                            {rInfo.source}
+                                          </span>
+                                          <span>{rInfo.value}</span>
+                                        </span>
+                                        <span
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                              ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                              : 'bg-amber-500/90 text-zinc-950'
+                                            }`}
+                                        >
+                                          {item.type === 'series'
+                                            ? `${tr('SERIAL', 'SERIES', 'СЕРИАЛ')} S${entry.season}:E${entry.episode}`
+                                            : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                        </span>
+                                      </div>
+                                    );
+                                  })()}
                                   {renderPosterProgressOverlay(
                                     entry,
                                     isLiveCard
@@ -3061,7 +3302,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     {item.name}
                                   </div>
                                   <div className="text-xs text-zinc-400 mt-0.5 flex items-center justify-between gap-1">
-                                    <span>{item.releaseInfo || '2026'}</span>
+                                    <span>{formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}</span>
                                     {isLiveCard && (
                                       <span className="text-[11px] font-bold text-blue-400 truncate">
                                         ● {devLabel}
@@ -3138,18 +3379,37 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                     ❤
                                   </span>
-                                  {item.imdbRating && (
-                                    <span className="absolute bottom-2.5 right-2.5 px-2.5 py-0.5 rounded-lg bg-black/75 backdrop-blur-sm text-white text-xs sm:text-sm font-bold tracking-tight shadow-md">
-                                      {item.imdbRating}
-                                    </span>
-                                  )}
+                                  {(() => {
+                                    const rInfo = getVodCardRatingInfo(item);
+                                    return (
+                                      <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                        <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                          <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
+                                            {rInfo.source}
+                                          </span>
+                                          <span>{rInfo.value}</span>
+                                        </span>
+                                        <span
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                            item.type === 'series'
+                                              ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                              : 'bg-amber-500/90 text-zinc-950'
+                                          }`}
+                                        >
+                                          {item.type === 'series'
+                                            ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
+                                            : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                        </span>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                                 <div className="mt-2.5 px-0.5">
                                   <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
                                     {item.name}
                                   </div>
                                   <div className="text-xs text-zinc-400 mt-0.5">
-                                    {item.releaseInfo || '2026'}
+                                    {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
                                   </div>
                                 </div>
                               </button>

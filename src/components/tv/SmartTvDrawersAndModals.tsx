@@ -44,6 +44,7 @@ import {
   saveTvProfiles,
   isAdminJekaProfile,
   canProfileAccessAdult,
+  canProfileAccessIedem,
   SmartTvProfile,
 } from "../../views/smartTvLampaHelpers";
 
@@ -626,8 +627,129 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-1.5 px-1">
-                  {/* 0A. Limba Interfeței (EN / RO / RU) */}
+                <div className="flex-1 overflow-y-auto space-y-2 px-1">
+                  {/* 0A. Profil Activ & Schimbare Rapidă Utilizator (Prioritatea #1) */}
+                  <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-400/35 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className={`relative w-9 h-9 rounded-full bg-gradient-to-br ${activeProfile.avatarBg} flex items-center justify-center text-xs font-black text-white shadow overflow-hidden shrink-0 ring-2 ring-emerald-400`}
+                        >
+                          {activeProfile.avatarUrl ? (
+                            <img
+                              src={activeProfile.avatarUrl}
+                              alt={activeProfile.name}
+                              className="w-full h-full rounded-full object-cover"
+                            />
+                          ) : (
+                            activeProfile.name.slice(0, 1).toUpperCase() || 'E'
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-300">
+                            {tr('Conectat acum pe:', 'Connected now:', 'Активный профиль:')}
+                          </div>
+                          <div className="text-base font-black text-white truncate">
+                            {activeProfile.name}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-400 text-zinc-950 text-[10px] font-black uppercase tracking-wider shrink-0 shadow">
+                        {tr('ACTIV', 'ACTIVE', 'АКТИВЕН')}
+                      </span>
+                    </div>
+
+                    {/* Direct 1-Click Profile Switcher Buttons right inside Settings */}
+                    {Array.isArray(tvProfiles) && tvProfiles.length > 1 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[11px] font-bold text-zinc-300">
+                          {tr(
+                            'Apasă OK pe un profil pentru conectare directă:',
+                            'Press OK on a profile to sign in directly:',
+                            'Нажмите OK на профиль для быстрого входа:'
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {tvProfiles.map((prof: SmartTvProfile) => {
+                            const isCur = prof.id === activeProfileId;
+                            const hasPin = Boolean(prof.pin && prof.pin.trim());
+                            return (
+                              <button
+                                key={`quick_switch_${prof.id}`}
+                                type="button"
+                                data-drawer-initial-focus={isCur ? 'true' : undefined}
+                                onClick={() => {
+                                  if (hasPin && !isCur) {
+                                    setIsSettingsDrawerOpen(false);
+                                    setEditingProfileId(null);
+                                    setIsHandoffModalOpen(true);
+                                    return;
+                                  }
+                                  handleSelectProfile(prof.id);
+                                  setIsSettingsDrawerOpen(false);
+                                }}
+                                className={`h-11 px-3 rounded-xl flex items-center justify-between gap-2 text-left transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-zinc-950 cursor-pointer border ${
+                                  isCur
+                                    ? 'bg-emerald-400 text-zinc-950 border-emerald-200 font-black shadow'
+                                    : 'bg-white/[0.08] hover:bg-white/20 text-white border-white/15 font-bold'
+                                }`}
+                              >
+                                <span className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className={`w-6 h-6 rounded-full bg-gradient-to-br ${prof.avatarBg} flex items-center justify-center text-[10px] font-black text-white overflow-hidden shrink-0`}
+                                  >
+                                    {prof.avatarUrl ? (
+                                      <img
+                                        src={prof.avatarUrl}
+                                        alt={prof.name}
+                                        className="w-full h-full object-cover"
+                                      />
+                                    ) : (
+                                      prof.name.slice(0, 1).toUpperCase()
+                                    )}
+                                  </span>
+                                  <span className="text-xs truncate">{prof.name}</span>
+                                </span>
+                                <span className="text-[10px] font-extrabold uppercase shrink-0">
+                                  {isCur
+                                    ? tr('Activ', 'Active', 'Актив')
+                                    : hasPin
+                                      ? 'PIN'
+                                      : tr('Intră', 'Sign In', 'Войти')}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      data-drawer-initial-focus={
+                        !Array.isArray(tvProfiles) || tvProfiles.length <= 1
+                          ? 'true'
+                          : undefined
+                      }
+                      onClick={() => {
+                        setIsSettingsDrawerOpen(false);
+                        setEditingProfileId(null);
+                        setIsHandoffModalOpen(true);
+                      }}
+                      className="w-full h-10 px-4 rounded-xl flex items-center justify-between gap-2 bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-white focus:outline-none text-white text-xs font-extrabold transition-all cursor-pointer"
+                    >
+                      <span>
+                        {tr(
+                          'Ecran Complet Profiluri (Schimbă / Adaugă / PIN)',
+                          'Full Profile Screen (Switch / Add / PIN)',
+                          'Все профили (Сменить / Добавить / PIN)'
+                        )}
+                      </span>
+                      <Users className="w-4 h-4 shrink-0" />
+                    </button>
+                  </div>
+
+                  {/* 0B. Limba Interfeței (EN / RO / RU) */}
                   <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/[0.06] space-y-2.5">
                     <div className="text-[14px] font-semibold text-white">
                       {tr(
@@ -661,37 +783,6 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                       })}
                     </div>
                   </div>
-
-                  {/* 0B. Schimbă Profilul (Netflix Profiles) */}
-                  <button
-                    type="button"
-                    data-drawer-initial-focus="true"
-                    onClick={() => {
-                      setIsSettingsDrawerOpen(false);
-                      setEditingProfileId(null);
-                      setIsHandoffModalOpen(true);
-                    }}
-                    className="w-full px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 text-left bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.06] focus:bg-gradient-to-r focus:from-[#e4e4e7] focus:via-[#ffffff] focus:to-[#d4d4d8] focus:text-[#141414] focus:outline-none group transition-all cursor-pointer"
-                  >
-                    <div>
-                      <div className="text-[15px] font-semibold text-white group-focus:text-[#141414]">
-                        {tr(
-                          'Profil Activ (Cine vizionează?)',
-                          "Active Profile (Who's watching?)",
-                          'Профиль (Кто смотрит?)'
-                        )}
-                      </div>
-                      <div className="text-[12px] text-white group-focus:text-zinc-800 mt-0.5 font-bold">
-                        {activeProfile.name} —{' '}
-                        {tr(
-                          'Schimbă sau adaugă profil',
-                          'Switch or add profile',
-                          'Сменить или добавить профиль'
-                        )}
-                      </div>
-                    </div>
-                    <Users className="w-5 h-5 text-white group-focus:text-zinc-900 shrink-0" />
-                  </button>
 
                   {/* 0B. Temă Vizuală Smart TV (Cinema Dark vs Ambient Slate TV) */}
                   <button
@@ -906,143 +997,295 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     </span>
                   </button>
 
-                  {/* 8. Conținut pentru Adulți (18+) — VIZIBIL EXCLUSIV PENTRU PROFILUL ADMIN JEKA */}
+                  {/* 8. Conținut pentru Adulți (18+) & Mediateca iEdem — VIZIBIL EXCLUSIV PENTRU PROFILUL ADMIN JEKA */}
                   {isAdminJekaProfile(activeProfile) && (
-                    <div className="w-full p-4 sm:p-5 rounded-2xl bg-white/[0.04] border border-rose-500/25 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[15px] font-bold text-white flex flex-wrap items-center gap-2">
-                            <span>
+                    <>
+                      <div className="w-full p-4 sm:p-5 rounded-2xl bg-white/[0.04] border border-emerald-500/25 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[15px] font-bold text-white flex flex-wrap items-center gap-2">
+                              <span>
+                                {tr(
+                                  'Control Acces iEdem (Doar JEKA)',
+                                  'iEdem Access Control (JEKA Admin Only)',
+                                  'Управление доступом iEdem (Только JEKA)'
+                                )}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                ADMIN JEKA
+                              </span>
+                            </div>
+                            <div className="text-[12px] text-zinc-400 mt-0.5">
                               {tr(
-                                '🔒 Control Acces Canale 18+ (Doar JEKA)',
-                                '🔒 18+ Channels Access Control (JEKA Admin Only)',
-                                '🔒 Управление доступом 18+ (Только JEKA)'
+                                'Decizi exclusiv de aici ce profiluri au acces la Mediateca și lista TV iEdem. Implicit este activ doar pentru JEKA.',
+                                'Decide exclusively from here which profiles can access iEdem Mediateka & TV. Enabled by default only for JEKA.',
+                                'Только вы решаете здесь, у каких профилей есть доступ к iEdem. По умолчанию включено только для JEKA.'
                               )}
-                            </span>
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                              ADMIN JEKA
-                            </span>
+                            </div>
                           </div>
-                          <div className="text-[12px] text-zinc-400 mt-0.5">
-                            {tr(
-                              'Decizi exclusiv de aici ce profiluri au acces la canalele și filmele pentru adulți (18+). Celelalte profiluri nu văd această setare.',
-                              'Decide exclusively from here which profiles can access 18+ adult channels. Other profiles cannot see this setting.',
-                              'Только вы решаете здесь, у каких профилей есть доступ к каналам 18+. Другие профили не видят эту настройку.'
-                            )}
-                          </div>
+                        </div>
+
+                        <div className="space-y-2 pt-1">
+                          {(Array.isArray(tvProfiles) ? tvProfiles : []).map(
+                            (prof: SmartTvProfile) => {
+                              const isProfKids = Boolean(prof.isKids);
+                              const profAllowed = canProfileAccessIedem(prof);
+                              const isJeka = isAdminJekaProfile(prof);
+
+                              return (
+                                <button
+                                  key={`iedem_perm_${prof.id}`}
+                                  type="button"
+                                  disabled={isProfKids}
+                                  onClick={() => {
+                                    if (isProfKids) return;
+                                    const nextAllowed = !profAllowed;
+                                    const nextProfiles = (
+                                      Array.isArray(tvProfiles)
+                                        ? tvProfiles
+                                        : []
+                                    ).map((p: SmartTvProfile) =>
+                                      p.id === prof.id
+                                        ? {
+                                            ...p,
+                                            allowIedemContent: nextAllowed,
+                                            updatedAt: Date.now(),
+                                          }
+                                        : p
+                                    );
+                                    setTvProfiles(nextProfiles);
+                                    saveTvProfiles(nextProfiles);
+                                    if (
+                                      prof.id === activeProfile?.id &&
+                                      !nextAllowed
+                                    ) {
+                                      if (section === 'iedem_vod') {
+                                        setSection('home');
+                                      }
+                                      if (tvRegionId === 'IEDEM') {
+                                        setTvRegionId('FAV');
+                                      }
+                                    }
+                                  }}
+                                  className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white ${
+                                    isProfKids
+                                      ? 'bg-white/[0.02] border-white/[0.04] opacity-55 cursor-not-allowed'
+                                      : profAllowed
+                                        ? 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/40 cursor-pointer'
+                                        : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.07] cursor-pointer'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    {prof.avatarUrl ? (
+                                      <img
+                                        src={prof.avatarUrl}
+                                        alt={prof.name}
+                                        className="w-8 h-8 rounded-lg object-cover shrink-0 border border-white/15"
+                                      />
+                                    ) : (
+                                      <div
+                                        className={`w-8 h-8 rounded-lg bg-gradient-to-br ${prof.avatarBg} flex items-center justify-center text-xs font-black text-white shrink-0`}
+                                      >
+                                        {prof.avatarEmoji ||
+                                          prof.name.slice(0, 1)}
+                                      </div>
+                                    )}
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold text-white flex items-center gap-1.5 truncate">
+                                        <span>{prof.name}</span>
+                                        {isJeka && (
+                                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 font-extrabold">
+                                            TU (ADMIN)
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-zinc-400 truncate">
+                                        {isProfKids
+                                          ? tr(
+                                              'Profil Copii — iEdem este blocat permanent',
+                                              'Kids Profile — iEdem permanently blocked',
+                                              'Детский профиль — iEdem заблокирован'
+                                            )
+                                          : profAllowed
+                                            ? tr(
+                                                'iEdem (Mediatecă & TV) este PERMIS pe acest profil',
+                                                'iEdem (Mediateka & TV) is ALLOWED on this profile',
+                                                'iEdem (Медиатека и ТВ) РАЗРЕШЕН для этого профиля'
+                                              )
+                                            : tr(
+                                                'iEdem (Mediatecă & TV) este ASCUNS pe acest profil',
+                                                'iEdem (Mediateka & TV) is HIDDEN on this profile',
+                                                'iEdem (Медиатека и ТВ) СКРЫТ для этого профиля'
+                                              )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <span
+                                    className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                      isProfKids
+                                        ? 'bg-zinc-800 text-zinc-500'
+                                        : profAllowed
+                                          ? 'bg-emerald-600 text-white shadow'
+                                          : 'bg-zinc-700 text-zinc-300'
+                                    }`}
+                                  >
+                                    {isProfKids
+                                      ? tr('BLOCAT', 'LOCKED', 'БЛОК')
+                                      : profAllowed
+                                        ? 'iEdem ON'
+                                        : 'OFF'}
+                                  </span>
+                                </button>
+                              );
+                            }
+                          )}
                         </div>
                       </div>
 
-                      <div className="space-y-2 pt-1">
-                        {(Array.isArray(tvProfiles) ? tvProfiles : []).map(
-                          (prof: SmartTvProfile) => {
-                            const isProfKids = Boolean(prof.isKids);
-                            const profAllowed = canProfileAccessAdult(prof);
-                            const isJeka = isAdminJekaProfile(prof);
+                      <div className="w-full p-4 sm:p-5 rounded-2xl bg-white/[0.04] border border-rose-500/25 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[15px] font-bold text-white flex flex-wrap items-center gap-2">
+                              <span>
+                                {tr(
+                                  'Control Acces Canale 18+ (Doar JEKA)',
+                                  '18+ Channels Access Control (JEKA Admin Only)',
+                                  'Управление доступом 18+ (Только JEKA)'
+                                )}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                                ADMIN JEKA
+                              </span>
+                            </div>
+                            <div className="text-[12px] text-zinc-400 mt-0.5">
+                              {tr(
+                                'Decizi exclusiv de aici ce profiluri au acces la canalele și filmele pentru adulți (18+). Celelalte profiluri nu văd această setare.',
+                                'Decide exclusively from here which profiles can access 18+ adult channels. Other profiles cannot see this setting.',
+                                'Только вы решаете здесь, у каких профилей есть доступ к каналам 18+. Другие профили не видят эту настройку.'
+                              )}
+                            </div>
+                          </div>
+                        </div>
 
-                            return (
-                              <button
-                                key={`adult_perm_${prof.id}`}
-                                type="button"
-                                disabled={isProfKids}
-                                onClick={() => {
-                                  if (isProfKids) return;
-                                  const nextAllowed = !profAllowed;
-                                  const nextProfiles = (
-                                    Array.isArray(tvProfiles) ? tvProfiles : []
-                                  ).map((p: SmartTvProfile) =>
-                                    p.id === prof.id
-                                      ? { ...p, allowAdultContent: nextAllowed }
-                                      : p
-                                  );
-                                  setTvProfiles(nextProfiles);
-                                  saveTvProfiles(nextProfiles);
-                                  if (prof.id === activeProfile?.id) {
-                                    setAdultContentEnabled(nextAllowed);
-                                    if (!nextAllowed) {
-                                      if (tvRegionId === 'ADULT')
-                                        setTvRegionId('FAV');
-                                      if (tvCategoryId === 'ADULT')
-                                        setTvCategoryId('ALL');
-                                      if (selectedGenre === 'Adult')
-                                        setSelectedGenre('top');
+                        <div className="space-y-2 pt-1">
+                          {(Array.isArray(tvProfiles) ? tvProfiles : []).map(
+                            (prof: SmartTvProfile) => {
+                              const isProfKids = Boolean(prof.isKids);
+                              const profAllowed = canProfileAccessAdult(prof);
+                              const isJeka = isAdminJekaProfile(prof);
+
+                              return (
+                                <button
+                                  key={`adult_perm_${prof.id}`}
+                                  type="button"
+                                  disabled={isProfKids}
+                                  onClick={() => {
+                                    if (isProfKids) return;
+                                    const nextAllowed = !profAllowed;
+                                    const nextProfiles = (
+                                      Array.isArray(tvProfiles)
+                                        ? tvProfiles
+                                        : []
+                                    ).map((p: SmartTvProfile) =>
+                                      p.id === prof.id
+                                        ? {
+                                            ...p,
+                                            allowAdultContent: nextAllowed,
+                                            updatedAt: Date.now(),
+                                          }
+                                        : p
+                                    );
+                                    setTvProfiles(nextProfiles);
+                                    saveTvProfiles(nextProfiles);
+                                    if (prof.id === activeProfile?.id) {
+                                      setAdultContentEnabled(nextAllowed);
+                                      if (!nextAllowed) {
+                                        if (tvRegionId === 'ADULT')
+                                          setTvRegionId('FAV');
+                                        if (tvCategoryId === 'ADULT')
+                                          setTvCategoryId('ALL');
+                                        if (selectedGenre === 'Adult')
+                                          setSelectedGenre('top');
+                                      }
                                     }
-                                  }
-                                }}
-                                className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white ${
-                                  isProfKids
-                                    ? 'bg-white/[0.02] border-white/[0.04] opacity-55 cursor-not-allowed'
-                                    : profAllowed
-                                      ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/40 cursor-pointer'
-                                      : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.07] cursor-pointer'
-                                }`}
-                              >
-                                <div className="flex items-center gap-3 min-w-0">
-                                  {prof.avatarUrl ? (
-                                    <img
-                                      src={prof.avatarUrl}
-                                      alt={prof.name}
-                                      className="w-8 h-8 rounded-lg object-cover shrink-0 border border-white/15"
-                                    />
-                                  ) : (
-                                    <div
-                                      className={`w-8 h-8 rounded-lg bg-gradient-to-br ${prof.avatarBg} flex items-center justify-center text-xs font-black text-white shrink-0`}
-                                    >
-                                      {prof.avatarEmoji || prof.name.slice(0, 1)}
-                                    </div>
-                                  )}
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-bold text-white flex items-center gap-1.5 truncate">
-                                      <span>{prof.name}</span>
-                                      {isJeka && (
-                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 font-extrabold">
-                                          TU (ADMIN)
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="text-[11px] text-zinc-400 truncate">
-                                      {isProfKids
-                                        ? tr(
-                                            'Profil Copii — Canalele 18+ sunt blocate permanent',
-                                            'Kids Profile — 18+ channels permanently blocked',
-                                            'Детский профиль — каналы 18+ заблокированы'
-                                          )
-                                        : profAllowed
-                                          ? tr(
-                                              'Canalele 18+ (Adulți) sunt PERMISE pe acest profil',
-                                              '18+ Adult channels are ALLOWED on this profile',
-                                              'Каналы 18+ РАЗРЕШЕНЫ для этого профиля'
-                                            )
-                                          : tr(
-                                              'Canalele 18+ (Adulți) sunt ASCUNSE pe acest profil',
-                                              '18+ Adult channels are HIDDEN on this profile',
-                                              'Каналы 18+ СКРЫТЫ для этого профиля'
-                                            )}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <span
-                                  className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                  }}
+                                  className={`w-full px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-3 text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white ${
                                     isProfKids
-                                      ? 'bg-zinc-800 text-zinc-500'
+                                      ? 'bg-white/[0.02] border-white/[0.04] opacity-55 cursor-not-allowed'
                                       : profAllowed
-                                        ? 'bg-rose-500 text-white shadow'
-                                        : 'bg-zinc-700 text-zinc-300'
+                                        ? 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/40 cursor-pointer'
+                                        : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.07] cursor-pointer'
                                   }`}
                                 >
-                                  {isProfKids
-                                    ? tr('BLOCAT', 'LOCKED', 'БЛОК')
-                                    : profAllowed
-                                      ? '18+ ON'
-                                      : 'OFF'}
-                                </span>
-                              </button>
-                            );
-                          }
-                        )}
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    {prof.avatarUrl ? (
+                                      <img
+                                        src={prof.avatarUrl}
+                                        alt={prof.name}
+                                        className="w-8 h-8 rounded-lg object-cover shrink-0 border border-white/15"
+                                      />
+                                    ) : (
+                                      <div
+                                        className={`w-8 h-8 rounded-lg bg-gradient-to-br ${prof.avatarBg} flex items-center justify-center text-xs font-black text-white shrink-0`}
+                                      >
+                                        {prof.avatarEmoji ||
+                                          prof.name.slice(0, 1)}
+                                      </div>
+                                    )}
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold text-white flex items-center gap-1.5 truncate">
+                                        <span>{prof.name}</span>
+                                        {isJeka && (
+                                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 font-extrabold">
+                                            TU (ADMIN)
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-zinc-400 truncate">
+                                        {isProfKids
+                                          ? tr(
+                                              'Profil Copii — Canalele 18+ sunt blocate permanent',
+                                              'Kids Profile — 18+ channels permanently blocked',
+                                              'Детский профиль — каналы 18+ заблокированы'
+                                            )
+                                          : profAllowed
+                                            ? tr(
+                                                'Canalele 18+ (Adulți) sunt PERMISE pe acest profil',
+                                                '18+ Adult channels are ALLOWED on this profile',
+                                                'Каналы 18+ РАЗРЕШЕНЫ для этого профиля'
+                                              )
+                                            : tr(
+                                                'Canalele 18+ (Adulți) sunt ASCUNSE pe acest profil',
+                                                '18+ Adult channels are HIDDEN on this profile',
+                                                'Каналы 18+ СКРЫТЫ для этого профиля'
+                                              )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <span
+                                    className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                      isProfKids
+                                        ? 'bg-zinc-800 text-zinc-500'
+                                        : profAllowed
+                                          ? 'bg-rose-500 text-white shadow'
+                                          : 'bg-zinc-700 text-zinc-300'
+                                    }`}
+                                  >
+                                    {isProfKids
+                                      ? tr('BLOCAT', 'LOCKED', 'БЛОК')
+                                      : profAllowed
+                                        ? '18+ ON'
+                                        : 'OFF'}
+                                  </span>
+                                </button>
+                              );
+                            }
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    </>
                   )}
 
                   {/* 9. Șterge Istoricul de Vizionare */}

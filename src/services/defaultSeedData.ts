@@ -496,12 +496,12 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
         "releaseTitle": "MobLand.S01.2160p.PMTP.WEB-DL.DD+5.1.DoVi.HDR.H.265-playWEB"
       },
       "season": 1,
-      "episode": 4,
-      "currentTime": 2070,
-      "duration": 2506,
+      "episode": 8,
+      "currentTime": 60,
+      "duration": 2687,
       "server": "filelist_torrent",
       "subLang": "ro",
-      "updatedAt": 1793902364757,
+      "updatedAt": 1794071260000,
       "deviceName": "Smart TV",
       "deviceId": "dev_mw3oczq5_588b2",
       "isPlayingNow": false,
@@ -509,9 +509,34 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "totalSeasons": 2,
       "episodeProgressMap": {
         "S1E4": {
-          "currentTime": 2070,
-          "duration": 2506,
-          "updatedAt": 1793902349907
+          "currentTime": 2481,
+          "duration": 2511,
+          "updatedAt": 1793976627545
+        },
+        "S1E5": {
+          "currentTime": 117,
+          "duration": 2480,
+          "updatedAt": 1793976862635
+        },
+        "S1E6": {
+          "currentTime": 2535,
+          "duration": 2565,
+          "updatedAt": 1793982822293
+        },
+        "S1E7": {
+          "currentTime": 2451,
+          "duration": 2481,
+          "updatedAt": 1793985258148
+        },
+        "S1E8": {
+          "currentTime": 60,
+          "duration": 2687,
+          "updatedAt": 1794071260000
+        },
+        "S1E9": {
+          "currentTime": 9,
+          "duration": 2857,
+          "updatedAt": 1794071033996
         }
       }
     },

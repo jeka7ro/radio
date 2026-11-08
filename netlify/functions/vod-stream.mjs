@@ -192,16 +192,6 @@ export async function resolveVodStreamData({
   if (seasonsIdx >= 0) {
     const rawSeasons = extractBalancedJsonArray(html, seasonsIdx);
     if (Array.isArray(rawSeasons) && rawSeasons.length > 0) {
-      const targetSeason =
-        rawSeasons.find((s) => Number(s.season) === Number(season)) ||
-        rawSeasons[0];
-      const episodes = Array.isArray(targetSeason?.episodes)
-        ? targetSeason.episodes
-        : [];
-      const targetEp =
-        episodes.find((e) => Number(e.episode) === Number(episode)) ||
-        episodes[0];
-
       const cleanSeasons = rawSeasons.map((s) => ({
         season: Number(s.season) || 1,
         episodes: (Array.isArray(s.episodes) ? s.episodes : []).map((ep) => ({
@@ -213,6 +203,26 @@ export async function resolveVodStreamData({
             : ['Русский'],
         })),
       }));
+
+      const targetSeason = rawSeasons.find(
+        (s) => Number(s.season) === Number(season)
+      );
+      const episodes = Array.isArray(targetSeason?.episodes)
+        ? targetSeason.episodes
+        : [];
+      const targetEp = episodes.find(
+        (e) => Number(e.episode) === Number(episode)
+      );
+
+      if (!targetSeason || !targetEp) {
+        return {
+          ok: false,
+          type: 'series',
+          sourcePath: usedPath,
+          seasons: cleanSeasons,
+          error: 'Requested season or episode not available on VOD balancer',
+        };
+      }
 
       if (targetEp?.hls || targetEp?.dash) {
         const dashUrl = targetEp.dash
@@ -242,6 +252,14 @@ export async function resolveVodStreamData({
           seasons: cleanSeasons,
         };
       }
+
+      return {
+        ok: false,
+        type: 'series',
+        sourcePath: usedPath,
+        seasons: cleanSeasons,
+        error: 'Requested episode has no playable stream',
+      };
     }
   }
 

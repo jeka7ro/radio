@@ -1,10 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Home, Tv, Film, Globe, Heart, Settings, ChevronRight } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { EnrichedCountry } from '../../hooks/useCountries';
 import { NavigationTab } from '../../types/radio';
 import { SmartCinemaLogo } from '../common/SmartCinemaLogo';
+import {
+  loadSharedProfiles,
+  loadSharedActiveProfileId,
+  canProfileAccessIedem,
+} from '../../services/deviceContinuityService';
 
 interface SidebarProps {
   selectedCountry: EnrichedCountry;
@@ -18,6 +23,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
     (state) => state.favorites.length + state.favoriteTvChannels.length
   );
   const setCountryModalOpen = useRadioStore((state) => state.setCountryModalOpen);
+  const [canAccessIedem, setCanAccessIedem] = useState<boolean>(() => {
+    const profiles = loadSharedProfiles();
+    const activeId = loadSharedActiveProfileId();
+    const active = profiles.find((p) => p.id === activeId) || profiles[0];
+    return canProfileAccessIedem(active);
+  });
+
+  useEffect(() => {
+    const syncIedemAccess = () => {
+      const profiles = loadSharedProfiles();
+      const activeId = loadSharedActiveProfileId();
+      const active = profiles.find((p) => p.id === activeId) || profiles[0];
+      setCanAccessIedem(canProfileAccessIedem(active));
+    };
+    window.addEventListener('aether:active-profile-changed', syncIedemAccess);
+    window.addEventListener('aether:profiles-updated', syncIedemAccess);
+    return () => {
+      window.removeEventListener('aether:active-profile-changed', syncIedemAccess);
+      window.removeEventListener('aether:profiles-updated', syncIedemAccess);
+    };
+  }, []);
 
   const navItems: { id: NavigationTab; label: string; icon: React.ReactNode; badge?: number }[] = [
     { id: 'home', label: t.nav.home, icon: <Home className="w-5 h-5" aria-hidden="true" /> },
@@ -77,24 +103,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ selectedCountry }) => {
 
         {/* Dedicated iEdem VOD & Smart TV (Lampa Mode) Launchers in Left Sidebar */}
         <div className="pt-3 mt-3 border-t border-slate-200/80 dark:border-zinc-800/80 space-y-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('mediateca');
-              window.setTimeout(() => {
-                window.dispatchEvent(new Event('aether:open-iedem-vod'));
-              }, 40);
-            }}
-            className="w-full min-h-[46px] flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md transition-all cursor-pointer"
-          >
-            <span className="flex items-center gap-3">
-              <Film className="w-5 h-5" aria-hidden="true" />
-              <span>iEdem</span>
-            </span>
-            <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider rounded-full bg-white/20 text-white">
-              4K • RU
-            </span>
-          </button>
+          {canAccessIedem && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('mediateca');
+                window.setTimeout(() => {
+                  window.dispatchEvent(new Event('aether:open-iedem-vod'));
+                }, 40);
+              }}
+              className="w-full min-h-[46px] flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md transition-all cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <Film className="w-5 h-5" aria-hidden="true" />
+                <span>iEdem</span>
+              </span>
+              <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider rounded-full bg-white/20 text-white">
+                4K • RU
+              </span>
+            </button>
+          )}
 
           <button
             type="button"

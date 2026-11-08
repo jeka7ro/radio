@@ -543,6 +543,22 @@ export async function downloadHlsToOfflineDb(params: {
 
   await saveOfflineItemMeta(item);
 
+  // Pre-build a native .mp4 (video/mp4) container in IndexedDB (${id}::file) so iPhone / iOS can play & export it natively
+  try {
+    if (onProgress) {
+      onProgress({
+        percent: 99,
+        downloadedBytes,
+        totalSegments,
+        completedSegments: totalSegments,
+        stage: 'Se optimizează fișierul MP4 pentru iPhone / Mobil...',
+      });
+    }
+    await ensureOfflineItemMp4Blob(item, signal);
+  } catch {
+    // ignore if offline remux is deferred
+  }
+
   if (onProgress) {
     onProgress({
       percent: 100,
@@ -557,7 +573,68 @@ export async function downloadHlsToOfflineDb(params: {
 }
 
 /**
- * Exports a downloaded offline video to the user's device Downloads folder
+ * Ensures a playable .mp4 (`video/mp4`) Blob exists in IndexedDB (`${item.id}::file`)
+ * by losslessly remuxing the downloaded .ts video + audio segments via `/api/offline-remux-mp4`
+ * (or in-browser fMP4 transmuxing if offline).
+ */
+export async function ensureOfflineItemMp4Blob(
+  item: OfflineMediaItem,
+  signal?: AbortSignal
+): Promise<Blob | null> {
+  const existing = await getBlobChunk(`${item.id}::file`);
+  if (existing) {
+    return existing instanceof Blob
+      ? existing
+      : new Blob([existing], { type: item.mimeType || 'video/mp4' });
+  }
+
+  const vCount = item.videoSegCount || 0;
+  if (vCount <= 0) return null;
+
+  const vParts: BlobPart[] = [];
+  for (let i = 0; i < vCount; i++) {
+    const seg = await getBlobChunk(`${item.id}::v_${i}`);
+    if (seg) vParts.push(seg);
+  }
+  const vBlob = new Blob(vParts, { type: 'video/mp2t' });
+
+  const aCount = item.audioSegCount || 0;
+  const aParts: BlobPart[] = [];
+  for (let i = 0; i < aCount; i++) {
+    const seg = await getBlobChunk(`${item.id}::a_${i}`);
+    if (seg) aParts.push(seg);
+  }
+  const aBlob = aParts.length > 0 ? new Blob(aParts, { type: 'video/mp2t' }) : null;
+
+  // 1. Try fast lossless server-side ffmpeg remux (/api/offline-remux-mp4)
+  try {
+    const payload = aBlob ? new Blob([vBlob, aBlob]) : vBlob;
+    const res = await fetch('/api/offline-remux-mp4', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'x-video-bytes': String(vBlob.size),
+        'x-audio-bytes': String(aBlob ? aBlob.size : 0),
+      },
+      body: payload,
+      signal,
+    });
+    if (res.ok && (res.headers.get('content-type') || '').includes('video/mp4')) {
+      const mp4Ab = await res.arrayBuffer();
+      if (mp4Ab.byteLength > 1024) {
+        await putBlobChunk(`${item.id}::file`, mp4Ab);
+        return new Blob([mp4Ab], { type: 'video/mp4' });
+      }
+    }
+  } catch {
+    // fallback if offline
+  }
+
+  return null;
+}
+
+/**
+ * Exports a downloaded offline video to the user's device Downloads / iPhone Files app as a playable .mp4
  */
 export async function exportOfflineItemToDeviceFile(
   item: OfflineMediaItem
@@ -566,26 +643,47 @@ export async function exportOfflineItemToDeviceFile(
     .replace(/[<>:"/\\|?*]+/g, ' ')
     .trim()
     .slice(0, 80);
+  const epSuffix =
+    item.mediaKind === 'series' && item.season && item.episode
+      ? ` S${item.season}E${item.episode}`
+      : '';
+  const baseFilename = `${safeName || 'video'}${epSuffix}`;
 
-  if (item.mediaType === 'blob') {
-    const chunk = await getBlobChunk(`${item.id}::file`);
-    if (!chunk) throw new Error('Fișierul local nu a fost găsit în baza de date');
-    const blob =
-      chunk instanceof Blob
-        ? chunk
-        : new Blob([chunk], { type: item.mimeType || 'video/mp4' });
-    const url = URL.createObjectURL(blob);
+  const mp4Blob = await ensureOfflineItemMp4Blob(item);
+  if (mp4Blob) {
+    const fileName = `${baseFilename}.mp4`;
+    const isIos =
+      typeof navigator !== 'undefined' &&
+      /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isIos && typeof navigator.share === 'function' && typeof File !== 'undefined') {
+      try {
+        const fileObj = new File([mp4Blob], fileName, { type: 'video/mp4' });
+        if (!navigator.canShare || navigator.canShare({ files: [fileObj] })) {
+          await navigator.share({
+            title: baseFilename,
+            files: [fileObj],
+          });
+          return;
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+      }
+    }
+
+    const url = URL.createObjectURL(mp4Blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${safeName || 'video'}.mp4`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+    window.setTimeout(() => URL.revokeObjectURL(url), 15000);
     return;
   }
 
-  // For HLS items, assemble video segments into a downloadable .ts file
+  // Fallback if offline and MP4 wasn't pre-built
   const parts: BlobPart[] = [];
   const count = item.videoSegCount || 0;
   for (let i = 0; i < count; i++) {
@@ -596,11 +694,11 @@ export async function exportOfflineItemToDeviceFile(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${safeName || 'video'}.ts`;
+  a.download = `${baseFilename}.ts`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+  window.setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 
 /**
@@ -693,6 +791,34 @@ export function createOfflineAwareHlsLoader() {
 export async function buildIosNativeOfflineHlsBlobUrl(
   item: OfflineMediaItem
 ): Promise<{ masterBlobUrl: string; revokeAll: () => void }> {
+  // 1. Best for all iPhones (Chrome & Safari, HTTP & HTTPS): Play remuxed native MP4 Blob directly
+  const mp4Blob = await ensureOfflineItemMp4Blob(item);
+  if (mp4Blob) {
+    const mp4Url = URL.createObjectURL(mp4Blob);
+    return {
+      masterBlobUrl: mp4Url,
+      revokeAll: () => {
+        try {
+          URL.revokeObjectURL(mp4Url);
+        } catch {
+          // ignore
+        }
+      },
+    };
+  }
+
+  // 2. If Service Worker is active (on HTTPS / PWA), serve /offline-hls/<id>/master.m3u8 via SW from IndexedDB
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.serviceWorker &&
+    navigator.serviceWorker.controller
+  ) {
+    return {
+      masterBlobUrl: `/offline-hls/${encodeURIComponent(item.id)}/master.m3u8`,
+      revokeAll: () => {},
+    };
+  }
+
   const createdUrls: string[] = [];
   const makeUrl = (blob: Blob) => {
     const u = URL.createObjectURL(blob);

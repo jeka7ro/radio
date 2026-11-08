@@ -76,6 +76,7 @@ import {
   loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isLocalHomeServer,
+  canProfileAccessIedem,
 } from '../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
 import { IedemMediatekaSection } from '../components/tv/IedemMediatekaSection';
@@ -938,8 +939,15 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   // Sorted list of items in "Continuă vizionarea"
   const continueWatchingList = useMemo(() => {
     return Object.values(watchProgressMap)
-      .filter((entry) => entry && entry.item && entry.currentTime >= 5)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .filter(
+        (entry) =>
+          entry &&
+          entry.item &&
+          (entry.currentTime > 0 ||
+            (entry.episodeProgressMap &&
+              Object.keys(entry.episodeProgressMap).length > 0))
+      )
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
       .slice(0, 12);
   }, [watchProgressMap]);
 
@@ -2106,23 +2114,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               <span>Seriale</span>
             </button>
 
-            {/* Primary Tab 2b: iEdem Mediatecă (1080p & 4K RU) */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('iedem');
-                setActiveVodItem(null);
-                setActiveOfflineItem(null);
-              }}
-              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'iedem'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/70 hover:bg-emerald-100'
-              }`}
-            >
-              <Film className="w-4 h-4" aria-hidden="true" />
-              <span>iEdem</span>
-            </button>
+            {/* Primary Tab 2b: iEdem Mediatecă (1080p & 4K RU) — doar pentru JEKA și profilurile autorizate */}
+            {canProfileAccessIedem(activeProfile) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('iedem');
+                  setActiveVodItem(null);
+                  setActiveOfflineItem(null);
+                }}
+                className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  activeTab === 'iedem'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/70 hover:bg-emerald-100'
+                }`}
+              >
+                <Film className="w-4 h-4" aria-hidden="true" />
+                <span>iEdem</span>
+              </button>
+            )}
 
             {/* Primary Tab 3: Lampa TV */}
             <button
@@ -3708,7 +3718,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       )}
 
       {/* iEDEM MEDIATEKA (1080P & 4K RU MOVIES & SERIES) */}
-      {activeTab === 'iedem' && (
+      {activeTab === 'iedem' && canProfileAccessIedem(activeProfile) && (
         <div className="rounded-2xl bg-zinc-950 p-4 sm:p-5 border border-zinc-800">
           <IedemMediatekaSection uiLang="ro" />
         </div>

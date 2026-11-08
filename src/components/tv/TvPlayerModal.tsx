@@ -334,7 +334,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 }) => {
   const { t, language, format } = useTranslation();
   const isMobilePhone =
-    typeof window !== 'undefined' && window.innerWidth < 640;
+    typeof window !== 'undefined' &&
+    (Math.min(window.innerWidth, window.innerHeight || 9999) < 640 ||
+      /iPhone|iPod|Android.*Mobile/i.test(navigator.userAgent));
   const [isFullModeExpanded, setIsFullModeExpanded] = useState(
     () => !isMobilePhone && isSmartTvFullMode
   );
@@ -1126,6 +1128,70 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       }
     };
 
+    const isIosMobile =
+      typeof navigator !== 'undefined' &&
+      (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+    const isHardwareSmartTv =
+      typeof navigator !== 'undefined' &&
+      /Web0S|webOS|NetCast|SmartTV|Tizen|SMART-TV|VIDAA|Hisense|Viera|BRAVIA|Philips|HbbTV|Maple|Opera TV|InettvBrowser|AFT/i.test(
+        navigator.userAgent
+      );
+    const canTryDirectHttp =
+      typeof window === 'undefined' ||
+      window.location.protocol !== 'https:' ||
+      directUrl.startsWith('https://');
+    let switchedToNativeHls = false;
+
+    const switchToNativeVideoHls = (targetUrl: string) => {
+      if (cancelled || switchedToNativeHls) return;
+      switchedToNativeHls = true;
+      cleanupHls();
+      let triedDirectNative = false;
+      video.src = targetUrl;
+      video.onloadedmetadata = () => {
+        if (cancelled) return;
+        const vAny = video as unknown as {
+          audioTracks?: ArrayLike<{
+            id?: string;
+            label?: string;
+            language?: string;
+            enabled?: boolean;
+          }>;
+        };
+        if (vAny.audioTracks && vAny.audioTracks.length > 0) {
+          const aTracks: HlsTrackItem[] = [];
+          let activeIdx = 0;
+          for (let i = 0; i < vAny.audioTracks.length; i += 1) {
+            const tr = vAny.audioTracks[i];
+            if (tr.enabled) activeIdx = i;
+            aTracks.push({
+              id: i,
+              name: tr.label || tr.language || `Audio ${i + 1}`,
+              lang: tr.language,
+            });
+          }
+          setAudioTracks(aTracks);
+          setActiveAudioTrack(activeIdx);
+        }
+      };
+      video.onerror = () => {
+        if (cancelled) return;
+        if (!triedDirectNative && targetUrl !== directUrl && canTryDirectHttp) {
+          triedDirectNative = true;
+          video.src = directUrl;
+          void safeAutoPlay();
+          return;
+        }
+        if (streamIndex + 1 < candidateStreams.length) {
+          setStreamIndex((prev) => prev + 1);
+          return;
+        }
+        setVideoStatus('error');
+      };
+      void safeAutoPlay();
+    };
+
     const startPlayback = async () => {
       try {
         // Direct MP4 / WebM / MKV VOD file support
@@ -1137,7 +1203,18 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
         if (cancelled) return;
 
+        // On iOS / iPadOS (Safari & Chrome CriOS), ALWAYS prefer native WebKit HLS (<video src>)
+        // over Hls.js ManagedMediaSource so MPEG-TS (.ts) live TV streams decode in hardware without hanging.
+        if (isIosMobile && video.canPlayType('application/vnd.apple.mpegurl')) {
+          switchToNativeVideoHls(proxiedUrl);
+          return;
+        }
+
         if (Hls.isSupported()) {
+          // Required by Apple WebKit if ManagedMediaSource is used
+          if ('ManagedMediaSource' in window && !('MediaSource' in window)) {
+            video.disableRemotePlayback = true;
+          }
           let triedDirectFallback = false;
           let mediaRecoveryCount = 0;
 
@@ -1236,15 +1313,20 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             clearWatchdog();
             frameWatchdogTimer = window.setTimeout(() => {
               if (cancelled) return;
-              if (
-                video.videoWidth === 0 &&
-                video.readyState < 3 &&
-                streamIndex + 1 < candidateStreams.length
-              ) {
-                cleanupHls();
-                setStreamIndex((prev) => prev + 1);
+              if (video.videoWidth === 0 && video.readyState < 3) {
+                if (
+                  isHardwareSmartTv ||
+                  video.canPlayType('application/vnd.apple.mpegurl')
+                ) {
+                  switchToNativeVideoHls(proxiedUrl);
+                  return;
+                }
+                if (streamIndex + 1 < candidateStreams.length) {
+                  cleanupHls();
+                  setStreamIndex((prev) => prev + 1);
+                }
               }
-            }, 5500);
+            }, 4800);
           });
 
           hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncTracks);
@@ -1255,7 +1337,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             if (data.fatal) {
               if (
                 data.type === Hls.ErrorTypes.NETWORK_ERROR &&
-                !triedDirectFallback
+                !triedDirectFallback &&
+                canTryDirectHttp
               ) {
                 triedDirectFallback = true;
                 hls.loadSource(directUrl);
@@ -1267,6 +1350,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               ) {
                 mediaRecoveryCount += 1;
                 hls.recoverMediaError();
+                return;
+              }
+              if (
+                isHardwareSmartTv ||
+                video.canPlayType('application/vnd.apple.mpegurl')
+              ) {
+                switchToNativeVideoHls(proxiedUrl);
                 return;
               }
               cleanupHls();
@@ -1282,8 +1372,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         }
 
         // Native HLS fallback (iOS Safari / Smart TV WebKit)
-        video.src = proxiedUrl;
-        await safeAutoPlay();
+        switchToNativeVideoHls(proxiedUrl);
       } catch {
         if (!cancelled) {
           setVideoStatus('error');
@@ -1295,6 +1384,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
     return () => {
       cancelled = true;
+      video.onloadedmetadata = null;
+      video.onerror = null;
       cleanupHls();
       video.pause();
     };
@@ -1375,14 +1466,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           enterTvFullMode();
         })
         .catch(() => {
-          if (typeof vid?.webkitEnterFullscreen === 'function') {
-            try {
-              vid.webkitEnterFullscreen();
-              return;
-            } catch {
-              // ignore
-            }
-          }
           if (effectiveTvFullMode) {
             exitTvFullMode();
           } else {
@@ -1390,19 +1473,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           }
         });
       return;
-    }
-
-    const isStandalone =
-      window.matchMedia?.('(display-mode: standalone)').matches ||
-      window.matchMedia?.('(display-mode: fullscreen)').matches ||
-      Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
-    if (!isStandalone && typeof vid?.webkitEnterFullscreen === 'function') {
-      try {
-        vid.webkitEnterFullscreen();
-        return;
-      } catch {
-        // ignore
-      }
     }
 
     if (effectiveTvFullMode) {
@@ -1543,7 +1613,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   };
 
   const showSideColumn = isMobilePhone
-    ? !isOsdOverlayOpen
+    ? !effectiveTvFullMode && !isOsdOverlayOpen
     : !effectiveTvFullMode && isSidePanelOpen && !isOsdOverlayOpen;
 
   return (
@@ -1575,9 +1645,17 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           closeTvPlayer();
         }
       }}
+      style={
+        effectiveTvFullMode
+          ? {
+              height: '100dvh',
+              maxHeight: '100dvh',
+            }
+          : undefined
+      }
       className={
         effectiveTvFullMode
-          ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+          ? 'fixed inset-0 z-[190] m-0 w-full h-full max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
           : inlineEmbeddedMode && isSplitFullscreen
             ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
             : inlineEmbeddedMode
@@ -1588,9 +1666,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       <div
         className={
           effectiveTvFullMode
-            ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-black'
+            ? 'relative flex flex-col w-full h-full overflow-hidden bg-black'
             : inlineEmbeddedMode && isSplitFullscreen
-              ? 'relative flex flex-col w-screen h-screen overflow-hidden bg-[#090d16]'
+              ? 'relative flex flex-col w-full h-full overflow-hidden bg-[#090d16]'
               : inlineEmbeddedMode
                 ? 'relative flex flex-col w-full h-full flex-1 min-h-0 overflow-hidden bg-[#090d16]'
                 : 'mx-auto m-0 sm:my-auto w-screen h-[100dvh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94vh] overflow-hidden'
@@ -1758,13 +1836,11 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               `}</style>
               <video
                 ref={videoRef}
-                controls={!effectiveTvFullMode}
+                controls={false}
                 playsInline
+                webkit-playsinline="true"
                 autoPlay
                 onClick={() => {
-                  if (typeof window !== 'undefined' && window.innerWidth < 640) {
-                    return;
-                  }
                   if (effectiveTvFullMode) {
                     setOsdViewMode('channels');
                     setIsOsdOverlayOpen(true);

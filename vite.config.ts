@@ -4,6 +4,8 @@ import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import ffmpegPath from 'ffmpeg-static';
 import { handleFileListRequest } from './src/server/filelistServer';
 import { handleYouTubeRequest } from './src/server/youtubeServer';
 
@@ -36,6 +38,7 @@ interface ParsedEpgFeed {
 }
 
 const epgFeedCache = new Map<string, ParsedEpgFeed>();
+const epgFeedInFlight = new Map<string, Promise<ParsedEpgFeed>>();
 const EPG_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 function normalizeEpgKey(raw: string, stripGenericWords = false): string {
@@ -94,25 +97,31 @@ async function fetchAndParseXmltvFeed(feedUrl: string): Promise<ParsedEpgFeed> {
     return cached;
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 14000);
-  const res = await fetch(feedUrl, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-    },
-    signal: controller.signal,
-  });
-  clearTimeout(timeoutId);
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} fetching EPG ${feedUrl}`);
+  const existingPromise = epgFeedInFlight.get(feedUrl);
+  if (existingPromise) {
+    return existingPromise;
   }
 
-  const buf = Buffer.from(await res.arrayBuffer());
-  const xml = feedUrl.endsWith('.gz')
-    ? zlib.gunzipSync(buf).toString('utf8')
-    : buf.toString('utf8');
+  const loadPromise = (async (): Promise<ParsedEpgFeed> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 14000);
+    const res = await fetch(feedUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} fetching EPG ${feedUrl}`);
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    const xml = feedUrl.endsWith('.gz')
+      ? zlib.gunzipSync(buf).toString('utf8')
+      : buf.toString('utf8');
 
   const channels: ParsedEpgFeed['channels'] = {};
   const archiveChannels: ParsedEpgFeed['archiveChannels'] = {};
@@ -205,14 +214,26 @@ async function fetchAndParseXmltvFeed(feedUrl: string): Promise<ParsedEpgFeed> {
     }
   }
 
-  const parsed: ParsedEpgFeed = {
-    timestamp: now,
-    channels,
-    archiveChannels,
-    keyMap,
-  };
-  epgFeedCache.set(feedUrl, parsed);
-  return parsed;
+    const parsed: ParsedEpgFeed = {
+      timestamp: now,
+      channels,
+      archiveChannels,
+      keyMap,
+    };
+    if (!epgFeedCache.has(feedUrl) && epgFeedCache.size >= 3) {
+      const oldestKey = epgFeedCache.keys().next().value;
+      if (oldestKey) epgFeedCache.delete(oldestKey);
+    }
+    epgFeedCache.set(feedUrl, parsed);
+    return parsed;
+  })();
+
+  epgFeedInFlight.set(feedUrl, loadPromise);
+  try {
+    return await loadPromise;
+  } finally {
+    epgFeedInFlight.delete(feedUrl);
+  }
 }
 
 function getEpgFeedUrlsForCountry(countryCode: string): string[] {
@@ -1348,6 +1369,8 @@ function tvStreamProxyPlugin(): Plugin {
         const isLanTvClient =
           hostHeader.startsWith('192.168.') ||
           hostHeader.startsWith('10.') ||
+          hostHeader.includes('.local') ||
+          hostHeader.includes('.lhr.life') ||
           /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
             req.headers['user-agent'] || ''
           );
@@ -1355,7 +1378,20 @@ function tvStreamProxyPlugin(): Plugin {
         if (isLanTvClient && !rawUrl.startsWith('/api/') && !rawUrl.startsWith('/msx/')) {
           const distDir = path.resolve(process.cwd(), 'dist');
           if (rawUrl.startsWith('/assets/') || rawUrl.startsWith('/icons/') || rawUrl === '/sw.js' || rawUrl === '/manifest.webmanifest') {
-            const assetFile = path.join(distDir, rawUrl);
+            let assetFile = path.join(distDir, rawUrl);
+            if ((!fs.existsSync(assetFile) || !fs.statSync(assetFile).isFile()) && rawUrl.startsWith('/assets/')) {
+              const assetsDir = path.join(distDir, 'assets');
+              if (fs.existsSync(assetsDir)) {
+                const files = fs.readdirSync(assetsDir);
+                if (rawUrl.endsWith('.js')) {
+                  const currentJs = files.find((f) => f.startsWith('index-') && f.endsWith('.js'));
+                  if (currentJs) assetFile = path.join(assetsDir, currentJs);
+                } else if (rawUrl.endsWith('.css')) {
+                  const currentCss = files.find((f) => f.startsWith('style-') && f.endsWith('.css'));
+                  if (currentCss) assetFile = path.join(assetsDir, currentCss);
+                }
+              }
+            }
             if (fs.existsSync(assetFile) && fs.statSync(assetFile).isFile()) {
               const ext = path.extname(assetFile).toLowerCase();
               const mime =
@@ -1377,7 +1413,7 @@ function tvStreamProxyPlugin(): Plugin {
                 'Access-Control-Allow-Private-Network': 'true',
                 'Cross-Origin-Resource-Policy': 'cross-origin',
                 'Content-Type': mime,
-                'Cache-Control': 'no-cache',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
               });
               res.end(fs.readFileSync(assetFile));
               return;
@@ -1389,7 +1425,7 @@ function tvStreamProxyPlugin(): Plugin {
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'text/html; charset=utf-8',
-                'Cache-Control': 'no-cache',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
               });
               res.end(fs.readFileSync(distIndex));
               return;
@@ -1513,17 +1549,44 @@ function tvStreamProxyPlugin(): Plugin {
               >;
               const current = readDiskProgress() as Record<
                 string,
-                { updatedAt?: number }
+                {
+                  updatedAt?: number;
+                  season?: number;
+                  episode?: number;
+                  currentTime?: number;
+                  episodeProgressMap?: Record<
+                    string,
+                    { currentTime: number; duration: number; updatedAt: number }
+                  >;
+                }
               >;
               const merged = { ...current };
               for (const [k, v] of Object.entries(incoming)) {
                 if (!v || typeof v !== 'object') continue;
+                const cleanV = { ...(v as Record<string, any>) };
+                if (
+                  cleanV.episodeProgressMap &&
+                  typeof cleanV.episodeProgressMap === 'object'
+                ) {
+                  const epMap = { ...cleanV.episodeProgressMap };
+                  for (const [epK, epV] of Object.entries(epMap)) {
+                    if (
+                      epV &&
+                      typeof epV === 'object' &&
+                      (epV as any).duration === 4500 &&
+                      (epV as any).currentTime >= 2500
+                    ) {
+                      delete epMap[epK];
+                    }
+                  }
+                  cleanV.episodeProgressMap = epMap;
+                }
                 const prev = merged[k];
                 if (
                   !prev ||
-                  (v.updatedAt || 0) >= (prev.updatedAt || 0)
+                  (cleanV.updatedAt || 0) >= (prev.updatedAt || 0)
                 ) {
-                  merged[k] = v;
+                  merged[k] = cleanV;
                 }
               }
               fs.writeFileSync(
@@ -1723,6 +1786,129 @@ function tvStreamProxyPlugin(): Plugin {
           if (handled) return;
         }
         next();
+      });
+
+      // Fast lossless MPEG-TS -> MP4 (+faststart) remuxer for iPhone / iOS Offline playback & Files app export
+      server.middlewares.use('/api/offline-remux-mp4', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end('Method Not Allowed');
+          return;
+        }
+        const vLen = Number(req.headers['x-video-bytes'] || 0);
+        const aLen = Number(req.headers['x-audio-bytes'] || 0);
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          const totalBuf = Buffer.concat(chunks);
+          if (totalBuf.length === 0) {
+            res.statusCode = 400;
+            res.end('Empty body');
+            return;
+          }
+          const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const tmpDir = os.tmpdir();
+          const vPath = path.join(tmpDir, `filmio_v_${stamp}.ts`);
+          const aPath = path.join(tmpDir, `filmio_a_${stamp}.ts`);
+          const outPath = path.join(tmpDir, `filmio_out_${stamp}.mp4`);
+
+          const cleanupTmp = () => {
+            for (const p of [vPath, aPath, outPath]) {
+              try {
+                if (fs.existsSync(p)) fs.unlinkSync(p);
+              } catch {
+                // ignore
+              }
+            }
+          };
+
+          try {
+            const actualVLen = vLen > 0 && vLen <= totalBuf.length ? vLen : totalBuf.length;
+            fs.writeFileSync(vPath, totalBuf.subarray(0, actualVLen));
+            const hasAudio = aLen > 0 && actualVLen + aLen <= totalBuf.length;
+            if (hasAudio) {
+              fs.writeFileSync(aPath, totalBuf.subarray(actualVLen, actualVLen + aLen));
+            }
+
+            const ffBin = (ffmpegPath as unknown as string) || 'ffmpeg';
+            const ffArgs = hasAudio
+              ? [
+                  '-y',
+                  '-hide_banner',
+                  '-loglevel',
+                  'error',
+                  '-i',
+                  vPath,
+                  '-i',
+                  aPath,
+                  '-map',
+                  '0:v:0',
+                  '-map',
+                  '1:a:0',
+                  '-c',
+                  'copy',
+                  '-bsf:a',
+                  'aac_adtstoasc',
+                  '-movflags',
+                  '+faststart',
+                  outPath,
+                ]
+              : [
+                  '-y',
+                  '-hide_banner',
+                  '-loglevel',
+                  'error',
+                  '-i',
+                  vPath,
+                  '-c',
+                  'copy',
+                  '-bsf:a',
+                  'aac_adtstoasc',
+                  '-movflags',
+                  '+faststart',
+                  outPath,
+                ];
+
+            const proc = spawn(ffBin, ffArgs);
+            proc.on('error', () => {
+              cleanupTmp();
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.end('ffmpeg spawn error');
+              }
+            });
+            proc.on('close', (code) => {
+              if (code === 0 && fs.existsSync(outPath)) {
+                try {
+                  const stat = fs.statSync(outPath);
+                  res.writeHead(200, {
+                    'Content-Type': 'video/mp4',
+                    'Content-Length': String(stat.size),
+                    'Cache-Control': 'no-store',
+                  });
+                  const rs = fs.createReadStream(outPath);
+                  rs.on('close', cleanupTmp);
+                  rs.on('error', cleanupTmp);
+                  rs.pipe(res);
+                  return;
+                } catch {
+                  // fallthrough
+                }
+              }
+              cleanupTmp();
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.end('ffmpeg remux failed');
+              }
+            });
+          } catch {
+            cleanupTmp();
+            if (!res.headersSent) {
+              res.statusCode = 500;
+              res.end('remux exception');
+            }
+          }
+        });
       });
 
       server.middlewares.use('/api/radio-meta', async (req, res) => {
@@ -2253,6 +2439,42 @@ function tvStreamProxyPlugin(): Plugin {
                 return;
               }
             }
+            const hasSegmentOrVariant = (m3uText: string) =>
+              m3uText
+                .split(/\r?\n/)
+                .some((l) => {
+                  const t = l.trim();
+                  return (t && !t.startsWith('#')) || /URI="[^"]+"/i.test(t);
+                });
+            if (text.includes('#EXT-X-') && !hasSegmentOrVariant(text)) {
+              await new Promise((r) => setTimeout(r, 450));
+              try {
+                const retryRes = await fetch(targetUrl, {
+                  method: 'GET',
+                  headers: {
+                    'User-Agent': effectiveUa,
+                    Referer: refererHeader,
+                    Origin: originHeader,
+                    Accept: '*/*',
+                  },
+                  redirect: 'follow',
+                });
+                if (retryRes.ok) {
+                  text = await retryRes.text();
+                }
+              } catch {
+                // ignore retry error
+              }
+              if (!hasSegmentOrVariant(text)) {
+                res.writeHead(503, {
+                  'Access-Control-Allow-Origin': '*',
+                  'Content-Type': 'text/plain; charset=utf-8',
+                  'Cache-Control': 'no-cache, no-store',
+                });
+                res.end('Upstream HLS playlist has 0 active segments');
+                return;
+              }
+            }
             const rawLines = text.split(/\r?\n/);
             const filteredLines: string[] = [];
             let skipNextUriLine = false;
@@ -2343,12 +2565,17 @@ function tvStreamProxyPlugin(): Plugin {
             return;
           }
 
+          const isVideoTsSegment =
+            /\.(ts|m4s|mp4)(\?|$)/i.test(finalUrl) ||
+            contentType.includes('mp2t') ||
+            contentType.includes('video/');
           const isLiveAudioStream =
-            contentType.startsWith('audio/') ||
-            contentType.includes('aac') ||
-            contentType.includes('mpeg') ||
-            contentType.includes('ogg') ||
-            contentType.includes('octet-stream');
+            !isVideoTsSegment &&
+            (contentType.startsWith('audio/') ||
+              contentType.includes('aac') ||
+              contentType.includes('mpeg') ||
+              contentType.includes('ogg') ||
+              contentType.includes('octet-stream'));
 
           if (isLiveAudioStream && upstreamRes.body) {
             res.writeHead(200, {
@@ -2479,6 +2706,7 @@ export default defineConfig({
     host: true,
     port: 8769,
     strictPort: true,
+    allowedHosts: true,
   },
   esbuild: {
     target: 'es2015',

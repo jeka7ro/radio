@@ -2,17 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import * as dashjs from 'dashjs';
 import {
-  Languages,
   Loader2,
   AlertCircle,
-  SlidersHorizontal,
   VolumeX,
-  Subtitles,
   Check,
   Search,
   Type,
   Clock,
-  Layers,
   Play,
   Pause,
   RotateCcw,
@@ -21,9 +17,15 @@ import {
   SkipForward,
   Sparkles,
   Maximize2,
-  Airplay,
   X,
 } from 'lucide-react';
+import {
+  SfEpisodesIcon,
+  SfCaptionsBubbleIcon,
+  SfInfoIcon,
+  SfSpeakerWaveIcon,
+  SfAirPlayIcon,
+} from '../common/AppleSfIcons';
 import {
   OfflineMediaItem,
   createOfflineAwareHlsLoader,
@@ -94,8 +96,8 @@ function parseQualityHeightFromString(raw = ''): number {
 }
 
 export function formatQualityTierLabel(height: number): string {
-  if (height >= 2160) return '4K UHD • 2160p';
-  if (height >= 1440) return '2K QHD • 1440p';
+  if (height >= 2160) return '4K UHD';
+  if (height >= 1440) return '2K QHD';
   if (height >= 1080) return '1080p Full HD';
   if (height >= 720) return '720p HD';
   if (height >= 480) return '480p SD';
@@ -159,6 +161,7 @@ interface VodNativeHlsPlayerProps {
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onStreamError?: () => void;
   onSelectAudioTrackIndex?: (index: number) => void;
+  onRequestOriginalAudio?: () => void;
   activeServerId?: string;
   serverOptions?: Array<{ id: string; label: string }>;
   onSelectServer?: (serverId: string) => void;
@@ -172,6 +175,7 @@ interface VodNativeHlsPlayerProps {
   onNextEpisode?: () => void;
   onOpenEpisodesDrawer?: () => void;
   onOpenInfoSheet?: () => void;
+  onClosePlayer?: () => void;
   prevEpisodeLabel?: string;
   nextEpisodeLabel?: string;
 }
@@ -184,6 +188,38 @@ const QUICK_SUB_LANGS = [
   { code: 'fr', flag: 'FR', countryIso: 'fr', label: 'Français' },
   { code: 'de', flag: 'DE', countryIso: 'de', label: 'Deutsch' },
 ];
+
+function resolveSubtitleFlagBadge(rawLabel?: string): {
+  countryIso: string | null;
+  trackNum: string;
+} {
+  const s = (rawLabel || '').trim();
+  const lower = s.toLowerCase();
+  const numMatch = s.match(/#\d+/);
+  const trackNum = numMatch ? numMatch[0] : '';
+  if (/\b(rom|ro|rum)\b|român|romana/i.test(lower)) {
+    return { countryIso: 'ro', trackNum };
+  }
+  if (/\b(rus|ru)\b|рус|rusă|rusa/i.test(lower)) {
+    return { countryIso: 'ru', trackNum };
+  }
+  if (/\b(eng|en)\b|english|englez/i.test(lower)) {
+    return { countryIso: 'gb', trackNum };
+  }
+  if (/\b(esp|spa|es)\b|español|spaniol/i.test(lower)) {
+    return { countryIso: 'es', trackNum };
+  }
+  if (/\b(fra|fre|fr)\b|français|francez/i.test(lower)) {
+    return { countryIso: 'fr', trackNum };
+  }
+  if (/\b(deu|ger|de)\b|deutsch|german/i.test(lower)) {
+    return { countryIso: 'de', trackNum };
+  }
+  if (/\b(ita|it)\b|italian/i.test(lower)) {
+    return { countryIso: 'it', trackNum };
+  }
+  return { countryIso: null, trackNum };
+}
 
 export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   dashUrl,
@@ -214,6 +250,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   onTimeUpdate,
   onStreamError,
   onSelectAudioTrackIndex,
+  onRequestOriginalAudio,
   activeServerId,
   serverOptions = [],
   onSelectServer,
@@ -227,6 +264,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   onNextEpisode,
   onOpenEpisodesDrawer,
   onOpenInfoSheet,
+  onClosePlayer,
   prevEpisodeLabel,
   nextEpisodeLabel,
 }) => {
@@ -305,10 +343,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const lastSeekAttemptMsRef = useRef<number>(0);
   const startAtSecondsRef = useRef<number>(startAtSeconds);
   const hasNotifiedInitialPlayOsdRef = useRef<boolean>(false);
+  const watchedTicksInEpisodeRef = useRef<number>(0);
+  const activeEpisodeMediaKeyRef = useRef<string>(
+    `${season}_${episode}_${hlsUrl || ''}_${dashUrl || ''}`
+  );
   useEffect(() => {
-    if (startAtSeconds === 0 || startAtSeconds > startAtSecondsRef.current) {
-      startAtSecondsRef.current = startAtSeconds;
-    }
+    startAtSecondsRef.current = startAtSeconds || 0;
   }, [startAtSeconds]);
 
   const [forcedAudioIdx, setForcedAudioIdx] = useState<number>(() => {
@@ -412,6 +452,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const [openMenu, setOpenMenu] = useState<
     'none' | 'subtitles' | 'audio' | 'server' | 'quality'
   >('none');
+  const prevOpenMenuRef = useRef<
+    'none' | 'subtitles' | 'audio' | 'server' | 'quality'
+  >('none');
+  useEffect(() => {
+    const prev = prevOpenMenuRef.current;
+    prevOpenMenuRef.current = openMenu;
+    if (prev !== 'none' && openMenu === 'none') {
+      window.setTimeout(() => {
+        const rootEl = playerRootRef.current;
+        if (!rootEl) return;
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (!activeEl || activeEl === document.body || !rootEl.contains(activeEl)) {
+          const triggerBtn = rootEl.querySelector<HTMLButtonElement>(
+            `[data-vod-primary-${prev}-btn="true"]`
+          );
+          triggerBtn?.focus();
+        }
+      }, 25);
+    }
+  }, [openMenu]);
   const [availableSubs, setAvailableSubs] = useState<OnlineSubtitleTrack[]>([]);
   const [isLoadingSubsList, setIsLoadingSubsList] = useState<boolean>(false);
   const [loadingSubTrackId, setLoadingSubTrackId] = useState<string | null>(
@@ -438,6 +498,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }>
   >([]);
   const [apiOutroStartSec, setApiOutroStartSec] = useState<number | null>(null);
+  const [apiOutroEndSec, setApiOutroEndSec] = useState<number | null>(null);
+  const [apiPostCreditsStartSec, setApiPostCreditsStartSec] = useState<
+    number | null
+  >(null);
   const [apiNoIntro, setApiNoIntro] = useState<boolean>(false);
   const [isIntroApiSettled, setIsIntroApiSettled] = useState<boolean>(false);
   const hasAutoFocusedSkipIntroRef = useRef<string | null>(null);
@@ -453,16 +517,38 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     setShowNextEpisodePrompt(false);
     hasTriggeredAutoNextRef.current = false;
     hasAutoFocusedNextEpRef.current = false;
+    watchedTicksInEpisodeRef.current = 0;
     setDismissedSegmentIds([]);
     setApiSkipSegments([]);
     setApiOutroStartSec(null);
+    setApiOutroEndSec(null);
+    setApiPostCreditsStartSec(null);
     setApiNoIntro(false);
     setIsIntroApiSettled(false);
     hasAutoFocusedSkipIntroRef.current = null;
     setVideoDurationSec(0);
-  }, [season, episode, hlsUrl, dashUrl]);
+    setBufferedEndSec(0);
+    setScrubPreviewSec(null);
+    const safeStart = startAtSeconds || 0;
+    startAtSecondsRef.current = safeStart;
+    streamOffsetRef.current = safeStart;
+    setStreamOffsetSec(safeStart);
+    setCurrentTimeSec(safeStart);
+    appliedStartRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [season, episode]);
 
-  // Query BOTH IntroDB.app (curated consensus Recap + Intro + Outro) and TheIntroDB v2 in parallel for Netflix/Lampa-level accuracy
+  useEffect(() => {
+    setAutoNextDismissed(false);
+    setShowNextEpisodePrompt(false);
+    hasTriggeredAutoNextRef.current = false;
+    hasAutoFocusedNextEpRef.current = false;
+    watchedTicksInEpisodeRef.current = 0;
+    hasAutoFocusedSkipIntroRef.current = null;
+    setVideoDurationSec(0);
+  }, [hlsUrl, dashUrl]);
+
+  // Query BOTH IntroDB.app (curated consensus Recap + Intro + Outro) and TheIntroDB v2 in parallel for Netflix/Lampa-level accuracy on both Series and Movies
   useEffect(() => {
     const cleanImdb =
       imdbId && imdbId.startsWith('tt')
@@ -471,9 +557,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const rawTmdb = tmdbId !== undefined && tmdbId !== null ? String(tmdbId).trim() : '';
     const cleanTmdb = /^\d+$/.test(rawTmdb) ? rawTmdb : '';
 
-    if (mediaType !== 'series' || (!cleanImdb && !cleanTmdb)) {
+    if (!cleanImdb && !cleanTmdb) {
       setApiSkipSegments([]);
       setApiOutroStartSec(null);
+      setApiOutroEndSec(null);
+      setApiPostCreditsStartSec(null);
       setApiNoIntro(false);
       setIsIntroApiSettled(true);
       return;
@@ -485,7 +573,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
     const fetchIntroDbApp = async (): Promise<any | null> => {
       if (!cleanImdb) return null;
-      const targetUrl = `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(cleanImdb)}&season=${season}&episode=${episode}`;
+      const sParam = mediaType === 'series' ? season : 0;
+      const eParam = mediaType === 'series' ? episode : 0;
+      const targetUrl = `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(cleanImdb)}&season=${sParam}&episode=${eParam}`;
       try {
         const res = await fetch(
           `/api/tv-proxy?raw=1&url=${encodeURIComponent(targetUrl)}&ref=${encodeURIComponent('https://introdb.app/')}`,
@@ -514,9 +604,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const idQuery = cleanImdb
         ? `imdb_id=${encodeURIComponent(cleanImdb)}`
         : `tmdb_id=${encodeURIComponent(cleanTmdb)}`;
+      const epQuery =
+        mediaType === 'series' ? `&season=${season}&episode=${episode}` : '';
       try {
         const res = await fetch(
-          `https://api.theintrodb.org/v2/media?${idQuery}&season=${season}&episode=${episode}`,
+          `https://api.theintrodb.org/v2/media?${idQuery}${epQuery}`,
           { signal: ctrl.signal }
         );
         if (!res.ok) return null;
@@ -550,205 +642,270 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         let introAdded = false;
         const explicitNoIntro = dApp?.no_intro === true;
 
-        // Parse valid segments from TheIntroDB v2 intro array (used for multi-segment recap+intro disambiguation & fallback)
-        const v2IntroValid: Array<{ s: number; e: number }> = Array.isArray(
-          dV2?.intro
-        )
-          ? dV2.intro
-              .map((seg: any) => ({
-                s: typeof seg?.start_ms === 'number' ? seg.start_ms / 1000 : 0,
-                e: typeof seg?.end_ms === 'number' ? seg.end_ms / 1000 : 0,
-              }))
-              .filter(
-                (seg: { s: number; e: number }) =>
-                  seg.e > seg.s + 10 &&
-                  seg.s < 1500 &&
-                  !(seg.s <= 3 && seg.e - seg.s <= 22)
-              )
-          : [];
+        if (mediaType === 'series') {
+          // Parse valid segments from TheIntroDB v2 intro array (used for multi-segment recap+intro disambiguation & fallback)
+          const v2IntroValid: Array<{ s: number; e: number }> = Array.isArray(
+            dV2?.intro
+          )
+            ? dV2.intro
+                .map((seg: any) => ({
+                  s:
+                    typeof seg?.start_ms === 'number'
+                      ? seg.start_ms / 1000
+                      : 0,
+                  e: typeof seg?.end_ms === 'number' ? seg.end_ms / 1000 : 0,
+                }))
+                .filter(
+                  (seg: { s: number; e: number }) =>
+                    seg.e > seg.s + 10 &&
+                    seg.s < 1500 &&
+                    !(seg.s <= 3 && seg.e - seg.s <= 22)
+                )
+            : [];
 
-        // 1. RECAP from IntroDB.app or TheIntroDB v2
-        if (dApp?.recap && typeof dApp.recap === 'object') {
-          const s =
-            typeof dApp.recap.start_sec === 'number'
-              ? dApp.recap.start_sec
-              : (dApp.recap.start_ms || 0) / 1000;
-          const e =
-            typeof dApp.recap.end_sec === 'number'
-              ? dApp.recap.end_sec
-              : (dApp.recap.end_ms || 0) / 1000;
-          if (e > s + 8 && s < 300) {
-            const startSec = Math.max(1, Math.floor(s));
-            const endSec = Math.ceil(e);
-            segments.push({
-              id: `recap_${startSec}_${endSec}`,
-              type: 'recap',
-              startSec,
-              endSec,
-              label: 'Sari peste Recapitulare',
-              toastLabel: '⏭ Recapitulare Omisă',
-            });
-            recapAdded = true;
-          }
-        } else if (Array.isArray(dV2?.recap) && dV2.recap.length > 0) {
-          const lastRec = dV2.recap[dV2.recap.length - 1];
-          const s = (lastRec?.start_ms || 0) / 1000;
-          const e = (lastRec?.end_ms || 0) / 1000;
-          if (e > s + 8 && s < 300) {
-            const startSec = Math.max(1, Math.floor(s));
-            const endSec = Math.ceil(e);
-            segments.push({
-              id: `recap_${startSec}_${endSec}`,
-              type: 'recap',
-              startSec,
-              endSec,
-              label: 'Sari peste Recapitulare',
-              toastLabel: '⏭ Recapitulare Omisă',
-            });
-            recapAdded = true;
-          }
-        }
-
-        // 2. INTRO from IntroDB.app (primary consensus) + smart disambiguation if an early recap was tagged as intro
-        if (!explicitNoIntro && dApp?.intro && typeof dApp.intro === 'object') {
-          const s =
-            typeof dApp.intro.start_sec === 'number'
-              ? dApp.intro.start_sec
-              : (dApp.intro.start_ms || 0) / 1000;
-          const e =
-            typeof dApp.intro.end_sec === 'number'
-              ? dApp.intro.end_sec
-              : (dApp.intro.end_ms || 0) / 1000;
-          if (e > s + 10 && s < 1500 && !(s <= 3 && e - s <= 22)) {
-            const startSec = Math.max(2, Math.floor(s));
-            const endSec = Math.ceil(e);
-            const hasLaterV2Intro =
-              !recapAdded &&
-              startSec < 20 &&
-              v2IntroValid.length >= 2 &&
-              v2IntroValid[0].s < 20 &&
-              v2IntroValid[v2IntroValid.length - 1].s >= 60;
-
-            if (hasLaterV2Intro) {
-              // The <20s segment is the "Previously on..." Recap, and the later segment is the real Opening Intro
+          // 1. RECAP from IntroDB.app or TheIntroDB v2
+          if (dApp?.recap && typeof dApp.recap === 'object') {
+            const s =
+              typeof dApp.recap.start_sec === 'number'
+                ? dApp.recap.start_sec
+                : (dApp.recap.start_ms || 0) / 1000;
+            const e =
+              typeof dApp.recap.end_sec === 'number'
+                ? dApp.recap.end_sec
+                : (dApp.recap.end_ms || 0) / 1000;
+            if (e > s + 8 && s < 300) {
+              const startSec = Math.max(1, Math.floor(s));
+              const endSec = Math.ceil(e);
               segments.push({
                 id: `recap_${startSec}_${endSec}`,
                 type: 'recap',
                 startSec,
                 endSec,
                 label: 'Sari peste Recapitulare',
-                toastLabel: '⏭ Recapitulare Omisă',
+                toastLabel: 'Recapitulare Omisă',
               });
               recapAdded = true;
+            }
+          } else if (Array.isArray(dV2?.recap) && dV2.recap.length > 0) {
+            const lastRec = dV2.recap[dV2.recap.length - 1];
+            const s = (lastRec?.start_ms || 0) / 1000;
+            const e = (lastRec?.end_ms || 0) / 1000;
+            if (e > s + 8 && s < 300) {
+              const startSec = Math.max(1, Math.floor(s));
+              const endSec = Math.ceil(e);
+              segments.push({
+                id: `recap_${startSec}_${endSec}`,
+                type: 'recap',
+                startSec,
+                endSec,
+                label: 'Sari peste Recapitulare',
+                toastLabel: 'Recapitulare Omisă',
+              });
+              recapAdded = true;
+            }
+          }
 
-              const trueIntro = v2IntroValid[v2IntroValid.length - 1];
-              const iStart = Math.max(2, Math.floor(trueIntro.s));
-              const iEnd = Math.ceil(trueIntro.e);
+          // 2. INTRO from IntroDB.app (primary consensus) + smart disambiguation if an early recap was tagged as intro
+          if (
+            !explicitNoIntro &&
+            dApp?.intro &&
+            typeof dApp.intro === 'object'
+          ) {
+            const s =
+              typeof dApp.intro.start_sec === 'number'
+                ? dApp.intro.start_sec
+                : (dApp.intro.start_ms || 0) / 1000;
+            const e =
+              typeof dApp.intro.end_sec === 'number'
+                ? dApp.intro.end_sec
+                : (dApp.intro.end_ms || 0) / 1000;
+            if (e > s + 10 && s < 1500 && !(s <= 3 && e - s <= 22)) {
+              const startSec = Math.max(2, Math.floor(s));
+              const endSec = Math.ceil(e);
+              const hasLaterV2Intro =
+                !recapAdded &&
+                startSec < 20 &&
+                v2IntroValid.length >= 2 &&
+                v2IntroValid[0].s < 20 &&
+                v2IntroValid[v2IntroValid.length - 1].s >= 60;
+
+              if (hasLaterV2Intro) {
+                segments.push({
+                  id: `recap_${startSec}_${endSec}`,
+                  type: 'recap',
+                  startSec,
+                  endSec,
+                  label: 'Sari peste Recapitulare',
+                  toastLabel: 'Recapitulare Omisă',
+                });
+                recapAdded = true;
+
+                const trueIntro = v2IntroValid[v2IntroValid.length - 1];
+                const iStart = Math.max(2, Math.floor(trueIntro.s));
+                const iEnd = Math.ceil(trueIntro.e);
+                segments.push({
+                  id: `intro_${iStart}_${iEnd}`,
+                  type: 'intro',
+                  startSec: iStart,
+                  endSec: iEnd,
+                  label: 'Sari peste Intro',
+                  toastLabel: 'Intro Omis',
+                });
+                introAdded = true;
+              } else {
+                segments.push({
+                  id: `intro_${startSec}_${endSec}`,
+                  type: 'intro',
+                  startSec,
+                  endSec,
+                  label: 'Sari peste Intro',
+                  toastLabel: 'Intro Omis',
+                });
+                introAdded = true;
+              }
+            }
+          }
+
+          // 3. Fallback / Supplement from TheIntroDB v2 when IntroDB.app didn't have the intro
+          if (!explicitNoIntro && !introAdded && v2IntroValid.length > 0) {
+            if (
+              v2IntroValid.length >= 2 &&
+              v2IntroValid[0].s < 20 &&
+              v2IntroValid[v2IntroValid.length - 1].s >= 60
+            ) {
+              if (!recapAdded) {
+                const rStart = Math.max(1, Math.floor(v2IntroValid[0].s));
+                const rEnd = Math.ceil(v2IntroValid[0].e);
+                segments.push({
+                  id: `recap_${rStart}_${rEnd}`,
+                  type: 'recap',
+                  startSec: rStart,
+                  endSec: rEnd,
+                  label: 'Sari peste Recapitulare',
+                  toastLabel: 'Recapitulare Omisă',
+                });
+                recapAdded = true;
+              }
+              const last = v2IntroValid[v2IntroValid.length - 1];
+              const iStart = Math.max(2, Math.floor(last.s));
+              const iEnd = Math.ceil(last.e);
               segments.push({
                 id: `intro_${iStart}_${iEnd}`,
                 type: 'intro',
                 startSec: iStart,
                 endSec: iEnd,
                 label: 'Sari peste Intro',
-                toastLabel: '⏭ Intro Omis',
+                toastLabel: 'Intro Omis',
               });
               introAdded = true;
             } else {
-              segments.push({
-                id: `intro_${startSec}_${endSec}`,
-                type: 'intro',
-                startSec,
-                endSec,
-                label: 'Sari peste Intro',
-                toastLabel: '⏭ Intro Omis',
-              });
-              introAdded = true;
+              const best = v2IntroValid[v2IntroValid.length - 1];
+              const overlapsRecap = segments.some(
+                (seg) =>
+                  seg.type === 'recap' &&
+                  Math.abs(seg.startSec - best.s) < 15
+              );
+              if (!overlapsRecap) {
+                const iStart = Math.max(2, Math.floor(best.s));
+                const iEnd = Math.ceil(best.e);
+                segments.push({
+                  id: `intro_${iStart}_${iEnd}`,
+                  type: 'intro',
+                  startSec: iStart,
+                  endSec: iEnd,
+                  label: 'Sari peste Intro',
+                  toastLabel: 'Intro Omis',
+                });
+                introAdded = true;
+              }
             }
           }
         }
 
-        // 3. Fallback / Supplement from TheIntroDB v2 when IntroDB.app didn't have the intro
-        if (!explicitNoIntro && !introAdded && v2IntroValid.length > 0) {
-          if (
-            v2IntroValid.length >= 2 &&
-            v2IntroValid[0].s < 20 &&
-            v2IntroValid[v2IntroValid.length - 1].s >= 60
-          ) {
-            if (!recapAdded) {
-              const rStart = Math.max(1, Math.floor(v2IntroValid[0].s));
-              const rEnd = Math.ceil(v2IntroValid[0].e);
-              segments.push({
-                id: `recap_${rStart}_${rEnd}`,
-                type: 'recap',
-                startSec: rStart,
-                endSec: rEnd,
-                label: 'Sari peste Recapitulare',
-                toastLabel: '⏭ Recapitulare Omisă',
-              });
-              recapAdded = true;
-            }
-            const last = v2IntroValid[v2IntroValid.length - 1];
-            const iStart = Math.max(2, Math.floor(last.s));
-            const iEnd = Math.ceil(last.e);
-            segments.push({
-              id: `intro_${iStart}_${iEnd}`,
-              type: 'intro',
-              startSec: iStart,
-              endSec: iEnd,
-              label: 'Sari peste Intro',
-              toastLabel: '⏭ Intro Omis',
-            });
-            introAdded = true;
-          } else {
-            const best = v2IntroValid[v2IntroValid.length - 1];
-            const overlapsRecap = segments.some(
-              (seg) =>
-                seg.type === 'recap' &&
-                Math.abs(seg.startSec - best.s) < 15
-            );
-            if (!overlapsRecap) {
-              const iStart = Math.max(2, Math.floor(best.s));
-              const iEnd = Math.ceil(best.e);
-              segments.push({
-                id: `intro_${iStart}_${iEnd}`,
-                type: 'intro',
-                startSec: iStart,
-                endSec: iEnd,
-                label: 'Sari peste Intro',
-                toastLabel: '⏭ Intro Omis',
-              });
-              introAdded = true;
-            }
-          }
-        }
+        // 4. OUTRO / CREDITS & POST-CREDITS timestamps (Series & Movies)
+        const minValidOutroSec = mediaType === 'series' ? 300 : 1200;
+        const outroStartCandidates: number[] = [];
+        const outroEndCandidates: number[] = [];
 
-        // 4. OUTRO / CREDITS timestamp
-        let resolvedOutroSec: number | null = null;
         if (dApp?.outro && typeof dApp.outro === 'object') {
-          const oSec =
+          const oStart =
             typeof dApp.outro.start_sec === 'number'
               ? dApp.outro.start_sec
               : (dApp.outro.start_ms || 0) / 1000;
-          if (oSec > 300) resolvedOutroSec = Math.floor(oSec);
-        }
-        if (!resolvedOutroSec && Array.isArray(dV2?.credits) && dV2.credits.length > 0) {
-          const lastCred = dV2.credits[dV2.credits.length - 1];
-          if (typeof lastCred?.start_ms === 'number' && lastCred.start_ms > 300000) {
-            resolvedOutroSec = Math.floor(lastCred.start_ms / 1000);
+          const oEnd =
+            typeof dApp.outro.end_sec === 'number'
+              ? dApp.outro.end_sec
+              : (dApp.outro.end_ms || 0) / 1000;
+          if (oStart > minValidOutroSec) {
+            outroStartCandidates.push(Math.floor(oStart));
+            if (oEnd > oStart + 5) {
+              outroEndCandidates.push(Math.ceil(oEnd));
+            }
           }
         }
-        if (!resolvedOutroSec && Array.isArray(dV2?.outro) && dV2.outro.length > 0) {
-          const lastOut = dV2.outro[dV2.outro.length - 1];
-          if (typeof lastOut?.start_ms === 'number' && lastOut.start_ms > 300000) {
-            resolvedOutroSec = Math.floor(lastOut.start_ms / 1000);
+        if (Array.isArray(dV2?.credits)) {
+          for (const cred of dV2.credits) {
+            const cStart =
+              typeof cred?.start_ms === 'number' ? cred.start_ms / 1000 : 0;
+            const cEnd =
+              typeof cred?.end_ms === 'number' ? cred.end_ms / 1000 : 0;
+            if (cStart > minValidOutroSec) {
+              outroStartCandidates.push(Math.floor(cStart));
+              if (cEnd > cStart + 5) {
+                outroEndCandidates.push(Math.ceil(cEnd));
+              }
+            }
+          }
+        }
+        if (Array.isArray(dV2?.outro)) {
+          for (const out of dV2.outro) {
+            const uStart =
+              typeof out?.start_ms === 'number' ? out.start_ms / 1000 : 0;
+            const uEnd =
+              typeof out?.end_ms === 'number' ? out.end_ms / 1000 : 0;
+            if (uStart > minValidOutroSec) {
+              outroStartCandidates.push(Math.floor(uStart));
+              if (uEnd > uStart + 5) {
+                outroEndCandidates.push(Math.ceil(uEnd));
+              }
+            }
+          }
+        }
+
+        let resolvedPostCreditsSec: number | null = null;
+        if (dApp?.post_credits && typeof dApp.post_credits === 'object') {
+          const pStart =
+            typeof dApp.post_credits.start_sec === 'number'
+              ? dApp.post_credits.start_sec
+              : (dApp.post_credits.start_ms || 0) / 1000;
+          if (pStart > minValidOutroSec) {
+            resolvedPostCreditsSec = Math.floor(pStart);
+          }
+        } else if (
+          Array.isArray(dV2?.post_credits) &&
+          dV2.post_credits.length > 0
+        ) {
+          const firstPc = dV2.post_credits[0];
+          const pStart =
+            typeof firstPc?.start_ms === 'number'
+              ? firstPc.start_ms / 1000
+              : 0;
+          if (pStart > minValidOutroSec) {
+            resolvedPostCreditsSec = Math.floor(pStart);
           }
         }
 
         segments.sort((a, b) => a.startSec - b.startSec);
         setApiSkipSegments(segments);
         setApiNoIntro(explicitNoIntro && segments.length === 0);
-        if (resolvedOutroSec) {
-          setApiOutroStartSec(resolvedOutroSec);
+        if (outroStartCandidates.length > 0) {
+          setApiOutroStartSec(Math.min(...outroStartCandidates));
+        }
+        if (outroEndCandidates.length > 0) {
+          setApiOutroEndSec(Math.max(...outroEndCandidates));
+        }
+        if (resolvedPostCreditsSec) {
+          setApiPostCreditsStartSec(resolvedPostCreditsSec);
         }
       } finally {
         window.clearTimeout(timer);
@@ -782,14 +939,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (active && d && d.ok && d.active) {
-            setTorrentLiveStats({
-              downloadSpeedText: d.downloadSpeedText || 'Buffer HD',
-              numPeers: Number(d.numPeers || 0),
-              source: d.source || 'FileList.io',
-            });
+            const nextSpeed = d.downloadSpeedText || 'Buffer HD';
+            const nextPeers = Number(d.numPeers || 0);
+            const nextSource = d.source || 'FileList.io';
+            setTorrentLiveStats((prev) =>
+              prev &&
+              prev.downloadSpeedText === nextSpeed &&
+              prev.numPeers === nextPeers &&
+              prev.source === nextSource
+                ? prev
+                : {
+                    downloadSpeedText: nextSpeed,
+                    numPeers: nextPeers,
+                    source: nextSource,
+                  }
+            );
             const probedDur = Number(d.durationSec || 0);
             if (Number.isFinite(probedDur) && probedDur > 60) {
-              setVideoDurationSec(probedDur);
+              setVideoDurationSec((prev) =>
+                Math.abs(prev - probedDur) < 1 ? prev : probedDur
+              );
             }
           }
         })
@@ -848,13 +1017,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         : undefined;
     const rawW = liveVideoDims.width;
     const rawH = liveVideoDims.height;
+    const badgeHeight = parseQualityHeightFromString(sourceQualityBadge);
     const fallbackH =
       selectedLevelObj?.height ||
       qualityLevels[0]?.height ||
-      parseQualityHeightFromString(sourceQualityBadge) ||
+      badgeHeight ||
       1080;
-    const normHeight =
+    const detectedH =
       rawH > 0 ? normalizeVideoQualityHeight(rawW, rawH) : fallbackH;
+    const normHeight =
+      qualityLevels.length === 0 && badgeHeight >= 2160
+        ? Math.max(detectedH, badgeHeight)
+        : detectedH;
     const badgeLabel = formatQualityTierLabel(normHeight);
     const dimsLabel =
       rawW > 0 && rawH > 0
@@ -1025,6 +1199,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     flStreamUrl: string
   ) => {
     cleanupFileListMse();
+    appliedStartRef.current = true;
+    lastTimeUpdateWallMsRef.current = Date.now();
 
     const isHardwareTv =
       typeof window !== 'undefined' &&
@@ -1256,27 +1432,58 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       return;
     }
 
-    video.src = flStreamUrl;
+    const isIosWebKit =
+      typeof navigator !== 'undefined' &&
+      (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+
+    const effectiveFlUrl =
+      isIosWebKit && flStreamUrl.includes('/api/filelist/stream')
+        ? flStreamUrl.replace('/api/filelist/stream', '/api/filelist/hls.m3u8')
+        : flStreamUrl;
+
+    let retriedAltFormat = false;
+    let retriedSameFormat = false;
+    video.src = effectiveFlUrl;
     video.onloadedmetadata = () => {
       isSeekingFileListRef.current = false;
-      try {
-        if (
-          video.buffered &&
-          video.buffered.length > 0 &&
-          video.buffered.start(0) > 0.01 &&
-          video.currentTime < video.buffered.start(0)
-        ) {
-          video.currentTime = video.buffered.start(0) + 0.02;
-        }
-      } catch {
-        // ignore
-      }
+      appliedStartRef.current = true;
+      lastTimeUpdateWallMsRef.current = Date.now();
       syncVideoDims(video);
       ensureAutoPlay(video);
       setStatus('playing');
       onWakeOsd?.();
     };
     video.onerror = () => {
+      if (!retriedSameFormat) {
+        retriedSameFormat = true;
+        window.setTimeout(() => {
+          if (videoRef.current === video) {
+            video.src = effectiveFlUrl;
+            ensureAutoPlay(video);
+          }
+        }, 700);
+        return;
+      }
+      if (!retriedAltFormat) {
+        retriedAltFormat = true;
+        if (effectiveFlUrl.includes('/api/filelist/hls.m3u8')) {
+          video.src = effectiveFlUrl.replace(
+            '/api/filelist/hls.m3u8',
+            '/api/filelist/stream'
+          );
+          ensureAutoPlay(video);
+          return;
+        }
+        if (
+          flStreamUrl.includes('/api/filelist/stream') &&
+          typeof window !== 'undefined' &&
+          typeof window.MediaSource !== 'undefined'
+        ) {
+          startMsePump();
+          return;
+        }
+      }
       isSeekingFileListRef.current = false;
       setStatus('error');
       onStreamError?.();
@@ -1408,17 +1615,38 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
-    if (video.currentTime > 3) {
+    const nextMediaKey = `${season}_${episode}_${hlsUrl || ''}_${dashUrl || ''}`;
+    const isSameEpisodeStream =
+      activeEpisodeMediaKeyRef.current === nextMediaKey;
+    activeEpisodeMediaKeyRef.current = nextMediaKey;
+
+    if (isSameEpisodeStream && video.currentTime > 3) {
       startAtSecondsRef.current = Math.floor(
         streamOffsetRef.current + video.currentTime
       );
+    } else if (!isSameEpisodeStream) {
+      const safeStart = startAtSeconds || 0;
+      startAtSecondsRef.current = safeStart;
+      streamOffsetRef.current = 0;
+      setStreamOffsetSec(0);
+      setCurrentTimeSec(safeStart);
+      watchedTicksInEpisodeRef.current = 0;
     }
     appliedStartRef.current = false;
     hasNotifiedInitialPlayOsdRef.current = false;
     setStatus('loading');
     setIsAutoMuted(false);
     setLiveVideoDims({ width: 0, height: 0 });
-    if (audioTrackLabels.length > 0) {
+    if (offlineItem) {
+      setAudioTracks([
+        {
+          id: 0,
+          name: offlineItem.audioLabel || audioTrackLabels[0] || 'Audio Offline',
+        },
+      ]);
+      setActiveAudioTrack(0);
+      setForcedAudioIdx(0);
+    } else if (audioTrackLabels.length > 0) {
       setAudioTracks(
         audioTrackLabels.map((name, idx) => ({
           id: idx,
@@ -1614,6 +1842,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
 
       logTvVod('start_hls', targetUrl);
+
+      // Direct progressive MP4 / WebM / MKV URLs (e.g. Klubnichka 18+ CDN MP4 streams) must play natively via <video src> rather than hls.js
+      if (
+        !offlineItem &&
+        /\.(mp4|webm|mkv)(\?|$)/i.test(targetUrl) &&
+        !/\.m3u8(\?|$)/i.test(targetUrl)
+      ) {
+        switchToNativeVideoHls(targetUrl, 'direct_mp4_stream');
+        return;
+      }
 
       if (
         isIosMobile &&
@@ -1929,28 +2167,30 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         return;
       }
 
-      // Case 1: Offline Blob file (.mp4 / .mkv / .webm)
-      if (offlineItem && offlineItem.mediaType === 'blob') {
+      // Case 1: Offline Blob file (.mp4 / .mkv / .webm) or pre-built MP4 from HLS offline download
+      if (offlineItem) {
         const chunk = await getBlobChunk(`${offlineItem.id}::file`);
         if (cancelled) return;
-        if (!chunk) {
+        if (chunk) {
+          const blob =
+            chunk instanceof Blob
+              ? chunk
+              : new Blob([chunk], { type: offlineItem.mimeType || 'video/mp4' });
+          objectUrlToRevoke = URL.createObjectURL(blob);
+          video.src = objectUrlToRevoke;
+          video.onloadedmetadata = () => {
+            syncVideoDims(video);
+            applyInitialSeek();
+            ensureAutoPlay(video);
+            setStatus('playing');
+            onWakeOsd?.();
+          };
+          return;
+        }
+        if (offlineItem.mediaType === 'blob') {
           setStatus('error');
           return;
         }
-        const blob =
-          chunk instanceof Blob
-            ? chunk
-            : new Blob([chunk], { type: offlineItem.mimeType || 'video/mp4' });
-        objectUrlToRevoke = URL.createObjectURL(blob);
-        video.src = objectUrlToRevoke;
-        video.onloadedmetadata = () => {
-          syncVideoDims(video);
-          applyInitialSeek();
-          ensureAutoPlay(video);
-          setStatus('playing');
-          onWakeOsd?.();
-        };
-        return;
       }
 
       // Case 2: Online 1080p Full HD DASH (.mpd) stream (Desktop/Laptop/Tablet + Smart TVs supporting VP9/Opus MSE)
@@ -2225,8 +2465,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     if (initialAudioTrackIndex !== forcedAudioIdx) {
       const v = videoRef.current;
       if (v && v.currentTime > 3) {
-        startAtSecondsRef.current = Math.floor(v.currentTime);
-        appliedStartRef.current = false;
+        const isFl = Boolean(
+          hlsUrl &&
+            (hlsUrl.includes('/api/filelist/stream') ||
+              hlsUrl.includes('/api/youtube/stream'))
+        );
+        startAtSecondsRef.current = Math.floor(
+          isFl ? streamOffsetRef.current + v.currentTime : v.currentTime
+        );
+        if (!isFl) {
+          appliedStartRef.current = false;
+        }
       }
       setActiveAudioTrack(initialAudioTrackIndex);
       setForcedAudioIdx(initialAudioTrackIndex);
@@ -2240,14 +2489,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     prevStartAtPropRef.current = startAtSeconds;
     const video = videoRef.current;
     if (!video || status !== 'playing') return;
+    const isFl = Boolean(
+      hlsUrl &&
+        (hlsUrl.includes('/api/filelist/stream') ||
+          hlsUrl.includes('/api/youtube/stream'))
+    );
     if (startAtSeconds === 0 && prevStart > 0 && video.currentTime > 2) {
       appliedStartRef.current = true;
       setStreamOffsetSec(0);
-      if (
-        hlsUrl &&
-        (hlsUrl.includes('/api/filelist/stream') ||
-          hlsUrl.includes('/api/youtube/stream'))
-      ) {
+      if (isFl && hlsUrl) {
         const cleanBase = hlsUrl
           .replace(/([?&])start=\d+/g, '')
           .replace(/([?&])audio=\d+/g, '');
@@ -2262,6 +2512,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         ensureAutoPlay(video);
       }
     } else if (
+      !isFl &&
       startAtSeconds > 5 &&
       !appliedStartRef.current &&
       Math.abs(video.currentTime + streamOffsetSec - startAtSeconds) > 15
@@ -2336,11 +2587,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     Number.isFinite(videoDurationSec) && videoDurationSec > 60;
   const rawBaseDurationSec = hasVerifiedDuration
     ? videoDurationSec
-    : durationHintSec && durationHintSec > 60
-      ? durationHintSec
-      : mediaType === 'series'
-        ? 3600
-        : 7200;
+    : apiOutroEndSec && apiOutroEndSec > 300
+      ? apiOutroEndSec
+      : durationHintSec && durationHintSec > 60
+        ? durationHintSec
+        : mediaType === 'series'
+          ? 3600
+          : 7200;
   const isVideoElementEnded = Boolean(videoRef.current?.ended);
   const effectiveDurationSec = (() => {
     if (!hasVerifiedDuration && displayTimeSec >= rawBaseDurationSec - 90 && !isVideoElementEnded) {
@@ -2424,7 +2677,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               startSec,
               endSec,
               label: 'Sari peste Intro',
-              toastLabel: '⏭ Intro Omis',
+              toastLabel: 'Intro Omis',
             },
           ];
         }
@@ -2461,13 +2714,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   );
 
   const skipIntroRemainingPct = useMemo(() => {
-    if (!activeSkipSegment) return 100;
+    if (!activeSkipSegment) return 0;
     const totalDur = Math.max(
       1,
       activeSkipSegment.endSec - activeSkipSegment.startSec
     );
     const elapsed = Math.max(0, displayTimeSec - activeSkipSegment.startSec);
-    return Math.max(0, Math.min(100, 100 - (elapsed / totalDur) * 100));
+    return Math.max(0, Math.min(100, (elapsed / totalDur) * 100));
   }, [activeSkipSegment, displayTimeSec]);
 
   // If user rewinds/seeks backward before a dismissed segment, un-dismiss it so the button appears again
@@ -2512,78 +2765,189 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     return () => window.clearTimeout(timer);
   }, [isSkipIntroVisible, activeSkipSegment?.id, isOsdVisible, openMenu, status]);
 
-  // Smart End-of-Episode / Credits Detection:
-  // 1) Exact IntroDB / TheIntroDB credits timestamp (if available)
-  // 2) Subtitle end-of-dialogue detection within the last 3.5 minutes (210s)
-  // 3) Default 2 minutes (120s) remaining threshold
-  const smartOutroRemainingThresholdSec = useMemo(() => {
-    if (
-      mediaType === 'series' &&
-      apiOutroStartSec &&
-      effectiveDurationSec > apiOutroStartSec + 15
-    ) {
-      const remAtApiOutro = effectiveDurationSec - apiOutroStartSec;
-      if (remAtApiOutro >= 30 && remAtApiOutro <= 260) {
-        return Math.max(120, Math.ceil(remAtApiOutro));
-      }
-    }
-    if (
-      mediaType === 'series' &&
-      subtitleCues &&
-      subtitleCues.length >= 15 &&
-      effectiveDurationSec > 300
-    ) {
-      const cleanCues = subtitleCues.filter((c) => {
-        const t = (c.text || '').toLowerCase();
-        return (
-          !t.includes('opensubtitles') &&
-          !t.includes('subtitrare') &&
-          !t.includes('traducere') &&
-          !t.includes('synced by') &&
-          !t.includes('www.')
+  // Smart End-of-Episode (Series) & End-of-Movie (Movies) Credits Detection:
+  // Compares displayTimeSec >= resolvedOutroStartSec directly (identical to Skip Intro/Recap):
+  // 1) Exact IntroDB.app + TheIntroDB v2 consensus credits/outro start timestamp
+  // 2) Subtitle explicit [end credits] / [closing theme] marker or end-of-dialogue detection
+  // 3) Verified duration fallback (last 90s for series, last 180s for movies)
+  const resolvedOutroStartSec = useMemo<number | null>(() => {
+    const minValidSec = mediaType === 'series' ? 300 : 1200;
+
+    // 1. Exact API Outro / Credits start timestamp
+    if (apiOutroStartSec && apiOutroStartSec > minValidSec) {
+      if (
+        hasVerifiedDuration &&
+        videoDurationSec > minValidSec &&
+        apiOutroStartSec >= videoDurationSec - 10
+      ) {
+        return Math.max(
+          minValidSec,
+          Math.floor(
+            videoDurationSec - (mediaType === 'series' ? 90 : 180)
+          )
         );
-      });
-      const lastCue = cleanCues[cleanCues.length - 1];
-      if (lastCue) {
-        const remAfterLastCue = effectiveDurationSec - lastCue.end;
-        if (remAfterLastCue >= 120 && remAfterLastCue <= 210) {
-          return Math.ceil(remAfterLastCue - 2);
+      }
+      return apiOutroStartSec;
+    }
+
+    // 2. Subtitle credits marker or end-of-dialogue detection
+    if (subtitleCues && subtitleCues.length >= 15) {
+      const minSubCreditsSec = mediaType === 'series' ? 600 : 1800;
+      const isExplicitCreditsMarker = (text: string): boolean => {
+        const t = (text || '').toLowerCase();
+        return (
+          t.includes('[end credits') ||
+          t.includes('(end credits') ||
+          t.includes('[closing theme') ||
+          t.includes('(closing theme') ||
+          t.includes('[ending theme') ||
+          t.includes('(ending theme') ||
+          t.includes('[credits') ||
+          t.includes('(credits') ||
+          t.includes('generic final')
+        );
+      };
+
+      const explicitCreditsCue = subtitleCues.find(
+        (c) =>
+          c.start >= minSubCreditsSec &&
+          (!hasVerifiedDuration ||
+            c.start >=
+              videoDurationSec - (mediaType === 'series' ? 360 : 600)) &&
+          isExplicitCreditsMarker(c.text)
+      );
+      if (explicitCreditsCue) {
+        return Math.floor(explicitCreditsCue.start);
+      }
+
+      if (hasVerifiedDuration && videoDurationSec > minValidSec) {
+        const cleanCues = subtitleCues.filter((c) => {
+          const t = (c.text || '').toLowerCase();
+          return (
+            !t.includes('opensubtitles') &&
+            !t.includes('subtitrare') &&
+            !t.includes('traducere') &&
+            !t.includes('subtitles by') &&
+            !t.includes('synced by') &&
+            !t.includes('www.')
+          );
+        });
+        const lastCue = cleanCues[cleanCues.length - 1];
+        if (lastCue && lastCue.end > minValidSec) {
+          const remAfterLastCue = videoDurationSec - lastCue.end;
+          const minRem = mediaType === 'series' ? 25 : 35;
+          const maxRem = mediaType === 'series' ? 240 : 480;
+          if (remAfterLastCue >= minRem && remAfterLastCue <= maxRem) {
+            return Math.ceil(lastCue.end + 2);
+          }
         }
       }
     }
-    return 120;
-  }, [mediaType, apiOutroStartSec, subtitleCues, effectiveDurationSec]);
 
-  // Propose moving to the Next Episode when 2 minutes (or smart credits threshold) remain, and auto-advance when the episode finishes
-  useEffect(() => {
+    // 3. Verified duration or reliable runtime fallback
+    if (hasVerifiedDuration && videoDurationSec > minValidSec) {
+      return Math.floor(
+        videoDurationSec - (mediaType === 'series' ? 90 : 180)
+      );
+    }
+    if (durationHintSec && durationHintSec > minValidSec) {
+      return Math.floor(
+        durationHintSec - (mediaType === 'series' ? 90 : 180)
+      );
+    }
+
+    return null;
+  }, [
+    mediaType,
+    apiOutroStartSec,
+    subtitleCues,
+    hasVerifiedDuration,
+    videoDurationSec,
+    durationHintSec,
+  ]);
+
+  const outroEffectiveEndSec = useMemo(() => {
     if (
-      mediaType !== 'series' ||
-      !onNextEpisode ||
+      apiOutroEndSec &&
+      resolvedOutroStartSec !== null &&
+      apiOutroEndSec > resolvedOutroStartSec + 10
+    ) {
+      return apiOutroEndSec;
+    }
+    if (
+      hasVerifiedDuration &&
+      resolvedOutroStartSec !== null &&
+      videoDurationSec > resolvedOutroStartSec + 10
+    ) {
+      return Math.floor(videoDurationSec);
+    }
+    if (resolvedOutroStartSec !== null) {
+      return Math.max(
+        resolvedOutroStartSec + (mediaType === 'series' ? 60 : 180),
+        effectiveDurationSec
+      );
+    }
+    return effectiveDurationSec;
+  }, [
+    apiOutroEndSec,
+    resolvedOutroStartSec,
+    hasVerifiedDuration,
+    videoDurationSec,
+    mediaType,
+    effectiveDurationSec,
+  ]);
+
+  const outroRemainingSec = Math.max(
+    0,
+    Math.ceil(outroEffectiveEndSec - displayTimeSec)
+  );
+
+  const outroProgressRemainingPct = useMemo(() => {
+    if (resolvedOutroStartSec === null) return 0;
+    const totalDur = Math.max(10, outroEffectiveEndSec - resolvedOutroStartSec);
+    const elapsed = Math.max(0, displayTimeSec - resolvedOutroStartSec);
+    return Math.max(0, Math.min(100, (elapsed / totalDur) * 100));
+  }, [resolvedOutroStartSec, outroEffectiveEndSec, displayTimeSec]);
+
+  // Propose Next Episode (Series) or End-of-Movie Actions (Movies) as soon as displayTimeSec >= resolvedOutroStartSec
+  useEffect(() => {
+    const canShowEndPrompt =
+      mediaType === 'series' ? Boolean(onNextEpisode) : true;
+    if (
+      !canShowEndPrompt ||
       autoNextDismissed ||
       hasTriggeredAutoNextRef.current ||
-      (!hasVerifiedDuration && !(durationHintSec && durationHintSec > 180))
+      resolvedOutroStartSec === null
     ) {
       return;
     }
+
     if (
-      displayTimeSec > 45 &&
-      effectiveDurationSec > 180 &&
-      remainingTimeSec <= smartOutroRemainingThresholdSec &&
-      remainingTimeSec > 0
+      displayTimeSec >= resolvedOutroStartSec &&
+      watchedTicksInEpisodeRef.current >= 6
     ) {
       if (!showNextEpisodePrompt) {
         setShowNextEpisodePrompt(true);
       }
-      if (hasVerifiedDuration && remainingTimeSec <= 2) {
+      if (
+        mediaType === 'series' &&
+        onNextEpisode &&
+        status === 'playing' &&
+        watchedTicksInEpisodeRef.current >= 15 &&
+        ((hasVerifiedDuration && remainingTimeSec <= 2) ||
+          (apiOutroEndSec !== null &&
+            apiOutroEndSec > resolvedOutroStartSec + 15 &&
+            displayTimeSec >= apiOutroEndSec - 1))
+      ) {
         hasTriggeredAutoNextRef.current = true;
         setShowNextEpisodePrompt(false);
         onNextEpisode();
       }
     } else if (
-      remainingTimeSec > smartOutroRemainingThresholdSec + 5 &&
+      displayTimeSec < resolvedOutroStartSec - 5 &&
       showNextEpisodePrompt
     ) {
-      // User seeked backward away from the end credits
+      // User seeked backward before the end credits
       setShowNextEpisodePrompt(false);
       hasAutoFocusedNextEpRef.current = false;
     }
@@ -2592,41 +2956,49 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     onNextEpisode,
     autoNextDismissed,
     hasVerifiedDuration,
-    durationHintSec,
     displayTimeSec,
-    effectiveDurationSec,
     remainingTimeSec,
-    smartOutroRemainingThresholdSec,
+    resolvedOutroStartSec,
+    apiOutroEndSec,
     showNextEpisodePrompt,
   ]);
 
-  // Auto-focus the Next Episode button once when it first appears at 2 minutes remaining
+  // Auto-focus the Next Episode / End-of-Movie primary button when it appears and no menu is open
   useEffect(() => {
     if (
       !showNextEpisodePrompt ||
       autoNextDismissed ||
-      mediaType !== 'series' ||
-      !onNextEpisode ||
-      hasAutoFocusedNextEpRef.current
+      openMenu !== 'none' ||
+      (mediaType === 'series' && !onNextEpisode)
     ) {
       return;
     }
-    hasAutoFocusedNextEpRef.current = true;
-    const timer = window.setTimeout(() => {
+    const focusAutoNextBtn = () => {
       if (openMenu === 'none') {
         const btn = playerRootRef.current?.querySelector<HTMLButtonElement>(
           '[data-vod-autonext-btn="true"]'
         );
-        btn?.focus();
+        try {
+          btn?.focus({ preventScroll: true });
+        } catch {
+          btn?.focus();
+        }
       }
-    }, 35);
+    };
+    if (!hasAutoFocusedNextEpRef.current) {
+      hasAutoFocusedNextEpRef.current = true;
+      focusAutoNextBtn();
+    }
+    const timer = window.setTimeout(focusAutoNextBtn, 45);
     return () => window.clearTimeout(timer);
   }, [
     showNextEpisodePrompt,
     autoNextDismissed,
     mediaType,
     onNextEpisode,
+    isOsdVisible,
     openMenu,
+    status,
   ]);
   const progressPct = Math.min(
     100,
@@ -2792,9 +3164,49 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       (bufferedAhead < 0.8 || v.readyState < 3 || v.ended || v.networkState === 3) &&
       isMidMovie;
 
-    if (isFileListStream && (v.ended || isMseClosedEarly || isStalledLong)) {
+    if (
+      isFileListStream &&
+      (v.ended ||
+        Boolean(v.error) ||
+        isMseClosedEarly ||
+        v.readyState === 0 ||
+        v.networkState === 3)
+    ) {
       lastTimeUpdateWallMsRef.current = now;
       seekToAbsoluteSeconds(currentEff, showToast ? '▶ Reluare' : undefined);
+      return;
+    }
+    if (isFileListStream) {
+      const timeBeforePlay = v.currentTime;
+      v.play()
+        .then(() => {
+          setIsPaused(false);
+          setStatus('playing');
+          window.setTimeout(() => {
+            if (
+              videoRef.current === v &&
+              !userIntentionallyPausedRef.current &&
+              !isSeekingFileListRef.current &&
+              (v.paused ||
+                v.ended ||
+                (Math.abs(v.currentTime - timeBeforePlay) < 0.05 &&
+                  v.readyState < 3))
+            ) {
+              seekToAbsoluteSeconds(currentEff);
+            }
+          }, 1100);
+        })
+        .catch(() => {
+          if (!userIntentionallyPausedRef.current) {
+            seekToAbsoluteSeconds(
+              currentEff,
+              showToast ? '▶ Reluare' : undefined
+            );
+          }
+        });
+      if (showToast) {
+        showTransportToast('▶ Redare');
+      }
       return;
     }
 
@@ -3114,6 +3526,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const playerRootRef = useRef<HTMLDivElement | null>(null);
   const [isCustomFullscreen, setIsCustomFullscreen] = useState<boolean>(false);
+  const [isMobileZoomCover, setIsMobileZoomCover] = useState<boolean>(false);
   const [isIosNativeFullscreen, setIsIosNativeFullscreen] = useState<boolean>(false);
   const [isLandscapeMobile, setIsLandscapeMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth > window.innerHeight : false
@@ -3139,9 +3552,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const onNativeFsChange = () => {
       const doc = document as Document & { webkitFullscreenElement?: Element | null };
       const inFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-      if (inFs) {
-        setIsCustomFullscreen(true);
-      }
+      setIsCustomFullscreen(inFs);
     };
     window.addEventListener('resize', syncOrientation);
     window.addEventListener('orientationchange', syncOrientation);
@@ -3161,14 +3572,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     setOpenMenu('none');
     onHideOsd?.();
 
-    const v = videoRef.current as
-      | (HTMLVideoElement & {
-          webkitEnterFullscreen?: () => void;
-          webkitEnterFullScreen?: () => void;
-          webkitDisplayingFullscreen?: boolean;
-          webkitExitFullscreen?: () => void;
-        })
-      | null;
+    const v = videoRef.current;
     if (v && v.muted && isAutoMuted) {
       v.muted = false;
       v.volume = 1;
@@ -3198,6 +3602,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       } else if (typeof doc.webkitExitFullscreen === 'function') {
         void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
       }
+      setIsCustomFullscreen(false);
       window.dispatchEvent(
         new CustomEvent('aether:vod-custom-fullscreen-toggle', {
           detail: { force: false },
@@ -3205,68 +3610,53 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       );
       return;
     }
-
-    if (v?.webkitDisplayingFullscreen && typeof v.webkitExitFullscreen === 'function') {
-      try {
-        v.webkitExitFullscreen();
-      } catch {
-        // ignore
-      }
-      window.dispatchEvent(
-        new CustomEvent('aether:vod-custom-fullscreen-toggle', {
-          detail: { force: false },
-        })
-      );
-      return;
-    }
-
-    const nextForce = !isCustomFullscreen;
-    window.dispatchEvent(
-      new CustomEvent('aether:vod-custom-fullscreen-toggle', {
-        detail: { force: nextForce },
-      })
-    );
 
     if (rootTarget) {
       const reqFn =
         rootTarget.requestFullscreen || rootTarget.webkitRequestFullscreen;
       if (typeof reqFn === 'function') {
-        if (nextForce) {
-          Promise.resolve(reqFn.call(rootTarget))
-            .then(() => {
-              try {
-                (
-                  screen.orientation as unknown as {
-                    lock?: (mode: string) => Promise<void>;
-                  }
-                )
-                  ?.lock?.('landscape')
-                  ?.catch(() => {});
-              } catch {
-                // ignore
-              }
-            })
-            .catch(() => {});
-        }
+        Promise.resolve(reqFn.call(rootTarget))
+          .then(() => {
+            setIsCustomFullscreen(true);
+            window.dispatchEvent(
+              new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+                detail: { force: true },
+              })
+            );
+            try {
+              (
+                screen.orientation as unknown as {
+                  lock?: (mode: string) => Promise<void>;
+                }
+              )
+                ?.lock?.('landscape')
+                ?.catch(() => {});
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => {
+            setIsMobileZoomCover((prev) => {
+              const next = !prev;
+              showTransportToast(
+                next ? 'Ecran Complet (Umplere)' : 'Format Original'
+              );
+              return next;
+            });
+          });
         return;
       }
     }
 
-    const isStandalone =
-      Boolean((window.navigator as { standalone?: boolean }).standalone) ||
-      Boolean(window.matchMedia?.('(display-mode: standalone)').matches) ||
-      Boolean(window.matchMedia?.('(display-mode: fullscreen)').matches);
-
-    if (!isStandalone && v) {
-      const enterIosFs = v.webkitEnterFullscreen || v.webkitEnterFullScreen;
-      if (typeof enterIosFs === 'function') {
-        try {
-          enterIosFs.call(v);
-        } catch {
-          // ignore
-        }
-      }
-    }
+    // On iPhone (where div.requestFullscreen is not supported), keep ONLY our custom player
+    // (never open native iOS QuickTime player) and toggle edge-to-edge video fill:
+    setIsMobileZoomCover((prev) => {
+      const next = !prev;
+      showTransportToast(
+        next ? 'Ecran Complet (Umplere)' : 'Format Original'
+      );
+      return next;
+    });
   };
 
   const handleTriggerAirPlay = () => {
@@ -3418,25 +3808,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     <div
       ref={playerRootRef}
       data-vod-open-menu={openMenu}
-      className="relative z-10 w-full h-full bg-[#090b10] flex flex-col select-none"
+      className="relative z-10 w-full h-full bg-black flex flex-col select-none"
     >
-      <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
-        {/* AMBIENT CINEMA GLOW BACKDROP (Hidden on mobile landscape/fullscreen so video fills 100% edge-to-edge without side glow) */}
-        {(backdropUrl || poster) &&
-          !(isMobilePhone && (isCustomFullscreen || isLandscapeMobile)) && (
-            <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-              <img
-                src={backdropUrl || poster}
-                alt=""
-                aria-hidden="true"
-                className="w-full h-full object-cover blur-3xl opacity-55 scale-115 saturate-150"
-              />
-              <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/45 via-zinc-950/20 to-zinc-950/55" />
-            </div>
-          )}
+      <div className="relative flex-1 w-full h-full bg-black flex items-center justify-center overflow-hidden">
         <video
           ref={videoRef}
+          controls={false}
           playsInline
+          webkit-playsinline="true"
           autoPlay
           poster={poster}
           onClick={(e) => {
@@ -3456,6 +3835,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onPlay={(e) => {
+            userIntentionallyPausedRef.current = false;
+            lastTimeUpdateWallMsRef.current = Date.now();
             setIsPaused(false);
             if (!e.currentTarget.muted && e.currentTarget.volume > 0) {
               setIsAutoMuted(false);
@@ -3491,6 +3872,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               setVideoDurationSec(v.duration);
             }
             if (
+              !isFileListStream &&
               !appliedStartRef.current &&
               targetStart > 5 &&
               v &&
@@ -3523,6 +3905,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             const v = e.currentTarget;
             syncVideoDims(v);
             if (
+              !isFileListStream &&
               !appliedStartRef.current &&
               targetStart > 5 &&
               Number.isFinite(v.duration) &&
@@ -3557,6 +3940,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             const v = e.currentTarget;
             syncVideoDims(v);
             if (
+              !isFileListStream &&
               !appliedStartRef.current &&
               targetStart > 5 &&
               Number.isFinite(v.duration) &&
@@ -3628,7 +4012,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               setIsAutoMuted(false);
             }
             const targetStart = startAtSecondsRef.current;
-            if (!appliedStartRef.current && targetStart > 5) {
+            if (!isFileListStream && !appliedStartRef.current && targetStart > 5) {
               if (Number.isFinite(vid.duration) && vid.duration > 10) {
                 const clampedTarget = Math.min(
                   targetStart,
@@ -3663,30 +4047,38 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             if (Math.abs(effectiveTime - lastTimeUpdateMediaSecRef.current) >= 0.15) {
               lastTimeUpdateMediaSecRef.current = effectiveTime;
               lastTimeUpdateWallMsRef.current = Date.now();
+              if (!vid.paused && !vid.seeking) {
+                watchedTicksInEpisodeRef.current += 1;
+              }
             }
             if (!isFileListStream && Number.isFinite(vid.duration) && vid.duration > 60) {
               setVideoDurationSec(vid.duration);
             }
             try {
               if (vid.buffered && vid.buffered.length > 0) {
-                const end = vid.buffered.end(vid.buffered.length - 1);
-                setBufferedEndSec(streamOffsetSec + end);
+                const end = streamOffsetSec + vid.buffered.end(vid.buffered.length - 1);
+                setBufferedEndSec((prev) =>
+                  Math.abs(prev - end) < 2 ? prev : end
+                );
               }
             } catch {
               // ignore
             }
-            const reportedDuration = Math.max(
-              effectiveDurationSec,
-              Math.floor(effectiveTime) + 30
-            );
+            const reportedDuration = hasVerifiedDuration
+              ? Math.floor(videoDurationSec)
+              : durationHintSec && durationHintSec > 60
+                ? Math.floor(durationHintSec)
+                : Math.max(effectiveDurationSec, Math.floor(effectiveTime) + 30);
             setCurrentTimeSec(effectiveTime);
+            const floorCur = Math.floor(effectiveTime);
             if (
-              effectiveTime > 1 &&
+              watchedTicksInEpisodeRef.current >= 4 &&
+              floorCur > 1 &&
               Number.isFinite(reportedDuration) &&
               reportedDuration > 10
             ) {
               onTimeUpdate?.(
-                Math.floor(effectiveTime),
+                floorCur,
                 Math.floor(reportedDuration)
               );
             }
@@ -3696,18 +4088,21 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               mediaType === 'series' &&
               onNextEpisode &&
               !autoNextDismissed &&
-              !hasTriggeredAutoNextRef.current
+              !hasTriggeredAutoNextRef.current &&
+              watchedTicksInEpisodeRef.current >= 10 &&
+              currentTimeSec >= 300
             ) {
               hasTriggeredAutoNextRef.current = true;
               setShowNextEpisodePrompt(false);
               onNextEpisode();
+            } else if (mediaType === 'movie') {
+              setAutoNextDismissed(false);
+              setShowNextEpisodePrompt(true);
             }
           }}
           className={`relative z-10 w-full h-full ${
-            isMobilePhone && (isCustomFullscreen || isLandscapeMobile)
-              ? 'object-cover'
-              : 'object-contain'
-          } bg-transparent`}
+            isMobileZoomCover ? 'object-cover' : 'object-contain'
+          } bg-black`}
         >
           {subtitleVttUrl && hasActiveSubtitle && (
             <track
@@ -3745,6 +4140,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           activeSkipSegment &&
           !showNextEpisodePrompt && (
             <div
+              data-vod-floating-bar="true"
               className={`absolute right-5 sm:right-8 z-40 flex items-center transition-all duration-300 ${
                 isOsdVisible || openMenu !== 'none'
                   ? 'bottom-48 sm:bottom-56'
@@ -3800,12 +4196,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             </div>
           )}
 
-        {/* CLEAN FRAMELESS NEXT EPISODE PILL BUTTON (PROPOSED WHEN 2 MINUTES REMAIN OR CREDITS START) */}
+        {/* CLEAN FRAMELESS NEXT EPISODE PILL BUTTON (SERIES — TRIGGERED AT EXACT CREDITS / OUTRO START) */}
         {mediaType === 'series' &&
           onNextEpisode &&
           !autoNextDismissed &&
           showNextEpisodePrompt && (
             <div
+              data-vod-floating-bar="true"
               className={`absolute right-5 sm:right-8 z-40 flex items-center transition-all duration-300 ${
                 isOsdVisible || openMenu !== 'none'
                   ? 'bottom-48 sm:bottom-56'
@@ -3820,20 +4217,136 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   setShowNextEpisodePrompt(false);
                   onNextEpisode();
                 }}
-                className="h-11 sm:h-12 px-5 sm:px-6 mr-2 rounded-full bg-white hover:bg-zinc-100 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] focus:outline-none focus:ring-4 focus:ring-blue-500 focus:scale-105 transition-transform cursor-pointer"
+                className="relative overflow-hidden h-11 sm:h-12 px-5 sm:px-6 mr-2 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md ring-4 ring-[#2563eb] focus:outline-none focus:ring-4 focus:ring-[#3b82f6] scale-[1.03] focus:scale-105 transition-transform cursor-pointer"
               >
-                <SkipForward className="w-4 h-4 fill-current shrink-0 mr-2 text-zinc-950" />
-                <span className="text-zinc-950">
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-y-0 left-0 bg-white transition-[width] duration-200 ease-linear"
+                  style={{ width: `${outroProgressRemainingPct}%` }}
+                />
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-0 left-0 h-1 bg-[#2563eb] transition-[width] duration-200 ease-linear"
+                  style={{ width: `${outroProgressRemainingPct}%` }}
+                />
+                <SkipForward className="relative z-10 w-4 h-4 fill-current shrink-0 mr-2 text-zinc-950" />
+                <span className="relative z-10 text-zinc-950">
                   Următorul Episod · {nextEpisodeLabel || `Ep. ${episode + 1}`}
                 </span>
-                <span className="ml-2 px-2 py-0.5 rounded-full bg-zinc-900/12 text-zinc-800 font-mono text-[11px] font-bold tabular-nums">
-                  -{formatSeekTime(remainingTimeSec)}
+                <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 font-mono text-[11px] font-bold tabular-nums">
+                  -{formatSeekTime(outroRemainingSec)}
                 </span>
               </button>
 
               <button
                 type="button"
-                title="Ascunde butonul"
+                data-vod-skip-intro-close-btn="true"
+                title="Rămâi la generic"
+                onClick={() => {
+                  setAutoNextDismissed(true);
+                  setShowNextEpisodePrompt(false);
+                }}
+                className="h-11 w-11 sm:h-12 sm:w-12 rounded-full bg-black/75 hover:bg-black/90 text-white/90 border border-white/25 inline-flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.85)] focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+        {/* CLEAN FRAMELESS END OF MOVIE PILL BAR (MOVIES — TRIGGERED AT EXACT CREDITS / OUTRO START) */}
+        {mediaType === 'movie' &&
+          !autoNextDismissed &&
+          showNextEpisodePrompt && (
+            <div
+              data-vod-floating-bar="true"
+              className={`absolute right-5 sm:right-8 z-40 flex items-center gap-2 transition-all duration-300 ${
+                isOsdVisible || openMenu !== 'none'
+                  ? 'bottom-48 sm:bottom-56'
+                  : 'bottom-8 sm:bottom-10'
+              }`}
+            >
+              {apiPostCreditsStartSec !== null &&
+              displayTimeSec < apiPostCreditsStartSec - 5 ? (
+                <button
+                  type="button"
+                  data-vod-autonext-btn="true"
+                  onClick={() => {
+                    seekToAbsoluteSeconds(
+                      apiPostCreditsStartSec,
+                      'Scenă Post-Credits'
+                    );
+                  }}
+                  className="relative overflow-hidden h-11 sm:h-12 px-5 sm:px-6 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md ring-4 ring-[#2563eb] focus:outline-none focus:ring-4 focus:ring-[#3b82f6] scale-[1.03] focus:scale-105 transition-transform cursor-pointer"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-0 left-0 bg-white transition-[width] duration-200 ease-linear"
+                    style={{ width: `${outroProgressRemainingPct}%` }}
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute bottom-0 left-0 h-1 bg-[#2563eb] transition-[width] duration-200 ease-linear"
+                    style={{ width: `${outroProgressRemainingPct}%` }}
+                  />
+                  <SkipForward className="relative z-10 w-4 h-4 fill-current shrink-0 mr-2 text-zinc-950" />
+                  <span className="relative z-10 text-zinc-950">
+                    Sari la Scena Post-Credits
+                  </span>
+                </button>
+              ) : null}
+
+              {onClosePlayer && (
+                <button
+                  type="button"
+                  data-vod-autonext-btn={
+                    apiPostCreditsStartSec !== null &&
+                    displayTimeSec < apiPostCreditsStartSec - 5
+                      ? undefined
+                      : 'true'
+                  }
+                  onClick={() => {
+                    setShowNextEpisodePrompt(false);
+                    onClosePlayer();
+                  }}
+                  className="relative overflow-hidden h-11 sm:h-12 px-5 sm:px-6 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md ring-4 ring-[#2563eb] focus:outline-none focus:ring-4 focus:ring-[#3b82f6] scale-[1.03] focus:scale-105 transition-transform cursor-pointer"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-0 left-0 bg-white transition-[width] duration-200 ease-linear"
+                    style={{ width: `${outroProgressRemainingPct}%` }}
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute bottom-0 left-0 h-1 bg-[#2563eb] transition-[width] duration-200 ease-linear"
+                    style={{ width: `${outroProgressRemainingPct}%` }}
+                  />
+                  <span className="relative z-10 text-zinc-950">
+                    Închide Filmul · Înapoi la Detalii
+                  </span>
+                  <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 font-mono text-[11px] font-bold tabular-nums">
+                    -{formatSeekTime(outroRemainingSec)}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                title="Reia filmul de la început"
+                onClick={() => {
+                  setShowNextEpisodePrompt(false);
+                  hasAutoFocusedNextEpRef.current = false;
+                  seekToAbsoluteSeconds(0, 'De la început');
+                }}
+                className="h-11 sm:h-12 px-4 sm:px-5 rounded-full bg-black/80 hover:bg-black/95 text-white font-extrabold text-xs sm:text-sm border border-white/25 inline-flex items-center shadow-[0_12px_32px_rgba(0,0,0,0.85)] focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-[#3b82f6] cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4 shrink-0 mr-1.5" />
+                <span>De la început</span>
+              </button>
+
+              <button
+                type="button"
+                data-vod-skip-intro-close-btn="true"
+                title="Rămâi la generic"
                 onClick={() => {
                   setAutoNextDismissed(true);
                   setShowNextEpisodePrompt(false);
@@ -3927,11 +4440,40 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         )}
 
         {status === 'error' && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center bg-zinc-950/90">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 p-4 text-center bg-zinc-950/90">
             <AlertCircle className="w-8 h-8 text-rose-400" />
-            <p className="text-xs sm:text-sm font-semibold text-zinc-200">
-              Acest titlu nu are stream direct pe acest server. Selectează Server 2, 3 sau 4 din bara de sus!
+            <p className="text-xs sm:text-sm font-semibold text-zinc-200 max-w-md">
+              Streamul curent a întâmpinat o întrerupere. Reîncearcă sau alege altă sursă:
             </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const v = videoRef.current;
+                  setStatus('loading');
+                  if (v) {
+                    resumeOrRecoverPlayback(v, true);
+                  }
+                }}
+                className="h-9 px-4 rounded-full bg-white text-zinc-950 font-extrabold text-xs cursor-pointer shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-400"
+              >
+                Reîncearcă Redarea
+              </button>
+              {serverOptions.map((srv) => (
+                <button
+                  key={srv.id}
+                  type="button"
+                  onClick={() => onSelectServer?.(srv.id)}
+                  className={`h-9 px-3.5 rounded-full text-xs font-bold border cursor-pointer focus:outline-none focus:bg-white focus:text-zinc-950 ${
+                    srv.id === activeServerId
+                      ? 'bg-[#2563eb] text-white border-blue-400'
+                      : 'bg-white/10 text-zinc-200 border-white/15 hover:bg-white/20'
+                  }`}
+                >
+                  {srv.label.split('(')[0].replace(/^[^\w\d\s]+\s*/, '').trim()}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -3941,7 +4483,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           onClick={(e) => e.stopPropagation()}
           style={
             isMobilePhone
-              ? { bottom: 'max(8px, env(safe-area-inset-bottom, 8px))' }
+              ? {
+                  bottom: 'max(8px, env(safe-area-inset-bottom, 8px))',
+                  left: 'max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-top, 0px))',
+                  right:
+                    'max(12px, env(safe-area-inset-right, 0px), env(safe-area-inset-bottom, 0px))',
+                }
               : undefined
           }
           className={`absolute ${
@@ -4014,21 +4561,25 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 const el = e.currentTarget;
                 el.setPointerCapture?.(e.pointerId);
                 const rect = el.getBoundingClientRect();
-                if (rect.width > 0) {
-                  const ratio = Math.min(
-                    1,
-                    Math.max(0, (e.clientX - rect.left) / rect.width)
-                  );
+                const isRotated90 = rect.height > rect.width;
+                const span = isRotated90 ? rect.height : rect.width;
+                if (span > 0) {
+                  const pos = isRotated90
+                    ? e.clientY - rect.top
+                    : e.clientX - rect.left;
+                  const ratio = Math.min(1, Math.max(0, pos / span));
                   setScrubPreviewSec(Math.floor(ratio * effectiveDurationSec));
                 }
               }}
               onPointerMove={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect();
-                if (rect.width <= 0) return;
-                const ratio = Math.min(
-                  1,
-                  Math.max(0, (e.clientX - rect.left) / rect.width)
-                );
+                const isRotated90 = rect.height > rect.width;
+                const span = isRotated90 ? rect.height : rect.width;
+                if (span <= 0) return;
+                const pos = isRotated90
+                  ? e.clientY - rect.top
+                  : e.clientX - rect.left;
+                const ratio = Math.min(1, Math.max(0, pos / span));
                 const targetSec = Math.floor(ratio * effectiveDurationSec);
                 if (e.buttons === 1 || e.currentTarget.hasPointerCapture?.(e.pointerId)) {
                   setScrubPreviewSec(targetSec);
@@ -4044,11 +4595,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   el.releasePointerCapture(e.pointerId);
                 }
                 const rect = el.getBoundingClientRect();
-                if (rect.width > 0) {
-                  const ratio = Math.min(
-                    1,
-                    Math.max(0, (e.clientX - rect.left) / rect.width)
-                  );
+                const isRotated90 = rect.height > rect.width;
+                const span = isRotated90 ? rect.height : rect.width;
+                if (span > 0) {
+                  const pos = isRotated90
+                    ? e.clientY - rect.top
+                    : e.clientX - rect.left;
+                  const ratio = Math.min(1, Math.max(0, pos / span));
                   seekToAbsoluteSeconds(
                     Math.floor(ratio * effectiveDurationSec)
                   );
@@ -4086,7 +4639,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               )}
 
               {/* Slim Apple Liquid Glass Track (expands smoothly on hover/focus) */}
-              <div className="relative w-full h-1.5 group-hover:h-2.5 group-focus:h-2.5 rounded-full bg-white/20 backdrop-blur-md overflow-hidden transition-all duration-200 group-focus:ring-2 group-focus:ring-white/60">
+              <div className="relative w-full h-1.5 group-hover:h-2.5 group-focus:h-3 rounded-full bg-white/20 backdrop-blur-md overflow-hidden transition-all duration-200 group-focus:ring-4 group-focus:ring-[#60a5fa]">
                 {/* Buffered Range */}
                 <div
                   style={{ width: `${bufferedPct}%` }}
@@ -4153,7 +4706,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       : progressPct
                   }% - 7px)`,
                 }}
-                className="pointer-events-none absolute w-3.5 h-3.5 rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.55)] scale-90 group-hover:scale-125 group-focus:scale-125 transition-transform duration-150"
+                className="pointer-events-none absolute w-3.5 h-3.5 rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.55)] scale-90 group-hover:scale-125 group-focus:scale-150 group-focus:ring-4 group-focus:ring-[#60a5fa] transition-transform duration-150"
               />
             </button>
 
@@ -4176,21 +4729,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             )}
           </div>
 
-          {/* ROW 2: APPLE LIQUID GLASS TRANSPORT CONTROLS (LEFT) + AUDIO / SERVER / SUBTITLES / QUALITY (RIGHT) */}
+          {/* ROW 2: APPLE LIQUID GLASS TRANSPORT CONTROLS (LEFT) + AUDIO / SERVER / SUBTITLES / QUALITY (RIGHT) — STRICTLY 1 SINGLE ROW */}
           <div
             data-vod-bottom-row="true"
-            className={`w-full flex items-center justify-between ${
-              isMobilePhone
-                ? 'flex-nowrap gap-1'
-                : 'flex-nowrap sm:flex-wrap gap-1 sm:gap-2'
+            className={`w-full flex items-center justify-between flex-nowrap ${
+              isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
             }`}
           >
             {/* Left Transport & Episode Controls */}
             <div
-              className={`flex items-center shrink-0 ${
-                isMobilePhone
-                  ? 'flex-nowrap gap-1'
-                  : 'flex-nowrap sm:flex-wrap gap-1 sm:gap-2'
+              className={`flex items-center flex-nowrap shrink-0 ${
+                isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
               }`}
             >
               <button
@@ -4203,8 +4752,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 className={`${
                   isMobilePhone
                     ? 'h-8 w-8 justify-center'
-                    : 'h-8 w-8 sm:h-9 sm:w-auto sm:px-4 justify-center sm:justify-start'
-                } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer`}
+                    : 'h-8 w-8 sm:h-9 sm:w-auto sm:px-3.5 justify-center sm:justify-start'
+                } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer`}
               >
                 {isPaused ? (
                   <Play className="w-3.5 h-3.5 fill-current shrink-0" />
@@ -4218,33 +4767,29 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 )}
               </button>
 
-              {!isMobilePhone && (
-                <button
-                  type="button"
-                  data-vod-seek-back-15="true"
-                  onFocus={() => onWakeOsd?.()}
-                  onClick={() => triggerSeek(-15)}
-                  title="Înapoi cu 15 secunde (-15s)"
-                  className="h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-1.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
-                  <span>15s</span>
-                </button>
-              )}
+              <button
+                type="button"
+                data-vod-seek-back-15="true"
+                onFocus={() => onWakeOsd?.()}
+                onClick={() => triggerSeek(-15)}
+                title="Înapoi cu 15 secunde (-15s)"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                <span>15s</span>
+              </button>
 
-              {!isMobilePhone && (
-                <button
-                  type="button"
-                  data-vod-seek-fwd-15="true"
-                  onFocus={() => onWakeOsd?.()}
-                  onClick={() => triggerSeek(15)}
-                  title="Înainte cu 15 secunde (+15s)"
-                  className="h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-1.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer"
-                >
-                  <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
-                  <span>+15s</span>
-                </button>
-              )}
+              <button
+                type="button"
+                data-vod-seek-fwd-15="true"
+                onFocus={() => onWakeOsd?.()}
+                onClick={() => triggerSeek(15)}
+                title="Înainte cu 15 secunde (+15s)"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
+              >
+                <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                <span>+15s</span>
+              </button>
 
               {!isMobilePhone && (
                 <button
@@ -4253,7 +4798,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   onFocus={() => onWakeOsd?.()}
                   onClick={() => triggerSeek(60)}
                   title="Înainte cu 1 minut (+1 min)"
-                  className="hidden sm:inline-flex h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                  className="hidden sm:inline-flex h-9 px-3 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
                 >
                   <RotateCw className="w-3.5 h-3.5 shrink-0" />
                   <span>+1 min</span>
@@ -4270,7 +4815,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     onPrevEpisode();
                   }}
                   title="Episodul precedent"
-                  className="hidden sm:inline-flex h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                  className="hidden sm:inline-flex h-9 px-3 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
                 >
                   <SkipBack className="w-3.5 h-3.5 shrink-0" />
                   <span>{prevEpisodeLabel || 'Ep. Prec.'}</span>
@@ -4287,323 +4832,52 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     onNextEpisode();
                   }}
                   title="Episodul următor"
-                  className="hidden sm:inline-flex h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                  className="hidden sm:inline-flex h-9 px-3 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
                 >
                   <span>{nextEpisodeLabel || 'Ep. Urm.'}</span>
                   <SkipForward className="w-3.5 h-3.5 shrink-0" />
                 </button>
               )}
-
-              {mediaType === 'series' && onOpenEpisodesDrawer && (
-                <button
-                  type="button"
-                  data-vod-bottom-episodes-btn="true"
-                  onFocus={() => onWakeOsd?.()}
-                  onClick={() => {
-                    onWakeOsd?.();
-                    onOpenEpisodesDrawer();
-                  }}
-                  title="Lista de sezoane și episoade (Apasă Jos de 2 ori sau Butonul Roșu)"
-                  className={`${
-                    isMobilePhone
-                      ? 'h-8 px-2 text-[11px] gap-1'
-                      : 'h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-1.5'
-                  } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer`}
-                >
-                  <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.9)] shrink-0" />
-                  {isMobilePhone ? (
-                    <span>Ep.</span>
-                  ) : (
-                    <>
-                      <span className="sm:hidden">Ep.</span>
-                      <span className="hidden sm:inline">Episoade</span>
-                      <span className="hidden sm:inline text-white/60 text-[11px] ml-1">
-                        S{season}·E{episode} (⬇×2)
-                      </span>
-                    </>
-                  )}
-                </button>
-              )}
-
-              {!isMobilePhone && onOpenInfoSheet && (
-                <button
-                  type="button"
-                  data-vod-bottom-info-btn="true"
-                  onFocus={() => onWakeOsd?.()}
-                  onClick={() => {
-                    onWakeOsd?.();
-                    setOpenMenu('none');
-                    onOpenInfoSheet();
-                  }}
-                  title="Descrierea Filmului / Serialului cu Poză și Actori (Butonul Galben)"
-                  className="hidden sm:inline-flex h-9 px-3.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs font-medium items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                >
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.95)] shrink-0 mr-1" />
-                  <span>
-                    {mediaType === 'series' ? 'Descriere Serial' : 'Descriere Film'}
-                  </span>
-                </button>
-              )}
             </div>
 
-            {/* Right Apple Liquid Glass Controls (Audio, Server, Subtitles, Resolution + Mobile Fullscreen) */}
+            {/* Right Apple Liquid Glass Controls (Roșu: Episoade, Verde: Subtitrări, Galben: Descriere, Albastru: Audio + Server, Calitate, AirPlay) */}
             <div
-              className={`flex items-center justify-end shrink-0 ${
-                isMobilePhone
-                  ? 'flex-nowrap gap-1'
-                  : 'flex-nowrap sm:flex-wrap gap-1 sm:gap-2'
+              className={`flex items-center justify-end flex-nowrap shrink-0 ${
+                isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
               }`}
             >
-              {/* 1. Audio Track Pill (Blue Remote Button) */}
-              {audioTracks.length > 0 ? (
-                <div className="relative">
-                  <button
-                    type="button"
-                    data-vod-primary-audio-btn="true"
-                    onFocus={() => onWakeOsd?.()}
-                    onClick={(e) => {
-                      const next = openMenu === 'audio' ? 'none' : 'audio';
-                      setOpenMenu(next);
-                      if (next === 'audio') {
-                        const container = e.currentTarget.parentElement;
-                        window.setTimeout(() => {
-                          const activeBtn =
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-audio-track-active="true"]'
-                            ) ||
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-audio-track-opt="true"]'
-                            );
-                          activeBtn?.focus();
-                        }, 40);
-                      }
-                    }}
-                    title="Pistă Audio (Butonul Albastru)"
-                    className={`${
-                      isMobilePhone
-                        ? 'h-8 px-2 text-[11px] gap-1'
-                        : 'h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-2'
-                    } rounded-full font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer ${
-                      openMenu === 'audio'
-                        ? 'bg-white text-zinc-950 font-semibold shadow-md'
-                        : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
-                    }`}
-                  >
-                    <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0" />
-                    {isMobilePhone ? (
-                      <span>Audio</span>
-                    ) : (
-                      <>
-                        <Languages className="hidden sm:block w-3.5 h-3.5 shrink-0 opacity-80" />
-                        <span className="sm:hidden">Audio</span>
-                        <span className="hidden sm:inline max-w-[130px] truncate">
-                          {audioTracks.find((t) => t.id === activeAudioTrack)
-                            ?.name ||
-                            audioTracks[forcedAudioIdx]?.name ||
-                            'Pistă Audio'}
-                        </span>
-                      </>
-                    )}
-                  </button>
-
-                  {openMenu === 'audio' && (
-                    <div
-                      data-vod-menu-popover="true"
-                      className={`${
-                        isMobilePhone
-                          ? 'absolute right-0 bottom-full mb-2 w-60 max-h-[60dvh]'
-                          : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-64 max-h-72'
-                      } overflow-y-auto rounded-2xl tahoe-emerald-osd p-2.5 shadow-2xl space-y-1 z-50`}
-                    >
-                      <div className="px-3 py-1 text-[11px] font-semibold text-white/60 flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-blue-400 inline-block shrink-0" />
-                        <span>Pistă Audio</span>
-                      </div>
-                      {audioTracks.map((trk, idx) => {
-                        const active =
-                          trk.id === activeAudioTrack || idx === forcedAudioIdx;
-                        return (
-                          <button
-                            key={`${trk.id}_${idx}`}
-                            type="button"
-                            data-audio-track-opt="true"
-                            data-audio-track-active={active ? 'true' : undefined}
-                            onClick={() => {
-                              const v = videoRef.current;
-                              if (v && v.currentTime > 3) {
-                                startAtSecondsRef.current = Math.floor(
-                                  v.currentTime
-                                );
-                                appliedStartRef.current = false;
-                              }
-                              setActiveAudioTrack(trk.id);
-                              setForcedAudioIdx(idx);
-                              saveActiveProfileMediaPrefs({
-                                defaultAudioPref: inferAudioPrefFromTrackName(
-                                  trk.name
-                                ),
-                              });
-                              onSelectAudioTrackIndex?.(idx);
-                              if (dashRef.current) {
-                                const dashTracks =
-                                  dashRef.current.getTracksFor('audio') || [];
-                                if (dashTracks[trk.id]) {
-                                  dashRef.current.setCurrentTrack(
-                                    dashTracks[trk.id]
-                                  );
-                                }
-                              } else if (
-                                hlsRef.current &&
-                                (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))
-                              ) {
-                                hlsRef.current.audioTrack = trk.id;
-                              } else if (
-                                !hlsRef.current &&
-                                (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))
-                              ) {
-                                const v = videoRef.current as unknown as {
-                                  audioTracks?: {
-                                    length: number;
-                                    [index: number]: { enabled?: boolean };
-                                  };
-                                } | null;
-                                if (v?.audioTracks && v.audioTracks.length > 0) {
-                                  for (
-                                    let i = 0;
-                                    i < v.audioTracks.length;
-                                    i++
-                                  ) {
-                                    if (v.audioTracks[i]) {
-                                      v.audioTracks[i].enabled = i === trk.id;
-                                    }
-                                  }
-                                }
-                              }
-                              setOpenMenu('none');
-                            }}
-                            className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                              active
-                                ? 'bg-white text-zinc-950 font-semibold'
-                                : 'text-white/90 hover:bg-white/15'
-                            }`}
-                          >
-                            <span className="truncate">{trk.name}</span>
-                            {active && <Check className="w-3.5 h-3.5 shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              ) : onOpenInfoSheet ? (
-                <button
-                  type="button"
-                  data-vod-primary-audio-btn="true"
-                  onFocus={() => onWakeOsd?.()}
-                  onClick={() => {
-                    onWakeOsd?.();
+              {/* 1. Red Remote Button: Episoade / Sursă Video (Apple SF Symbol — play.rectangle.on.rectangle.fill) */}
+              <button
+                type="button"
+                data-vod-bottom-episodes-btn="true"
+                onFocus={() => onWakeOsd?.()}
+                onClick={() => {
+                  onWakeOsd?.();
+                  if (mediaType === 'series' && onOpenEpisodesDrawer) {
                     setOpenMenu('none');
-                    onOpenInfoSheet();
-                  }}
-                  title="Pistă Audio & Sursă (Butonul Albastru)"
-                  className={`${
-                    isMobilePhone
-                      ? 'h-8 px-2 text-[11px] gap-1'
-                      : 'h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-2'
-                  } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer`}
-                >
-                  <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.95)] shrink-0" />
-                  {isMobilePhone ? (
-                    <span>Audio</span>
-                  ) : (
-                    <>
-                      <Languages className="hidden sm:block w-3.5 h-3.5 shrink-0 opacity-80" />
-                      <span className="sm:hidden">Audio</span>
-                      <span className="hidden sm:inline">Pistă Audio</span>
-                    </>
-                  )}
-                </button>
-              ) : null}
+                    onOpenEpisodesDrawer();
+                  } else {
+                    setOpenMenu(openMenu === 'quality' ? 'none' : 'quality');
+                  }
+                }}
+                title={
+                  mediaType === 'series'
+                    ? `Episoade S${season}·E${episode} (Butonul Roșu)`
+                    : 'Stream-uri & Calitate Video (Butonul Roșu)'
+                }
+                aria-label={
+                  mediaType === 'series'
+                    ? `Episoade S${season}·E${episode}`
+                    : 'Stream-uri & Calitate Video'
+                }
+                className={`${
+                  isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                } rounded-full bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FF453A] focus:text-white shrink-0 cursor-pointer`}
+              >
+                <SfEpisodesIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+              </button>
 
-              {/* 1B. Video Source / Server Pill (Desktop & Smart TV only) */}
-              {!isMobilePhone && serverOptions.length > 0 && onSelectServer && (
-                <div className="hidden sm:block relative">
-                  <button
-                    type="button"
-                    data-vod-primary-server-btn="true"
-                    onFocus={() => onWakeOsd?.()}
-                    onClick={(e) => {
-                      const next = openMenu === 'server' ? 'none' : 'server';
-                      setOpenMenu(next);
-                      if (next === 'server') {
-                        const container = e.currentTarget.parentElement;
-                        window.setTimeout(() => {
-                          const activeBtn =
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-server-opt-active="true"]'
-                            ) ||
-                            container?.querySelector<HTMLButtonElement>(
-                              '[data-server-opt="true"]'
-                            );
-                          activeBtn?.focus();
-                        }, 40);
-                      }
-                    }}
-                    className={`h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-2 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                      openMenu === 'server'
-                        ? 'bg-white text-zinc-950 font-semibold shadow-md'
-                        : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0 opacity-80" />
-                    <span className="max-w-[120px] max-sm:max-w-[72px] truncate">
-                      {(
-                        serverOptions
-                          .find((s) => s.id === activeServerId)
-                          ?.label.split(':')[0] || 'S1'
-                      ).replace(/^[^\w\d\s]+\s*/, '')}
-                    </span>
-                  </button>
-
-                  {openMenu === 'server' && (
-                    <div
-                      data-vod-menu-popover="true"
-                      className="max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-72 max-h-72 overflow-y-auto rounded-2xl tahoe-emerald-osd p-2.5 shadow-2xl space-y-1 z-50"
-                    >
-                      <div className="px-3 py-1 text-[11px] font-semibold text-white/60">
-                        Sursă Video
-                      </div>
-                      {serverOptions.map((srv) => {
-                        const active = srv.id === activeServerId;
-                        return (
-                          <button
-                            key={srv.id}
-                            type="button"
-                            data-server-opt="true"
-                            data-server-opt-active={active ? 'true' : undefined}
-                            onClick={() => {
-                              onSelectServer(srv.id);
-                              setOpenMenu('none');
-                            }}
-                            className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                              active
-                                ? 'bg-white text-zinc-950 font-semibold'
-                                : 'text-white/90 hover:bg-white/15'
-                            }`}
-                          >
-                            <span className="truncate">
-                              {srv.label.replace(/^[^\w\d\s]+\s*/, '')}
-                            </span>
-                            {active && <Check className="w-3.5 h-3.5 shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 2. Subtitles Pill (Green Remote Button — All Size & Sync Controls Inside Popover) */}
+              {/* 2. Green Remote Button: Subtitles (Apple SF Symbol — captions.bubble.fill) */}
               {(onApplyAutoSubtitle ||
                 onOpenSubtitleFinder ||
                 hasActiveSubtitle) && (
@@ -4631,36 +4905,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       }
                     }}
                     title="Subtitrări (Butonul Verde)"
+                    aria-label="Subtitrări"
                     className={`${
-                      isMobilePhone
-                        ? 'h-8 px-2 text-[11px] gap-1'
-                        : 'h-8 sm:h-9 px-2 sm:px-3.5 text-[11px] sm:text-xs gap-1 sm:gap-2'
-                    } rounded-full font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 cursor-pointer ${
+                      isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                    } rounded-full inline-flex items-center justify-center transition-all backdrop-blur-2xl focus:outline-none focus:bg-[#30D158] focus:text-zinc-950 shrink-0 cursor-pointer ${
                       openMenu === 'subtitles'
-                        ? 'bg-white text-zinc-950 font-semibold shadow-md'
-                        : hasActiveSubtitle
-                          ? 'bg-white/25 border border-white/30 text-white font-semibold'
-                          : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
+                        ? 'bg-[#30D158] text-zinc-950 border border-[#30D158] shadow-[0_0_16px_rgba(48,209,88,0.55)]'
+                        : 'bg-[#30D158]/18 hover:bg-[#30D158]/30 border border-[#30D158]/45 text-[#30D158] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(48,209,88,0.22)]'
                     }`}
                   >
-                    <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.95)] shrink-0" />
-                    {isMobilePhone ? (
-                      <span>Sub</span>
-                    ) : (
-                      <>
-                        <Subtitles className="hidden sm:block w-3.5 h-3.5 shrink-0 opacity-85" />
-                        <span className="sm:hidden">Sub</span>
-                        <span className="hidden sm:inline max-w-[140px] truncate">
-                          {hasActiveSubtitle
-                            ? `${subtitleLabel || 'Subtitrări'}${
-                                subOffsetSec !== 0
-                                  ? ` (${subOffsetSec > 0 ? `+${subOffsetSec.toFixed(1)}s` : `${subOffsetSec.toFixed(1)}s`})`
-                                  : ''
-                              }`
-                            : 'Subtitrări'}
-                        </span>
-                      </>
-                    )}
+                    <SfCaptionsBubbleIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
                   </button>
 
                   {openMenu === 'subtitles' && (
@@ -4668,7 +4922,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       data-vod-menu-popover="true"
                       className={`${
                         isMobilePhone
-                          ? 'absolute right-0 bottom-full mb-2 w-72 max-h-[62dvh]'
+                          ? 'absolute right-0 bottom-full mb-2 w-72 max-h-[calc(min(100dvh,100dvw)-92px)]'
                           : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-[340px] max-h-[70vh] sm:max-h-[78vh]'
                       } overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2 z-50`}
                     >
@@ -4959,16 +5213,242 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 </div>
               )}
 
-              {/* 3. Video Quality / Resolution Pill (Desktop & Smart TV only) */}
+              {/* 3. Yellow Remote Button: Descriere (Apple SF Symbol — info.circle.fill) */}
+              {!isMobilePhone && onOpenInfoSheet && (
+                <button
+                  type="button"
+                  data-vod-bottom-info-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={() => {
+                    onWakeOsd?.();
+                    setOpenMenu('none');
+                    onOpenInfoSheet();
+                  }}
+                  title="Descriere (Butonul Galben)"
+                  aria-label="Descriere"
+                  className="hidden sm:inline-flex h-9 w-9 rounded-full bg-[#FFD60A]/18 hover:bg-[#FFD60A]/30 border border-[#FFD60A]/45 text-[#FFD60A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,214,10,0.22)] backdrop-blur-2xl items-center justify-center transition-all focus:outline-none focus:bg-[#FFD60A] focus:text-zinc-950 shrink-0 cursor-pointer"
+                >
+                  <SfInfoIcon className="w-[18px] h-[18px] shrink-0" />
+                </button>
+              )}
+
+              {/* 4. Blue Remote Button: Audio Track (Apple SF Symbol — speaker.wave.2.fill) */}
+              {audioTracks.length > 0 ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    data-vod-primary-audio-btn="true"
+                    onFocus={() => onWakeOsd?.()}
+                    onClick={(e) => {
+                      const next = openMenu === 'audio' ? 'none' : 'audio';
+                      setOpenMenu(next);
+                      if (next === 'audio') {
+                        const container = e.currentTarget.parentElement;
+                        window.setTimeout(() => {
+                          const activeBtn =
+                            container?.querySelector<HTMLButtonElement>(
+                              '[data-audio-track-active="true"]'
+                            ) ||
+                            container?.querySelector<HTMLButtonElement>(
+                              '[data-audio-track-opt="true"]'
+                            );
+                          activeBtn?.focus();
+                        }, 40);
+                      }
+                    }}
+                    title="Pistă Audio (Butonul Albastru)"
+                    aria-label="Pistă Audio"
+                    className={`${
+                      isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                    } rounded-full inline-flex items-center justify-center transition-all backdrop-blur-2xl focus:outline-none focus:bg-[#0A84FF] focus:text-white shrink-0 cursor-pointer ${
+                      openMenu === 'audio'
+                        ? 'bg-[#0A84FF] text-white border border-[#0A84FF] shadow-[0_0_16px_rgba(10,132,255,0.55)]'
+                        : 'bg-[#0A84FF]/18 hover:bg-[#0A84FF]/30 border border-[#0A84FF]/45 text-[#0A84FF] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(10,132,255,0.22)]'
+                    }`}
+                  >
+                    <SfSpeakerWaveIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+                  </button>
+
+                  {openMenu === 'audio' && (
+                    <div
+                      data-vod-menu-popover="true"
+                      className={`${
+                        isMobilePhone
+                          ? 'absolute right-0 bottom-full mb-2 w-60 max-h-[calc(min(100dvh,100dvw)-92px)]'
+                          : 'max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-64 max-h-72'
+                      } overflow-y-auto rounded-2xl tahoe-emerald-osd p-2.5 shadow-2xl space-y-1 z-50`}
+                    >
+                      <div className="px-3 py-1 text-[11px] font-semibold text-white/60 flex items-center gap-1.5">
+                        <SfSpeakerWaveIcon className="w-3.5 h-3.5 text-[#0A84FF] shrink-0" />
+                        <span>Pistă Audio</span>
+                      </div>
+                      {audioTracks.map((trk, idx) => {
+                        const active =
+                          trk.id === activeAudioTrack || idx === forcedAudioIdx;
+                        return (
+                          <button
+                            key={`${trk.id}_${idx}`}
+                            type="button"
+                            data-audio-track-opt="true"
+                            data-audio-track-active={active ? 'true' : undefined}
+                            onClick={() => {
+                              const v = videoRef.current;
+                              if (v && v.currentTime > 3) {
+                                startAtSecondsRef.current = Math.floor(
+                                  v.currentTime
+                                );
+                                appliedStartRef.current = false;
+                              }
+                              setActiveAudioTrack(trk.id);
+                              setForcedAudioIdx(idx);
+                              saveActiveProfileMediaPrefs({
+                                defaultAudioPref: inferAudioPrefFromTrackName(
+                                  trk.name
+                                ),
+                              });
+                              onSelectAudioTrackIndex?.(idx);
+                              if (dashRef.current) {
+                                const dashTracks =
+                                  dashRef.current.getTracksFor('audio') || [];
+                                if (dashTracks[trk.id]) {
+                                  dashRef.current.setCurrentTrack(
+                                    dashTracks[trk.id]
+                                  );
+                                }
+                              } else if (
+                                hlsRef.current &&
+                                (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))
+                              ) {
+                                hlsRef.current.audioTrack = trk.id;
+                              } else if (
+                                !hlsRef.current &&
+                                (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))
+                              ) {
+                                const v = videoRef.current as unknown as {
+                                  audioTracks?: {
+                                    length: number;
+                                    [index: number]: { enabled?: boolean };
+                                  };
+                                } | null;
+                                if (v?.audioTracks && v.audioTracks.length > 0) {
+                                  for (
+                                    let i = 0;
+                                    i < v.audioTracks.length;
+                                    i++
+                                  ) {
+                                    if (v.audioTracks[i]) {
+                                      v.audioTracks[i].enabled = i === trk.id;
+                                    }
+                                  }
+                                }
+                              }
+                              setOpenMenu('none');
+                            }}
+                            className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                              active
+                                ? 'bg-white text-zinc-950 font-semibold'
+                                : 'text-white/90 hover:bg-white/15'
+                            }`}
+                          >
+                            <span className="truncate">{trk.name}</span>
+                            {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                      {!offlineItem &&
+                        onRequestOriginalAudio &&
+                        !audioTracks.some((t) =>
+                          /orig|eng|english|ориг|англ/i.test(t.name)
+                        ) && (
+                          <button
+                            type="button"
+                            data-audio-track-opt="true"
+                            onClick={() => {
+                              saveActiveProfileMediaPrefs({
+                                defaultAudioPref: 'original',
+                              });
+                              setOpenMenu('none');
+                              onRequestOriginalAudio();
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold flex items-center justify-between gap-2 transition-colors bg-[#1e3a8a]/80 hover:bg-[#2563eb] text-white border border-blue-400/40 focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                          >
+                            <span className="truncate">
+                              Original (English) • 1080p / 4K
+                            </span>
+                          </button>
+                        )}
+                      {isMobilePhone &&
+                        serverOptions.length > 0 &&
+                        onSelectServer && (
+                          <div className="pt-1.5 mt-1.5 border-t border-white/10 space-y-1">
+                            <div className="px-3 py-0.5 text-[10px] font-semibold text-white/55 uppercase tracking-wider">
+                              Sursă Video
+                            </div>
+                            {serverOptions.map((srv) => {
+                              const active = srv.id === activeServerId;
+                              return (
+                                <button
+                                  key={`mob_srv_${srv.id}`}
+                                  type="button"
+                                  data-audio-track-opt="true"
+                                  onClick={() => {
+                                    onSelectServer(srv.id);
+                                    setOpenMenu('none');
+                                  }}
+                                  className={`w-full px-3 py-1.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                                    active
+                                      ? 'bg-white text-zinc-950 font-semibold'
+                                      : 'text-white/85 hover:bg-white/15'
+                                  }`}
+                                >
+                                  <span className="truncate">
+                                    {srv.label.replace(/^[^\w\d\s]+\s*/, '')}
+                                  </span>
+                                  {active && (
+                                    <Check className="w-3.5 h-3.5 shrink-0" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                    </div>
+                  )}
+                </div>
+              ) : onOpenInfoSheet ? (
+                <button
+                  type="button"
+                  data-vod-primary-audio-btn="true"
+                  onFocus={() => onWakeOsd?.()}
+                  onClick={() => {
+                    onWakeOsd?.();
+                    setOpenMenu('none');
+                    onOpenInfoSheet();
+                  }}
+                  title="Pistă Audio & Sursă (Butonul Albastru)"
+                  aria-label="Pistă Audio & Sursă"
+                  className={`${
+                    isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                  } rounded-full bg-[#0A84FF]/18 hover:bg-[#0A84FF]/30 border border-[#0A84FF]/45 text-[#0A84FF] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(10,132,255,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#0A84FF] focus:text-white shrink-0 cursor-pointer`}
+                >
+                  <SfSpeakerWaveIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+                </button>
+              ) : null}
+
+              {/* 5. Unified Video Quality & Source Pill (Desktop & Smart TV) */}
               {!isMobilePhone && (
                 <div className="hidden sm:block relative">
                   <button
                     ref={qualityBtnRef}
                     type="button"
                     data-vod-primary-quality-btn="true"
+                    data-vod-primary-server-btn="true"
                     onFocus={() => onWakeOsd?.()}
                     onClick={(e) => {
-                      const next = openMenu === 'quality' ? 'none' : 'quality';
+                      const next =
+                        openMenu === 'quality' || openMenu === 'server'
+                          ? 'none'
+                          : 'quality';
                       setOpenMenu(next);
                       if (next === 'quality') {
                         const container = e.currentTarget.parentElement;
@@ -4984,13 +5464,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                         }, 40);
                       }
                     }}
-                    className={`h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-2 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                      openMenu === 'quality'
+                    className={`h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer ${
+                      openMenu === 'quality' || openMenu === 'server'
                         ? 'bg-white text-zinc-950 font-semibold shadow-md'
                         : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
                     }`}
                   >
-                    <SlidersHorizontal className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0 opacity-80" />
                     <span>
                       {activeQuality === -1 && qualityLevels.length > 1
                         ? `Auto · ${resolutionReport.badgeLabel}`
@@ -4998,14 +5477,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     </span>
                   </button>
 
-                  {openMenu === 'quality' && (
+                  {(openMenu === 'quality' || openMenu === 'server') && (
                     <div
                       data-vod-menu-popover="true"
-                      className="max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-72 max-h-[70vh] overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2 z-50"
+                      className="max-sm:fixed max-sm:inset-x-3 max-sm:bottom-32 max-sm:w-auto sm:absolute sm:right-0 sm:bottom-full sm:mb-3 sm:w-80 max-h-[72vh] overflow-y-auto rounded-2xl tahoe-emerald-osd p-3 shadow-2xl space-y-2.5 z-50"
                     >
                       <div className="flex items-center justify-between px-1">
-                        <span className="text-xs font-semibold text-white/70">
-                          Calitate Video
+                        <span className="text-xs font-semibold text-white/75">
+                          Calitate & Sursă Video
                         </span>
                         <button
                           type="button"
@@ -5076,10 +5555,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       )}
 
                       {/* 2. External Source Resolution Variants */}
-                      {externalQualityOptions.length > 0 && (
-                        <div className="space-y-1 pt-1.5 border-t border-white/10">
-                          <div className="px-2 py-0.5 text-[11px] font-medium text-white/60">
-                            Sursă ({externalQualityOptions.length})
+                      {!offlineItem && externalQualityOptions.length > 0 && (
+                        <div className="space-y-1.5 pt-1.5 border-t border-white/10">
+                          <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
+                            Stream-uri Video ({externalQualityOptions.length})
                           </div>
                           {externalQualityOptions.map((opt) => (
                             <button
@@ -5093,18 +5572,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                                 opt.onSelect();
                                 setOpenMenu('none');
                               }}
-                              className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                              className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
                                 opt.active
                                   ? 'bg-white text-zinc-950 font-semibold'
                                   : 'text-white/90 hover:bg-white/15'
                               }`}
                             >
                               <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 truncate">
-                                  <span className="truncate">{opt.label}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="truncate leading-snug">{opt.label}</span>
                                   {opt.badge && (
                                     <span
-                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
                                         opt.active
                                           ? 'bg-zinc-950/15 text-zinc-950'
                                           : 'bg-white/15 text-white'
@@ -5122,34 +5601,71 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                           ))}
                         </div>
                       )}
+
+                      {/* 3. Video Servers (Unified inside the same menu) */}
+                      {!offlineItem && serverOptions.length > 0 && onSelectServer && (
+                        <div className="space-y-1 pt-1.5 border-t border-white/10">
+                          <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
+                            Servere Alternative ({serverOptions.length})
+                          </div>
+                          {serverOptions.map((srv) => {
+                            const active = srv.id === activeServerId;
+                            return (
+                              <button
+                                key={srv.id}
+                                type="button"
+                                data-quality-opt="true"
+                                data-server-opt="true"
+                                data-server-opt-active={active ? 'true' : undefined}
+                                onClick={() => {
+                                  onSelectServer(srv.id);
+                                  setOpenMenu('none');
+                                }}
+                                className={`w-full px-3 py-2 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                                  active
+                                    ? 'bg-white text-zinc-950 font-semibold'
+                                    : 'text-white/90 hover:bg-white/15'
+                                }`}
+                              >
+                                <span className="truncate leading-snug">
+                                  {srv.label.replace(/^[^\w\d\s]+\s*/, '')}
+                                </span>
+                                {active && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* 4. Mobile & iPad Only: AirPlay Icon Button + Fullscreen Icon Button */}
-              {isMobilePhone && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleTriggerAirPlay}
-                    title="AirPlay / Redare pe TV"
-                    aria-label="AirPlay / Redare pe TV"
-                    className="h-8 w-8 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer"
-                  >
-                    <Airplay className="w-3.5 h-3.5 shrink-0" />
-                  </button>
+              {/* 4. AirPlay / Cast Icon Button (Always visible on all devices) + Mobile Fullscreen Icon Button */}
+              <button
+                type="button"
+                data-vod-airplay-btn="true"
+                onFocus={() => onWakeOsd?.()}
+                onClick={handleTriggerAirPlay}
+                title="AirPlay / Redare pe TV"
+                aria-label="AirPlay / Redare pe TV"
+                className={`${
+                  isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
+                } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 inline-flex items-center justify-center shrink-0 shadow-md transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer`}
+              >
+                <SfAirPlayIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+              </button>
 
-                  <button
-                    type="button"
-                    onClick={handleToggleVodFullscreen}
-                    title="Ecran Complet"
-                    aria-label="Ecran Complet"
-                    className="h-8 w-8 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5 shrink-0" />
-                  </button>
-                </>
+              {isMobilePhone && (
+                <button
+                  type="button"
+                  onClick={handleToggleVodFullscreen}
+                  title="Ecran Complet"
+                  aria-label="Ecran Complet"
+                  className="h-8 w-8 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer"
+                >
+                  <Maximize2 className="w-3.5 h-3.5 shrink-0" />
+                </button>
               )}
             </div>
           </div>

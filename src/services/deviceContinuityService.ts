@@ -8,11 +8,13 @@ export interface SharedTvProfile {
   pin?: string; // Optional 4-digit PIN e.g. "1234"
   isKids?: boolean;
   allowAdultContent?: boolean; // Managed exclusively by Admin profile JEKA
+  allowIedemContent?: boolean; // Managed exclusively by Admin profile JEKA
   uiLang?: 'ro' | 'en' | 'ru';
   defaultAudioPref?: 'original' | 'ro' | 'ru' | 'uk' | 'first';
   defaultSubLang?: 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off';
   defaultSubFontSize?: 'normal' | 'large' | 'xlarge';
   defaultSubFontPx?: number;
+  tvTheme?: 'dark' | 'ambient';
   updatedAt?: number;
 }
 
@@ -34,6 +36,16 @@ export function canProfileAccessAdult(
   if (!profile || profile.isKids) return false;
   if (typeof profile.allowAdultContent === 'boolean') {
     return profile.allowAdultContent;
+  }
+  return isAdminJekaProfile(profile);
+}
+
+export function canProfileAccessIedem(
+  profile?: Partial<SharedTvProfile> | null
+): boolean {
+  if (!profile || profile.isKids) return false;
+  if (typeof profile.allowIedemContent === 'boolean') {
+    return profile.allowIedemContent;
   }
   return isAdminJekaProfile(profile);
 }
@@ -465,6 +477,7 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     pin: '1155',
     isKids: false,
     allowAdultContent: true,
+    allowIedemContent: true,
     uiLang: 'ro',
   },
   {
@@ -476,6 +489,7 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     pin: '1212',
     isKids: false,
     allowAdultContent: false,
+    allowIedemContent: false,
     uiLang: 'ro',
     updatedAt: 1793971138770,
   },
@@ -487,6 +501,7 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     avatarBg: 'from-amber-500 to-orange-700',
     isKids: false,
     allowAdultContent: false,
+    allowIedemContent: false,
     uiLang: 'en',
   },
   {
@@ -497,6 +512,7 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     avatarBg: 'from-sky-500 to-blue-700',
     isKids: false,
     allowAdultContent: false,
+    allowIedemContent: false,
     uiLang: 'en',
   },
   {
@@ -507,6 +523,7 @@ export const DEFAULT_SHARED_PROFILES: SharedTvProfile[] = [
     avatarBg: 'from-lime-500 to-emerald-700',
     isKids: true,
     allowAdultContent: false,
+    allowIedemContent: false,
     uiLang: 'ro',
   },
 ];
@@ -633,12 +650,21 @@ export function normalizeProfile(p: Partial<SharedTvProfile>, idx = 0): SharedTv
           ? kidsPreset.avatarUrl
           : p.avatarUrl,
     avatarBg: p.avatarBg || matchedPreset.bg,
-    pin: p.pin ? String(p.pin).trim() : undefined,
+    pin: p.pin
+      ? String(p.pin).trim()
+      : p.id === 'p1' && p.pin === undefined
+        ? '1155'
+        : undefined,
     isKids: isKidsProf,
     allowAdultContent: isKidsProf
       ? false
       : typeof p.allowAdultContent === 'boolean'
         ? p.allowAdultContent
+        : isAdminJekaProfile(p),
+    allowIedemContent: isKidsProf
+      ? false
+      : typeof p.allowIedemContent === 'boolean'
+        ? p.allowIedemContent
         : isAdminJekaProfile(p),
     uiLang: p.uiLang || 'ro',
     defaultAudioPref: p.defaultAudioPref,
@@ -649,6 +675,12 @@ export function normalizeProfile(p: Partial<SharedTvProfile>, idx = 0): SharedTv
       Number.isFinite(p.defaultSubFontPx)
         ? Math.max(14, Math.min(48, Math.round(p.defaultSubFontPx)))
         : undefined,
+    tvTheme:
+      p.tvTheme === 'ambient'
+        ? 'ambient'
+        : p.tvTheme === 'dark'
+          ? 'dark'
+          : undefined,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : undefined,
   };
 }
@@ -743,6 +775,24 @@ export function mergeSharedProfiles(
       byId.set(norm.id, {
         ...existing,
         ...norm,
+        defaultAudioPref: norm.defaultAudioPref || existing.defaultAudioPref,
+        defaultSubLang: norm.defaultSubLang || existing.defaultSubLang,
+        defaultSubFontSize:
+          norm.defaultSubFontSize || existing.defaultSubFontSize,
+        defaultSubFontPx: norm.defaultSubFontPx || existing.defaultSubFontPx,
+        tvTheme: norm.tvTheme || existing.tvTheme,
+        updatedAt: Math.max(existingTs, incomingTs) || undefined,
+      });
+    } else {
+      byId.set(norm.id, {
+        ...norm,
+        ...existing,
+        defaultAudioPref: existing.defaultAudioPref || norm.defaultAudioPref,
+        defaultSubLang: existing.defaultSubLang || norm.defaultSubLang,
+        defaultSubFontSize:
+          existing.defaultSubFontSize || norm.defaultSubFontSize,
+        defaultSubFontPx: existing.defaultSubFontPx || norm.defaultSubFontPx,
+        tvTheme: existing.tvTheme || norm.tvTheme,
         updatedAt: Math.max(existingTs, incomingTs) || undefined,
       });
     }
@@ -1018,6 +1068,7 @@ export interface ProfileMediaPreferences {
   defaultSubLang: 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off';
   defaultSubFontSize: 'normal' | 'large' | 'xlarge';
   defaultSubFontPx: number;
+  tvTheme?: 'dark' | 'ambient';
 }
 
 const PROFILE_SETTINGS_BASE_KEY = 'aether_smart_tv_settings_v2';
@@ -1083,11 +1134,27 @@ export function getActiveProfileMediaPrefs(
       subFontSize === 'xlarge' ? 32 : subFontSize === 'normal' ? 20 : 26;
   }
 
+  let explicitTheme: string | null = null;
+  try {
+    explicitTheme = localStorage.getItem(`aether_tv_theme_${profileId}`);
+  } catch {
+    // ignore
+  }
+  const resolvedTheme: 'dark' | 'ambient' =
+    explicitTheme === 'ambient' || explicitTheme === 'dark'
+      ? explicitTheme
+      : settingsParsed.tvTheme === 'ambient' || settingsParsed.tvTheme === 'dark'
+        ? (settingsParsed.tvTheme as 'dark' | 'ambient')
+        : prof?.tvTheme === 'ambient' || prof?.tvTheme === 'dark'
+          ? prof.tvTheme
+          : 'dark';
+
   return {
     defaultAudioPref: audioPref,
     defaultSubLang: subLang,
     defaultSubFontSize: subFontSize,
     defaultSubFontPx: Math.max(14, Math.min(48, Math.round(subFontPx))),
+    tvTheme: resolvedTheme,
   };
 }
 
@@ -1123,14 +1190,23 @@ export function saveActiveProfileMediaPrefs(
     const settingsKey = getProfileSettingsKey(profileId);
     const raw = localStorage.getItem(settingsKey);
     const parsed = raw ? JSON.parse(raw) : {};
+    const resolvedTheme =
+      next.tvTheme === 'ambient' || next.tvTheme === 'dark'
+        ? next.tvTheme
+        : parsed.tvTheme === 'ambient'
+          ? 'ambient'
+          : 'dark';
+    next.tvTheme = resolvedTheme;
     const updatedSettings = {
       ...parsed,
       defaultAudioPref: next.defaultAudioPref,
       defaultSubLang: next.defaultSubLang,
       defaultSubFontSize: next.defaultSubFontSize,
       defaultSubFontPx: next.defaultSubFontPx,
+      tvTheme: resolvedTheme,
     };
     localStorage.setItem(settingsKey, JSON.stringify(updatedSettings));
+    localStorage.setItem(`aether_tv_theme_${profileId}`, resolvedTheme);
     localStorage.setItem(
       `aether_tv_sub_font_px_${profileId}`,
       String(next.defaultSubFontPx)
@@ -1155,6 +1231,7 @@ export function saveActiveProfileMediaPrefs(
             defaultSubLang: next.defaultSubLang,
             defaultSubFontSize: next.defaultSubFontSize,
             defaultSubFontPx: next.defaultSubFontPx,
+            tvTheme: next.tvTheme || p.tvTheme || 'dark',
             updatedAt: Date.now(),
           }
         : p
