@@ -90,12 +90,12 @@ export const CastCardsSection: React.FC<CastCardsSectionProps> = ({
         </div>
 
         {/* Name & Role */}
-        <div className="pl-4 min-w-0 flex-1 flex flex-col justify-center">
-          <div className="text-[17px] sm:text-[19px] font-normal text-white group-hover:text-[#141414] group-focus:text-[#141414] leading-snug truncate">
+        <div className="pl-3.5 min-w-0 flex-1 flex flex-col justify-center py-1.5">
+          <div className="text-[15px] sm:text-[16px] font-medium text-white group-hover:text-[#141414] group-focus:text-[#141414] leading-snug whitespace-normal break-words line-clamp-3">
             {actor.name}
           </div>
           {subtitle && (
-            <div className="text-xs sm:text-[13px] font-normal text-white/80 group-hover:text-zinc-600 group-focus:text-zinc-600 mt-1 truncate">
+            <div className="text-xs sm:text-[13px] font-normal text-white/80 group-hover:text-zinc-600 group-focus:text-zinc-600 mt-1 leading-tight whitespace-normal break-words line-clamp-2">
               {subtitle}
             </div>
           )}

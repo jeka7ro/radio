@@ -1,5 +1,7 @@
-const CACHE_NAME = 'aether-radio-v9';
+const CACHE_NAME = 'aether-radio-v10';
 const STATIC_ASSETS = [
+  '/',
+  '/index.html',
   '/manifest.webmanifest',
   '/icons/favicon.svg',
   '/icons/icon-192.svg',
@@ -34,9 +36,34 @@ async function getOfflineBlobSw(key) {
   });
 }
 
+async function precacheShellAndBundles(cache) {
+  try {
+    await cache.addAll(STATIC_ASSETS);
+    const res = await fetch('/index.html', { cache: 'no-store' });
+    if (res && res.ok) {
+      await cache.put('/index.html', res.clone());
+      await cache.put('/', res.clone());
+      const html = await res.text();
+      const assetMatches = html.match(/\/assets\/[^"'\s>]+/g) || [];
+      for (const assetPath of assetMatches) {
+        try {
+          await cache.add(assetPath);
+        } catch {
+          // ignore individual asset error
+        }
+      }
+    }
+  } catch {
+    // ignore offline install error
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).then(() => self.skipWaiting())
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => precacheShellAndBundles(cache))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -45,7 +72,9 @@ self.addEventListener('activate', (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))
+        Promise.all(
+          keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        )
       )
       .then(() => self.clients.claim())
   );
@@ -62,7 +91,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         try {
-          const parts = url.pathname.replace(/^\/offline-hls\//, '').split('/').filter(Boolean);
+          const parts = url.pathname
+            .replace(/^\/offline-hls\//, '')
+            .split('/')
+            .filter(Boolean);
           const itemId = decodeURIComponent(parts[0] || '');
           const subPath = parts.slice(1).join('/');
           const encId = encodeURIComponent(itemId);
@@ -76,7 +108,10 @@ self.addEventListener('fetch', (event) => {
             else if (subPath === 'audio.m3u8') manifest = meta.audioM3u8 || '';
 
             const rewritten = manifest.replace(
-              new RegExp(`https://offline\\.local/${encId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g'),
+              new RegExp(
+                `https://offline\\.local/${encId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`,
+                'g'
+              ),
               `${url.origin}/offline-hls/${encId}/`
             );
             return new Response(rewritten, {
@@ -137,7 +172,10 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Network-first with cache fallback for Radio Browser API calls (countries & station lists)
-  if (url.hostname.includes('api.radio-browser.info') && !url.pathname.includes('/json/url/')) {
+  if (
+    url.hostname.includes('api.radio-browser.info') &&
+    !url.pathname.includes('/json/url/')
+  ) {
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -152,7 +190,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first for HTML navigation requests so deploys never serve stale index.html with old asset hashes
+  // Network-first for HTML navigation requests + store in cache so Airplane Mode works 100% offline
   if (
     request.mode === 'navigate' ||
     url.pathname === '/' ||
@@ -160,20 +198,61 @@ self.addEventListener('fetch', (event) => {
     url.pathname === '/index.html'
   ) {
     event.respondWith(
-      fetch(request, { cache: 'no-store' }).catch(() =>
-        caches.match('/index.html')
-      )
+      fetch(request, { cache: 'no-store' })
+        .then((response) => {
+          if (response && response.ok) {
+            const cloneForIndex = response.clone();
+            const cloneForRoot = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put('/index.html', cloneForIndex);
+              cache.put('/', cloneForRoot);
+            });
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cachedIndex =
+            (await caches.match('/index.html')) ||
+            (await caches.match('/')) ||
+            (await caches.match(request));
+          return (
+            cachedIndex ||
+            new Response('Offline', {
+              status: 503,
+              headers: { 'Content-Type': 'text/plain' },
+            })
+          );
+        })
     );
     return;
   }
 
-  // Stale-while-revalidate for static shell assets
+  // Cache poster images so offline downloads keep their cover art in Airplane Mode
+  if (request.destination === 'image') {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        const net = fetch(request)
+          .then((response) => {
+            if (response && response.ok) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            }
+            return response;
+          })
+          .catch(() => cached);
+        return cached || net;
+      })
+    );
+    return;
+  }
+
+  // Stale-while-revalidate for static shell assets (/assets/*.js, /assets/*.css, icons, fonts)
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.match(request).then((cached) => {
         const networkFetch = fetch(request)
           .then((response) => {
-            if (response.ok) {
+            if (response && response.ok) {
               const clone = response.clone();
               caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
             }
@@ -185,4 +264,3 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
-

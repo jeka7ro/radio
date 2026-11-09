@@ -1006,9 +1006,9 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             <div className="text-[15px] font-bold text-white flex flex-wrap items-center gap-2">
                               <span>
                                 {tr(
-                                  'Control Acces iEdem (Doar JEKA)',
-                                  'iEdem Access Control (JEKA Admin Only)',
-                                  'Управление доступом iEdem (Только JEKA)'
+                                  'Control Acces Kinozal (Doar JEKA)',
+                                  'Kinozal Access Control (JEKA Admin Only)',
+                                  'Управление доступом Kinozal (Только JEKA)'
                                 )}
                               </span>
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
@@ -1017,9 +1017,9 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             </div>
                             <div className="text-[12px] text-zinc-400 mt-0.5">
                               {tr(
-                                'Decizi exclusiv de aici ce profiluri au acces la Mediateca și lista TV iEdem. Implicit este activ doar pentru JEKA.',
-                                'Decide exclusively from here which profiles can access iEdem Mediateka & TV. Enabled by default only for JEKA.',
-                                'Только вы решаете здесь, у каких профилей есть доступ к iEdem. По умолчанию включено только для JEKA.'
+                                'Decizi exclusiv de aici ce profiluri au acces la modulul Kinozal (Filme & Seriale RU) și lista TV iEdem. Implicit este activ doar pentru JEKA.',
+                                'Decide exclusively from here which profiles can access Kinozal (RU Movies & Series) & TV. Enabled by default only for JEKA.',
+                                'Только вы решаете здесь, у каких профилей есть доступ к Kinozal. По умолчанию включено только для JEKA.'
                               )}
                             </div>
                           </div>
@@ -1102,20 +1102,20 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                                       <div className="text-[11px] text-zinc-400 truncate">
                                         {isProfKids
                                           ? tr(
-                                              'Profil Copii — iEdem este blocat permanent',
-                                              'Kids Profile — iEdem permanently blocked',
-                                              'Детский профиль — iEdem заблокирован'
+                                              'Profil Copii — Kinozal este blocat permanent',
+                                              'Kids Profile — Kinozal permanently blocked',
+                                              'Детский профиль — Kinozal заблокирован'
                                             )
                                           : profAllowed
                                             ? tr(
-                                                'iEdem (Mediatecă & TV) este PERMIS pe acest profil',
-                                                'iEdem (Mediateka & TV) is ALLOWED on this profile',
-                                                'iEdem (Медиатека и ТВ) РАЗРЕШЕН для этого профиля'
+                                                'Kinozal (Filme & Seriale RU) este PERMIS pe acest profil',
+                                                'Kinozal (RU Movies & Series) is ALLOWED on this profile',
+                                                'Kinozal (Медиатека и ТВ) РАЗРЕШЕН для этого профиля'
                                               )
                                             : tr(
-                                                'iEdem (Mediatecă & TV) este ASCUNS pe acest profil',
-                                                'iEdem (Mediateka & TV) is HIDDEN on this profile',
-                                                'iEdem (Медиатека и ТВ) СКРЫТ для этого профиля'
+                                                'Kinozal (Filme & Seriale RU) este ASCUNS pe acest profil',
+                                                'Kinozal (RU Movies & Series) is HIDDEN on this profile',
+                                                'Kinozal (Медиатека и ТВ) СКРЫТ для этого профиля'
                                               )}
                                       </div>
                                     </div>
@@ -1133,7 +1133,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                                     {isProfKids
                                       ? tr('BLOCAT', 'LOCKED', 'БЛОК')
                                       : profAllowed
-                                        ? 'iEdem ON'
+                                        ? 'Kinozal ON'
                                         : 'OFF'}
                                   </span>
                                 </button>

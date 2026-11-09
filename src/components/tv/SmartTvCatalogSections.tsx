@@ -184,6 +184,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     >
   >({});
   const [isKlubnichkaOpen, setIsKlubnichkaOpen] = React.useState<boolean>(false);
+  const [searchCatFilter, setSearchCatFilter] = React.useState<
+    'all' | 'movies' | 'series' | 'docs' | 'kinozal' | 'tv'
+  >('all');
 
   React.useEffect(() => {
     if (section !== 'torrents' || !isAdminJekaProfile(activeProfile)) {
@@ -2414,155 +2417,422 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       </div>
                     </div>
 
-                    {/* Live TV Channels matching global searchQuery */}
+                    {/* Categorized Global Search Results: Filter Tabs + Grouped Sections (Filme, Seriale, Documentare, Kinozal RU, Canale TV) */}
                     {(() => {
                       const qGlobal = searchQuery.trim().toLowerCase();
-                      if (qGlobal.length < 2) return null;
-                      const combined = [
+                      const combinedTv = [
                         ...tvChannels,
                         ...customTvChannels,
                         ...favoriteTvChannels,
                       ];
-                      const seen = new Set<string>();
-                      const matchedTv = combined
-                        .filter((ch) => {
-                          if (!adultContentEnabled && isAdultTvChannel(ch))
-                            return false;
-                          const key = `${ch.name.toLowerCase().trim()}|${ch.url}`;
-                          if (seen.has(ch.id) || seen.has(key)) return false;
-                          if (
-                            !ch.name.toLowerCase().includes(qGlobal) &&
-                            !(ch.group || '').toLowerCase().includes(qGlobal)
-                          ) {
-                            return false;
-                          }
-                          seen.add(ch.id);
-                          seen.add(key);
-                          return true;
-                        })
-                        .slice(0, 24);
+                      const seenTv = new Set<string>();
+                      const matchedTv =
+                        qGlobal.length >= 2
+                          ? combinedTv
+                              .filter((ch) => {
+                                if (!adultContentEnabled && isAdultTvChannel(ch))
+                                  return false;
+                                const key = `${ch.name.toLowerCase().trim()}|${ch.url}`;
+                                if (seenTv.has(ch.id) || seenTv.has(key))
+                                  return false;
+                                if (
+                                  !ch.name.toLowerCase().includes(qGlobal) &&
+                                  !(ch.group || '').toLowerCase().includes(qGlobal)
+                                ) {
+                                  return false;
+                                }
+                                seenTv.add(ch.id);
+                                seenTv.add(key);
+                                return true;
+                              })
+                              .slice(0, 24)
+                          : [];
 
-                      if (matchedTv.length === 0) return null;
-                      return (
-                        <div className="space-y-3">
-                          <div className="text-sm font-extrabold text-[#60a5fa] uppercase tracking-wider inline-flex items-center gap-2">
-                            <Tv className="w-4 h-4" />
-                            <span>Canale TV găsite ({matchedTv.length})</span>
-                          </div>
-                          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
-                            {matchedTv.map((ch) => (
+                      const isKinozalRu = (item: any) =>
+                        Boolean(
+                          item.iedemFid ||
+                            String(item.id || '').startsWith('iedem_') ||
+                            String(item.qualityBadge || '').includes('Kinozal') ||
+                            /(Росси|СССР|Беларус|Russia|USSR)/i.test(
+                              String(item.country || '')
+                            )
+                        );
+
+                      const isDocOrTv = (item: any) =>
+                        Boolean(
+                          (Array.isArray(item.genres) &&
+                            item.genres.some((g: string) =>
+                              /document|документ|телепередач|реальное|ток-шоу|игра|концерт|reality|talk/i.test(
+                                String(g)
+                              )
+                            )) ||
+                            /документ|выпуск|шоу|квн|стендап|stand[\s-]*up/i.test(
+                              `${item.name || ''} ${item.description || ''}`
+                            )
+                        );
+
+                      const moviesGroup = searchResults.filter(
+                        (it) =>
+                          it.type !== 'series' &&
+                          !isDocOrTv(it) &&
+                          !isKinozalRu(it)
+                      );
+                      const seriesGroup = searchResults.filter(
+                        (it) =>
+                          it.type === 'series' &&
+                          !isDocOrTv(it) &&
+                          !isKinozalRu(it)
+                      );
+                      const docsGroup = searchResults.filter((it) =>
+                        isDocOrTv(it)
+                      );
+                      const kinozalGroup = searchResults.filter((it) =>
+                        isKinozalRu(it)
+                      );
+
+                      const totalVodAndTv =
+                        searchResults.length + matchedTv.length;
+
+                      const renderVodGrid = (
+                        itemsList: any[],
+                        forceKinozalBadge = false
+                      ) => (
+                        <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
+                          {itemsList.map((item) => {
+                            const posterUrl =
+                              item.poster ||
+                              (String(item.id || '').startsWith('tt')
+                                ? `https://images.metahub.space/poster/medium/${item.id}/img`
+                                : '');
+                            const rInfo = getVodCardRatingInfo(item);
+                            const showKzBadge =
+                              forceKinozalBadge || isKinozalRu(item);
+                            return (
                               <button
-                                key={`global_tv_${ch.id}`}
+                                key={`${item.id}_${item.name}`}
                                 type="button"
-                                onClick={() => {
-                                  requestTvFullscreen();
-                                  setActiveTvPlaylistContext(
-                                    ch.countryCode || "RO",
-                                    "ALL"
-                                  );
-                                  playTvChannel(ch, matchedTv);
-                                }}
-                                className="p-3.5 rounded-2xl bg-zinc-900/90 border-2 border-white/10 hover:border-[#60a5fa] focus:border-[#60a5fa] focus:bg-[#60a5fa]/15 focus:ring-4 focus:ring-white focus:outline-none flex items-center gap-3 text-left transition-all cursor-pointer"
+                                data-vod-card="true"
+                                onClick={() => handleOpenVod(item)}
+                                className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
-                                <div className="w-10 h-10 rounded-xl bg-zinc-950 border border-white/10 flex items-center justify-center overflow-hidden shrink-0 relative">
-                                  <span className="text-[11px] font-black text-amber-400 uppercase tracking-tighter select-none">
-                                    {ch.name
-                                      .replace(/[^a-zA-Zа-яА-Я0-9]/g, '')
-                                      .slice(0, 3) || 'TV'}
-                                  </span>
-                                  {ch.logo && (
+                                <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
+                                  {posterUrl ? (
                                     <img
-                                      src={ch.logo}
-                                      alt=""
+                                      src={posterUrl}
+                                      alt={item.name}
                                       loading="lazy"
-                                      referrerPolicy="no-referrer"
                                       onError={(e) => {
                                         e.currentTarget.style.display = 'none';
                                       }}
-                                      className="absolute inset-0 w-full h-full object-contain p-1 bg-zinc-950"
+                                      className="w-full h-full object-cover"
                                     />
-                                  )}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-xs sm:text-sm font-extrabold text-white truncate">
-                                    {ch.name}
+                                  ) : null}
+                                  <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-zinc-500 bg-gradient-to-b from-[#172554]/40 to-[#0f172a]">
+                                    <Film className="w-10 h-10 mb-2 text-[#60a5fa]/60" />
+                                    <span className="text-xs font-bold text-zinc-300 line-clamp-3">
+                                      {item.name}
+                                    </span>
                                   </div>
-                                  <div className="text-[11px] text-zinc-400 truncate mt-0.5">
-                                    {ch.countryCode} • {ch.group || 'Live HD'}
+                                  {showKzBadge && (
+                                    <div className="absolute top-2.5 left-2.5 z-10 pointer-events-none">
+                                      <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-[#1e3a8a]/95 text-[#93c5fd] border border-[#60a5fa]/60 shadow">
+                                        KINOZAL
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
+                                    <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
+                                      <span
+                                        className={
+                                          rInfo.isRussian
+                                            ? 'text-[#ff5500]'
+                                            : 'text-amber-400'
+                                        }
+                                      >
+                                        {rInfo.source}
+                                      </span>
+                                      <span>{rInfo.value}</span>
+                                    </span>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                        item.type === 'series'
+                                          ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                          : 'bg-amber-500/90 text-zinc-950'
+                                      }`}
+                                    >
+                                      {item.type === 'series'
+                                        ? formatSeriesCardBadgeText(
+                                            item,
+                                            seriesEpStatsMap[item.id] ||
+                                              uhdSeriesEpStats[item.id],
+                                            tr
+                                          )
+                                        : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-2.5 px-0.5">
+                                  <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    {item.name}
+                                  </div>
+                                  <div className="text-xs text-zinc-400 mt-0.5">
+                                    {formatSeriesCardSubtitleText(
+                                      item,
+                                      seriesEpStatsMap[item.id] ||
+                                        uhdSeriesEpStats[item.id],
+                                      tr
+                                    )}
                                   </div>
                                 </div>
                               </button>
-                            ))}
-                          </div>
+                            );
+                          })}
+                        </div>
+                      );
+
+                      const filterTabs: Array<{
+                        id:
+                          | 'all'
+                          | 'movies'
+                          | 'series'
+                          | 'docs'
+                          | 'kinozal'
+                          | 'tv';
+                        label: string;
+                        count: number;
+                      }> = [
+                        {
+                          id: 'all',
+                          label: tr('Toate', 'All', 'Все'),
+                          count: totalVodAndTv,
+                        },
+                        {
+                          id: 'movies',
+                          label: tr('Filme', 'Movies', 'Фильмы'),
+                          count: moviesGroup.length,
+                        },
+                        {
+                          id: 'series',
+                          label: tr('Seriale', 'Series', 'Сериалы'),
+                          count: seriesGroup.length,
+                        },
+                        {
+                          id: 'docs',
+                          label: tr(
+                            'Documentare & TV',
+                            'Docs & TV',
+                            'Документальные и ТВ'
+                          ),
+                          count: docsGroup.length,
+                        },
+                        {
+                          id: 'kinozal',
+                          label: tr(
+                            'Kinozal (Rusești)',
+                            'Kinozal (Russian)',
+                            'Kinozal (Русские)'
+                          ),
+                          count: kinozalGroup.length,
+                        },
+                        {
+                          id: 'tv',
+                          label: tr('Canale TV', 'TV Channels', 'Телеканалы'),
+                          count: matchedTv.length,
+                        },
+                      ];
+
+                      return (
+                        <div className="space-y-6">
+                          {/* Category Filter Pills */}
+                          {qGlobal.length >= 2 && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {filterTabs.map((tab) => {
+                                const active = searchCatFilter === tab.id;
+                                return (
+                                  <button
+                                    key={tab.id}
+                                    type="button"
+                                    onClick={() => setSearchCatFilter(tab.id)}
+                                    className={`h-9 px-3.5 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 border transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                                      active
+                                        ? 'bg-[#1e3a8a] text-white border-[#60a5fa] shadow-md shadow-blue-900/40'
+                                        : 'bg-white/[0.06] hover:bg-white/[0.14] text-zinc-200 border-white/10'
+                                    }`}
+                                  >
+                                    <span>{tab.label}</span>
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                                        active
+                                          ? 'bg-white text-[#141414]'
+                                          : 'bg-white/10 text-zinc-300'
+                                      }`}
+                                    >
+                                      {tab.count}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {isSearchLoading ? (
+                            <div className="py-12 flex items-center justify-center gap-3 text-zinc-400">
+                              <Loader2 className="w-8 h-8 text-white animate-spin" />
+                              <span className="text-sm font-bold">
+                                {tr('Se caută...', 'Searching...', 'Поиск...')}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="space-y-8">
+                              {/* 1. Filme */}
+                              {(searchCatFilter === 'all' ||
+                                searchCatFilter === 'movies') &&
+                                moviesGroup.length > 0 && (
+                                  <div className="space-y-3">
+                                    <div className="text-sm sm:text-base font-extrabold text-amber-400 uppercase tracking-wider inline-flex items-center gap-2">
+                                      <Film className="w-4 h-4" />
+                                      <span>
+                                        {tr('Filme', 'Movies', 'Фильмы')} (
+                                        {moviesGroup.length})
+                                      </span>
+                                    </div>
+                                    {renderVodGrid(moviesGroup)}
+                                  </div>
+                                )}
+
+                              {/* 2. Seriale */}
+                              {(searchCatFilter === 'all' ||
+                                searchCatFilter === 'series') &&
+                                seriesGroup.length > 0 && (
+                                  <div className="space-y-3">
+                                    <div className="text-sm sm:text-base font-extrabold text-[#60a5fa] uppercase tracking-wider inline-flex items-center gap-2">
+                                      <Tv className="w-4 h-4" />
+                                      <span>
+                                        {tr('Seriale', 'Series', 'Сериалы')} (
+                                        {seriesGroup.length})
+                                      </span>
+                                    </div>
+                                    {renderVodGrid(seriesGroup)}
+                                  </div>
+                                )}
+
+                              {/* 3. Documentare & Emisiuni */}
+                              {(searchCatFilter === 'all' ||
+                                searchCatFilter === 'docs') &&
+                                docsGroup.length > 0 && (
+                                  <div className="space-y-3">
+                                    <div className="text-sm sm:text-base font-extrabold text-emerald-400 uppercase tracking-wider inline-flex items-center gap-2">
+                                      <Sparkles className="w-4 h-4" />
+                                      <span>
+                                        {tr(
+                                          'Documentare & Emisiuni TV',
+                                          'Documentaries & TV Shows',
+                                          'Документальные и ТВ-шоу'
+                                        )}{' '}
+                                        ({docsGroup.length})
+                                      </span>
+                                    </div>
+                                    {renderVodGrid(docsGroup)}
+                                  </div>
+                                )}
+
+                              {/* 4. Kinozal — Filme & Seriale Rusești */}
+                              {(searchCatFilter === 'all' ||
+                                searchCatFilter === 'kinozal') &&
+                                kinozalGroup.length > 0 && (
+                                  <div className="space-y-3">
+                                    <div className="text-sm sm:text-base font-extrabold text-[#93c5fd] uppercase tracking-wider inline-flex items-center gap-2">
+                                      <img
+                                        src="https://flagcdn.com/w40/ru.png"
+                                        alt="RU"
+                                        className="w-4 h-3 rounded-[2px] object-cover"
+                                      />
+                                      <span>
+                                        {tr(
+                                          'Kinozal — Filme & Seriale Rusești',
+                                          'Kinozal — Russian Movies & Series',
+                                          'Kinozal — Русские фильмы и сериалы'
+                                        )}{' '}
+                                        ({kinozalGroup.length})
+                                      </span>
+                                    </div>
+                                    {renderVodGrid(kinozalGroup, true)}
+                                  </div>
+                                )}
+
+                              {/* 5. Canale TV găsite */}
+                              {(searchCatFilter === 'all' ||
+                                searchCatFilter === 'tv') &&
+                                matchedTv.length > 0 && (
+                                  <div className="space-y-3">
+                                    <div className="text-sm sm:text-base font-extrabold text-[#60a5fa] uppercase tracking-wider inline-flex items-center gap-2">
+                                      <Tv className="w-4 h-4" />
+                                      <span>
+                                        {tr(
+                                          'Canale TV găsite',
+                                          'Live TV Channels',
+                                          'Найденные телеканалы'
+                                        )}{' '}
+                                        ({matchedTv.length})
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
+                                      {matchedTv.map((ch) => (
+                                        <button
+                                          key={`global_tv_${ch.id}`}
+                                          type="button"
+                                          onClick={() => {
+                                            requestTvFullscreen();
+                                            setActiveTvPlaylistContext(
+                                              ch.countryCode || 'RO',
+                                              'ALL'
+                                            );
+                                            playTvChannel(ch, matchedTv);
+                                          }}
+                                          className="p-3.5 rounded-2xl bg-zinc-900/90 border-2 border-white/10 hover:border-[#60a5fa] focus:border-[#60a5fa] focus:bg-[#60a5fa]/15 focus:ring-4 focus:ring-white focus:outline-none flex items-center gap-3 text-left transition-all cursor-pointer"
+                                        >
+                                          <div className="w-10 h-10 rounded-xl bg-zinc-950 border border-white/10 flex items-center justify-center overflow-hidden shrink-0 relative">
+                                            <span className="text-[11px] font-black text-amber-400 uppercase tracking-tighter select-none">
+                                              {ch.name
+                                                .replace(
+                                                  /[^a-zA-Zа-яА-Я0-9]/g,
+                                                  ''
+                                                )
+                                                .slice(0, 3) || 'TV'}
+                                            </span>
+                                            {ch.logo && (
+                                              <img
+                                                src={ch.logo}
+                                                alt=""
+                                                loading="lazy"
+                                                referrerPolicy="no-referrer"
+                                                onError={(e) => {
+                                                  e.currentTarget.style.display =
+                                                    'none';
+                                                }}
+                                                className="absolute inset-0 w-full h-full object-contain p-1 bg-zinc-950"
+                                              />
+                                            )}
+                                          </div>
+                                          <div className="min-w-0 flex-1">
+                                            <div className="text-xs sm:text-sm font-extrabold text-white truncate">
+                                              {ch.name}
+                                            </div>
+                                            <div className="text-[11px] text-zinc-400 truncate mt-0.5">
+                                              {ch.countryCode} •{' '}
+                                              {ch.group || 'Live HD'}
+                                            </div>
+                                          </div>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
-
-                    {/* Search Results Grid (5 per row Lampa style) */}
-                    {isSearchLoading ? (
-                      <div className="py-12 flex items-center justify-center gap-3 text-zinc-400">
-                        <Loader2 className="w-8 h-8 text-white animate-spin" />
-                        <span className="text-sm font-bold">{tr('Se caută...', 'Searching...', 'Поиск...')}</span>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
-                        {searchResults.map((item) => {
-                          const posterUrl =
-                            item.poster ||
-                            `https://images.metahub.space/poster/medium/${item.id}/img`;
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              data-vod-card="true"
-                              onClick={() => handleOpenVod(item)}
-                              className="group w-full block text-left focus:outline-none cursor-pointer"
-                            >
-                              <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
-                                <img
-                                  src={posterUrl}
-                                  alt={item.name}
-                                  loading="lazy"
-                                  className="w-full h-full object-cover"
-                                />
-                                {(() => {
-                                  const rInfo = getVodCardRatingInfo(item);
-                                  return (
-                                    <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
-                                      <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
-                                        <span className={rInfo.isRussian ? 'text-[#ff5500]' : 'text-amber-400'}>
-                                          {rInfo.source}
-                                        </span>
-                                        <span>{rInfo.value}</span>
-                                      </span>
-                                      <span
-                                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
-                                          item.type === 'series'
-                                            ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                                            : 'bg-amber-500/90 text-zinc-950'
-                                        }`}
-                                      >
-                                        {item.type === 'series'
-                                          ? formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)
-                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                      </span>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                              <div className="mt-2.5 px-0.5">
-                                <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
-                                  {item.name}
-                                </div>
-                                <div className="text-xs text-zinc-400 mt-0.5">
-                                  {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
                   </div>
                 )}
 

@@ -13,6 +13,7 @@ import {
   Clock,
   Calendar,
   Layers,
+  Flame,
 } from 'lucide-react';
 import {
   IEDEM_VOD_CATEGORIES,
@@ -24,6 +25,8 @@ import {
   IedemVodItem,
   IedemVodDetailResponse,
   fetchIedemCatalogItems,
+  fetchKinozalTopBannerItems,
+  cleanIedemBaseTitle,
   searchIedemVod,
   fetchIedemItemDetail,
   getCachedIedemVerifiedMeta,
@@ -74,6 +77,52 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
     useState<IedemVodDetailResponse | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
   const [seriesEpCounts, setSeriesEpCounts] = useState<Record<number, number>>({});
+  const [topBannerItems, setTopBannerItems] = useState<IedemVodItem[]>([]);
+  const [activeBannerIdx, setActiveBannerIdx] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const rawTop = await fetchKinozalTopBannerItems();
+      if (cancelled || rawTop.length === 0) return;
+      setTopBannerItems(rawTop);
+
+      // Resolve Kinopoisk posters, ratings, and Russian origin verification for all Top Banner items
+      await Promise.all(rawTop.map((it) => resolveIedemKinopoiskMeta(it)));
+      if (cancelled) return;
+
+      setTopBannerItems((prev) => {
+        const verified: IedemVodItem[] = [];
+        const seenTitles = new Set<string>();
+        for (const it of prev) {
+          const meta = getCachedIedemVerifiedMeta(it);
+          if (meta?.isRussian === false) continue;
+          const cleanT = cleanIedemBaseTitle(it.title).toLowerCase().replace(/ё/g, 'е').trim();
+          if (!cleanT || seenTitles.has(cleanT)) continue;
+          seenTitles.add(cleanT);
+          verified.push({
+            ...it,
+            year: meta?.year || it.year,
+            ratingKinopoisk: meta?.ratingKinopoisk || it.ratingKinopoisk,
+            img: it.img || meta?.posterUrl,
+            kpId: it.kpId || meta?.kpId,
+          });
+        }
+        return verified.slice(0, 10);
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (topBannerItems.length <= 1 || debouncedQuery) return;
+    const timer = window.setInterval(() => {
+      setActiveBannerIdx((prev) => (prev + 1) % topBannerItems.length);
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [topBannerItems.length, debouncedQuery]);
 
   useEffect(() => {
     const seriesToFetch = items
@@ -149,7 +198,15 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
               meta?.ratingKinopoisk && meta.ratingKinopoisk !== it.ratingKinopoisk
                 ? meta.ratingKinopoisk
                 : it.ratingKinopoisk;
-            if (nextYear !== it.year || nextRating !== it.ratingKinopoisk) {
+            const nextImg =
+              !it.img && meta?.posterUrl ? meta.posterUrl : it.img;
+            const nextKpId = !it.kpId && meta?.kpId ? meta.kpId : it.kpId;
+            if (
+              nextYear !== it.year ||
+              nextRating !== it.ratingKinopoisk ||
+              nextImg !== it.img ||
+              nextKpId !== it.kpId
+            ) {
               changed = true;
             }
             if (selectedYear && !matchesIedemYearFilter(nextYear, selectedYear)) {
@@ -157,12 +214,21 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
               continue;
             }
             next.push(
-              nextYear !== it.year || nextRating !== it.ratingKinopoisk
-                ? { ...it, year: nextYear, ratingKinopoisk: nextRating }
+              nextYear !== it.year ||
+                nextRating !== it.ratingKinopoisk ||
+                nextImg !== it.img ||
+                nextKpId !== it.kpId
+                ? {
+                    ...it,
+                    year: nextYear,
+                    ratingKinopoisk: nextRating,
+                    img: nextImg,
+                    kpId: nextKpId,
+                  }
                 : it
             );
           }
-          return changed ? sortIedemItemsByYearDesc(next) : prev;
+          return changed ? next : prev;
         });
       }
     })();
@@ -272,7 +338,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
     );
   };
 
-  const handleOpenItem = async (item: IedemVodItem) => {
+  const handleOpenItem = async (item: IedemVodItem, autoPlayImmediately = false) => {
     if (onOpenVodItem) {
       const isSeries = item.type === 'multistream';
       const seasonMatch = item.title.match(/Сезон\s*(\d+)/i);
@@ -298,8 +364,8 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           year: yearStr || undefined,
           ratingKinopoisk: verifiedRating || undefined,
           imdbRating: verifiedRating || undefined,
-          poster: item.img,
-          background: item.img,
+          poster: cachedMeta?.posterUrl || item.img,
+          background: cachedMeta?.posterUrl || item.img,
           description: item.description,
           runtime: item.duration ? `${item.duration} min` : undefined,
           country: 'Россия',
@@ -309,13 +375,17 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
             (isSeries && seriesEpCounts[item.fid]
               ? seriesEpCounts[item.fid]
               : undefined),
-          qualityBadge: item['4k']
-            ? '4K UHD • iEdem VIP'
-            : item.networkBadge
-              ? `1080p FHD • ${item.networkBadge}`
-              : '1080p FHD • iEdem VIP',
+          qualityBadge: item.kinozalHash
+            ? item['4k']
+              ? '4K UHD • Kinozal VIP'
+              : '1080p FHD • Kinozal VIP'
+            : item['4k']
+              ? '4K UHD • iEdem MediaLibrary'
+              : item.networkBadge
+                ? `1080p FHD • ${item.networkBadge}`
+                : '1080p FHD • iEdem MediaLibrary',
         },
-        false,
+        autoPlayImmediately,
         isSeries ? parsedSeason : undefined,
         1
       );
@@ -407,7 +477,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-white">
-                iEdem Медиатека
+                Kinozal
               </h2>
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#1e3a8a]/80 text-[#93c5fd] border border-[#3b82f6]/40 inline-flex items-center gap-1.5">
                 <img
@@ -415,11 +485,15 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                   alt="RU"
                   className="w-3.5 h-2.5 rounded-[2px] object-cover"
                 />
-                <span>VIP • FHD & 4K • RU</span>
+                <span>VIP • 4K & 1080p • Kinozal + iEdem RU</span>
               </span>
             </div>
             <p className="text-xs text-zinc-400">
-              Русские сериалы, ТВ-передачи и русские фильмы (1080p / 4K UHD)
+              {uiLang === 'ro'
+                ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Filme, Seriale, Documentare & TV Rusești'
+                : uiLang === 'en'
+                  ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Russian Movies, Series, Documentaries & TV'
+                  : 'Kinozal VIP (popescu20210) + iEdem Медиатека — Русские сериалы, фильмы, документальные и ТВ'}
             </p>
           </div>
         </div>
@@ -516,7 +590,264 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
         </div>
       )}
 
-      {/* Category Pills (Wrapped cleanly, Russian Movies & Russian Series separated first with clean vector & flag icons) */}
+      {/* NETFLIX-STYLE WIDESCREEN HERO BILLBOARD BANNER (Identical to Home Page Banner — Top 10 Unique Kinozal Russian Movies & Series) */}
+      {!debouncedQuery && topBannerItems.length > 0 && (() => {
+        const safeIdx = activeBannerIdx % topBannerItems.length;
+        const rawBannerItem = topBannerItems[safeIdx] || topBannerItems[0];
+        const normBannerKey = cleanIedemBaseTitle(rawBannerItem.title)
+          .toLowerCase()
+          .replace(/ё/g, 'е')
+          .trim();
+        const matchedCatalogItem = items.find(
+          (x) =>
+            cleanIedemBaseTitle(x.title).toLowerCase().replace(/ё/g, 'е').trim() ===
+            normBannerKey
+        );
+        const cachedMeta = getCachedIedemVerifiedMeta(rawBannerItem);
+        const bannerItem: IedemVodItem = {
+          ...matchedCatalogItem,
+          ...rawBannerItem,
+          fid:
+            matchedCatalogItem && matchedCatalogItem.fid > 0
+              ? matchedCatalogItem.fid
+              : rawBannerItem.fid,
+          url: matchedCatalogItem?.url || rawBannerItem.url,
+          img:
+            rawBannerItem.img ||
+            cachedMeta?.posterUrl ||
+            matchedCatalogItem?.img,
+          backdropUrl:
+            rawBannerItem.backdropUrl ||
+            cachedMeta?.backdropUrl ||
+            rawBannerItem.img ||
+            cachedMeta?.posterUrl ||
+            matchedCatalogItem?.img,
+          logoUrl: rawBannerItem.logoUrl || cachedMeta?.logoUrl,
+          overview:
+            rawBannerItem.overview ||
+            cachedMeta?.overview ||
+            matchedCatalogItem?.description ||
+            rawBannerItem.description,
+          kpId:
+            rawBannerItem.kpId ||
+            cachedMeta?.kpId ||
+            matchedCatalogItem?.kpId,
+          ratingKinopoisk:
+            rawBannerItem.ratingKinopoisk ||
+            cachedMeta?.ratingKinopoisk ||
+            matchedCatalogItem?.ratingKinopoisk ||
+            '7.8',
+          '4k': Boolean(rawBannerItem['4k'] || matchedCatalogItem?.['4k']),
+          fhd: true,
+        };
+        const isSeriesBanner = bannerItem.type === 'multistream';
+        const heroBackdrop = bannerItem.backdropUrl || bannerItem.img;
+
+        return (
+          <div
+            data-top-hero-card="true"
+            className="relative w-full min-h-[245px] sm:min-h-[395px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-4 sm:p-9"
+          >
+            {/* Full-Bleed Widescreen Backdrop */}
+            {heroBackdrop && (
+              <img
+                key={`kz_hero_bg_${bannerItem.fid}_${bannerItem.title}`}
+                src={heroBackdrop}
+                alt={bannerItem.title}
+                onError={(e) => {
+                  if (bannerItem.img && e.currentTarget.src !== bannerItem.img) {
+                    e.currentTarget.src = bannerItem.img;
+                  } else {
+                    e.currentTarget.style.display = 'none';
+                  }
+                }}
+                className="pointer-events-none absolute inset-0 w-full h-full object-cover object-center scale-[1.01] transition-all duration-700"
+              />
+            )}
+            {/* Netflix Vignette Gradients (Left & Bottom) */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/95 via-black/55 to-transparent" />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-black/20" />
+
+            {/* Top Row: Brand Emblem + Top Spotlight Selector Dots */}
+            <div className="relative z-10 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="px-2.5 py-1 rounded-md bg-[#E50914] text-white text-[10px] sm:text-xs font-black uppercase tracking-wider shadow">
+                  KINOZAL
+                </span>
+                <span className="text-[11px] sm:text-xs font-black uppercase tracking-[0.22em] text-zinc-200 drop-shadow">
+                  НАШЕ КИНО •{' '}
+                  {isSeriesBanner
+                    ? uiLang === 'ro'
+                      ? 'SERIAL RECOMANDAT'
+                      : uiLang === 'en'
+                        ? 'FEATURED SERIES'
+                        : 'СЕРИАЛ • ПРЕМЬЕРА'
+                    : uiLang === 'ro'
+                      ? 'FILM RECOMANDAT'
+                      : uiLang === 'en'
+                        ? 'FEATURED MOVIE'
+                        : 'ФИЛЬМ • ПРЕМЬЕРА'}
+                </span>
+              </div>
+
+              {topBannerItems.length > 1 && (
+                <div className="flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15">
+                  {topBannerItems.map((hItem, idx) => {
+                    const isCurrentHero = idx === safeIdx;
+                    return (
+                      <button
+                        key={`kz_hero_dot_${hItem.fid}_${hItem.title}`}
+                        type="button"
+                        title={`${hItem.title} (★ KP ${hItem.ratingKinopoisk || '7.8'})`}
+                        onClick={() => setActiveBannerIdx(idx)}
+                        className={`h-2.5 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                          isCurrentHero
+                            ? 'w-7 bg-[#E50914]'
+                            : 'w-2.5 bg-white/35 hover:bg-white/70'
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Middle & Bottom: Display Title/Logo + Metadata + Play & More Info + Bottom-Right Badges */}
+            <div className="relative z-10 mt-5 sm:mt-12 flex flex-col gap-3 sm:gap-4">
+              <div className="max-w-2xl space-y-2 sm:space-y-2.5">
+                {bannerItem.logoUrl ? (
+                  <img
+                    key={`kz_hero_logo_${bannerItem.fid}_${bannerItem.title}`}
+                    src={bannerItem.logoUrl}
+                    alt={bannerItem.title}
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                    }}
+                    className="max-h-12 sm:max-h-24 max-w-[220px] sm:max-w-[420px] w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]"
+                  />
+                ) : (
+                  <h2 className="text-2xl sm:text-5xl font-black uppercase tracking-tight text-white leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.95)] line-clamp-2">
+                    {bannerItem.title}
+                  </h2>
+                )}
+
+                {/* Metadata Line: Movie/Series • Country • Year • KP Rating • 4K UHD • 16+ */}
+                <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm font-bold text-zinc-200 drop-shadow">
+                  <span className="text-white font-extrabold">
+                    {isSeriesBanner
+                      ? uiLang === 'ro'
+                        ? 'Serial'
+                        : uiLang === 'en'
+                          ? 'Series'
+                          : 'Сериал'
+                      : uiLang === 'ro'
+                        ? 'Film'
+                        : uiLang === 'en'
+                          ? 'Movie'
+                          : 'Фильм'}
+                  </span>
+                  <span className="text-zinc-500">•</span>
+                  <span>Россия</span>
+                  <span className="text-zinc-500">•</span>
+                  <span className="text-white font-extrabold">
+                    {bannerItem.year || 2026}
+                  </span>
+                  {bannerItem.ratingKinopoisk && (
+                    <>
+                      <span className="text-zinc-500">•</span>
+                      <span className="px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-xs font-black shadow">
+                        ★ KP {bannerItem.ratingKinopoisk}
+                      </span>
+                    </>
+                  )}
+                  <span className="text-zinc-500">•</span>
+                  <span className="px-2 py-0.5 rounded-md bg-white/15 border border-white/25 text-[11px] font-extrabold text-white">
+                    {bannerItem['4k'] ? '4K UHD' : '1080p FHD'}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-white/10 text-[11px] font-bold text-zinc-300">
+                    16+
+                  </span>
+                </div>
+
+                {bannerItem.overview && (
+                  <p className="text-xs sm:text-sm text-zinc-200/90 line-clamp-2 max-w-xl leading-relaxed drop-shadow">
+                    {bannerItem.overview}
+                  </p>
+                )}
+              </div>
+
+              {/* Bottom Action Bar: Left (Play + More Info) & Right (Recently Added + TOP 10 #1) */}
+              <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 pt-1">
+                <div className="flex flex-row items-center gap-2 sm:gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenItem(bannerItem, true)}
+                    className="group/heroplay w-auto shrink-0 h-10 sm:h-12 px-5 sm:px-8 rounded-full bg-white hover:bg-zinc-200 focus:bg-[#1e3a8a] text-[#081220] hover:text-[#081220] focus:text-white border border-white/80 focus:border-[#3b82f6]/50 text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 sm:gap-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all focus:outline-none focus:ring-4 focus:ring-white focus:scale-105 cursor-pointer whitespace-nowrap"
+                  >
+                    <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current text-[#081220] group-focus/heroplay:text-white shrink-0" />
+                    <span className="text-[#081220] group-focus/heroplay:text-white font-extrabold">
+                      {uiLang === 'ro'
+                        ? 'Redă'
+                        : uiLang === 'en'
+                          ? 'Play'
+                          : 'Смотреть'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenItem(bannerItem, false)}
+                    className="w-auto shrink-0 h-10 sm:h-12 px-4 sm:px-7 rounded-full bg-zinc-700/75 hover:bg-zinc-600/85 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 text-white text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer whitespace-nowrap"
+                  >
+                    <span>
+                      {uiLang === 'ro'
+                        ? 'Mai multe detalii'
+                        : uiLang === 'en'
+                          ? 'More Info'
+                          : 'Подробнее'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="hidden sm:flex flex-wrap items-center gap-2.5">
+                  <span className="h-9 px-3.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white inline-flex items-center gap-2 shadow-lg">
+                    <Flame className="w-4 h-4 text-[#E50914] fill-[#E50914]" />
+                    <span>
+                      {uiLang === 'ro'
+                        ? 'Adăugat Recent'
+                        : uiLang === 'en'
+                          ? 'Recently Added'
+                          : 'Недавно добавлено'}
+                    </span>
+                  </span>
+
+                  <span className="h-9 px-3.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white inline-flex items-center gap-2 shadow-lg">
+                    <span className="px-1.5 py-0.5 rounded bg-[#E50914] text-white text-[9px] font-black leading-none uppercase">
+                      TOP 10
+                    </span>
+                    <span>
+                      #{safeIdx + 1}{' '}
+                      {isSeriesBanner
+                        ? uiLang === 'ro'
+                          ? 'în Seriale Rusești Azi'
+                          : uiLang === 'en'
+                            ? 'in Russian Series Today'
+                            : 'в Топе Сериалов Сегодня'
+                        : uiLang === 'ro'
+                          ? 'în Filme Rusești Azi'
+                          : uiLang === 'en'
+                            ? 'in Russian Movies Today'
+                            : 'в Топе Фильмов Сегодня'}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+            {/* Category Pills (Wrapped cleanly, Russian Movies & Russian Series separated first with clean vector & flag icons) */}
       <div className="flex flex-wrap items-center gap-2">
         {IEDEM_VOD_CATEGORIES.map((cat) => {
           const active = selectedCategoryId === cat.id && !debouncedQuery;
@@ -535,7 +866,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                 setDebouncedQuery('');
                 setSelectedCategoryId(cat.id);
               }}
-              className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+              className={`px-4 py-2 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
                 active
                   ? 'bg-[#1e3a8a] text-white border-[#60a5fa]/60 shadow-lg shadow-blue-900/40'
                   : 'bg-[#101829]/85 text-zinc-300 border-white/10 hover:bg-[#172554] hover:text-white focus:bg-white focus:text-[#141414]'
@@ -571,7 +902,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                 key={net.id}
                 type="button"
                 onClick={() => setSelectedTvNetwork(net.id)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer inline-flex items-center gap-1.5 ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-extrabold whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer inline-flex items-center gap-1.5 ${
                   active
                     ? 'bg-[#2563eb] text-white border-[#93c5fd] shadow-md shadow-blue-900/50'
                     : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:bg-[#172554] hover:text-white focus:bg-white focus:text-[#141414]'
@@ -599,7 +930,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                   key={y.label}
                   type="button"
                   onClick={() => setSelectedYear(y.value)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                  className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap border transition-colors focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
                     active
                       ? 'bg-[#1e3a8a] text-white border-[#60a5fa]/60 shadow'
                       : 'bg-zinc-900/70 text-zinc-400 border-white/10 hover:text-white focus:bg-white focus:text-[#141414]'
@@ -615,7 +946,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
             <select
               value={selectedGenre}
               onChange={(e) => setSelectedGenre(Number(e.target.value))}
-              className="px-3 py-1.5 rounded-lg bg-[#101829] border border-[#3b82f6]/35 text-xs font-bold text-zinc-200 focus:outline-none focus:border-[#60a5fa]"
+              className="px-3.5 py-1 rounded-full bg-[#101829] border border-[#3b82f6]/35 text-xs font-bold text-zinc-200 focus:outline-none focus:border-[#60a5fa]"
             >
               {IEDEM_VOD_GENRES.map((g) => (
                 <option key={g.value} value={g.value}>
@@ -681,56 +1012,59 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                         src={item.img}
                         alt={item.title}
                         loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
                         className="w-full h-full object-cover"
                       />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-zinc-600">
-                        <Film className="w-10 h-10" />
-                      </div>
-                    )}
+                    ) : null}
+                    <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-zinc-500 bg-gradient-to-b from-[#172554]/40 to-[#0f172a]">
+                      <Film className="w-10 h-10 mb-2 text-[#60a5fa]/60" />
+                      <span className="text-xs font-bold text-zinc-300 line-clamp-3">
+                        {item.title}
+                      </span>
+                    </div>
 
                     {/* Top Quality, KP Rating & Type Badges (Sus lângă scrisul ФИЛЬМ / СЕРИАЛ) */}
-                    <div className="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between gap-1 pointer-events-none">
-                      <div className="flex items-center gap-1">
-                        {item.networkBadge ? (
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-[#1e3a8a]/95 text-white border border-[#60a5fa]/60 shadow">
-                            {item.networkBadge}
-                          </span>
-                        ) : item['4k'] ? (
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-400 text-zinc-950 shadow">
-                            4K UHD
-                          </span>
-                        ) : item.fhd ? (
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#0d1f38]/95 text-[#93c5fd] border border-[#60a5fa]/40 shadow">
-                            1080p
-                          </span>
-                        ) : null}
-                      </div>
+                    {(() => {
+                      const cleanNetBadge =
+                        item.networkBadge && !/kinozal/i.test(item.networkBadge)
+                          ? item.networkBadge
+                          : '';
+                      return (
+                        <div className="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between gap-1 pointer-events-none">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <span className="px-2 py-0.5 rounded-full bg-black/85 backdrop-blur-sm border border-[#ff5500]/50 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1 whitespace-nowrap shrink-0">
+                              <span className="text-[#ff5500]">KP</span>
+                              <span>{rInfo.value}</span>
+                            </span>
+                            {cleanNetBadge ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-[#1e3a8a]/95 text-white border border-[#60a5fa]/60 shadow whitespace-nowrap shrink-0">
+                                {cleanNetBadge}
+                              </span>
+                            ) : item['4k'] ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-zinc-950 shadow whitespace-nowrap shrink-0">
+                                4K
+                              </span>
+                            ) : null}
+                          </div>
 
-                      <div className="flex items-center gap-1">
-                        <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-[#ff5500]/50 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
-                          <span className="text-[#ff5500]">KP</span>
-                          <span>{rInfo.value}</span>
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
-                            isSeries
-                              ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
-                              : 'bg-amber-500/90 text-zinc-950'
-                          }`}
-                        >
-                          {item.tvShowNetwork
-                            ? epCount > 0
-                              ? `ШОУ • ${epCount} ВЫП.`
-                              : 'ТВ-ШОУ'
-                            : isSeries
-                              ? epCount > 0
-                                ? `СЕРИАЛ • ${epCount} СЕР.`
-                                : 'СЕРИАЛ'
-                              : 'ФИЛЬМ'}
-                        </span>
-                      </div>
-                    </div>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap shrink-0 ${
+                              isSeries
+                                ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                : 'bg-amber-500/90 text-zinc-950'
+                            }`}
+                          >
+                            {item.tvShowNetwork
+                              ? 'ТВ-ШОУ'
+                              : isSeries
+                                ? 'СЕРИАЛ'
+                                : 'ФИЛЬМ'}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div className="mt-2.5 px-0.5">
@@ -739,7 +1073,9 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                     </div>
                     <div className="text-xs text-zinc-400 mt-0.5">
                       {item.year || '2026'}
-                      {item.networkBadge ? ` • ${item.networkBadge}` : ''}
+                      {item.networkBadge && !/kinozal/i.test(item.networkBadge)
+                        ? ` • ${item.networkBadge}`
+                        : ''}
                       {item.tvShowNetwork
                         ? epCount > 0
                           ? item.explicitSeason

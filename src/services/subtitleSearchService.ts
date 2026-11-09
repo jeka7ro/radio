@@ -488,10 +488,22 @@ export async function autoResolveAndFetchBestRoRuSubtitle(params: {
 
   if (!cleanImdb.startsWith('tt')) {
     const query = (params.nameOriginal || params.title || '').trim();
-    if (query.length >= 2) {
+    // Never search Cinemeta with a pure Cyrillic title (Cinemeta is English-only and returns random anime/fuzzy matches)
+    const hasLatin = /[a-zA-Z]/.test(query);
+    if (query.length >= 2 && hasLatin) {
       const candidates = await searchMediaForSubtitles(query, params.type);
-      if (candidates[0]?.imdbId) {
-        cleanImdb = candidates[0].imdbId;
+      const normQ = query
+        .toLowerCase()
+        .replace(/\(\d{4}\)/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
+      const exactMatch = candidates.find((c) => {
+        const normC = (c.name || '')
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, '');
+        return Boolean(normC && (normC === normQ || normC.includes(normQ) || normQ.includes(normC)));
+      });
+      if (exactMatch?.imdbId) {
+        cleanImdb = exactMatch.imdbId;
       }
     }
   }

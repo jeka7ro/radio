@@ -341,7 +341,10 @@ export async function fetchCastForVodItem(params: {
                   : undefined),
               professionKey:
                 item.professionKey === 'DIRECTOR' ? 'DIRECTOR' : 'ACTOR',
-              photoUrl: item.posterUrl || undefined,
+              photoUrl:
+                item.posterUrl && !item.posterUrl.includes('no-poster')
+                  ? item.posterUrl
+                  : undefined,
             });
           }
         }
@@ -835,8 +838,12 @@ export async function fetchActorFullProfile(
     nameEn: kpStaffData?.nameEn || actor.nameEn || actor.name,
     nameRu: lang === 'ru' ? kpStaffData?.nameRu || actor.nameRu : undefined,
     photoUrl:
-      kpStaffData?.posterUrl ||
-      actor.photoUrl ||
+      (kpStaffData?.posterUrl && !kpStaffData.posterUrl.includes('no-poster')
+        ? kpStaffData.posterUrl
+        : undefined) ||
+      (actor.photoUrl && !actor.photoUrl.includes('no-poster')
+        ? actor.photoUrl
+        : undefined) ||
       wikiData.photoUrl ||
       undefined,
     birthday: kpStaffData?.birthday || undefined,

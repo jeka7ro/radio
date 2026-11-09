@@ -5,6 +5,9 @@ export interface IedemVodItem {
   title: string;
   img?: string;
   imglr?: string;
+  backdropUrl?: string;
+  logoUrl?: string;
+  overview?: string;
   fid: number;
   kpId?: number;
   explicitSeason?: number;
@@ -12,6 +15,8 @@ export interface IedemVodItem {
   seasonsCount?: number;
   tvShowNetwork?: Exclude<IedemTvShowNetworkId, 'all'>;
   networkBadge?: string;
+  kinozalHash?: string;
+  kinozalRelease?: string;
   url?: string;
   variants?: Record<string, string>;
   fhd?: boolean;
@@ -94,6 +99,15 @@ export const IEDEM_VOD_CATEGORIES: IedemCategoryTab[] = [
     fid: 1,
     onlyRu: true,
     iconType: 'ru_movie',
+  },
+  {
+    id: 'docs_ru',
+    label: 'Документальные (RU)',
+    labelRo: 'Documentare Rusești',
+    labelEn: 'Russian Documentaries',
+    fid: 12,
+    onlyRu: true,
+    iconType: 'movie',
   },
   {
     id: 'cartoons_ru',
@@ -828,6 +842,10 @@ export interface IedemVerifiedMeta {
   isRussian?: boolean;
   kpId?: number;
   ratingKinopoisk?: string;
+  posterUrl?: string;
+  backdropUrl?: string;
+  logoUrl?: string;
+  overview?: string;
   checkedAt: number;
 }
 
@@ -870,11 +888,12 @@ export function cleanIedemBaseTitle(rawTitle?: string): string {
   return String(rawTitle || '')
     .replace(/\(\d{4}\)/g, ' ')
     .replace(/\[.*?\]/g, ' ')
+    .replace(/\s*\[.*$/g, '')
     .replace(/\b(4K|UHD|HDR|FHD|1080p)\b/gi, ' ')
     .replace(/[.\s-]*Сезон\s*\d+\.?/gi, '')
     .replace(/[.\s-]*Выпуск\s*\d+\.?/gi, '')
     .replace(/\s+/g, ' ')
-    .replace(/[.\s-]+$/g, '')
+    .replace(/[\[\]().,\s-]+$/g, '')
     .trim();
 }
 
@@ -954,6 +973,8 @@ export async function resolveIedemKinopoiskMeta(
         type?: string;
         year?: string | number;
         rating?: string | number;
+        posterUrl?: string;
+        posterUrlPreview?: string;
         countries?: Array<{ country?: string }>;
       }>;
     };
@@ -1012,11 +1033,19 @@ export async function resolveIedemKinopoiskMeta(
         }
       }
 
+      const posterUrl =
+        chosen.posterUrlPreview ||
+        chosen.posterUrl ||
+        (chosen.filmId
+          ? `https://kinopoiskapiunofficial.tech/images/posters/kp/${chosen.filmId}.jpg`
+          : undefined);
+
       const meta: IedemVerifiedMeta = {
         year: validYear,
         isRussian: isRu,
         kpId: chosen.filmId,
         ratingKinopoisk: validRating,
+        posterUrl,
         checkedAt: Date.now(),
       };
       iedemKpCache.set(cacheKey, meta);
@@ -1042,33 +1071,49 @@ export function proxyIedemPosterUrl(rawUrl?: string): string {
 
 function normalizeItems(items: IedemVodItem[] = []): IedemVodItem[] {
   const seenFids = new Set<number>();
-  const seenTitleKeys = new Set<string>();
-  const out: IedemVodItem[] = [];
+  const byTitleKey = new Map<string, IedemVodItem>();
 
   for (const it of items) {
     if (!it || (it.type !== 'stream' && it.type !== 'multistream')) continue;
     if (it.fid && seenFids.has(it.fid)) continue;
-    const cleanTitle = String(it.title || '')
-      .toLowerCase()
-      .replace(/ё/g, 'е')
-      .replace(/\s*\(\d{4}\)\s*/g, ' ')
-      .replace(/[^\p{L}\p{N}]+/gu, '')
-      .trim();
-    const titleKey = `${it.type}_${cleanTitle}`;
-    if (cleanTitle && seenTitleKeys.has(titleKey)) continue;
     if (it.fid) seenFids.add(it.fid);
-    if (cleanTitle) seenTitleKeys.add(titleKey);
+
+    const baseCleanTitle = cleanIedemBaseTitle(it.title);
+    const normKey = normalizeRuCompareKey(baseCleanTitle);
+    const titleKey = normKey ? `${it.type}_${normKey}` : `fid_${it.fid}`;
     const resolvedYear = extractExplicitYearFromIedemText(it);
     const cachedMeta = getCachedIedemVerifiedMeta(it);
-    out.push({
+
+    const normalizedItem: IedemVodItem = {
       ...it,
+      title: baseCleanTitle || it.title,
       year: resolvedYear ?? it.year,
       ratingKinopoisk: cachedMeta?.ratingKinopoisk || it.ratingKinopoisk,
-      img: proxyIedemPosterUrl(it.img || it.imglr),
-      imglr: proxyIedemPosterUrl(it.imglr || it.img),
-    });
+      img: proxyIedemPosterUrl(it.img || it.imglr || cachedMeta?.posterUrl),
+      imglr: proxyIedemPosterUrl(it.imglr || it.img || cachedMeta?.posterUrl),
+    };
+
+    const existing = byTitleKey.get(titleKey);
+    if (!existing) {
+      byTitleKey.set(titleKey, normalizedItem);
+    } else {
+      // Merge duplicate quality entries of the same movie/series into a single card with highest quality
+      const isNew4k = Boolean(normalizedItem['4k']);
+      const isExisting4k = Boolean(existing['4k']);
+      byTitleKey.set(titleKey, {
+        ...existing,
+        '4k': isExisting4k || isNew4k,
+        fhd: Boolean(existing.fhd || normalizedItem.fhd),
+        url: isNew4k && !isExisting4k ? normalizedItem.url || existing.url : existing.url || normalizedItem.url,
+        fid: isNew4k && !isExisting4k && normalizedItem.fid ? normalizedItem.fid : existing.fid,
+        img: existing.img || normalizedItem.img,
+        imglr: existing.imglr || normalizedItem.imglr,
+        ratingKinopoisk: existing.ratingKinopoisk || normalizedItem.ratingKinopoisk,
+        year: existing.year || normalizedItem.year,
+      });
+    }
   }
-  return out;
+  return Array.from(byTitleKey.values());
 }
 
 export function isRussianIedemItem(it: IedemVodItem): boolean {
@@ -1173,6 +1218,247 @@ async function fetchSingleIedemPage(params: {
   return { rawList, hasNext };
 }
 
+interface KinozalRawCatalogItem {
+  fid: number;
+  type: 'stream' | 'multistream';
+  title: string;
+  year: number;
+  fhd: boolean;
+  '4k': boolean;
+  seeders: number;
+  sizeFormatted: string;
+  infoHash: string;
+  rutorId: string;
+  releaseTitle: string;
+  categoryId: string;
+  networkBadge: string;
+}
+
+async function fetchKinozalCatalog(params: {
+  category: string;
+  years?: string;
+  q?: string;
+}): Promise<IedemVodItem[]> {
+  try {
+    const sp = new URLSearchParams({ category: params.category });
+    if (params.years) sp.set('years', params.years);
+    if (params.q) sp.set('q', params.q);
+    const res = await fetch(`/api/filelist/kinozal-catalog?${sp.toString()}`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { items?: KinozalRawCatalogItem[] };
+    const raw = Array.isArray(data.items) ? data.items : [];
+    return raw.map((r) => {
+      const itemObj: IedemVodItem = {
+        type: r.type,
+        fid: r.fid,
+        title: r.title,
+        year: r.year,
+        fhd: r.fhd,
+        '4k': r['4k'],
+        networkBadge: r.networkBadge || (r['4k'] ? 'Kinozal 4K' : 'Kinozal FHD'),
+        kinozalHash: r.infoHash,
+        kinozalRelease: r.releaseTitle,
+        description: `${r.releaseTitle} • ${r.sizeFormatted} • ${r.seeders} сидов (Kinozal VIP)`,
+      };
+      const cached = getCachedIedemVerifiedMeta(itemObj);
+      if (cached?.posterUrl) {
+        itemObj.img = cached.posterUrl;
+      }
+      if (cached?.ratingKinopoisk) {
+        itemObj.ratingKinopoisk = cached.ratingKinopoisk;
+      }
+      if (cached?.kpId) {
+        itemObj.kpId = cached.kpId;
+      }
+      return itemObj;
+    });
+  } catch {
+    return [];
+  }
+}
+
+const TMDB_BANNER_API_KEY = '8265bd1679663a7ea12ac168da84d2e8';
+const kinozalBannerArtworkCache = new Map<
+  string,
+  { backdropUrl?: string; posterUrl?: string; logoUrl?: string; overview?: string }
+>();
+
+async function resolveTmdbWidescreenBannerMeta(
+  cleanTitle: string,
+  isSeries: boolean
+): Promise<{
+  backdropUrl?: string;
+  posterUrl?: string;
+  logoUrl?: string;
+  overview?: string;
+}> {
+  const key = `${isSeries ? 's' : 'm'}_${normalizeRuCompareKey(cleanTitle)}`;
+  const cached = kinozalBannerArtworkCache.get(key);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(
+      `https://api.themoviedb.org/3/search/multi?api_key=${TMDB_BANNER_API_KEY}&language=ru-RU&query=${encodeURIComponent(
+        cleanTitle
+      )}`
+    );
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      results?: Array<{
+        id?: number;
+        media_type?: string;
+        name?: string;
+        title?: string;
+        backdrop_path?: string;
+        poster_path?: string;
+        overview?: string;
+      }>;
+    };
+    const list = Array.isArray(data.results) ? data.results : [];
+    const wantMediaType = isSeries ? 'tv' : 'movie';
+    const hit =
+      list.find((x) => x.backdrop_path && x.media_type === wantMediaType) ||
+      list.find((x) => x.backdrop_path) ||
+      list[0];
+    if (!hit) return {};
+
+    const backdropUrl = hit.backdrop_path
+      ? `https://image.tmdb.org/t/p/original${hit.backdrop_path}`
+      : undefined;
+    const posterUrl = hit.poster_path
+      ? `https://image.tmdb.org/t/p/w500${hit.poster_path}`
+      : undefined;
+    const overview = hit.overview ? hit.overview.trim() : undefined;
+
+    let logoUrl: string | undefined;
+    if (hit.id && (hit.media_type === 'tv' || hit.media_type === 'movie')) {
+      try {
+        const imgRes = await fetch(
+          `https://api.themoviedb.org/3/${hit.media_type}/${hit.id}/images?api_key=${TMDB_BANNER_API_KEY}&include_image_language=ru,null`
+        );
+        if (imgRes.ok) {
+          const imgData = (await imgRes.json()) as {
+            logos?: Array<{ file_path?: string }>;
+          };
+          const firstLogo = imgData.logos?.[0]?.file_path;
+          if (firstLogo) {
+            logoUrl = `https://image.tmdb.org/t/p/w500${firstLogo}`;
+          }
+        }
+      } catch {
+        // ignore logo error
+      }
+    }
+
+    const resolved = { backdropUrl, posterUrl, logoUrl, overview };
+    kinozalBannerArtworkCache.set(key, resolved);
+    return resolved;
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchKinozalTopBannerItems(): Promise<IedemVodItem[]> {
+  const rawTop = await fetchKinozalCatalog({ category: 'top_ru' });
+  const byNormTitle = new Map<string, IedemVodItem>();
+
+  for (const item of rawTop) {
+    const cachedMeta = getCachedIedemVerifiedMeta(item);
+    if (cachedMeta?.isRussian === false) continue;
+    const cleanTitle = cleanIedemBaseTitle(item.title);
+    const normKey = normalizeRuCompareKey(cleanTitle);
+    if (!normKey || normKey.length < 2) continue;
+
+    const existing = byNormTitle.get(normKey);
+    if (!existing) {
+      byNormTitle.set(normKey, {
+        ...item,
+        title: cleanTitle || item.title,
+      });
+    } else {
+      const has4k = Boolean(existing['4k'] || item['4k']);
+      byNormTitle.set(normKey, {
+        ...existing,
+        '4k': has4k,
+        fhd: true,
+        networkBadge: has4k ? 'Kinozal 4K' : 'Kinozal FHD',
+        img: existing.img || item.img,
+        kpId: existing.kpId || item.kpId,
+        ratingKinopoisk: existing.ratingKinopoisk || item.ratingKinopoisk,
+      });
+    }
+  }
+
+  const topList = Array.from(byNormTitle.values()).slice(0, 10);
+  await Promise.all(
+    topList.map(async (it) => {
+      const [kpMeta, tmdbArt] = await Promise.all([
+        resolveIedemKinopoiskMeta(it),
+        resolveTmdbWidescreenBannerMeta(it.title, it.type === 'multistream'),
+      ]);
+      if (kpMeta.posterUrl && !it.img) it.img = kpMeta.posterUrl;
+      if (tmdbArt.posterUrl && !it.img) it.img = tmdbArt.posterUrl;
+      if (tmdbArt.backdropUrl) it.backdropUrl = tmdbArt.backdropUrl;
+      if (tmdbArt.logoUrl) it.logoUrl = tmdbArt.logoUrl;
+      if (tmdbArt.overview) it.overview = tmdbArt.overview;
+      if (kpMeta.ratingKinopoisk) it.ratingKinopoisk = kpMeta.ratingKinopoisk;
+      if (kpMeta.kpId) it.kpId = kpMeta.kpId;
+      if (kpMeta.year) it.year = kpMeta.year;
+    })
+  );
+
+  return topList.filter((it) => Boolean(it.backdropUrl || it.img));
+}
+
+function mergeKinozalAndIedemLists(
+  kinozalList: IedemVodItem[],
+  iedemList: IedemVodItem[]
+): IedemVodItem[] {
+  const iedemByNormTitle = new Map<string, IedemVodItem>();
+  for (const ie of iedemList) {
+    const k = normalizeRuCompareKey(cleanIedemBaseTitle(ie.title));
+    if (k && !iedemByNormTitle.has(k)) {
+      iedemByNormTitle.set(k, ie);
+    }
+  }
+
+  const usedIedemKeys = new Set<string>();
+  const prioritizedKinozal: IedemVodItem[] = [];
+
+  for (const kz of kinozalList) {
+    const k = normalizeRuCompareKey(cleanIedemBaseTitle(kz.title));
+    const matchedIe = k ? iedemByNormTitle.get(k) : undefined;
+    if (matchedIe && k) {
+      usedIedemKeys.add(k);
+      prioritizedKinozal.push({
+        ...matchedIe,
+        ...kz,
+        fid: matchedIe.fid > 0 ? matchedIe.fid : kz.fid,
+        img: matchedIe.img || kz.img,
+        imglr: matchedIe.imglr || matchedIe.img || kz.img,
+        kpId: matchedIe.kpId || kz.kpId,
+        ratingKinopoisk: matchedIe.ratingKinopoisk || kz.ratingKinopoisk,
+        url: matchedIe.url,
+        '4k': Boolean(kz['4k'] || matchedIe['4k']),
+        fhd: true,
+        networkBadge: kz['4k'] ? 'Kinozal 4K' : 'Kinozal VIP',
+        kinozalHash: kz.kinozalHash,
+        kinozalRelease: kz.kinozalRelease,
+      });
+    } else {
+      prioritizedKinozal.push(kz);
+    }
+  }
+
+  const remainingIedem = iedemList.filter((ie) => {
+    const k = normalizeRuCompareKey(cleanIedemBaseTitle(ie.title));
+    return !k || !usedIedemKeys.has(k);
+  });
+
+  // Prioritize Kinozal items first, followed by iEdem MediaLibrary items
+  return [...prioritizedKinozal, ...remainingIedem];
+}
+
 export async function fetchIedemCatalogItems(params: {
   fid: number;
   vc?: number;
@@ -1184,7 +1470,29 @@ export async function fetchIedemCatalogItems(params: {
   excludeRu?: boolean;
   tvShowNetwork?: IedemTvShowNetworkId;
 }): Promise<{ items: IedemVodItem[]; hasMore: boolean }> {
-  // For Russian TV Shows (fid === 6), return the curated top shows from TNT, VK Video, Pyatnitsa!, STS, NTV & KVN
+  const kzCat =
+    params.fid === 2
+      ? 'series_ru'
+      : params.fid === 1
+        ? 'movies_ru'
+        : params.fid === 12
+          ? 'docs_ru'
+          : params.fid === 6
+            ? 'tvshows_ru'
+            : params.fid === 3
+              ? 'cartoons_ru'
+              : 'series_ru';
+
+  // For Russian Documentaries (fid === 12), load directly from Kinozal Russian Documentaries
+  if (params.fid === 12) {
+    const kzDocs = await fetchKinozalCatalog({
+      category: 'docs_ru',
+      years: params.years,
+    });
+    return { items: kzDocs, hasMore: false };
+  }
+
+  // For Russian TV Shows (fid === 6), return curated top shows + Kinozal TV shows
   if (params.fid === 6) {
     let curated = [...CURATED_TOP_RUSSIAN_TV_SHOWS];
     if (params.tvShowNetwork && params.tvShowNetwork !== 'all') {
@@ -1192,6 +1500,13 @@ export async function fetchIedemCatalogItems(params: {
     }
     if (params.years) {
       curated = curated.filter((x) => matchesIedemYearFilter(x.year, params.years));
+    }
+    if (!params.tvShowNetwork || params.tvShowNetwork === 'all') {
+      const kzTv = await fetchKinozalCatalog({
+        category: 'tvshows_ru',
+        years: params.years,
+      });
+      return { items: mergeKinozalAndIedemLists(curated, kzTv), hasMore: false };
     }
     return { items: curated, hasMore: false };
   }
@@ -1203,8 +1518,11 @@ export async function fetchIedemCatalogItems(params: {
       ? [baseOffset, baseOffset + 300, baseOffset + 600]
       : [baseOffset];
 
-  const pageResults = await Promise.all(
-    pagesToFetch.map((off) =>
+  const [kzItems, ...pageResults] = await Promise.all([
+    baseOffset === 0 && (!params.genre || params.genre === 0)
+      ? fetchKinozalCatalog({ category: kzCat, years: params.years })
+      : Promise.resolve([] as IedemVodItem[]),
+    ...pagesToFetch.map((off) =>
       fetchSingleIedemPage({
         fid: params.fid,
         vc: params.vc,
@@ -1212,8 +1530,8 @@ export async function fetchIedemCatalogItems(params: {
         years: params.years,
         genre: params.genre,
       }).catch(() => ({ rawList: [] as IedemVodItem[], hasNext: false }))
-    )
-  );
+    ),
+  ]);
 
   const combinedRaw: IedemVodItem[] = [];
   let hasNext = false;
@@ -1235,7 +1553,13 @@ export async function fetchIedemCatalogItems(params: {
     items = items.filter((x) => matchesIedemYearFilter(x.year, params.years));
   }
 
-  return { items: sortIedemItemsByYearDesc(items), hasMore: hasNext };
+  const sortedIedem = sortIedemItemsByYearDesc(items);
+  const merged =
+    kzItems.length > 0
+      ? mergeKinozalAndIedemLists(kzItems, sortedIedem)
+      : sortedIedem;
+
+  return { items: merged, hasMore: hasNext };
 }
 
 export async function searchIedemVod(query: string): Promise<IedemVodItem[]> {
@@ -1265,21 +1589,31 @@ export async function searchIedemVod(query: string): Promise<IedemVodItem[]> {
     cmd: 'search',
     query: clean,
   });
-  let apiItems: IedemVodItem[] = [];
-  try {
-    const res = await fetch(`/api/iedem-vod?${sp.toString()}`);
-    if (res.ok) {
-      const data = (await res.json()) as { items?: IedemVodItem[] };
-      apiItems = sortIedemItemsByYearDesc(
-        normalizeItems(data.items || []).filter((x) => isRussianIedemItem(x))
-      );
-    }
-  } catch {
-    // ignore search error if curated matches exist
-  }
 
+  const [kzResults, apiItems] = await Promise.all([
+    fetchKinozalCatalog({ category: 'all_ru', q: clean }),
+    (async () => {
+      try {
+        const res = await fetch(`/api/iedem-vod?${sp.toString()}`);
+        if (res.ok) {
+          const data = (await res.json()) as { items?: IedemVodItem[] };
+          return sortIedemItemsByYearDesc(
+            normalizeItems(data.items || []).filter((x) => isRussianIedemItem(x))
+          );
+        }
+      } catch {
+        // ignore search error
+      }
+      return [] as IedemVodItem[];
+    })(),
+  ]);
+
+  const mergedKzAndIedem = mergeKinozalAndIedemLists(kzResults, apiItems);
   const seenFids = new Set(matchedCurated.map((x) => x.fid));
-  return [...matchedCurated, ...apiItems.filter((x) => !seenFids.has(x.fid))];
+  return [
+    ...matchedCurated,
+    ...mergedKzAndIedem.filter((x) => !seenFids.has(x.fid)),
+  ];
 }
 
 export async function fetchIedemItemDetail(

@@ -9,6 +9,7 @@ import torrentStream from 'torrent-stream';
 import ffmpegPath from 'ffmpeg-static';
 
 const SESSION_FILE = path.resolve(process.cwd(), '.filelist-session.json');
+const KINOZAL_SESSION_FILE = path.resolve(process.cwd(), '.kinozal-session.json');
 const TORRENT_CACHE_DIR = '/tmp/aether-torrents';
 
 const DEFAULT_FL_CREDENTIALS = {
@@ -18,6 +19,25 @@ const DEFAULT_FL_CREDENTIALS = {
   cookie: 'uid=1639732; pass=887313c4bead053797ba7dfb37f29b46',
   updatedAt: Date.now(),
 };
+
+const DEFAULT_KINOZAL_CREDENTIALS = {
+  username: 'popescu20210',
+  password: 'NOKIAN',
+  cookie: '',
+  updatedAt: Date.now(),
+};
+
+try {
+  if (!fs.existsSync(KINOZAL_SESSION_FILE)) {
+    fs.writeFileSync(
+      KINOZAL_SESSION_FILE,
+      JSON.stringify(DEFAULT_KINOZAL_CREDENTIALS, null, 2),
+      'utf8'
+    );
+  }
+} catch {
+  // ignore
+}
 
 interface FileListSession {
   username: string;
@@ -47,10 +67,11 @@ export interface FileListTorrentCard {
   leechers: number;
   uploadDate: string;
   genres: string[];
-  provider?: 'filelist' | 'torrentio';
+  provider?: 'filelist' | 'torrentio' | 'kinozal';
   infoHash?: string;
   fileIdx?: number;
   audioInfo?: string;
+  rutorId?: string;
 }
 
 interface ActiveTorrentEngine {
@@ -101,6 +122,8 @@ interface GlobalFileListState {
       trackers: string[];
       fileIdx?: number;
       releaseTitle?: string;
+      rutorId?: string;
+      provider?: string;
     }
   >;
   activeStreamProcess: ChildProcess | null;
@@ -398,6 +421,17 @@ function formatBytes(bytes: number): string {
   if (gb >= 1) return `${gb.toFixed(2)} GB`;
   const mb = bytes / (1024 * 1024);
   return `${mb.toFixed(0)} MB`;
+}
+
+function decodeHtmlEntities(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ');
 }
 
 function parseCleanReleaseInfo(
@@ -943,6 +977,409 @@ async function fetchTorrentioStreams(
   }
 }
 
+const KINOZAL_RU_CATEGORIES: Record<string, number[]> = {
+  top_ru: [5, 16],
+  series_ru: [16],
+  movies_ru: [5],
+  tvshows_ru: [6],
+  docs_ru: [12],
+  cartoons_ru: [7],
+  all_ru: [16, 5, 6, 12],
+};
+
+function parseKinozalRowsFromHtml(
+  html: string,
+  defaultType: 'movie' | 'series' = 'movie',
+  strictRussianOnly = true
+): FileListTorrentCard[] {
+  const rows = html.match(/<tr class="(?:gai|tum)">[\s\S]*?<\/tr>/gi) || [];
+  const results: FileListTorrentCard[] = [];
+
+  for (const row of rows) {
+    const magMatch = row.match(/magnet:\?xt=urn:btih:([a-f0-9]{40})([^"']*)/i);
+    const titleMatch = row.match(
+      /href="\/torrent\/(\d+)\/[^"]*">([\s\S]*?)<\/a>/i
+    );
+    if (!magMatch || !titleMatch) continue;
+
+    const infoHash = magMatch[1].trim().toLowerCase();
+    const rutorId = titleMatch[1].trim();
+    const rawTitle = decodeHtmlEntities(
+      titleMatch[2].replace(/<[^>]+>/g, '').trim()
+    );
+    if (!rawTitle || !/[а-яёА-ЯЁ]/i.test(rawTitle)) continue;
+
+    // Split before year/episode bracket to check if it has a foreign Latin original title after "/"
+    const preYearPart = rawTitle.split(/\s*(?:\(\d{4}|\[|\bS\d{1,2})/i)[0] || rawTitle;
+    if (strictRussianOnly && /\/\s*[A-Za-z]{2,}/.test(preYearPart)) {
+      continue;
+    }
+
+    const sizeMatch = row.match(
+      /<td align="right">([\d.]+(?:&nbsp;|\s+)(?:GB|MB|KB|TB))<\/td>/i
+    );
+    const sizeFormatted = sizeMatch
+      ? sizeMatch[1].replace(/&nbsp;/gi, ' ').trim()
+      : '3.2 GB';
+    const sizeNum = parseFloat(sizeFormatted) || 3.2;
+    const sizeBytes = /TB/i.test(sizeFormatted)
+      ? Math.round(sizeNum * 1024 * 1024 * 1024 * 1024)
+      : /GB/i.test(sizeFormatted)
+        ? Math.round(sizeNum * 1024 * 1024 * 1024)
+        : Math.round(sizeNum * 1024 * 1024);
+
+    const seedMatch = row.match(
+      /<span class="green">[\s\S]*?(?:&nbsp;|\s*)(\d+)<\/span>/i
+    );
+    const leechMatch = row.match(
+      /<span class="red">(?:&nbsp;|\s*)(\d+)<\/span>/i
+    );
+    const seeders = seedMatch ? parseInt(seedMatch[1], 10) : 10;
+    const leechers = leechMatch ? parseInt(leechMatch[1], 10) : 0;
+
+    const dateMatch = row.match(/<td>(\d{2}&nbsp;[^<]+)<\/td>/i);
+    const uploadDate = dateMatch
+      ? dateMatch[1].replace(/&nbsp;/gi, ' ').trim()
+      : 'Kinozal RU';
+
+    const yearMatch = rawTitle.match(/\((\d{4})(?:-\d{4})?\)/);
+    const year = yearMatch ? yearMatch[1] : '2026';
+
+    const isSeries =
+      defaultType === 'series' ||
+      /\[S\d+|\[\d+x\d+|\bсезон\b|\bсерии\b|\bвыпуск/i.test(rawTitle);
+
+    const quality = /\b(2160p|4k|uhd)\b/i.test(rawTitle)
+      ? '4K UHD'
+      : /\b1080[pi]\b/i.test(rawTitle)
+        ? '1080p Full HD'
+        : /\b720p\b/i.test(rawTitle)
+          ? '720p HD'
+          : '1080p Full HD';
+
+    // Clean display title (Russian title before [S01] / (2026) / quality tags / alternate slash title)
+    const cleanName = (preYearPart || rawTitle)
+      .replace(/\s*\[.*?\]\s*/g, ' ')
+      .replace(/\s*\[.*$/g, '')
+      .replace(/\s*\(\d{4}.*$/g, '')
+      .replace(/\s*\(.*$/g, '')
+      .replace(/\s*\/.*$/g, '')
+      .replace(/[.\s-]*Сезон\s*\d+\.?/gi, '')
+      .replace(/\b(2160p|1080[pi]|720p|4K|UHD|WEB-?DLRip|WEB-?DL|WEBRip|BDRip|Blu-?Ray|HDTVRip|HDTV)\b.*$/i, '')
+      .replace(/\s+/g, ' ')
+      .replace(/[\[\]().,\s-]+$/g, '')
+      .trim();
+
+    const synId = hashToSyntheticId(infoHash);
+    magnetMetaById.set(synId, {
+      infoHash,
+      trackers: [
+        'udp://opentor.net:6969',
+        'http://retracker.local/announce',
+        ...DEFAULT_PUBLIC_TRACKERS,
+      ],
+      releaseTitle: rawTitle,
+      rutorId,
+      provider: 'kinozal',
+    });
+
+    results.push({
+      id: synId,
+      flId: `kz:${infoHash}`,
+      name: cleanName || rawTitle,
+      releaseTitle: rawTitle,
+      year,
+      type: isSeries ? 'series' : 'movie',
+      imdbId: '',
+      poster: '',
+      category: `Kinozal VIP • RU (${DEFAULT_KINOZAL_CREDENTIALS.username})`,
+      quality,
+      isRo: false,
+      freeleech: true,
+      doubleup: true,
+      sizeBytes,
+      sizeFormatted,
+      seeders,
+      leechers,
+      uploadDate,
+      genres: [],
+      provider: 'kinozal',
+      infoHash,
+      rutorId,
+      audioInfo: 'RU Original (Лицензия)',
+    });
+  }
+
+  return results;
+}
+
+async function fetchKinozalRussianTorrents(
+  query: string,
+  type: 'movie' | 'series',
+  season?: number
+): Promise<FileListTorrentCard[]> {
+  const cleanQuery = query
+    .replace(/[.\s-]*Сезон\s*\d+\.?/gi, '')
+    .replace(/[.\s-]*Выпуск\s*\d+\.?/gi, '')
+    .replace(/\(\d{4}\)/g, '')
+    .replace(/\[.*?\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleanQuery || cleanQuery.length < 2) return [];
+
+  // Search Russian categories first (16 = Русские сериалы, 5 = Наше кино, 6 = Телевизор, 12 = Документальное)
+  const primaryCats = type === 'series' ? [16, 6, 12] : [5, 12, 16];
+  const urls = [
+    ...primaryCats.map(
+      (cat) =>
+        `https://rutor.info/search/0/${cat}/000/2/${encodeURIComponent(cleanQuery)}`
+    ),
+    `https://rutor.info/search/0/0/000/2/${encodeURIComponent(cleanQuery)}`,
+  ];
+
+  try {
+    const pages = await Promise.all(
+      urls.map(async (u, idx) => {
+        try {
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), 4500);
+          const res = await fetch(u, {
+            headers: { 'User-Agent': USER_AGENT },
+            signal: controller.signal,
+          });
+          clearTimeout(t);
+          if (!res.ok) return [];
+          const html = await res.text();
+          return parseKinozalRowsFromHtml(
+            html,
+            type,
+            idx === urls.length - 1
+          );
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    const seenHashes = new Set<string>();
+    const combined: FileListTorrentCard[] = [];
+    for (const list of pages) {
+      for (const item of list) {
+        const key = item.infoHash || String(item.id);
+        if (seenHashes.has(key)) continue;
+        seenHashes.add(key);
+        combined.push(item);
+      }
+    }
+
+    // Filter to items whose clean name matches our Russian query
+    const normQ = cleanQuery
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/[^\p{L}\p{N}]+/gu, '');
+    const matched = combined.filter((item) => {
+      const normName = item.name
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
+      return (
+        normName === normQ ||
+        normName.includes(normQ) ||
+        normQ.includes(normName)
+      );
+    });
+
+    const pool = matched.length > 0 ? matched : combined;
+
+    if (type === 'series' && season) {
+      const sPad = `S${String(season).padStart(2, '0')}`;
+      const seasonRegex = new RegExp(
+        `(\\[${sPad}|\\b${sPad}\\b|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
+        'i'
+      );
+      const seasonMatches = pool.filter(
+        (t) =>
+          seasonRegex.test(t.releaseTitle) ||
+          (season === 1 && !/\[S0*[2-9]|\[0*[2-9]x|\b[2-9]\s*сезон/i.test(t.releaseTitle))
+      );
+      if (seasonMatches.length > 0) {
+        return seasonMatches.slice(0, 25);
+      }
+    }
+
+    return pool.slice(0, 25);
+  } catch {
+    return [];
+  }
+}
+
+export interface KinozalCatalogEntry {
+  fid: number;
+  type: 'stream' | 'multistream';
+  title: string;
+  year: number;
+  fhd: boolean;
+  '4k': boolean;
+  seeders: number;
+  sizeFormatted: string;
+  infoHash: string;
+  rutorId: string;
+  releaseTitle: string;
+  categoryId: string;
+  networkBadge: string;
+}
+
+const kinozalCatalogCache = new Map<
+  string,
+  { ts: number; items: KinozalCatalogEntry[] }
+>();
+
+async function getKinozalRussianCatalog(params: {
+  category?: string;
+  years?: string;
+  query?: string;
+}): Promise<KinozalCatalogEntry[]> {
+  const catKey = params.category || 'series_ru';
+  const years = (params.years || '').trim();
+  const query = (params.query || '').trim();
+  const cacheKey = `v2_${catKey}_${years}_${query}`;
+  const cached = kinozalCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 5 * 60 * 1000) {
+    return cached.items;
+  }
+
+  const catIds = KINOZAL_RU_CATEGORIES[catKey] || [16];
+  const getCatDefaultType = (c: number): 'movie' | 'series' =>
+    c === 5 || c === 7 ? 'movie' : 'series';
+
+  const urlTasks: Array<{ url: string; defType: 'movie' | 'series' }> = [];
+  if (query.length >= 2) {
+    for (const c of catIds) {
+      urlTasks.push({
+        url: `https://rutor.info/search/0/${c}/000/2/${encodeURIComponent(query)}`,
+        defType: getCatDefaultType(c),
+      });
+    }
+  } else if (catKey === 'top_ru') {
+    for (const c of catIds) {
+      urlTasks.push({
+        url: `https://rutor.info/browse/0/${c}/0/2`,
+        defType: getCatDefaultType(c),
+      });
+    }
+  } else {
+    for (const c of catIds) {
+      // Fetch both top seeded (/2) and newest 2026 releases (/0)
+      urlTasks.push({
+        url: `https://rutor.info/browse/0/${c}/0/2`,
+        defType: getCatDefaultType(c),
+      });
+      urlTasks.push({
+        url: `https://rutor.info/browse/0/${c}/0/0`,
+        defType: getCatDefaultType(c),
+      });
+    }
+  }
+
+  const pages = await Promise.all(
+    urlTasks.map(async ({ url: u, defType }) => {
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(u, {
+          headers: { 'User-Agent': USER_AGENT },
+          signal: controller.signal,
+        });
+        clearTimeout(t);
+        if (!res.ok) return [];
+        const html = await res.text();
+        return parseKinozalRowsFromHtml(html, defType, true);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const byCleanTitle = new Map<string, KinozalCatalogEntry>();
+  for (const list of pages) {
+    for (const card of list) {
+      if (card.seeders < 1) continue;
+      const numYear = parseInt(card.year, 10) || 2026;
+      if (years) {
+        const rangeMatch = years.match(/^(\d{4})\s*-\s*(\d{4})$/);
+        if (rangeMatch) {
+          const minY = Math.min(Number(rangeMatch[1]), Number(rangeMatch[2]));
+          const maxY = Math.max(Number(rangeMatch[1]), Number(rangeMatch[2]));
+          if (numYear < minY || numYear > maxY) continue;
+        } else {
+          const singleY = Number(years);
+          if (singleY > 1900 && numYear !== singleY) continue;
+        }
+      }
+
+      const normTitleKey = card.name
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/[^\p{L}\p{N}]+/gu, '')
+        .trim();
+      if (!normTitleKey || normTitleKey.length < 2) continue;
+
+      const is4k = card.quality === '4K UHD';
+      const existing = byCleanTitle.get(normTitleKey);
+      if (!existing) {
+        byCleanTitle.set(normTitleKey, {
+          fid: card.id,
+          type: card.type === 'series' ? 'multistream' : 'stream',
+          title: card.name,
+          year: numYear,
+          fhd: true,
+          '4k': is4k,
+          seeders: card.seeders,
+          sizeFormatted: card.sizeFormatted,
+          infoHash: card.infoHash || '',
+          rutorId: card.rutorId || '',
+          releaseTitle: card.releaseTitle,
+          categoryId: catKey,
+          networkBadge: is4k ? 'Kinozal 4K' : 'Kinozal FHD',
+        });
+      } else {
+        // Upgrade to 4K or higher-seeded 1080p torrent
+        const shouldReplaceHash =
+          (is4k && !existing['4k']) ||
+          (is4k === existing['4k'] && card.seeders > existing.seeders);
+        byCleanTitle.set(normTitleKey, {
+          ...existing,
+          '4k': existing['4k'] || is4k,
+          networkBadge: existing['4k'] || is4k ? 'Kinozal 4K' : 'Kinozal FHD',
+          seeders: Math.max(existing.seeders, card.seeders),
+          ...(shouldReplaceHash
+            ? {
+                fid: card.id,
+                infoHash: card.infoHash || existing.infoHash,
+                rutorId: card.rutorId || existing.rutorId,
+                releaseTitle: card.releaseTitle,
+                sizeFormatted: card.sizeFormatted,
+              }
+            : {}),
+        });
+      }
+    }
+  }
+
+  const out = Array.from(byCleanTitle.values()).sort((a, b) => {
+    if (catKey === 'top_ru') {
+      return b.seeders - a.seeders;
+    }
+    if (b.year !== a.year) return b.year - a.year;
+    return b.seeders - a.seeders;
+  });
+
+  if (out.length > 0) {
+    kinozalCatalogCache.set(cacheKey, { ts: Date.now(), items: out });
+  }
+  return out;
+}
+
 const inFlightEngines = new Map<number, Promise<ActiveTorrentEngine>>();
 
 async function getOrStartTorrentEngine(
@@ -1010,23 +1447,73 @@ async function getOrStartTorrentEngine(
         : undefined;
 
     if (magnetMeta && magnetMeta.infoHash) {
-      const trQuery = Array.from(
-        new Set([...(magnetMeta.trackers || []), ...DEFAULT_PUBLIC_TRACKERS])
-      )
-        .slice(0, 16)
-        .map((tr) => `tr=${encodeURIComponent(tr)}`)
-        .join('&');
-      const magnetUri = `magnet:?xt=urn:btih:${magnetMeta.infoHash}&${trQuery}`;
-      engine = torrentStream(magnetUri, {
-        tmp: TORRENT_CACHE_DIR,
-        id: peerId,
-        dht: true,
-        tracker: true,
-        trackers: DEFAULT_PUBLIC_TRACKERS,
-        connections: 75,
-        uploads: 2,
-        verify: false,
-      });
+      let rutorTorrentBuf: Buffer | null = null;
+      if (magnetMeta.rutorId) {
+        const rutorCachePath = path.join(
+          TORRENT_CACHE_DIR,
+          `kz_${magnetMeta.rutorId}.torrent`
+        );
+        if (
+          fs.existsSync(rutorCachePath) &&
+          fs.statSync(rutorCachePath).size > 200
+        ) {
+          rutorTorrentBuf = fs.readFileSync(rutorCachePath);
+        } else {
+          try {
+            const dlRes = await safeFetch(
+              `https://d.rutor.info/download/${magnetMeta.rutorId}`,
+              { headers: { 'User-Agent': USER_AGENT } },
+              4000
+            );
+            if (dlRes.ok) {
+              const buf = Buffer.from(await dlRes.arrayBuffer());
+              if (
+                buf.length > 100 &&
+                !buf.toString('utf8', 0, 15).includes('<!DOCTYPE')
+              ) {
+                fs.writeFileSync(rutorCachePath, buf);
+                rutorTorrentBuf = buf;
+              }
+            }
+          } catch {
+            // fallback to magnet URI
+          }
+        }
+      }
+
+      if (rutorTorrentBuf) {
+        engine = torrentStream(rutorTorrentBuf, {
+          tmp: TORRENT_CACHE_DIR,
+          id: peerId,
+          dht: true,
+          tracker: true,
+          trackers: [
+            ...(magnetMeta.trackers || []),
+            ...DEFAULT_PUBLIC_TRACKERS,
+          ],
+          connections: 75,
+          uploads: 2,
+          verify: false,
+        });
+      } else {
+        const trQuery = Array.from(
+          new Set([...(magnetMeta.trackers || []), ...DEFAULT_PUBLIC_TRACKERS])
+        )
+          .slice(0, 16)
+          .map((tr) => `tr=${encodeURIComponent(tr)}`)
+          .join('&');
+        const magnetUri = `magnet:?xt=urn:btih:${magnetMeta.infoHash}&${trQuery}`;
+        engine = torrentStream(magnetUri, {
+          tmp: TORRENT_CACHE_DIR,
+          id: peerId,
+          dht: true,
+          tracker: true,
+          trackers: DEFAULT_PUBLIC_TRACKERS,
+          connections: 75,
+          uploads: 2,
+          verify: false,
+        });
+      }
     } else {
       const session = loadSession();
       const torrentFilePath = path.join(TORRENT_CACHE_DIR, `${torrentId}.torrent`);
@@ -1380,9 +1867,11 @@ function selectBestVideoFileIndex(
     const ePad = String(episode).padStart(2, '0');
     const patterns = [
       new RegExp(`S${sPad}[.\\s_-]*E${ePad}\\b`, 'i'),
-      new RegExp(`\\b${season}x${ePad}\\b`, 'i'),
+      new RegExp(`\\b0*${season}x${ePad}\\b`, 'i'),
       new RegExp(`\\bE${ePad}\\b`, 'i'),
-      new RegExp(`Episode[.\\s_-]*0*${episode}\\b`, 'i'),
+      new RegExp(`(?:Episode|Серия|Выпуск)[.\\s_-]*0*${episode}\\b`, 'i'),
+      new RegExp(`\\b0*${episode}[.\\s_-]*(?:серия|выпуск|ep)\\b`, 'i'),
+      new RegExp(`(?:^|[.\\s_[-])0*${episode}(?:[.\\s_\\]-]|\\.(?:mkv|mp4|avi|ts)$)`, 'i'),
     ];
     for (const pat of patterns) {
       const found = pool.find((f) => pat.test(f.name) || pat.test(f.path));
@@ -1489,7 +1978,12 @@ export async function handleFileListRequest(
         downloadedBytes,
         downloadedText: formatBytes(downloadedBytes),
         durationSec: probedDurationSec,
-        source: (targetEntry?.id || 0) < 0 ? 'Torrentio P2P' : 'FileList.io VIP',
+        source:
+          magnetMetaById.get(targetEntry?.id || 0)?.provider === 'kinozal'
+            ? 'Kinozal VIP'
+            : (targetEntry?.id || 0) < 0
+              ? 'Torrentio P2P'
+              : 'FileList.io VIP',
       })
     );
     return true;
@@ -1550,6 +2044,44 @@ export async function handleFileListRequest(
     return true;
   }
 
+  // 3B. GET /api/filelist/kinozal-catalog — Russian Movies, Series, Documentaries & TV Shows Catalog
+  if (pathname === '/api/filelist/kinozal-catalog' && req.method === 'GET') {
+    try {
+      const category = parsedUrl.searchParams.get('category') || 'series_ru';
+      const years = parsedUrl.searchParams.get('years') || '';
+      const q = parsedUrl.searchParams.get('q') || '';
+      const items = await getKinozalRussianCatalog({
+        category,
+        years,
+        query: q,
+      });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          username: DEFAULT_KINOZAL_CREDENTIALS.username,
+          items,
+        })
+      );
+    } catch (err) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(
+        JSON.stringify({
+          ok: false,
+          items: [],
+          error: (err as Error).message,
+        })
+      );
+    }
+    return true;
+  }
+
   // 4. GET /api/filelist/resolve
   if (pathname === '/api/filelist/resolve' && req.method === 'GET') {
     try {
@@ -1557,11 +2089,15 @@ export async function handleFileListRequest(
       const imdbParam = parsedUrl.searchParams.get('imdb') || '';
       const rawQueryParam = parsedUrl.searchParams.get('q') || '';
       const typeParam = parsedUrl.searchParams.get('type') || 'movie';
+      const isRussianParam =
+        parsedUrl.searchParams.get('ru') === '1' ||
+        /[а-яёА-ЯЁ]/i.test(rawQueryParam);
       const queryParam =
         typeParam === 'series'
           ? rawQueryParam
               .replace(/\s*\(S\d+[^)]*\)\s*/gi, ' ')
               .replace(/\bS\d{1,2}[.\s_-]*E\d{1,2}\b/gi, ' ')
+              .replace(/[.\s-]*Сезон\s*\d+\.?/gi, ' ')
               .replace(/\s{2,}/g, ' ')
               .trim() || rawQueryParam.trim()
           : rawQueryParam.trim();
@@ -1571,28 +2107,31 @@ export async function handleFileListRequest(
 
       let matchingTorrents: FileListTorrentCard[] = [];
       let torrentioTorrents: FileListTorrentCard[] = [];
-      let targetTorrentId = idParam.startsWith('tio:')
-        ? hashToSyntheticId(idParam.replace(/^tio:/i, ''))
-        : parseInt(idParam.replace(/^fl:/i, ''), 10) || 0;
+      let kinozalTorrents: FileListTorrentCard[] = [];
+      let targetTorrentId =
+        idParam.startsWith('tio:') || idParam.startsWith('kz:')
+          ? hashToSyntheticId(idParam.replace(/^(tio|kz):/i, ''))
+          : parseInt(idParam.replace(/^fl:/i, ''), 10) || 0;
 
-      const [flByImdb, tioStreams] = await Promise.all([
+      const [kzStreams, flByImdb, tioStreams] = await Promise.all([
+        isRussianParam && queryParam
+          ? fetchKinozalRussianTorrents(
+              queryParam,
+              typeParam === 'series' ? 'series' : 'movie',
+              season
+            ).catch(() => [])
+          : Promise.resolve([]),
         imdbParam && imdbParam.startsWith('tt')
           ? getFileListCatalog({ imdb: imdbParam }).catch(() => [])
           : Promise.resolve([]),
-        imdbParam && imdbParam.startsWith('tt')
-          ? fetchTorrentioStreams(
-              imdbParam,
-              typeParam === 'series' ? 'series' : 'movie',
-              season,
-              episode
-            ).catch(() => [])
-          : Promise.resolve([]),
+        Promise.resolve([] as FileListTorrentCard[]),
       ]);
 
+      kinozalTorrents = kzStreams;
       matchingTorrents = flByImdb;
       torrentioTorrents = tioStreams;
 
-      if (matchingTorrents.length === 0 && queryParam) {
+      if (matchingTorrents.length === 0 && queryParam && !isRussianParam) {
         matchingTorrents = await getFileListCatalog({ query: queryParam }).catch(() => []);
       }
 
@@ -1609,6 +2148,7 @@ export async function handleFileListRequest(
         });
 
       matchingTorrents = sortByQualityAndSeeders(matchingTorrents);
+      kinozalTorrents = sortByQualityAndSeeders(kinozalTorrents);
 
       // If series, filter or rank torrents matching the requested Season/Episode AFTER sorting
       if (typeParam === 'series' && season) {
@@ -1616,7 +2156,7 @@ export async function handleFileListRequest(
         const ePad = episode ? `E${String(episode).padStart(2, '0')}` : '';
         const epRegex = ePad ? new RegExp(`${sPad}[.\\s_-]*${ePad}\\b`, 'i') : null;
         const seasonPackRegex = new RegExp(
-          `(${sPad}(?!E\\d)|Season[.\\s_-]*0*${season}\\b)`,
+          `(${sPad}(?!E\\d)|Season[.\\s_-]*0*${season}\\b|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
           'i'
         );
 
@@ -1625,7 +2165,7 @@ export async function handleFileListRequest(
           : [];
 
         // If the specific episode wasn't in the top 15 IMDb results (e.g. Asia Express S07E18), query FileList directly for that episode
-        if (exactEp.length === 0 && queryParam && ePad) {
+        if (exactEp.length === 0 && queryParam && ePad && !isRussianParam) {
           const cleanQ = queryParam.replace(/\s*\(S\d+.*$/i, '').trim();
           const epSearchItems = await getFileListCatalog({
             query: `${cleanQ} ${sPad}${ePad}`,
@@ -1701,14 +2241,25 @@ export async function handleFileListRequest(
         }
       }
 
+      // For Russian content, Kinozal VIP is ALWAYS the #1 Priority source before FileList & Torrentio!
+      if (kinozalTorrents.length > 0) {
+        matchingTorrents = [...kinozalTorrents, ...matchingTorrents];
+      }
+
       // Append Torrentio streams after FileList torrents so both appear in Stremio Stream Selector
       if (torrentioTorrents.length > 0) {
         matchingTorrents = [...matchingTorrents, ...torrentioTorrents];
       }
 
       if (!targetTorrentId && matchingTorrents.length > 0) {
+        const kzOnly = matchingTorrents.filter((t) => t.provider === 'kinozal');
         const flOnly = matchingTorrents.filter((t) => t.id > 0);
-        const pool = flOnly.length > 0 ? flOnly : matchingTorrents;
+        const pool =
+          kzOnly.length > 0
+            ? kzOnly
+            : flOnly.length > 0
+              ? flOnly
+              : matchingTorrents;
         const best4kNonDoVi = pool.find(
           (t) =>
             t.quality === '4K UHD' &&
@@ -1745,7 +2296,7 @@ export async function handleFileListRequest(
         res.end(
           JSON.stringify({
             ok: false,
-            error: 'Nu s-a găsit niciun torrent activ pe FileList.io sau Torrentio pentru acest titlu.',
+            error: 'Nu s-a găsit niciun torrent activ pe Kinozal, FileList.io sau Torrentio pentru acest titlu.',
           })
         );
         return true;
@@ -1761,11 +2312,15 @@ export async function handleFileListRequest(
         quality: '1080p Full HD',
         seeders: 20,
         sizeFormatted: '2.5 GB',
-        category: targetTorrentId < 0 ? 'Torrentio P2P' : 'FileList.io',
+        category: targetTorrentId < 0 ? 'Kinozal / Torrentio P2P' : 'FileList.io',
       };
 
-      // If it's a Torrentio magnet (< 0) and the user hasn't explicitly requested this ID yet, return the stream list immediately (< 600ms)
-      if (targetTorrentId < 0 && !idParam) {
+      // If it's a pure Torrentio magnet (< 0 without direct .torrent rutorId) and the user hasn't explicitly requested this ID yet, return the stream list immediately (< 600ms)
+      if (
+        targetTorrentId < 0 &&
+        !idParam &&
+        !magnetMetaById.get(targetTorrentId)?.rutorId
+      ) {
         const magnetPresetIdx = magnetMetaById.get(targetTorrentId)?.fileIdx ?? 0;
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
@@ -1813,7 +2368,11 @@ export async function handleFileListRequest(
         : [
             targetTorrentId,
             ...matchingTorrents
-              .filter((t) => t.id !== targetTorrentId && t.id > 0)
+              .filter(
+                (t) =>
+                  t.id !== targetTorrentId &&
+                  (t.id > 0 || t.provider === 'kinozal')
+              )
               .slice(0, 2)
               .map((t) => t.id),
           ];

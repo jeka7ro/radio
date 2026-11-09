@@ -101,6 +101,7 @@ export interface CinemetaItem {
   freeleech?: boolean;
   isRo?: boolean;
   qualityBadge?: string;
+  networkBadge?: string;
   moviedb_id?: number | string;
   type: 'movie' | 'series';
   name: string;
@@ -213,9 +214,15 @@ export async function resolveSeriesEpisodeStats(
         }
       }
 
-      // 2. Cinemeta by IMDb ID
+      // 2. Cinemeta by IMDb ID (never search Cinemeta by Cyrillic title — avoids false anime matches)
       let targetImdb = rawImdb.startsWith('tt') ? rawImdb : '';
-      if (!targetImdb && !rawKp && item.name) {
+      if (
+        !targetImdb &&
+        !rawKp &&
+        item.name &&
+        /[a-zA-Z]/.test(item.name) &&
+        !isRussianVodItem(item)
+      ) {
         const cleanTitle = item.name
           .replace(/\(\d{4}\)/g, '')
           .replace(/\[.*?\]/g, '')
@@ -459,8 +466,8 @@ export interface FileListTorrentInfo {
   leechers: number;
   uploadDate: string;
   genres: string[];
-  provider?: 'filelist' | 'torrentio';
-  source?: 'filelist' | 'torrentio';
+  provider?: 'filelist' | 'torrentio' | 'kinozal';
+  source?: 'filelist' | 'torrentio' | 'kinozal';
   tracker?: string;
   infoHash?: string;
   fileIdx?: number;
@@ -763,17 +770,12 @@ export const RADIO_COUNTRIES: Array<{
 export const VOD_SERVERS: Array<{ id: VodServerId; label: string }> = [
   {
     id: 'filelist_torrent',
-    label: 'S1: FileList.io Torrents (4K UHD / 1080p BluRay Live)',
+    label: 'S1: FileList.io & Kinozal VIP (4K UHD / 1080p BluRay)',
   },
   {
     id: 'kinogram_hls',
-    label: 'S2: Player Nativ 1080p Full HD (Original / Multi-Audio)',
+    label: 'S2: iEdem VIP MediaLibrary (1080p Full HD)',
   },
-  { id: 'vidspark', label: 'S3: VidSpark 1080p / 4K (Sub RO/RU/EN)' },
-  { id: 'kinogram_embed', label: 'S4: Kinogram 1080p Multi-Audio' },
-  { id: 'vidzee', label: 'S5: VidZee 1080p Multi-Server' },
-  { id: 'vidsrc_pm', label: 'S6: VidSrc 1080p OpenSubtitles' },
-  { id: 'nontongo', label: 'S7: MultiEmbed 4K / 1080p VIP' },
 ];
 
 export const ON_SCREEN_KEYS_LATIN = [
@@ -1236,43 +1238,18 @@ export const SMART_TV_SERVER_OPTIONS: Array<{
 }> = [
     {
       id: 'auto_best',
-      label: 'Automat — Cea mai bună calitate (1080p DASH / 4K)',
-      desc: 'Alege automat Playerul Nativ 1080p Full HD (DASH/HLS) sau VidSpark 4K',
-    },
-    {
-      id: 'kinogram_hls',
-      label: 'S1: Player Nativ HD (Audio Original / RU + Sub RO)',
-      desc: 'Playerul nativ Lampa cu selecție piste audio și subtitrări .SRT',
+      label: 'Automat — FileList.io + Kinozal + iEdem VIP (4K UHD / 1080p)',
+      desc: 'Selectează automat cea mai bună sursă plătită (FileList VIP, Kinozal VIP sau iEdem MediaLibrary)',
     },
     {
       id: 'filelist_torrent',
-      label: 'FileList.io Torrents (4K UHD / 1080p BluRay Live)',
-      desc: 'Streaming live direct din contul FileList.io (jeka7ro) cu subtitrare RO',
+      label: 'S1: FileList.io & Kinozal VIP (4K UHD / 1080p BluRay)',
+      desc: 'Streaming direct din conturile VIP FileList.io (jeka7ro) și Kinozal (popescu20210)',
     },
     {
-      id: 'vidspark',
-      label: 'S2: VidSpark 1080p / 4K (Sub RO/RU/EN)',
-      desc: 'Server rapid Full HD / 4K cu subtitrări integrate',
-    },
-    {
-      id: 'kinogram_embed',
-      label: 'S3: Kinogram Multi-Audio Embed',
-      desc: 'Player web Kinogram cu selector dublaj integrat',
-    },
-    {
-      id: 'vidzee',
-      label: 'S4: VidZee Multi-Server',
-      desc: 'Server alternativ cu comutare rapidă',
-    },
-    {
-      id: 'vidsrc_pm',
-      label: 'S5: VidSrc OpenSubtitles',
-      desc: 'Server cu suport OpenSubtitles',
-    },
-    {
-      id: 'nontongo',
-      label: 'S6: MultiEmbed 4K / 1080p VIP',
-      desc: 'Server extern cu surse multiple internaționale',
+      id: 'kinogram_hls',
+      label: 'S2: iEdem VIP MediaLibrary (1080p Full HD)',
+      desc: 'Playerul nativ cu flux direct HLS din iEdem MediaLibrary',
     },
   ];
 

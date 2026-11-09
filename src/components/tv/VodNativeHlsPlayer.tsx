@@ -1436,7 +1436,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const isIosWebKit =
       typeof navigator !== 'undefined' &&
       (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+        (/Safari/i.test(navigator.userAgent) &&
+          !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Opera|Vivaldi|YaBrowser|Brave/i.test(
+            navigator.userAgent
+          )));
 
     const effectiveFlUrl =
       isIosWebKit && flStreamUrl.includes('/api/filelist/stream')
@@ -1833,7 +1837,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
     const isIosMobile =
       typeof navigator !== 'undefined' &&
-      /iPhone|iPod/i.test(navigator.userAgent);
+      (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+        (/Safari/i.test(navigator.userAgent) &&
+          !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Opera|Vivaldi|YaBrowser|Brave/i.test(
+            navigator.userAgent
+          )));
 
     const startHlsPlayback = (targetUrl: string) => {
       if (!targetUrl) {
@@ -1877,9 +1886,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
       if (Hls.isSupported()) {
         try {
-          if ('ManagedMediaSource' in window && !('MediaSource' in window)) {
-            video.disableRemotePlayback = true;
-          }
+          video.disableRemotePlayback = false;
         } catch {
           // ignore
         }
@@ -3572,6 +3579,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     };
   }, []);
 
+  const pinchStartDistRef = useRef<number | null>(null);
+
   const handleToggleVodFullscreen = () => {
     setOpenMenu('none');
     onHideOsd?.();
@@ -3582,6 +3591,34 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       v.volume = 1;
       setIsAutoMuted(false);
     }
+
+    const toggleMobileSinglePlayerFullscreen = () => {
+      const isPortraitNow =
+        typeof window !== 'undefined' && window.innerHeight > window.innerWidth;
+      if (isPortraitNow) {
+        const nextFs = !isCustomFullscreen;
+        setIsCustomFullscreen(nextFs);
+        if (!nextFs) {
+          setIsMobileZoomCover(false);
+        }
+        window.dispatchEvent(
+          new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+            detail: { force: nextFs },
+          })
+        );
+        showTransportToast(
+          nextFs ? 'Ecran Complet (Landscape)' : 'Mod Portret'
+        );
+      } else {
+        setIsMobileZoomCover((prev) => {
+          const next = !prev;
+          showTransportToast(
+            next ? 'Ecran Complet (Umplere)' : 'Format Original'
+          );
+          return next;
+        });
+      }
+    };
 
     const rootTarget =
       (playerRootRef.current?.closest(
@@ -3640,27 +3677,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           })
           .catch(() => {
-            setIsMobileZoomCover((prev) => {
-              const next = !prev;
-              showTransportToast(
-                next ? 'Ecran Complet (Umplere)' : 'Format Original'
-              );
-              return next;
-            });
+            toggleMobileSinglePlayerFullscreen();
           });
         return;
       }
     }
 
-    // On iPhone (where div.requestFullscreen is not supported), keep ONLY our custom player
-    // (never open native iOS QuickTime player) and toggle edge-to-edge video fill:
-    setIsMobileZoomCover((prev) => {
-      const next = !prev;
-      showTransportToast(
-        next ? 'Ecran Complet (Umplere)' : 'Format Original'
-      );
-      return next;
-    });
+    toggleMobileSinglePlayerFullscreen();
   };
 
   const handleTriggerAirPlay = () => {
@@ -3671,21 +3694,99 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           remote?: { prompt?: () => Promise<void> };
         })
       | null;
-    if (v && typeof v.webkitShowPlaybackTargetPicker === 'function') {
+    if (!v) return;
+    try {
+      v.disableRemotePlayback = false;
+      v.setAttribute('x-webkit-airplay', 'allow');
+      v.setAttribute('airplay', 'allow');
+    } catch {
+      // ignore
+    }
+    if (typeof v.webkitShowPlaybackTargetPicker === 'function') {
       try {
+        if (
+          hlsRef.current &&
+          hlsUrl &&
+          !offlineItem &&
+          v.canPlayType('application/vnd.apple.mpegurl')
+        ) {
+          const savedTime = v.currentTime || 0;
+          const wasPaused = v.paused;
+          try {
+            hlsRef.current.destroy();
+          } catch {
+            // ignore
+          }
+          hlsRef.current = null;
+          v.src = hlsUrl;
+          v.addEventListener(
+            'loadedmetadata',
+            () => {
+              if (savedTime > 2) {
+                try {
+                  v.currentTime = savedTime;
+                } catch {
+                  // ignore
+                }
+              }
+              if (!wasPaused) {
+                void v.play().catch(() => {});
+              }
+            },
+            { once: true }
+          );
+        }
         v.webkitShowPlaybackTargetPicker();
         return;
       } catch {
         // fallback below
       }
     }
-    if (v?.remote && typeof v.remote.prompt === 'function') {
+
+    const triggerPresentationCast = () => {
+      try {
+        const PresReq = (
+          window as unknown as {
+            PresentationRequest?: new (
+              urls: string | string[]
+            ) => { start: () => Promise<unknown> };
+          }
+        ).PresentationRequest;
+        if (typeof PresReq === 'function') {
+          const castUrls: string[] = ['cast:CC1AD845'];
+          if (hlsUrl && /^https?:/i.test(hlsUrl)) {
+            castUrls.push(hlsUrl);
+          } else if (typeof window !== 'undefined' && window.location?.href) {
+            castUrls.push(window.location.href);
+          }
+          const req = new PresReq(castUrls);
+          req.start().catch(() => {});
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    };
+
+    const isBlobMediaSource =
+      Boolean(hlsRef.current || dashRef.current) ||
+      String(v.currentSrc || v.src || '').startsWith('blob:');
+
+    if (!isBlobMediaSource && v.remote && typeof v.remote.prompt === 'function') {
       v.remote.prompt().catch(() => {
-        window.dispatchEvent(new CustomEvent('aether:open-handoff-modal'));
+        triggerPresentationCast();
       });
       return;
     }
-    window.dispatchEvent(new CustomEvent('aether:open-handoff-modal'));
+
+    if (triggerPresentationCast()) {
+      return;
+    }
+
+    if (v.remote && typeof v.remote.prompt === 'function') {
+      v.remote.prompt().catch(() => {});
+    }
   };
 
   useEffect(() => {
@@ -3822,6 +3923,32 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           webkit-playsinline="true"
           autoPlay
           poster={poster}
+          onTouchStart={(e) => {
+            if (e.touches.length === 2) {
+              const dx = e.touches[0].clientX - e.touches[1].clientX;
+              const dy = e.touches[0].clientY - e.touches[1].clientY;
+              pinchStartDistRef.current = Math.hypot(dx, dy);
+            }
+          }}
+          onTouchMove={(e) => {
+            if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
+              const dx = e.touches[0].clientX - e.touches[1].clientX;
+              const dy = e.touches[0].clientY - e.touches[1].clientY;
+              const dist = Math.hypot(dx, dy);
+              if (dist - pinchStartDistRef.current > 35) {
+                pinchStartDistRef.current = null;
+                setIsMobileZoomCover(true);
+                showTransportToast('Ecran Complet (Umplere)');
+              } else if (pinchStartDistRef.current - dist > 35) {
+                pinchStartDistRef.current = null;
+                setIsMobileZoomCover(false);
+                showTransportToast('Format Original');
+              }
+            }
+          }}
+          onTouchEnd={() => {
+            pinchStartDistRef.current = null;
+          }}
           onClick={(e) => {
             e.stopPropagation();
             const vid = e.currentTarget;
@@ -4387,7 +4514,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             <div
               className={`${
                 isMobilePhone
-                  ? 'max-w-[86vw] px-2.5 py-0.5 rounded-lg bg-black/65 font-semibold'
+                  ? 'max-w-[88%] px-2.5 py-0.5 rounded-lg bg-black/65 font-semibold'
                   : `max-w-4xl rounded-2xl bg-black/80 font-extrabold ${subFontClass}`
               } text-white text-center leading-snug whitespace-pre-line shadow-2xl border border-white/10`}
               style={{
@@ -4487,12 +4614,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           onClick={(e) => e.stopPropagation()}
           style={
             isMobilePhone
-              ? {
-                  bottom: 'max(8px, env(safe-area-inset-bottom, 8px))',
-                  left: 'max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-top, 0px))',
-                  right:
-                    'max(12px, env(safe-area-inset-right, 0px), env(safe-area-inset-bottom, 0px))',
-                }
+              ? isCustomFullscreen && !isLandscapeMobile
+                ? {
+                    bottom: '10px',
+                    left: 'max(16px, env(safe-area-inset-top, 16px))',
+                    right: 'max(16px, env(safe-area-inset-bottom, 16px))',
+                  }
+                : {
+                    bottom: 'max(8px, env(safe-area-inset-bottom, 8px))',
+                    left: 'max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-top, 0px))',
+                    right:
+                      'max(12px, env(safe-area-inset-right, 0px), env(safe-area-inset-bottom, 0px))',
+                  }
               : undefined
           }
           className={`absolute ${
