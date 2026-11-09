@@ -113,6 +113,17 @@ export default async (req) => {
 
     // 3. /api/tv-progress
     const currentProgress = globalStore.progressByProfile[profileId] || {};
+    const deleteId = url.searchParams.get('deleteId') || '';
+    if (req.method === 'DELETE' || deleteId) {
+      if (deleteId && deleteId in currentProgress) {
+        delete currentProgress[deleteId];
+        globalStore.progressByProfile[profileId] = currentProgress;
+      }
+      return new Response(JSON.stringify(currentProgress), {
+        status: 200,
+        headers: corsHeaders,
+      });
+    }
     if (req.method === 'POST') {
       const incoming = await req.json().catch(() => null);
       if (incoming && typeof incoming === 'object') {
@@ -120,8 +131,40 @@ export default async (req) => {
         for (const [k, v] of Object.entries(incoming)) {
           if (!v || typeof v !== 'object') continue;
           const existing = merged[k];
-          if (!existing || (v.updatedAt || 0) >= (existing.updatedAt || 0)) {
+          if (!existing) {
             merged[k] = v;
+            continue;
+          }
+          const vCleared =
+            (v.currentTime || 0) === 0 &&
+            (!v.episodeProgressMap ||
+              Object.keys(v.episodeProgressMap).length === 0);
+          if (vCleared && (v.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            merged[k] = v;
+            continue;
+          }
+          const mergedEpMap = { ...(existing.episodeProgressMap || {}) };
+          if (v.episodeProgressMap && typeof v.episodeProgressMap === 'object') {
+            for (const [epK, epV] of Object.entries(v.episodeProgressMap)) {
+              if (!epV || typeof epV !== 'object') continue;
+              const prevEp = mergedEpMap[epK];
+              if (!prevEp || (epV.updatedAt || 0) >= (prevEp.updatedAt || 0)) {
+                mergedEpMap[epK] = epV;
+              }
+            }
+          }
+          if ((v.updatedAt || 0) >= (existing.updatedAt || 0)) {
+            merged[k] = {
+              ...existing,
+              ...v,
+              episodeProgressMap: mergedEpMap,
+            };
+          } else {
+            merged[k] = {
+              ...v,
+              ...existing,
+              episodeProgressMap: mergedEpMap,
+            };
           }
         }
         globalStore.progressByProfile[profileId] = merged;

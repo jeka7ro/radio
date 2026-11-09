@@ -1426,6 +1426,7 @@ function tvStreamProxyPlugin(): Plugin {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'text/html; charset=utf-8',
                 'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Referrer-Policy': 'no-referrer',
               });
               res.end(fs.readFileSync(distIndex));
               return;
@@ -1486,6 +1487,125 @@ function tvStreamProxyPlugin(): Plugin {
         return path.resolve(__dirname, `.tv-watch-progress-${cleanId}.json`);
       };
 
+      const mergeProgressEntriesMap = (
+        baseMap: Record<string, any>,
+        incomingMap: Record<string, any>
+      ): Record<string, any> => {
+        const merged = { ...(baseMap || {}) };
+        for (const [k, v] of Object.entries(incomingMap || {})) {
+          if (!v || typeof v !== 'object') continue;
+          const cleanV = { ...(v as Record<string, any>) };
+          if (
+            cleanV.episodeProgressMap &&
+            typeof cleanV.episodeProgressMap === 'object'
+          ) {
+            const epMap = { ...cleanV.episodeProgressMap };
+            for (const [epK, epV] of Object.entries(epMap)) {
+              if (
+                epV &&
+                typeof epV === 'object' &&
+                (epV as any).duration === 4500 &&
+                (epV as any).currentTime >= 2500
+              ) {
+                delete epMap[epK];
+              }
+            }
+            cleanV.episodeProgressMap = epMap;
+          }
+          const prev = merged[k];
+          if (!prev) {
+            merged[k] = cleanV;
+            continue;
+          }
+          const vCleared =
+            (cleanV.currentTime || 0) === 0 &&
+            (!cleanV.episodeProgressMap ||
+              Object.keys(cleanV.episodeProgressMap).length === 0);
+          if (vCleared && (cleanV.updatedAt || 0) >= (prev.updatedAt || 0)) {
+            merged[k] = cleanV;
+            continue;
+          }
+          const mergedEpMap = { ...(prev.episodeProgressMap || {}) };
+          if (
+            cleanV.episodeProgressMap &&
+            typeof cleanV.episodeProgressMap === 'object'
+          ) {
+            for (const [epK, epV] of Object.entries(cleanV.episodeProgressMap)) {
+              if (!epV || typeof epV !== 'object') continue;
+              const prevEp = mergedEpMap[epK];
+              if (
+                !prevEp ||
+                ((epV as any).updatedAt || 0) >= ((prevEp as any).updatedAt || 0)
+              ) {
+                mergedEpMap[epK] = epV;
+              }
+            }
+          }
+          if ((cleanV.updatedAt || 0) >= (prev.updatedAt || 0)) {
+            merged[k] = {
+              ...prev,
+              ...cleanV,
+              episodeProgressMap: mergedEpMap,
+            };
+          } else {
+            merged[k] = {
+              ...cleanV,
+              ...prev,
+              episodeProgressMap: mergedEpMap,
+            };
+          }
+        }
+        return merged;
+      };
+
+      let lastCloudSyncAtByProf: Record<string, number> = {};
+      const syncProfileProgressWithCloud = async (
+        profileId: string,
+        forcePush = false
+      ) => {
+        const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        const now = Date.now();
+        if (!forcePush && now - (lastCloudSyncAtByProf[cleanId] || 0) < 12000) {
+          return;
+        }
+        lastCloudSyncAtByProf[cleanId] = now;
+        try {
+          const targetFile = getTvProgressFileForProfile(cleanId);
+          const localData = fs.existsSync(targetFile)
+            ? JSON.parse(fs.readFileSync(targetFile, 'utf-8') || '{}')
+            : {};
+          const res = await fetch(
+            `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(cleanId)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(localData),
+            }
+          );
+          if (res.ok) {
+            const cloudMerged = (await res.json()) as Record<string, any>;
+            if (cloudMerged && typeof cloudMerged === 'object') {
+              const finalMerged = mergeProgressEntriesMap(localData, cloudMerged);
+              fs.writeFileSync(
+                targetFile,
+                JSON.stringify(finalMerged),
+                'utf-8'
+              );
+            }
+          }
+        } catch {
+          // ignore network errors when offline
+        }
+      };
+
+      // Background bidirectional sync between local disk (.tv-watch-progress.json) and cloud (https://filmio.my)
+      setInterval(() => {
+        void syncProfileProgressWithCloud('p1', false);
+      }, 25000);
+      setTimeout(() => {
+        void syncProfileProgressWithCloud('p1', true);
+      }, 2500);
+
       server.middlewares.use('/api/tv-progress', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -1527,6 +1647,12 @@ function tvStreamProxyPlugin(): Plugin {
             } catch {
               // ignore
             }
+            fetch(
+              `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(
+                profileId
+              )}&deleteId=${encodeURIComponent(deleteId)}`,
+              { method: 'DELETE' }
+            ).catch(() => {});
           }
           res.writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
@@ -1543,57 +1669,15 @@ function tvStreamProxyPlugin(): Plugin {
           });
           req.on('end', () => {
             try {
-              const incoming = JSON.parse(body || '{}') as Record<
-                string,
-                { updatedAt?: number }
-              >;
-              const current = readDiskProgress() as Record<
-                string,
-                {
-                  updatedAt?: number;
-                  season?: number;
-                  episode?: number;
-                  currentTime?: number;
-                  episodeProgressMap?: Record<
-                    string,
-                    { currentTime: number; duration: number; updatedAt: number }
-                  >;
-                }
-              >;
-              const merged = { ...current };
-              for (const [k, v] of Object.entries(incoming)) {
-                if (!v || typeof v !== 'object') continue;
-                const cleanV = { ...(v as Record<string, any>) };
-                if (
-                  cleanV.episodeProgressMap &&
-                  typeof cleanV.episodeProgressMap === 'object'
-                ) {
-                  const epMap = { ...cleanV.episodeProgressMap };
-                  for (const [epK, epV] of Object.entries(epMap)) {
-                    if (
-                      epV &&
-                      typeof epV === 'object' &&
-                      (epV as any).duration === 4500 &&
-                      (epV as any).currentTime >= 2500
-                    ) {
-                      delete epMap[epK];
-                    }
-                  }
-                  cleanV.episodeProgressMap = epMap;
-                }
-                const prev = merged[k];
-                if (
-                  !prev ||
-                  (cleanV.updatedAt || 0) >= (prev.updatedAt || 0)
-                ) {
-                  merged[k] = cleanV;
-                }
-              }
+              const incoming = JSON.parse(body || '{}') as Record<string, any>;
+              const current = readDiskProgress() as Record<string, any>;
+              const merged = mergeProgressEntriesMap(current, incoming);
               fs.writeFileSync(
                 targetProgressFile,
                 JSON.stringify(merged),
                 'utf-8'
               );
+              void syncProfileProgressWithCloud(profileId, true);
               res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Cache-Control': 'no-cache, no-store',
@@ -1608,6 +1692,7 @@ function tvStreamProxyPlugin(): Plugin {
           });
           return;
         }
+        void syncProfileProgressWithCloud(profileId, false);
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-cache, no-store',
@@ -1661,6 +1746,16 @@ function tvStreamProxyPlugin(): Plugin {
                   JSON.stringify(incoming),
                   'utf-8'
                 );
+                fetch(
+                  `https://filmio.my/api/tv-saved?profileId=${encodeURIComponent(
+                    profileId
+                  )}`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(incoming),
+                  }
+                ).catch(() => {});
               }
             } catch {
               // ignore
@@ -1755,6 +1850,14 @@ function tvStreamProxyPlugin(): Plugin {
                     JSON.stringify(merged),
                     'utf-8'
                   );
+                  fetch('https://filmio.my/api/tv-profiles', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Deleted-Profile-Ids': deletedHeader,
+                    },
+                    body: JSON.stringify(merged),
+                  }).catch(() => {});
                 }
               }
             } catch {
@@ -2097,13 +2200,22 @@ function tvStreamProxyPlugin(): Plugin {
             userAgent: reqUa,
           });
           if (result.ok && result.hlsUrl) {
-            const safeDesktopUa =
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-            result.proxyHlsUrl = `/api/tv-proxy?url=${encodeURIComponent(
-              result.hlsUrl
-            )}&ref=${encodeURIComponent(
-              'https://api.kinogram.best/'
-            )}&ua=${encodeURIComponent(safeDesktopUa)}`;
+            if (String(result.hlsUrl).startsWith('/api/tv-proxy')) {
+              result.proxyHlsUrl = result.hlsUrl;
+            } else {
+              const safeDesktopUa =
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+              const proxyRef = /rutube\.ru|rtbcdn\.ru/i.test(result.hlsUrl)
+                ? 'https://rutube.ru/'
+                : /vkvideo\.ru|okcdn\.ru|vkuser/i.test(result.hlsUrl)
+                  ? 'https://vkvideo.ru/'
+                  : 'https://api.kinogram.best/';
+              result.proxyHlsUrl = `/api/tv-proxy?url=${encodeURIComponent(
+                result.hlsUrl
+              )}&ref=${encodeURIComponent(
+                proxyRef
+              )}&ua=${encodeURIComponent(safeDesktopUa)}`;
+            }
           }
           console.log(
             `[VOD-STREAM] ${title || imdb || kp} -> ok=${result.ok} source=${result.sourcePath || 'none'
@@ -2314,6 +2426,19 @@ function tvStreamProxyPlugin(): Plugin {
             }
           };
 
+          if (rawMode && !isM3u8) {
+            const text = await upstreamRes.text();
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': contentType.includes('json')
+                ? 'application/json; charset=utf-8'
+                : 'text/plain; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(text);
+            return;
+          }
+
           if (isPls) {
             const text = await upstreamRes.text();
             const fileMatch = text.match(/^File\d+=(https?:\/\/[^\r\n]+)/im);
@@ -2515,46 +2640,101 @@ function tvStreamProxyPlugin(): Plugin {
             );
             let promotedOriginalAudio = false;
             let currentAudioLineIdx = 0;
-            const rewritten = filteredLines
-              .map((line) => {
-                let currentLine = line;
-                const trimmed = currentLine.trim();
-                if (!trimmed) return currentLine;
-                if (
-                  (useExplicitAudioIdx || hasOriginalAudioTrack) &&
-                  trimmed.startsWith('#EXT-X-MEDIA:') &&
-                  /TYPE=AUDIO/i.test(trimmed)
-                ) {
-                  const thisAudioIdx = currentAudioLineIdx++;
-                  const shouldPromote = useExplicitAudioIdx
-                    ? thisAudioIdx === requestedAudioIdx
-                    : !promotedOriginalAudio &&
+            const rewrittenLines = filteredLines.map((line) => {
+              let currentLine = line;
+              const trimmed = currentLine.trim();
+              if (!trimmed) return currentLine;
+              if (
+                (useExplicitAudioIdx || hasOriginalAudioTrack) &&
+                trimmed.startsWith('#EXT-X-MEDIA:') &&
+                /TYPE=AUDIO/i.test(trimmed)
+              ) {
+                const thisAudioIdx = currentAudioLineIdx++;
+                const shouldPromote = useExplicitAudioIdx
+                  ? thisAudioIdx === requestedAudioIdx
+                  : !promotedOriginalAudio &&
                     (/LANGUAGE="en"/i.test(trimmed) ||
                       /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(trimmed));
-                  if (shouldPromote) {
-                    promotedOriginalAudio = true;
-                    currentLine = currentLine
-                      .replace(/DEFAULT=NO/gi, 'DEFAULT=YES')
-                      .replace(/AUTOSELECT=NO/gi, 'AUTOSELECT=YES');
-                  } else {
-                    currentLine = currentLine
-                      .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
-                      .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
-                  }
-                }
-                if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+                if (shouldPromote) {
+                  promotedOriginalAudio = true;
                   currentLine = currentLine
-                    .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
-                    .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
+                    .replace(/DEFAULT=NO/gi, 'DEFAULT=YES')
+                    .replace(/AUTOSELECT=NO/gi, 'AUTOSELECT=YES');
+                } else {
+                  currentLine = currentLine
+                    .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
+                    .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
                 }
-                if (trimmed.startsWith('#')) {
-                  return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
-                    return `URI="${buildProxyUrl(uri)}"`;
-                  });
+              }
+              if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+                currentLine = currentLine
+                  .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
+                  .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
+              }
+              if (trimmed.startsWith('#')) {
+                return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
+                  return `URI="${buildProxyUrl(uri)}"`;
+                });
+              }
+              return buildProxyUrl(trimmed);
+            });
+
+            let rewritten = rewrittenLines.join('\n');
+            if (
+              rewrittenLines.some((l) =>
+                l.trim().startsWith('#EXT-X-STREAM-INF:')
+              )
+            ) {
+              const headerLines: string[] = [];
+              const variantPairs: Array<{
+                infLine: string;
+                uriLine: string;
+                height: number;
+                bandwidth: number;
+              }> = [];
+              for (let i = 0; i < rewrittenLines.length; i++) {
+                const ln = rewrittenLines[i];
+                const tr = ln.trim();
+                if (tr.startsWith('#EXT-X-STREAM-INF:')) {
+                  let uriLine = '';
+                  while (i + 1 < rewrittenLines.length) {
+                    const nextLn = rewrittenLines[i + 1];
+                    const nextTr = nextLn.trim();
+                    i++;
+                    if (!nextTr) continue;
+                    uriLine = nextLn;
+                    break;
+                  }
+                  if (uriLine) {
+                    const resMatch = tr.match(/RESOLUTION=(\d+)x(\d+)/i);
+                    const bwMatch = tr.match(/(?:^|,)BANDWIDTH=(\d+)/i);
+                    const w = resMatch ? Number(resMatch[1]) : 0;
+                    const h = resMatch ? Number(resMatch[2]) : 0;
+                    const height = w && h ? Math.min(w, h) : h;
+                    const bandwidth = bwMatch ? Number(bwMatch[1]) : 0;
+                    variantPairs.push({
+                      infLine: ln,
+                      uriLine,
+                      height,
+                      bandwidth,
+                    });
+                  } else {
+                    headerLines.push(ln);
+                  }
+                } else {
+                  headerLines.push(ln);
                 }
-                return buildProxyUrl(trimmed);
-              })
-              .join('\n');
+              }
+              if (variantPairs.length > 1) {
+                variantPairs.sort(
+                  (a, b) => b.height - a.height || b.bandwidth - a.bandwidth
+                );
+                rewritten = [
+                  ...headerLines,
+                  ...variantPairs.flatMap((p) => [p.infLine, p.uriLine]),
+                ].join('\n');
+              }
+            }
 
             res.writeHead(200, {
               'Access-Control-Allow-Origin': '*',

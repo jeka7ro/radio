@@ -10,7 +10,9 @@ import {
 } from 'lucide-react';
 import {
   KLUBNICHKA_CATEGORIES,
+  KLUBNICHKA_SOURCES,
   KlubnichkaCategoryId,
+  KlubnichkaSourceId,
   KlubnichkaSortMode,
   KlubnichkaVideoCard,
   fetchKlubnichkaCatalog,
@@ -66,6 +68,29 @@ const SORT_MODES: Array<{
   },
 ];
 
+// Persist Klubnichka state across video player open/close so Back returns instantly to the exact card & category
+const persistedKlubCache: {
+  selectedSource: KlubnichkaSourceId;
+  selectedCategory: KlubnichkaCategoryId;
+  sortMode: KlubnichkaSortMode;
+  searchQuery: string;
+  items: KlubnichkaVideoCard[];
+  page: number;
+  hasMore: boolean;
+  loadedKey: string;
+  lastClickedCardId: string | null;
+} = {
+  selectedSource: 'all',
+  selectedCategory: 'top_4k',
+  sortMode: 'top-weekly',
+  searchQuery: '',
+  items: [],
+  page: 1,
+  hasMore: false,
+  loadedKey: '',
+  lastClickedCardId: null,
+};
+
 export const SmartTvKlubnichkaSection: React.FC<
   SmartTvKlubnichkaSectionProps
 > = ({
@@ -75,18 +100,58 @@ export const SmartTvKlubnichkaSection: React.FC<
   onFocusVodItem,
   onOpenVodItem,
 }) => {
-  const [selectedCategory, setSelectedCategory] =
-    useState<KlubnichkaCategoryId>('top_4k');
-  const [sortMode, setSortMode] = useState<KlubnichkaSortMode>('top-weekly');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [debouncedQuery, setDebouncedQuery] = useState<string>('');
+  const [selectedSource, setSelectedSourceState] = useState<KlubnichkaSourceId>(
+    () => persistedKlubCache.selectedSource
+  );
+  const [selectedCategory, setSelectedCategoryState] =
+    useState<KlubnichkaCategoryId>(() => persistedKlubCache.selectedCategory);
+  const [sortMode, setSortModeState] = useState<KlubnichkaSortMode>(
+    () => persistedKlubCache.sortMode
+  );
+  const [searchQuery, setSearchQueryState] = useState<string>(
+    () => persistedKlubCache.searchQuery
+  );
+  const [debouncedQuery, setDebouncedQuery] = useState<string>(() =>
+    persistedKlubCache.searchQuery.trim()
+  );
   const [isKeyboardOpen, setIsKeyboardOpen] = useState<boolean>(false);
 
-  const [items, setItems] = useState<KlubnichkaVideoCard[]>([]);
-  const [page, setPage] = useState<number>(1);
-  const [hasMore, setHasMore] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const currentQueryKey = `${selectedSource}::${selectedCategory}::${sortMode}::${debouncedQuery}`;
+  const hasCachedInitial =
+    persistedKlubCache.loadedKey === currentQueryKey &&
+    persistedKlubCache.items.length > 0;
+
+  const [items, setItems] = useState<KlubnichkaVideoCard[]>(() =>
+    hasCachedInitial ? persistedKlubCache.items : []
+  );
+  const [page, setPage] = useState<number>(() =>
+    hasCachedInitial ? persistedKlubCache.page : 1
+  );
+  const [hasMore, setHasMore] = useState<boolean>(() =>
+    hasCachedInitial ? persistedKlubCache.hasMore : false
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => !hasCachedInitial);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+
+  const setSelectedSource = (next: KlubnichkaSourceId) => {
+    persistedKlubCache.selectedSource = next;
+    setSelectedSourceState(next);
+  };
+  const setSelectedCategory = (next: KlubnichkaCategoryId) => {
+    persistedKlubCache.selectedCategory = next;
+    setSelectedCategoryState(next);
+  };
+  const setSortMode = (next: KlubnichkaSortMode) => {
+    persistedKlubCache.sortMode = next;
+    setSortModeState(next);
+  };
+  const setSearchQuery = (val: string | ((prev: string) => string)) => {
+    setSearchQueryState((prev) => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      persistedKlubCache.searchQuery = next;
+      return next;
+    });
+  };
 
   // Live preview frame cycling when a card is focused or hovered
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
@@ -111,12 +176,25 @@ export const SmartTvKlubnichkaSection: React.FC<
   }, [activePreviewId]);
 
   useEffect(() => {
+    const targetKey = `${selectedSource}::${selectedCategory}::${sortMode}::${debouncedQuery}`;
+    if (
+      persistedKlubCache.loadedKey === targetKey &&
+      persistedKlubCache.items.length > 0
+    ) {
+      setItems(persistedKlubCache.items);
+      setPage(persistedKlubCache.page);
+      setHasMore(persistedKlubCache.hasMore);
+      setIsLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setIsLoading(true);
     setPage(1);
 
     fetchKlubnichkaCatalog({
       category: selectedCategory,
+      source: selectedSource,
       query: debouncedQuery,
       sort: sortMode,
       page: 1,
@@ -125,6 +203,10 @@ export const SmartTvKlubnichkaSection: React.FC<
         if (cancelled) return;
         setItems(res.items);
         setHasMore(res.hasMore);
+        persistedKlubCache.items = res.items;
+        persistedKlubCache.page = 1;
+        persistedKlubCache.hasMore = res.hasMore;
+        persistedKlubCache.loadedKey = targetKey;
       })
       .catch(() => {
         if (!cancelled) {
@@ -141,25 +223,32 @@ export const SmartTvKlubnichkaSection: React.FC<
     return () => {
       cancelled = true;
     };
-  }, [selectedCategory, debouncedQuery, sortMode]);
+  }, [selectedSource, selectedCategory, debouncedQuery, sortMode]);
 
   const handleLoadMore = async () => {
     if (isLoadingMore || !hasMore) return;
     const nextPage = page + 1;
+    const targetKey = `${selectedSource}::${selectedCategory}::${sortMode}::${debouncedQuery}`;
     setIsLoadingMore(true);
     try {
       const res = await fetchKlubnichkaCatalog({
         category: selectedCategory,
+        source: selectedSource,
         query: debouncedQuery,
         sort: sortMode,
         page: nextPage,
       });
       setItems((prev) => {
         const existingIds = new Set(prev.map((x) => x.id));
-        return [
+        const merged = [
           ...prev,
           ...res.items.filter((x) => !existingIds.has(x.id)),
         ];
+        persistedKlubCache.items = merged;
+        persistedKlubCache.page = nextPage;
+        persistedKlubCache.hasMore = res.hasMore;
+        persistedKlubCache.loadedKey = targetKey;
+        return merged;
       });
       setPage(nextPage);
       setHasMore(res.hasMore);
@@ -213,23 +302,35 @@ export const SmartTvKlubnichkaSection: React.FC<
   const currentSortObj =
     SORT_MODES.find((s) => s.id === sortMode) || SORT_MODES[0];
 
+  // Restore focus to the last-watched video card on return from player, or to the active category pill
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (persistedKlubCache.lastClickedCardId) {
+        const lastCard = document.querySelector<HTMLElement>(
+          `[data-klub-card-id="${persistedKlubCache.lastClickedCardId}"]`
+        );
+        if (lastCard) {
+          lastCard.focus({ preventScroll: false });
+          lastCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return;
+        }
+      }
       const activePill = document.querySelector<HTMLElement>(
         '[data-klub-active-cat="true"]'
       );
       activePill?.focus({ preventScroll: true });
-    }, 50);
+    }, 65);
     return () => window.clearTimeout(timer);
   }, []);
 
   return (
-    <div className="space-y-4 pb-16">
-      {/* Top Bar: Back to Torrents + All Category Pills + Sort & JEKA Badge */}
+    <div data-klubnichka-root="true" className="space-y-4 pb-16">
+      {/* Row 1: Back to Torrents + Source Selector Pills + Sort + JEKA Badge */}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           data-top-pill="true"
+          data-klub-exit-btn="true"
           onClick={onExitKlubnichka}
           className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.16] focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs sm:text-sm font-extrabold border border-white/15 inline-flex items-center gap-2 shrink-0 transition-all cursor-pointer"
         >
@@ -239,6 +340,67 @@ export const SmartTvKlubnichkaSection: React.FC<
           </span>
         </button>
 
+        {KLUBNICHKA_SOURCES.map((src) => {
+          const active = selectedSource === src.id;
+          const label =
+            uiLang === 'ru'
+              ? src.labelRu
+              : uiLang === 'en'
+                ? src.labelEn
+                : src.labelRo;
+          return (
+            <button
+              key={src.id}
+              type="button"
+              data-top-pill="true"
+              onClick={() => {
+                persistedKlubCache.lastClickedCardId = null;
+                setSelectedSource(src.id);
+                if (src.id === 'filelist_xxx') {
+                  setSelectedCategory('filelist_xxx');
+                } else if (selectedCategory === 'filelist_xxx') {
+                  setSelectedCategory('top_4k');
+                }
+              }}
+              className={`h-10 px-4 rounded-full text-xs sm:text-sm font-extrabold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${
+                active
+                  ? 'bg-gradient-to-r from-rose-500 to-amber-400 text-[#141414] shadow-lg'
+                  : 'bg-white/[0.08] hover:bg-white/[0.14] text-zinc-100 border border-white/15'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+
+        <button
+          type="button"
+          data-top-pill="true"
+          onClick={() => {
+            persistedKlubCache.lastClickedCardId = null;
+            const curIdx = SORT_MODES.findIndex((s) => s.id === sortMode);
+            const next = SORT_MODES[(curIdx + 1) % SORT_MODES.length];
+            setSortMode(next.id);
+          }}
+          className="h-10 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.12] focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs sm:text-sm font-extrabold border border-white/10 shrink-0 cursor-pointer"
+        >
+          {uiLang === 'ru'
+            ? currentSortObj.labelRu
+            : uiLang === 'en'
+              ? currentSortObj.labelEn
+              : currentSortObj.labelRo}
+        </button>
+
+        <span className="px-3.5 py-1.5 rounded-full bg-rose-500/15 border border-rose-500/35 text-rose-300 text-xs font-extrabold inline-flex items-center gap-1.5 shrink-0">
+          <Lock className="w-3.5 h-3.5 text-rose-400" />
+          <span>
+            Klubnichka 18+ • JEKA ({items.length})
+          </span>
+        </span>
+      </div>
+
+      {/* Row 2: Expanded Category Pills (20 Categories) */}
+      <div className="flex flex-wrap items-center gap-2">
         {KLUBNICHKA_CATEGORIES.map((cat) => {
           const active =
             selectedCategory === cat.id && !debouncedQuery;
@@ -255,14 +417,20 @@ export const SmartTvKlubnichkaSection: React.FC<
               data-top-pill="true"
               data-klub-active-cat={active ? 'true' : undefined}
               onClick={() => {
+                persistedKlubCache.lastClickedCardId = null;
                 setSearchQuery('');
                 setDebouncedQuery('');
                 setSelectedCategory(cat.id);
-                if (cat.id !== 'filelist_xxx') {
+                if (cat.id === 'filelist_xxx') {
+                  setSelectedSource('filelist_xxx');
+                } else {
+                  if (selectedSource === 'filelist_xxx') {
+                    setSelectedSource('all');
+                  }
                   setSortMode(cat.defaultOrder);
                 }
               }}
-              className={`h-10 px-4 rounded-full text-xs sm:text-sm font-bold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${
+              className={`h-9 px-3.5 rounded-full text-xs sm:text-[13px] font-bold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${
                 active
                   ? 'bg-gradient-to-r from-[#60a5fa] to-[#bfdbfe] text-[#141414] font-extrabold shadow-lg'
                   : 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-200 border border-white/10'
@@ -272,28 +440,6 @@ export const SmartTvKlubnichkaSection: React.FC<
             </button>
           );
         })}
-
-        <button
-          type="button"
-          data-top-pill="true"
-          onClick={() => {
-            const curIdx = SORT_MODES.findIndex((s) => s.id === sortMode);
-            const next = SORT_MODES[(curIdx + 1) % SORT_MODES.length];
-            setSortMode(next.id);
-          }}
-          className="h-10 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.12] focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs sm:text-sm font-extrabold border border-white/10 shrink-0 cursor-pointer"
-        >
-          {uiLang === 'ru'
-            ? currentSortObj.labelRu
-            : uiLang === 'en'
-              ? currentSortObj.labelEn
-              : currentSortObj.labelRo}
-        </button>
-
-        <span className="px-3.5 py-1.5 rounded-full bg-rose-500/15 border border-rose-500/35 text-rose-300 text-xs font-extrabold inline-flex items-center gap-1.5 shrink-0">
-          <Lock className="w-3.5 h-3.5 text-rose-400" />
-          <span>Klubnichka 18+ • JEKA</span>
-        </span>
       </div>
 
       {/* Klubnichka Search Bar + On-Screen TV Remote Keyboard (Same Tahoe-Glass Design as App) */}
@@ -304,7 +450,10 @@ export const SmartTvKlubnichkaSection: React.FC<
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                persistedKlubCache.lastClickedCardId = null;
+                setSearchQuery(e.target.value);
+              }}
               placeholder={tr(
                 'Caută în Klubnichka 18+ (studio, actriță, 4K, categorie)...',
                 'Search in Klubnichka 18+ (studio, actress, 4K, category)...',
@@ -316,6 +465,7 @@ export const SmartTvKlubnichkaSection: React.FC<
               <button
                 type="button"
                 onClick={() => {
+                  persistedKlubCache.lastClickedCardId = null;
                   setSearchQuery('');
                   setDebouncedQuery('');
                 }}
@@ -434,6 +584,7 @@ export const SmartTvKlubnichkaSection: React.FC<
                   key={card.id}
                   type="button"
                   data-vod-card="true"
+                  data-klub-card-id={card.id}
                   onFocus={() => {
                     setActivePreviewId(card.id);
                     onFocusVodItem(mappedVod);
@@ -452,12 +603,10 @@ export const SmartTvKlubnichkaSection: React.FC<
                       prev === card.id ? null : prev
                     );
                   }}
-                  onClick={() =>
-                    onOpenVodItem(
-                      mappedVod,
-                      card.sourceKind === 'stream'
-                    )
-                  }
+                  onClick={() => {
+                    persistedKlubCache.lastClickedCardId = card.id;
+                    onOpenVodItem(mappedVod, true);
+                  }}
                   className="group text-left focus:outline-none cursor-pointer"
                 >
                   <div className="aspect-video w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg border border-white/10 group-focus:ring-4 group-focus:ring-[#60a5fa] group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
@@ -477,14 +626,16 @@ export const SmartTvKlubnichkaSection: React.FC<
                       </div>
                     )}
 
-                    {/* Top Left: Quality Badge */}
+                    {/* Top Left: Quality Badge + Provider Badge */}
                     <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
                       <span className="px-2.5 py-0.5 rounded-full bg-black/85 border border-[#60a5fa]/50 text-[#60a5fa] text-[10px] font-extrabold uppercase tracking-wider shadow">
                         {card.qualityBadge}
                       </span>
-                      <span className="px-2 py-0.5 rounded-full bg-rose-600/90 text-white text-[10px] font-black uppercase shadow">
-                        18+
-                      </span>
+                      {card.providerBadge && (
+                        <span className="px-2 py-0.5 rounded-full bg-rose-600/90 text-white text-[10px] font-black uppercase shadow">
+                          {card.providerBadge}
+                        </span>
+                      )}
                     </div>
 
                     {/* Top Right: Rating / Freeleech */}
@@ -557,4 +708,3 @@ export const SmartTvKlubnichkaSection: React.FC<
     </div>
   );
 };
-

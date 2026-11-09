@@ -49,6 +49,8 @@ import {
   isAdminJekaProfile,
 } from "../../views/smartTvLampaHelpers";
 
+let persistedIsKlubnichkaOpen = false;
+
 export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   section,
   platformMediaTab,
@@ -183,7 +185,22 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
       }
     >
   >({});
-  const [isKlubnichkaOpen, setIsKlubnichkaOpen] = React.useState<boolean>(false);
+  const [isKlubnichkaOpen, setIsKlubnichkaOpenState] = React.useState<boolean>(
+    () =>
+      persistedIsKlubnichkaOpen &&
+      section === 'torrents' &&
+      isAdminJekaProfile(activeProfile)
+  );
+  const setIsKlubnichkaOpen = React.useCallback(
+    (val: boolean | ((prev: boolean) => boolean)) => {
+      setIsKlubnichkaOpenState((prev) => {
+        const next = typeof val === 'function' ? val(prev) : val;
+        persistedIsKlubnichkaOpen = next;
+        return next;
+      });
+    },
+    []
+  );
   const [searchCatFilter, setSearchCatFilter] = React.useState<
     'all' | 'movies' | 'series' | 'docs' | 'kinozal' | 'tv'
   >('all');
@@ -192,7 +209,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     if (section !== 'torrents' || !isAdminJekaProfile(activeProfile)) {
       setIsKlubnichkaOpen(false);
     }
-  }, [section, activeProfile]);
+  }, [section, activeProfile, setIsKlubnichkaOpen]);
 
   React.useEffect(() => {
     if (currentStation?.stationuuid && activeRadioTrack?.title) {

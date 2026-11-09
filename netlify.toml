@@ -40,6 +40,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/filelist/*"
+  to = "/.netlify/functions/filelist-catalog"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/youtube/search"
   to = "/.netlify/functions/youtube"
   status = 200
@@ -139,11 +145,19 @@
   for = "/index.html"
   [headers.values]
     Cache-Control = "no-cache, no-store, must-revalidate"
+    Referrer-Policy = "no-referrer"
 
 [[headers]]
   for = "/"
   [headers.values]
     Cache-Control = "no-cache, no-store, must-revalidate"
+    Referrer-Policy = "no-referrer"
+
+[[headers]]
+  for = "/tv"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Referrer-Policy = "no-referrer"
 
 [[headers]]
   for = "/sw.js"

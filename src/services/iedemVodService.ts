@@ -15,6 +15,7 @@ export interface IedemVodItem {
   seasonsCount?: number;
   tvShowNetwork?: Exclude<IedemTvShowNetworkId, 'all'>;
   networkBadge?: string;
+  kinozalFid?: number;
   kinozalHash?: string;
   kinozalRelease?: string;
   url?: string;
@@ -197,7 +198,7 @@ export const IEDEM_TVSHOW_NETWORKS: IedemTvShowNetworkFilter[] = [
 ];
 
 export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
-  // ================= VK ВИДЕО & ЗВЁЗДЫ =================
+  // ================= ТОП ХИТЫ (КСТАТИ • ТОКСИКИ • НАТАЛЬНАЯ КАРТА • ВОПРОС РЕБРОМ • ПРОЖАРКА • ЗВЁЗДЫ) =================
   {
     type: 'multistream',
     fid: -5318639,
@@ -214,6 +215,76 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     agelimit: 18,
     description:
       'Главное вечернее разговорно-юмористическое шоу VK Видео с Гариком Харламовым, Азаматом Мусагалиевым и Денисом Дороховым. Звёздные гости, живая музыка и жёсткие импровизации.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001012,
+    kpId: 9001012,
+    title: 'Шоу «Токсики» (VK Видео • Илья Соболев)',
+    img: 'https://sun9-6.vkuserphoto.ru/impg/0mBBkZciocvMkO6W_tAh_tWQxWoh8jKQuZsklg/pMXBxoSH1ew.jpg?size=800x450&quality=95&keep_aspect_ratio=1&background=000000&sign=996bb982b44b215288fe1fb43ac9626b&type=video_thumb',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.2',
+    episodesCount: 39,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 18,
+    description:
+      'Разговорно-комедийное шоу Ильи Соболева в 4K UHD на VK Видео: звёздные гости и комики делятся самыми токсичными историями, претензиями и жёсткими панчами без цензуры.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001001,
+    kpId: 9001001,
+    title: 'Натальная карта (VK Видео • Олеся Иванченко и Дмитрий Журавлёв)',
+    img: 'https://sun9-61.vkuserphoto.ru/TJqee1BY_cSFCxb0F1HrDX0GKlaH3t2UlmtL3A/MEBv3Sq3OsI.jpg',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.1',
+    episodesCount: 54,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 18,
+    description:
+      'Главное астрологически-юмористическое шоу VK Видео в 4K UHD: Олеся Иванченко разбирает натальную карту звёздного гостя, а Дмитрий Журавлёв отстаивает скептицизм.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001013,
+    kpId: 9001013,
+    title: 'Вопрос Ребром (VK Видео • Баста / GAZ)',
+    img: 'https://sun9-85.vkuserphoto.ru/impg/GjOK-S_7xZ4ciYx_eU3PQYXzIs06UpW9g0h0uQ/H1IvMeI5_8g.jpg?size=800x450&quality=95&keep_aspect_ratio=1&background=000000&sign=8ea78150a6e25d12efb38003af1b6462&type=video_thumb',
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.0',
+    episodesCount: 93,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео',
+    agelimit: 18,
+    description:
+      'Музыкально-разговорное шоу Басты (Василия Вакуленко) в баре Frank by БАСТА: гости ресторана задают звёздам самые неудобные и острые вопросы.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001014,
+    kpId: 9001014,
+    title: 'Прожарка (ТНТ4 • VK Видео • Илья Соболев)',
+    img: 'https://sun9-85.vkuserphoto.ru/up0KqlmH8j22jCfRsll2h1KMxrpV9uUEv6zpYA/T2H35kGCJx0.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.9',
+    episodesCount: 21,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK • ТНТ4',
+    agelimit: 18,
+    description:
+      'Главное хейт-шоу страны с ведущим Ильёй Соболевым: молодые комики и звёздные друзья безжалостно «прожаривают» приглашённую знаменитость прямо в лицо.',
   },
   {
     type: 'multistream',
@@ -271,90 +342,71 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
   },
   {
     type: 'multistream',
-    fid: -5423568,
-    kpId: 5423568,
-    title: 'Большое шоу (VK Видео • Азамат Мусагалиев)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5423568.jpg',
+    fid: -4761950,
+    kpId: 4761950,
+    title: 'Звёзды в Африке (ТНТ • Все 5 сезонов)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/4761950.jpg',
     fhd: true,
-    year: 2026,
-    ratingKinopoisk: '7.8',
-    episodesCount: 94,
-    seasonsCount: 19,
-    tvShowNetwork: 'vk',
-    networkBadge: 'VK Видео',
-    agelimit: 18,
-    description:
-      'Хитовое комедийное реалити Азамата Мусагалиева (все 19 сезонов). Десять известных комиков и звёзд запираются в одной комнате: кто засмеётся или улыбнётся — выбывает.',
-  },
-
-  // ================= ТНТ =================
-  {
-    type: 'multistream',
-    fid: -471505,
-    kpId: 471505,
-    title: 'Comedy Club (ТНТ • Все сезоны)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/471505.jpg',
-    fhd: true,
-    year: 2026,
-    ratingKinopoisk: '7.5',
-    episodesCount: 709,
-    seasonsCount: 22,
-    tvShowNetwork: 'tnt',
-    networkBadge: 'ТНТ',
-    agelimit: 18,
-    description:
-      'Флагманское юмористическое шоу телеканала ТНТ с Гариком Харламовым, Павлом Волей, Тимуром Батрутдиновым, Демисом Карибидисом и Мариной Кравец.',
-  },
-  {
-    type: 'multistream',
-    fid: -1344492,
-    kpId: 1344492,
-    title: 'Женский стендап на ТНТ',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/1344492.jpg',
-    fhd: true,
-    year: 2026,
-    ratingKinopoisk: '7.6',
-    episodesCount: 109,
-    seasonsCount: 8,
-    tvShowNetwork: 'tnt',
-    networkBadge: 'ТНТ',
-    agelimit: 18,
-    description:
-      'Откровенный и бескомпромиссный стендап на ТНТ: Ирина Мягкова, Зоя Яровицына, Варвара Щербакова, Надежда Джабраилова, Мария Маркова и Сауле Юсупова.',
-  },
-  {
-    type: 'multistream',
-    fid: -802911,
-    kpId: 802911,
-    title: 'Stand Up на ТНТ',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/802911.jpg',
-    fhd: true,
-    year: 2026,
-    ratingKinopoisk: '7.8',
-    episodesCount: 317,
-    seasonsCount: 13,
-    tvShowNetwork: 'tnt',
-    networkBadge: 'ТНТ',
-    agelimit: 18,
-    description:
-      'Главное стендап-шоу страны на ТНТ: Алексей Щербаков, Нурлан Сабуров, Руслан Белый, Иван Абрамов, Тимур Каргинов, Виктория Складчикова и Евгений Чебатков.',
-  },
-  {
-    type: 'multistream',
-    fid: -842497,
-    kpId: 842497,
-    title: 'Однажды в России (ТНТ)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/842497.jpg',
-    fhd: true,
-    year: 2026,
-    ratingKinopoisk: '7.2',
-    episodesCount: 292,
-    seasonsCount: 2,
+    year: 2024,
+    ratingKinopoisk: '6.9',
+    episodesCount: 75,
+    seasonsCount: 5,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
     description:
-      'Острая сатирическая скетч-программа ТНТ с Азаматом Мусагалиевым, Денисом Дороховым, Ольгой Картунковой, Екатериной Моргуновой и Максимом Киселёвым.',
+      'Популярное реалити-шоу ТНТ с Ольгой Бузовой и Михаилом Галустяном в саванне Южной Африки.',
+  },
+  {
+    type: 'multistream',
+    fid: -14171220,
+    kpId: 14171220,
+    title: 'Звёзды в джунглях (ТНТ • Все 3 сезона)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/4761950.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.3',
+    episodesCount: 35,
+    seasonsCount: 3,
+    tvShowNetwork: 'tnt',
+    networkBadge: 'ТНТ',
+    agelimit: 16,
+    description:
+      'Новое реалити-шоу ТНТ с Ольгой Бузовой и Михаилом Галустяном в джунглях Колумбии и Карибского побережья.',
+  },
+  {
+    type: 'multistream',
+    fid: -5463970,
+    kpId: 5463970,
+    title: 'Сокровища императора (ТНТ)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5463970.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.5',
+    episodesCount: 39,
+    seasonsCount: 3,
+    tvShowNetwork: 'tnt',
+    networkBadge: 'ТНТ',
+    agelimit: 16,
+    description:
+      'Приключенческое реалити-шоу ТНТ в Китае с ведущими Ольгой Бузовой и Михаилом Галустяном. Звёздные пары проходят испытания в борьбе за 1 миллион юаней.',
+  },
+  {
+    type: 'multistream',
+    fid: -5617914,
+    kpId: 5617914,
+    title: 'Выживалити (Пятница!)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5617914.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.6',
+    episodesCount: 36,
+    seasonsCount: 4,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Самое жёсткое экстремально-психологическое реалити-шоу на выживание телеканала «Пятница!» с ведущим Вадимом Демчогом.',
   },
   {
     type: 'multistream',
@@ -411,54 +463,230 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
   },
   {
     type: 'multistream',
-    fid: -5463970,
-    kpId: 5463970,
-    title: 'Сокровища императора (ТНТ)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5463970.jpg',
+    fid: -7429055,
+    kpId: 7429055,
+    title: 'Мастер игры (ТНТ)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/7429055.jpg',
     fhd: true,
     year: 2025,
-    ratingKinopoisk: '7.5',
-    episodesCount: 39,
-    seasonsCount: 3,
+    ratingKinopoisk: '7.7',
+    episodesCount: 26,
+    seasonsCount: 2,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
     description:
-      'Приключенческое реалити-шоу ТНТ в Китае с ведущими Ольгой Бузовой и Михаилом Галустяном. Звёздные пары проходят испытания в борьбе за 1 миллион юаней.',
+      'Психологическое реалити-шоу ТНТ в Марокко: звёздные участники ведут интеллектуальную игру на выбывание с тайными ролями.',
   },
   {
     type: 'multistream',
-    fid: -4761950,
-    kpId: 4761950,
-    title: 'Звёзды в Африке (ТНТ • Все 5 сезонов)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/4761950.jpg',
+    fid: -5423568,
+    kpId: 5423568,
+    title: 'Большое шоу (VK Видео • Азамат Мусагалиев)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5423568.jpg',
     fhd: true,
-    year: 2024,
-    ratingKinopoisk: '6.9',
-    episodesCount: 75,
+    year: 2026,
+    ratingKinopoisk: '7.8',
+    episodesCount: 119,
+    seasonsCount: 17,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео',
+    agelimit: 18,
+    description:
+      'Хитовое комедийное реалити Азамата Мусагалиева. Десять известных комиков и звёзд запираются в одной комнате: кто засмеётся или улыбнётся — выбывает.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001002,
+    kpId: 9001002,
+    title: 'Громкий вопрос (VK Видео • Импроком)',
+    img: 'https://sun9-51.vkuserphoto.ru/VnfO-3CXEeVAvlAfdtrfbgNqyR_n-R2dQGu73Q/4Napwcd9o7Q.jpg',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.4',
+    episodesCount: 120,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 16,
+    description:
+      'Антон Шастун, Арсений Попов, Дмитрий Позов и Сергей Матвиенко в наушниках с глушащей музыкой пытаются объяснить звёздному гостю ответы на вопросы по губам.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001003,
+    kpId: 9001003,
+    title: 'Тейбл Тайм (VK Видео • Импроком)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/11227393.jpg',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.6',
+    episodesCount: 48,
+    seasonsCount: 6,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 16,
+    description:
+      'Настольные баталии четвёрки «Импровизаторов» в атмосферном особняке: каждый сезон — новая игра, интриги и один чемпион.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001004,
+    kpId: 9001004,
+    title: 'Шоу Истории (VK Видео • Импроком)',
+    img: 'https://sun9-68.vkuserphoto.ru/Me0SsTLSsG3zNxT6He1NusE4bvtTOGQdBkA0MQ/UyXkqiHyi3A.jpg',
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.3',
+    episodesCount: 68,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео',
+    agelimit: 16,
+    description:
+      'Длинная форма импровизации: Антон Шастун, Арсений Попов, Дмитрий Позов и Сергей Матвиенко создают целый получасовой спектакль из одной истории зрителя.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001005,
+    kpId: 9001005,
+    title: 'Неигры (VK Видео • Шастун и Позов)',
+    img: 'https://sun9-8.vkuserphoto.ru/R5ARJqpSIN6gK6tQQoyh6NPuZ0zgEUhTBQedaw/k6tVfZBWZ0I.jpg',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '8.0',
+    episodesCount: 74,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 16,
+    description:
+      'Азартное соревновательное шоу Антона Шастуна и Дмитрия Позова в 4K UHD, где два звёздных гостя проходят безумные челленджи с мелкими предметами.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001006,
+    kpId: 9001006,
+    title: 'Контакты (VK Видео • Антон Шастун)',
+    img: 'https://sun9-47.vkuserphoto.ru/Ect5E818jI5wXBZMP0WFUD3XCNLzIHKO08PuRQ/KOEEiARtu0M.jpg',
+    '4k': true,
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '7.9',
+    episodesCount: 95,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео 4K',
+    agelimit: 18,
+    description:
+      'Шоу Антона Шастуна в 4K UHD, в котором звёздный гость должен ответить на вопросы викторины с помощью живых звонков контактам из своей телефонной книжки.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001007,
+    kpId: 9001007,
+    title: 'Что было дальше? (ЧБД • Все выпуски)',
+    img: proxyIedemPosterUrl('http://895890bd73a7.jmeekos.com/posters/h/p_00010539.jpg'),
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.9',
+    episodesCount: 15,
+    seasonsCount: 1,
+    tvShowNetwork: 'vk',
+    networkBadge: 'VK Видео',
+    agelimit: 18,
+    description:
+      'Культовое юмористическое шоу Нурлана Сабурова, Алексея Щербакова, Тамби Масаева, Ильи Макарова и Эмира Кашокова.',
+  },
+
+  // ================= ТНТ =================
+  {
+    type: 'multistream',
+    fid: -471505,
+    kpId: 471505,
+    title: 'Comedy Club (ТНТ • Все сезоны)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/471505.jpg',
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '7.5',
+    episodesCount: 709,
+    seasonsCount: 4,
+    tvShowNetwork: 'tnt',
+    networkBadge: 'ТНТ',
+    agelimit: 18,
+    description:
+      'Флагманское юмористическое шоу телеканала ТНТ с Гариком Харламовым, Павлом Волей, Тимуром Батрутдиновым, Демисом Карибидисом и Мариной Кравец.',
+  },
+  {
+    type: 'multistream',
+    fid: 97218,
+    kpId: 1344492,
+    title: 'Женский стендап на ТНТ',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/1344492.jpg',
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '7.6',
+    episodesCount: 109,
+    seasonsCount: 8,
+    tvShowNetwork: 'tnt',
+    networkBadge: 'ТНТ',
+    agelimit: 18,
+    description:
+      'Откровенный и бескомпромиссный стендап на ТНТ: Ирина Мягкова, Зоя Яровицына, Варвара Щербакова, Надежда Джабраилова, Мария Маркова и Сауле Юсупова.',
+  },
+  {
+    type: 'multistream',
+    fid: -802911,
+    kpId: 802911,
+    title: 'Stand Up на ТНТ',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/802911.jpg',
+    fhd: true,
+    year: 2026,
+    ratingKinopoisk: '7.8',
+    episodesCount: 317,
     seasonsCount: 5,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
-    agelimit: 16,
+    agelimit: 18,
     description:
-      'Популярное реалити-шоу ТНТ с Ольгой Бузовой и Михаилом Галустяном в саванне Южной Африки.',
+      'Главное стендап-шоу страны на ТНТ: Алексей Щербаков, Нурлан Сабуров, Руслан Белый, Иван Абрамов, Тимур Каргинов, Виктория Складчикова и Евгений Чебатков.',
   },
   {
     type: 'multistream',
-    fid: -14171220,
-    kpId: 14171220,
-    title: 'Звёзды в джунглях (ТНТ • Все 3 сезона)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/4761950.jpg',
+    fid: -842497,
+    kpId: 842497,
+    title: 'Однажды в России (ТНТ)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/842497.jpg',
     fhd: true,
-    year: 2025,
-    ratingKinopoisk: '7.3',
-    episodesCount: 35,
+    year: 2026,
+    ratingKinopoisk: '7.2',
+    episodesCount: 292,
     seasonsCount: 3,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
     description:
-      'Новое реалити-шоу ТНТ с Ольгой Бузовой и Михаилом Галустяном в джунглях Колумбии и Карибского побережья.',
+      'Острая сатирическая скетч-программа ТНТ с Азаматом Мусагалиевым, Денисом Дороховым, Ольгой Картунковой, Екатериной Моргуновой и Максимом Киселёвым.',
+  },
+  {
+    type: 'multistream',
+    fid: -5500883,
+    kpId: 5500883,
+    title: 'Невеста. Экстра любовь (ТНТ)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5500883.jpg',
+    fhd: true,
+    year: 2024,
+    ratingKinopoisk: '7.1',
+    episodesCount: 16,
+    seasonsCount: 1,
+    tvShowNetwork: 'tnt',
+    networkBadge: 'ТНТ',
+    agelimit: 16,
+    description:
+      'Романтическое реалити-шоу телеканала ТНТ в Марокко: Константин Гецати ищет свою любовь среди 16 очаровательных претенденток.',
   },
   {
     type: 'multistream',
@@ -487,7 +715,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '6.8',
     episodesCount: 355,
-    seasonsCount: 25,
+    seasonsCount: 4,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
@@ -496,7 +724,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
   },
   {
     type: 'multistream',
-    fid: -5190505,
+    fid: 133098,
     kpId: 5190505,
     title: 'Концерты на ТНТ',
     img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5190505.jpg',
@@ -513,14 +741,14 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
   },
   {
     type: 'multistream',
-    fid: -4640330,
+    fid: 82153,
     kpId: 4640330,
     title: 'ИГРА на ТНТ',
     img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/4640330.jpg',
     fhd: true,
     year: 2021,
     ratingKinopoisk: '7.9',
-    episodesCount: 6,
+    episodesCount: 12,
     seasonsCount: 1,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
@@ -538,7 +766,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '7.0',
     episodesCount: 73,
-    seasonsCount: 6,
+    seasonsCount: 1,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
@@ -555,7 +783,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2023,
     ratingKinopoisk: '8.3',
     episodesCount: 178,
-    seasonsCount: 8,
+    seasonsCount: 3,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
@@ -579,42 +807,8 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     description:
       'Большое воскресное вечернее шоу Павла Воли и Ильи Соболева на ТНТ с главными звёздами, итогами недели и музыкальными номерами.',
   },
-  {
-    type: 'multistream',
-    fid: -5452387,
-    kpId: 5452387,
-    title: 'Новая Фабрика звёзд (ТНТ)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5452387.jpg',
-    fhd: true,
-    year: 2024,
-    ratingKinopoisk: '6.5',
-    episodesCount: 12,
-    seasonsCount: 1,
-    tvShowNetwork: 'tnt',
-    networkBadge: 'ТНТ',
-    agelimit: 12,
-    description:
-      'Возрождение легендарного музыкального реалити на ТНТ под руководством наставников Сергея Жукова и Сергея Шнурова.',
-  },
 
   // ================= ПЯТНИЦА! =================
-  {
-    type: 'multistream',
-    fid: -5320550,
-    kpId: 5320550,
-    title: 'На ножах (Пятница! • Константин Ивлев)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5320550.jpg',
-    fhd: true,
-    year: 2025,
-    ratingKinopoisk: '7.2',
-    episodesCount: 176,
-    seasonsCount: 9,
-    tvShowNetwork: 'pyatnitsa',
-    networkBadge: 'Пятница!',
-    agelimit: 16,
-    description:
-      'Знаменитое кулинарное реалити-шоу телеканала «Пятница!»: шеф-повар Константин Ивлев спасает убыточные кафе и рестораны по всей стране.',
-  },
   {
     type: 'multistream',
     fid: -5367740,
@@ -625,7 +819,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '7.2',
     episodesCount: 139,
-    seasonsCount: 6,
+    seasonsCount: 1,
     tvShowNetwork: 'pyatnitsa',
     networkBadge: 'Пятница!',
     agelimit: 16,
@@ -642,12 +836,131 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '7.6',
     episodesCount: 68,
-    seasonsCount: 4,
+    seasonsCount: 3,
     tvShowNetwork: 'pyatnitsa',
     networkBadge: 'Пятница!',
     agelimit: 16,
     description:
       'Экстремальная кулинарная академия Константина Ивлева на телеканале «Пятница!». Испытания на выживание и высокая кухня.',
+  },
+  {
+    type: 'multistream',
+    fid: -5320550,
+    kpId: 5320550,
+    title: 'На ножах (Пятница! • Константин Ивлев)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5320550.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.2',
+    episodesCount: 176,
+    seasonsCount: 6,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Знаменитое кулинарное реалити-шоу телеканала «Пятница!»: шеф-повар Константин Ивлев спасает убыточные кафе и рестораны по всей стране.',
+  },
+  {
+    type: 'multistream',
+    fid: -5189043,
+    kpId: 5189043,
+    title: 'Адская кухня (Пятница! • Константин Ивлев)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5189043.jpg',
+    fhd: true,
+    year: 2021,
+    ratingKinopoisk: '6.8',
+    episodesCount: 90,
+    seasonsCount: 5,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Все 5 сезонов легендарного кулинарного реалити-шоу «Адская кухня» на телеканале «Пятница!» с шефом Константином Ивлевым.',
+  },
+  {
+    type: 'multistream',
+    fid: -5618003,
+    kpId: 5618003,
+    title: 'Большие девочки (Пятница! • Этери Тутберидзе)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5618003.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.3',
+    episodesCount: 28,
+    seasonsCount: 3,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Масштабное реалити о трансформации на телеканале «Пятница!» с легендарным тренером Этери Тутберидзе: физические и психологические испытания на пути к новой жизни.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001010,
+    kpId: 9001010,
+    title: 'Четыре свадьбы (Пятница!)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/9338569.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.2',
+    episodesCount: 64,
+    seasonsCount: 1,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Хитовое свадебное реалити-шоу телеканала «Пятница!»: четыре невесты ходят на свадьбы друг к другу и выставляют оценки за платье, банкет и оформление.',
+  },
+  {
+    type: 'multistream',
+    fid: -5459661,
+    kpId: 5459661,
+    title: 'Четыре жены (Пятница!)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5459661.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.1',
+    episodesCount: 52,
+    seasonsCount: 1,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Семейное реалити телеканала «Пятница!»: героини «Четырёх свадеб» возвращаются, чтобы проверить, кто из них стал лучшей хозяйкой и супругой.',
+  },
+  {
+    type: 'multistream',
+    fid: -9001011,
+    kpId: 9001011,
+    title: 'Чёрный список. На кухне (Пятница!)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/11270895.jpg',
+    fhd: true,
+    year: 2025,
+    ratingKinopoisk: '7.4',
+    episodesCount: 30,
+    seasonsCount: 1,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Тайная проверка телеканала «Пятница!» с шефами Ивлевым и Агзамовым: скрытые камеры показывают, как повара и сервис работают на самом деле.',
+  },
+  {
+    type: 'multistream',
+    fid: -911219,
+    kpId: 911219,
+    title: 'Ревизорро (Пятница!)',
+    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/911219.jpg',
+    fhd: true,
+    year: 2023,
+    ratingKinopoisk: '6.8',
+    episodesCount: 130,
+    seasonsCount: 1,
+    tvShowNetwork: 'pyatnitsa',
+    networkBadge: 'Пятница!',
+    agelimit: 16,
+    description:
+      'Главное инспекционное шоу телеканала «Пятница!» о проверке отелей и ресторанов по всей России.',
   },
   {
     type: 'multistream',
@@ -659,7 +972,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '6.7',
     episodesCount: 107,
-    seasonsCount: 7,
+    seasonsCount: 1,
     tvShowNetwork: 'pyatnitsa',
     networkBadge: 'Пятница!',
     agelimit: 16,
@@ -676,29 +989,12 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '6.5',
     episodesCount: 157,
-    seasonsCount: 10,
+    seasonsCount: 1,
     tvShowNetwork: 'pyatnitsa',
     networkBadge: 'Пятница!',
     agelimit: 18,
     description:
       'Социальное реалити-шоу телеканала «Пятница!» о преображении девушек с непростой судьбой в Школе Леди.',
-  },
-  {
-    type: 'multistream',
-    fid: -5617914,
-    kpId: 5617914,
-    title: 'Выживалити (Пятница!)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5617914.jpg',
-    fhd: true,
-    year: 2025,
-    ratingKinopoisk: '7.6',
-    episodesCount: 36,
-    seasonsCount: 4,
-    tvShowNetwork: 'pyatnitsa',
-    networkBadge: 'Пятница!',
-    agelimit: 16,
-    description:
-      'Самое жёсткое экстремально-психологическое реалити-шоу на выживание телеканала «Пятница!» с ведущим Вадимом Демчогом.',
   },
 
   // ================= СТС • НТВ • КВН =================
@@ -712,7 +1008,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '8.5',
     episodesCount: 51,
-    seasonsCount: 5,
+    seasonsCount: 1,
     tvShowNetwork: 'sts_ntv',
     networkBadge: 'СТС',
     agelimit: 16,
@@ -746,7 +1042,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2025,
     ratingKinopoisk: '8.6',
     episodesCount: 57,
-    seasonsCount: 5,
+    seasonsCount: 1,
     tvShowNetwork: 'sts_ntv',
     networkBadge: 'СТС',
     agelimit: 12,
@@ -769,23 +1065,6 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     agelimit: 16,
     description:
       'Экстремальные прятки со звёздами в заброшенных локациях по всей стране на телеканале СТС.',
-  },
-  {
-    type: 'multistream',
-    fid: -5194229,
-    kpId: 5194229,
-    title: 'Шоу «Маска» (НТВ)',
-    img: 'https://kinopoiskapiunofficial.tech/images/posters/kp/5194229.jpg',
-    fhd: true,
-    year: 2025,
-    ratingKinopoisk: '8.1',
-    episodesCount: 88,
-    seasonsCount: 7,
-    tvShowNetwork: 'sts_ntv',
-    networkBadge: 'НТВ',
-    agelimit: 12,
-    description:
-      'Главное музыкальное шоу-загадка телеканала НТВ: суперзвёзды выступают в фантастических костюмах, скрывая свою личность.',
   },
   {
     type: 'multistream',
@@ -849,7 +1128,7 @@ export interface IedemVerifiedMeta {
   checkedAt: number;
 }
 
-const IEDEM_KP_CACHE_KEY = 'iedem_kp_verified_meta_v3';
+const IEDEM_KP_CACHE_KEY = 'iedem_kp_verified_meta_v6';
 const iedemKpCache = new Map<string, IedemVerifiedMeta>();
 
 try {
@@ -905,14 +1184,20 @@ function normalizeRuCompareKey(str?: string): string {
     .trim();
 }
 
-export function getIedemKpCacheKey(item: Pick<IedemVodItem, 'title' | 'type'>): string {
+export function getIedemKpCacheKey(
+  item: Pick<IedemVodItem, 'title' | 'type' | 'year'>
+): string {
   const isSeries = item.type === 'multistream';
   const base = normalizeRuCompareKey(cleanIedemBaseTitle(item.title));
-  return `${isSeries ? 's' : 'm'}_${base}`;
+  const yr =
+    typeof item.year === 'number' && item.year >= 1940 && item.year <= 2026
+      ? `_${item.year}`
+      : '';
+  return `${isSeries ? 's' : 'm'}_${base}${yr}`;
 }
 
 export function getCachedIedemVerifiedMeta(
-  item: Pick<IedemVodItem, 'title' | 'type'>
+  item: Pick<IedemVodItem, 'title' | 'type' | 'year'>
 ): IedemVerifiedMeta | undefined {
   const key = getIedemKpCacheKey(item);
   return iedemKpCache.get(key);
@@ -996,23 +1281,42 @@ export async function resolveIedemKinopoiskMeta(
         /(Росси|СССР|Беларус|Казахстан)/i.test(String(c?.country || ''))
       );
 
-    // Prefer exact match with matching media type and Russian/USSR origin
+    const titleYearMatch = String(item.title || '').match(
+      /(?:^|[\s(\-«"])(19[4-9]\d|20[0-2]\d)(?:$|[\s).»"г])/i
+    );
+    const targetYear =
+      typeof item.year === 'number' && item.year >= 1940 && item.year <= 2026
+        ? item.year
+        : titleYearMatch
+          ? Number(titleYearMatch[1])
+          : undefined;
+
+    const matchesTargetYear = (fYear?: string | number) => {
+      if (!fYear || fYear === 'null') return false;
+      const py = Number(String(fYear).slice(0, 4));
+      if (!Number.isFinite(py) || py < 1930 || py > 2026) return false;
+      if (!targetYear) return true;
+      return Math.abs(py - targetYear) <= 1;
+    };
+
+    // Prefer exact match with matching media type, target year (±1), and Russian/USSR origin
     const chosen =
       exactMatches.find(
         (f) =>
           isSeriesType(f.type) === wantSeries &&
           isRuCountryList(f.countries) &&
-          f.year &&
-          f.year !== 'null'
+          matchesTargetYear(f.year)
       ) ||
       exactMatches.find(
         (f) =>
           isSeriesType(f.type) === wantSeries &&
-          f.year &&
-          f.year !== 'null'
+          matchesTargetYear(f.year)
       ) ||
-      exactMatches.find((f) => isRuCountryList(f.countries) && f.year && f.year !== 'null') ||
-      exactMatches.find((f) => f.year && f.year !== 'null');
+      (!item.kinozalHash
+        ? exactMatches.find(
+            (f) => isRuCountryList(f.countries) && matchesTargetYear(f.year)
+          ) || exactMatches.find((f) => matchesTargetYear(f.year))
+        : undefined);
 
     if (chosen) {
       const parsedYear = Number(String(chosen.year).slice(0, 4));
@@ -1063,6 +1367,9 @@ export async function resolveIedemKinopoiskMeta(
 
 export function proxyIedemPosterUrl(rawUrl?: string): string {
   if (!rawUrl) return '';
+  if (rawUrl.startsWith('http://img.imgilall.me/')) {
+    return rawUrl.replace('http://', 'https://');
+  }
   if (rawUrl.startsWith('http://')) {
     return `/api/iedem-vod?poster=${encodeURIComponent(rawUrl)}`;
   }
@@ -1223,6 +1530,9 @@ interface KinozalRawCatalogItem {
   type: 'stream' | 'multistream';
   title: string;
   year: number;
+  explicitSeason?: number;
+  episodesCount?: number;
+  quality?: string;
   fhd: boolean;
   '4k': boolean;
   seeders: number;
@@ -1251,8 +1561,11 @@ async function fetchKinozalCatalog(params: {
       const itemObj: IedemVodItem = {
         type: r.type,
         fid: r.fid,
+        kinozalFid: r.fid < 0 ? r.fid : undefined,
         title: r.title,
         year: r.year,
+        explicitSeason: r.explicitSeason,
+        episodesCount: r.episodesCount,
         fhd: r.fhd,
         '4k': r['4k'],
         networkBadge: r.networkBadge || (r['4k'] ? 'Kinozal 4K' : 'Kinozal FHD'),
@@ -1285,14 +1598,16 @@ const kinozalBannerArtworkCache = new Map<
 
 async function resolveTmdbWidescreenBannerMeta(
   cleanTitle: string,
-  isSeries: boolean
+  isSeries: boolean,
+  targetYear?: number
 ): Promise<{
   backdropUrl?: string;
   posterUrl?: string;
   logoUrl?: string;
   overview?: string;
 }> {
-  const key = `${isSeries ? 's' : 'm'}_${normalizeRuCompareKey(cleanTitle)}`;
+  const normKey = normalizeRuCompareKey(cleanTitle);
+  const key = `${isSeries ? 's' : 'm'}_${normKey}_${targetYear || ''}`;
   const cached = kinozalBannerArtworkCache.get(key);
   if (cached) return cached;
 
@@ -1309,6 +1624,10 @@ async function resolveTmdbWidescreenBannerMeta(
         media_type?: string;
         name?: string;
         title?: string;
+        original_name?: string;
+        original_title?: string;
+        first_air_date?: string;
+        release_date?: string;
         backdrop_path?: string;
         poster_path?: string;
         overview?: string;
@@ -1316,10 +1635,23 @@ async function resolveTmdbWidescreenBannerMeta(
     };
     const list = Array.isArray(data.results) ? data.results : [];
     const wantMediaType = isSeries ? 'tv' : 'movie';
+    const matchesTmdbItem = (x: (typeof list)[number]) => {
+      if (x.media_type !== wantMediaType) return false;
+      const n1 = normalizeRuCompareKey(x.name || x.title);
+      const n2 = normalizeRuCompareKey(x.original_name || x.original_title);
+      if (n1 !== normKey && n2 !== normKey) return false;
+      if (targetYear) {
+        const dateStr = x.first_air_date || x.release_date || '';
+        const yr = Number(dateStr.slice(0, 4));
+        if (Number.isFinite(yr) && yr > 1900 && Math.abs(yr - targetYear) > 1) {
+          return false;
+        }
+      }
+      return true;
+    };
     const hit =
-      list.find((x) => x.backdrop_path && x.media_type === wantMediaType) ||
-      list.find((x) => x.backdrop_path) ||
-      list[0];
+      list.find((x) => x.backdrop_path && matchesTmdbItem(x)) ||
+      list.find((x) => matchesTmdbItem(x));
     if (!hit) return {};
 
     const backdropUrl = hit.backdrop_path
@@ -1394,7 +1726,11 @@ export async function fetchKinozalTopBannerItems(): Promise<IedemVodItem[]> {
     topList.map(async (it) => {
       const [kpMeta, tmdbArt] = await Promise.all([
         resolveIedemKinopoiskMeta(it),
-        resolveTmdbWidescreenBannerMeta(it.title, it.type === 'multistream'),
+        resolveTmdbWidescreenBannerMeta(
+          it.title,
+          it.type === 'multistream',
+          it.year
+        ),
       ]);
       if (kpMeta.posterUrl && !it.img) it.img = kpMeta.posterUrl;
       if (tmdbArt.posterUrl && !it.img) it.img = tmdbArt.posterUrl;
@@ -1408,6 +1744,21 @@ export async function fetchKinozalTopBannerItems(): Promise<IedemVodItem[]> {
   );
 
   return topList.filter((it) => Boolean(it.backdropUrl || it.img));
+}
+
+export async function fetchRussianTvShowsTopBannerItems(
+  networkFilter: IedemTvShowNetworkId = 'all'
+): Promise<IedemVodItem[]> {
+  const pool =
+    networkFilter && networkFilter !== 'all'
+      ? CURATED_TOP_RUSSIAN_TV_SHOWS.filter((x) => x.tvShowNetwork === networkFilter)
+      : CURATED_TOP_RUSSIAN_TV_SHOWS;
+  const topList = pool.slice(0, 10).map((it) => ({
+    ...it,
+    overview: it.description,
+    backdropUrl: it.img?.includes('800x450') ? it.img : undefined,
+  }));
+  return topList;
 }
 
 function mergeKinozalAndIedemLists(
@@ -1427,13 +1778,20 @@ function mergeKinozalAndIedemLists(
 
   for (const kz of kinozalList) {
     const k = normalizeRuCompareKey(cleanIedemBaseTitle(kz.title));
-    const matchedIe = k ? iedemByNormTitle.get(k) : undefined;
+    const candidateIe = k ? iedemByNormTitle.get(k) : undefined;
+    const isSameTypeAndYear =
+      candidateIe &&
+      candidateIe.type === kz.type &&
+      ((kz.year && candidateIe.year && Math.abs(kz.year - candidateIe.year) <= 1) ||
+        (!kz.year && !candidateIe.year));
+    const matchedIe = isSameTypeAndYear ? candidateIe : undefined;
     if (matchedIe && k) {
       usedIedemKeys.add(k);
       prioritizedKinozal.push({
         ...matchedIe,
         ...kz,
         fid: matchedIe.fid > 0 ? matchedIe.fid : kz.fid,
+        kinozalFid: kz.fid < 0 ? kz.fid : undefined,
         img: matchedIe.img || kz.img,
         imglr: matchedIe.imglr || matchedIe.img || kz.img,
         kpId: matchedIe.kpId || kz.kpId,
@@ -1446,7 +1804,10 @@ function mergeKinozalAndIedemLists(
         kinozalRelease: kz.kinozalRelease,
       });
     } else {
-      prioritizedKinozal.push(kz);
+      prioritizedKinozal.push({
+        ...kz,
+        kinozalFid: kz.fid < 0 ? kz.fid : undefined,
+      });
     }
   }
 
@@ -1492,7 +1853,7 @@ export async function fetchIedemCatalogItems(params: {
     return { items: kzDocs, hasMore: false };
   }
 
-  // For Russian TV Shows (fid === 6), return curated top shows + Kinozal TV shows
+  // For Russian TV Shows (fid === 6), return verified curated top shows (Kinogram 1080p & iEdem VIP)
   if (params.fid === 6) {
     let curated = [...CURATED_TOP_RUSSIAN_TV_SHOWS];
     if (params.tvShowNetwork && params.tvShowNetwork !== 'all') {
@@ -1500,13 +1861,6 @@ export async function fetchIedemCatalogItems(params: {
     }
     if (params.years) {
       curated = curated.filter((x) => matchesIedemYearFilter(x.year, params.years));
-    }
-    if (!params.tvShowNetwork || params.tvShowNetwork === 'all') {
-      const kzTv = await fetchKinozalCatalog({
-        category: 'tvshows_ru',
-        years: params.years,
-      });
-      return { items: mergeKinozalAndIedemLists(curated, kzTv), hasMore: false };
     }
     return { items: curated, hasMore: false };
   }

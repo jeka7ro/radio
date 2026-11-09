@@ -209,6 +209,8 @@ import {
   sanitizeDeviceName,
   loadWatchProgressMap,
   saveWatchProgressMap,
+  loadSeriesEpisodeSortDesc,
+  saveSeriesEpisodeSortDesc,
   loadSavedVodItems,
   saveSavedVodItems,
   buildVodEmbedUrl,
@@ -918,7 +920,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const allowedIedem =
       !isPinLockRequired && canProfileAccessIedem(activeProfile);
     if (!allowedIedem) {
-      if (section === 'iedem_vod') setSection('home');
+      if (section === 'iedem_vod' || section === 'ru_shows') setSection('home');
       if (tvRegionId === 'IEDEM') setTvRegionId('FAV');
     }
   }, [
@@ -980,7 +982,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
       const allowedIedem = canProfileAccessIedem(targetProfile);
       if (!allowedIedem) {
-        setSection((prev) => (prev === 'iedem_vod' ? 'home' : prev));
+        setSection((prev) => (prev === 'iedem_vod' || prev === 'ru_shows' ? 'home' : prev));
         setTvRegionId((prev) => (prev === 'IEDEM' ? 'FAV' : prev));
       }
       if (targetProfile.pin && targetProfile.pin.trim()) {
@@ -1400,8 +1402,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
 
-      // 4) Otherwise switch to Server 1 (vidspark — Original English 1080p)
-      setActiveServer('vidspark');
+      // 4) Otherwise switch to Native HLS Player (kinogram_hls)
+      setActiveServer('kinogram_hls');
       if (startPlaybackImmediately) setIsPlayingVod(true);
     },
     [
@@ -2332,6 +2334,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
         setIsPlayingVod(false);
         setIsInfoSheetOpen(false);
+        if (activeVodItem?.id.startsWith('yt_') || activeVodItem?.isAdultKlubnichka) {
+          setActiveVodItem(null);
+          if (!activeVodItem?.isAdultKlubnichka) {
+            setIsSidebarOpen(true);
+          }
+          return;
+        }
         window.setTimeout(() => {
           playVodBtnRef.current?.focus();
         }, 60);
@@ -2355,6 +2364,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
       if (section !== 'home') {
+        const klubExitBtn = document.querySelector<HTMLElement>('[data-klub-exit-btn="true"]');
+        if (klubExitBtn) {
+          klubExitBtn.click();
+          return;
+        }
         setSection('home');
         setIsSidebarOpen(true);
         return;
@@ -2514,9 +2528,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
           setIsPlayingVod(false);
           setIsInfoSheetOpen(false);
-          if (activeVodItem?.id.startsWith('yt_')) {
+          if (activeVodItem?.id.startsWith('yt_') || activeVodItem?.isAdultKlubnichka) {
             setActiveVodItem(null);
-            setIsSidebarOpen(true);
+            if (!activeVodItem?.isAdultKlubnichka) {
+              setIsSidebarOpen(true);
+            }
             return;
           }
           window.setTimeout(() => {
@@ -2543,6 +2559,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           return;
         }
         if (section !== 'home') {
+          const klubExitBtn = document.querySelector<HTMLElement>('[data-klub-exit-btn="true"]');
+          if (klubExitBtn) {
+            klubExitBtn.click();
+            return;
+          }
           setSection('home');
           setIsSidebarOpen(true);
           return;
@@ -5223,6 +5244,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setSelectedAudioTrackIdx(-1);
       setSelectedSeason(targetSeason);
       setSelectedEpisode(targetEpisode);
+      setEpisodesSortDesc(loadSeriesEpisodeSortDesc(item.id, saved));
       const canUseLocalFl = isLocalHomeServer();
       const isForeignItem =
         !isRussianVodItem(normalizedItem) &&
@@ -5253,7 +5275,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           item.klubnichkaRawId ||
           (item.id.startsWith('klub_') && !item.flTorrentId)
           ? 'kinogram_hls'
-          : (item.flTorrentId || isForeignItem) && canUseLocalFl
+          : (item.flTorrentId || item.id.startsWith('kinozal_') || isForeignItem) && canUseLocalFl
             ? 'filelist_torrent'
             : savedSrv || defaultSrv
       );
@@ -5794,26 +5816,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 f?.type === 'TV_SERIES' ||
                 f?.type === 'MINI_SERIES' ||
                 f?.type === 'TV_SHOW';
+              const matchesYr = (fy: any) => {
+                if (!fy || fy === 'null') return false;
+                if (!targetYear) return true;
+                const py = Number(String(fy).slice(0, 4));
+                const ty = Number(targetYear);
+                return Number.isFinite(py) && Number.isFinite(ty) ? Math.abs(py - ty) <= 1 : true;
+              };
               const matchedFilm =
                 searchData.films.find(
                   (f: any) =>
                     normF(f.nameRu) === normCleanTitle &&
                     isSeriesFilm(f) === wantSeries &&
-                    f.year &&
-                    f.year !== 'null'
+                    matchesYr(f.year)
                 ) ||
                 searchData.films.find(
                   (f: any) =>
                     normF(f.nameRu) === normCleanTitle &&
-                    f.year &&
-                    f.year !== 'null'
-                ) ||
-                searchData.films.find(
-                  (f: any) =>
-                    targetYear &&
-                    String(f.year || '').slice(0, 4) === targetYear
-                ) ||
-                searchData.films[0];
+                    matchesYr(f.year)
+                );
               if (matchedFilm?.filmId) {
                 foundKpId = String(matchedFilm.filmId);
                 if (typeof matchedFilm.nameEn === 'string' && matchedFilm.nameEn.trim()) {
@@ -6115,6 +6136,46 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               });
             })
             .catch(() => {});
+          if (activeVodItem.type === 'series') {
+            fetch(`https://kinopoiskapiunofficial.tech/api/v2.2/films/${resolvedKpIdStr}/seasons`, {
+              headers: {
+                'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+              },
+            })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((kpSeasonsData) => {
+                if (cancelled || !Array.isArray(kpSeasonsData?.items) || kpSeasonsData.items.length === 0) {
+                  return;
+                }
+                const kpVideos: SeriesEpisode[] = [];
+                for (const sItem of kpSeasonsData.items) {
+                  const sNum = Number(sItem?.number);
+                  if (!sNum || sNum <= 0 || !Array.isArray(sItem?.episodes)) continue;
+                  for (const epItem of sItem.episodes) {
+                    const epNum = Number(epItem?.episodeNumber);
+                    if (!epNum || epNum <= 0) continue;
+                    kpVideos.push({
+                      id: `kp_ep_${sNum}_${epNum}`,
+                      season: sNum,
+                      episode: epNum,
+                      name: String(epItem.nameRu || epItem.nameEn || '').trim(),
+                      overview: String(epItem.synopsis || '').trim() || undefined,
+                      released: epItem.releaseDate ? String(epItem.releaseDate) : undefined,
+                    });
+                  }
+                }
+                if (kpVideos.length > 0) {
+                  setDetailedMeta((prev) => {
+                    const base = prev || { ...activeVodItem };
+                    return {
+                      ...base,
+                      videos: Array.isArray(base.videos) && base.videos.length > kpVideos.length ? base.videos : kpVideos,
+                    };
+                  });
+                }
+              })
+              .catch(() => {});
+          }
         }
       });
     } else if (!kp && activeVodItem.name && !isRussianVodItem(activeVodItem)) {
@@ -6163,7 +6224,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     let flResolvedOk = false;
     let flFinished = !isLocalHomeServer();
 
-    if (kp) {
+    if (kp && !(Number(kp) >= 9001000 && Number(kp) <= 9001999)) {
       fetch(`https://kinopoiskapiunofficial.tech/api/v2.2/films/${kp}`, {
         headers: {
           'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
@@ -6201,7 +6262,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               return {
                 ...base,
                 name:
-                  !base.id.startsWith('kp_') && uiLang !== 'ru' && origName
+                  !base.id.startsWith('kp_') && !base.id.startsWith('kinozal_') && uiLang !== 'ru' && origName
                     ? origName
                     : base.name,
                 imdbId: resolvedImdb,
@@ -6407,6 +6468,66 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         })
         .catch(() => { });
+      if (activeVodItem.type === 'series') {
+        fetch(`https://kinopoiskapiunofficial.tech/api/v2.2/films/${kp}/seasons`, {
+          headers: {
+            'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+          },
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((kpSeasonsData) => {
+            if (cancelled || !Array.isArray(kpSeasonsData?.items) || kpSeasonsData.items.length === 0) {
+              return;
+            }
+            const kpVideos: SeriesEpisode[] = [];
+            for (const sItem of kpSeasonsData.items) {
+              const sNum = Number(sItem?.number);
+              if (!sNum || sNum <= 0 || !Array.isArray(sItem?.episodes)) continue;
+              for (const epItem of sItem.episodes) {
+                const epNum = Number(epItem?.episodeNumber);
+                if (!epNum || epNum <= 0) continue;
+                kpVideos.push({
+                  id: `kp_ep_${sNum}_${epNum}`,
+                  season: sNum,
+                  episode: epNum,
+                  name: String(epItem.nameRu || epItem.nameEn || '').trim(),
+                  overview: String(epItem.synopsis || '').trim() || undefined,
+                  released: epItem.releaseDate ? String(epItem.releaseDate) : undefined,
+                });
+              }
+            }
+            if (kpVideos.length > 0) {
+              setDetailedMeta((prev) => {
+                const base = prev || { ...activeVodItem };
+                const existingVids = Array.isArray(base.videos) ? base.videos : [];
+                const mergedMap = new Map<string, SeriesEpisode>();
+                for (const kv of kpVideos) {
+                  mergedMap.set(`${kv.season}_${kv.episode}`, kv);
+                }
+                for (const ev of existingVids) {
+                  const sN = Number(ev.season);
+                  const eN = Number(ev.episode ?? ev.number);
+                  if (!sN || !eN) continue;
+                  const key = `${sN}_${eN}`;
+                  const prevKp = mergedMap.get(key);
+                  mergedMap.set(key, {
+                    ...prevKp,
+                    ...ev,
+                    season: sN,
+                    episode: eN,
+                    name: ev.name || prevKp?.name || '',
+                    overview: ev.overview || ev.description || prevKp?.overview,
+                  });
+                }
+                return {
+                  ...base,
+                  videos: Array.from(mergedMap.values()),
+                };
+              });
+            }
+          })
+          .catch(() => { });
+      }
     }
 
     // Automatically fetch & activate subtitle according to Smart TV Settings (unless 'off')
@@ -6512,6 +6633,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               setActiveServer('kinogram_hls');
             }
           } else if (
+            !activeVodItem.id.startsWith('kp_') &&
             tvSettings.defaultVodServer !== 'auto_best' &&
             tvSettings.defaultVodServer !== 'nontongo' &&
             (tvSettings.defaultVodServer !== 'filelist_torrent' || isLocalHomeServer())
@@ -6535,9 +6657,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setActiveServer(
             isLocalHomeServer() && (!flFinished || flResolvedOk)
               ? 'filelist_torrent'
-              : imdb
-                ? 'vidspark'
-                : 'kinogram_embed'
+              : 'kinogram_hls'
           );
         }
       })
@@ -6561,9 +6681,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               tvSettings.defaultVodServer !== 'nontongo' &&
               tvSettings.defaultVodServer !== 'filelist_torrent'
               ? tvSettings.defaultVodServer
-              : imdb
-                ? 'vidspark'
-                : 'kinogram_embed'
+              : 'kinogram_hls'
           );
         }
       })
@@ -6603,7 +6721,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const cleanFlQuery =
         activeVodItem.type === 'series'
           ? rawFlQuery
-            .replace(/\s*\(S\d+[^)]*\)\s*/gi, ' ')
+            .replace(/\s*\([^)]*\)\s*/gi, ' ')
+            .replace(/•.*$/g, ' ')
             .replace(/\bS\d{1,2}[.\s_-]*E\d{1,2}\b/gi, ' ')
             .replace(/[.\s-]*Сезон\s*\d+\.?/gi, ' ')
             .replace(/\s{2,}/g, ' ')
@@ -6618,7 +6737,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       });
       if (userSelectedFlTorrentIdRef.current) {
         flParams.set('id', String(userSelectedFlTorrentIdRef.current));
-      } else if (activeVodItem.flTorrentId && activeVodItem.type !== 'series') {
+        flParams.set('strictId', '1');
+      } else if (
+        activeVodItem.flTorrentId &&
+        (activeVodItem.type !== 'series' || activeVodItem.flTorrentId < 0)
+      ) {
         flParams.set('id', String(activeVodItem.flTorrentId));
       }
       if (imdb) {
@@ -6645,6 +6768,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           if (
             flData?.ok &&
             !userManuallySelectedServerRef.current &&
+            !activeVodItem.id.startsWith('kp_') &&
             (isForeignVod ||
               activeVodItem.flTorrentId ||
               userSelectedFlTorrentIdRef.current !== null ||
@@ -6660,7 +6784,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             if (directResolvedOk) {
               setActiveServer('kinogram_hls');
             } else if (!activeVodItem.flTorrentId || imdb) {
-              setActiveServer(imdb ? 'vidspark' : 'kinogram_embed');
+              setActiveServer('kinogram_hls');
             }
           }
         })
@@ -6813,6 +6937,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           '';
       const p = new URLSearchParams({
         id: String(torrentId),
+        strictId: '1',
+        ru: isRussianVodItem(activeVodItem) ? '1' : '0',
         type: activeVodItem.type,
         s: String(selectedSeason),
         e: String(selectedEpisode),
@@ -6904,6 +7030,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         },
       }));
     }
+    const vkOpts: VodExternalQualityOption[] = (
+      resolvedDirectStream?.vkQualities || []
+    ).map((q) => ({
+      id: q.id,
+      label: `${q.label} • VK Видео Direct`,
+      badge:
+        q.height >= 2160
+          ? '4K UHD'
+          : q.height >= 1440
+            ? '2K QHD'
+            : q.height >= 1080
+              ? 'Full HD'
+              : 'HD',
+      subLabel: resolvedDirectStream?.title || activeVodItem?.name || '',
+      active:
+        activeServer === 'kinogram_hls' &&
+        resolvedDirectStream?.hlsUrl === q.url,
+      onSelect: () => {
+        setActiveServer('kinogram_hls');
+        setResolvedDirectStream((prev) =>
+          prev
+            ? {
+                ...prev,
+                hlsUrl: q.url,
+                sourcePath: `VK Видео Direct (${q.label})`,
+              }
+            : prev
+        );
+      },
+    }));
     const flList =
       resolvedFileListStream?.torrents &&
         resolvedFileListStream.torrents.length > 0
@@ -6911,11 +7067,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         : resolvedFileListStream?.selectedTorrent
           ? [resolvedFileListStream.selectedTorrent]
           : [];
-    return flList.map((tor) => ({
+    const flOpts = flList.map((tor) => ({
       id: `fl_q_${tor.id}`,
-      label: `${tor.quality || '1080p Full HD'}${tor.isRo ? ' • 🇷🇴 RO' : ''}${tor.source === 'torrentio' ? ' • Torrentio' : ' • FileList'
+      label: `${tor.quality || '1080p Full HD'}${tor.isRo ? ' • RO' : ''}${tor.source === 'kinozal' ? ' • Kinozal VIP' : tor.source === 'torrentio' ? ' • Torrentio' : ' • FileList'
         }`,
-      badge: `▲ ${tor.seeders} • 💾 ${tor.sizeFormatted}${tor.audioInfo ? ` • ${tor.audioInfo}` : ''
+      badge: `${tor.seeders} seed • ${tor.sizeFormatted}${tor.audioInfo ? ` • ${tor.audioInfo}` : ''
         }`,
       subLabel: tor.releaseTitle || tor.name,
       active:
@@ -6925,14 +7081,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         handleSelectFileListTorrent(tor.id, tor.fileIdx, true);
       },
     }));
-  }, [resolvedFileListStream, activeServer, handleSelectFileListTorrent, klubnichkaQualities, activeVodItem, resolvedDirectStream?.hlsUrl]);
+    return [...vkOpts, ...flOpts];
+  }, [resolvedFileListStream, activeServer, handleSelectFileListTorrent, klubnichkaQualities, activeVodItem, resolvedDirectStream]);
 
   // Seasons & Episodes list for Series
   const seasonsMap = useMemo(() => {
     const cleanEpisodeTitle = (rawTitle?: string, epNum?: number): string => {
       const t = (rawTitle || '').trim();
       if (!t) return '';
-      if (/\(\s*\d+\s*сезон\s*\)/i.test(t) || /\d+\s*серия/i.test(t)) {
+      if (/^\s*\d+\s*серия(\s*\(\s*\d+\s*сезон\s*\))?\s*$/i.test(t)) {
         return '';
       }
       if (
@@ -6944,8 +7101,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       return t;
     };
 
-    const isRuSeries = Boolean(activeVodItem && isRussianVodItem(activeVodItem));
-    const metaVideos = isRuSeries ? [] : detailedMeta?.videos || [];
+    const rawKpNum = Number(
+      activeVodItem?.kpId ||
+        detailedMeta?.kpId ||
+        (activeVodItem?.id.startsWith('kp_')
+          ? activeVodItem.id.replace(/^kp_/, '')
+          : 0)
+    );
+    const isSyntheticVkShow =
+      (rawKpNum >= 9001000 && rawKpNum <= 9001999) ||
+      Boolean(
+        activeVodItem?.id.startsWith('iedem_') &&
+          resolvedDirectStream?.seasons &&
+          resolvedDirectStream.seasons.length > 0
+      );
+    const metaVideos = isSyntheticVkShow ? [] : detailedMeta?.videos || [];
     const metaVideoMap = new Map<string, SeriesEpisode>();
     for (const v of metaVideos) {
       const sNum = Number(v.season);
@@ -6975,6 +7145,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               name:
                 metaEp?.name ||
                 cleanEpisodeTitle(ep.title, ep.episode),
+              thumbnail: ep.thumbnail || metaEp?.thumbnail,
               season: s.season,
               episode: ep.episode,
             };
@@ -7004,16 +7175,38 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       map.set(sNum, list);
     }
 
-    // Also include any higher season/episode numbers discovered on FileList.io (e.g. Asia Express S07E19..S07E35)
-    const flTorrents = resolvedFileListStream?.torrents || [];
+    // Also include any higher season/episode numbers discovered on FileList.io / Kinozal VIP
+    const flTorrents = isSyntheticVkShow
+      ? []
+      : resolvedFileListStream?.torrents || [];
     for (const tor of flTorrents) {
-      const m = String(tor.releaseTitle || '').match(
-        /\bS(\d{1,2})[.\s_-]*E(\d{1,2})\b/i
-      );
-      if (!m) continue;
-      const sNum = Number(m[1]);
-      const eMax = Number(m[2]);
-      if (!sNum || !eMax || eMax > 100) continue;
+      const rel = String(tor.releaseTitle || '');
+      const mEn = rel.match(/\bS(\d{1,2})[.\s_-]*E(\d{1,2})\b/i);
+      const mBracket = rel.match(/\[(?:S0*(\d+)x|0*(\d+)x)\d+-0*(\d+)\]/i);
+      const mIz = rel.match(/\[0*1\s*[-–]\s*0*(\d+)(?:\s*из\s*\d+)?\]/i);
+      const mRu = rel.match(/(?:(\d+)\s*сезон[^)]*?)?1\s*[-–]\s*0*(\d+)\s*(?:сери|выпуск)/i);
+      const sexplicit = rel.match(/(?:\[S0*(\d+)\]|\[S0*(\d+)|\b0*(\d+)\s*сезон)/i);
+      const sNum = mEn
+        ? Number(mEn[1])
+        : mBracket
+          ? Number(mBracket[1] || mBracket[2])
+          : mRu && mRu[1]
+            ? Number(mRu[1])
+            : sexplicit
+              ? Number(sexplicit[1] || sexplicit[2] || sexplicit[3])
+              : selectedSeason || 1;
+      const eMax = mEn
+        ? Number(mEn[2])
+        : mBracket
+          ? Number(mBracket[3])
+          : mIz
+            ? Number(mIz[1])
+            : mRu
+              ? Number(mRu[2])
+              : sexplicit
+                ? 15
+                : 0;
+      if (!sNum || !eMax || eMax > 120) continue;
       const list = map.get(sNum) || [];
       const existingEps = new Set(list.map((x) => x.episode));
       for (let ep = 1; ep <= eMax; ep++) {
@@ -7031,8 +7224,89 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       map.set(sNum, list);
     }
 
+    if (
+      activeVodItem?.type === 'series' &&
+      resolvedFileListStream?.files &&
+      resolvedFileListStream.files.length > 1
+    ) {
+      const sNum = selectedSeason || 1;
+      const fCount = Math.min(120, resolvedFileListStream.files.length);
+      const list = map.get(sNum) || [];
+      const existingEps = new Set(list.map((x) => x.episode));
+      for (let ep = 1; ep <= fCount; ep++) {
+        if (!existingEps.has(ep)) {
+          existingEps.add(ep);
+          list.push({
+            id: `fl_file_${sNum}_${ep}`,
+            name: '',
+            season: sNum,
+            episode: ep,
+          });
+        }
+      }
+      list.sort((a, b) => a.episode - b.episode);
+      map.set(sNum, list);
+    }
+
+    if (
+      activeVodItem?.type === 'series' &&
+      (activeVodItem?.seasonsCount || 0) > 1 &&
+      map.size < Number(activeVodItem.seasonsCount)
+    ) {
+      const totalS = Math.min(30, Number(activeVodItem.seasonsCount) || 1);
+      const perSeasonEp = Math.min(
+        120,
+        Math.max(
+          8,
+          Math.round((Number(activeVodItem.episodesCount) || totalS * 12) / totalS)
+        )
+      );
+      for (let s = 1; s <= totalS; s++) {
+        if (!map.has(s)) {
+          const list: SeriesEpisode[] = [];
+          for (let ep = 1; ep <= perSeasonEp; ep++) {
+            list.push({
+              id: `cnt_${s}_${ep}`,
+              name: '',
+              season: s,
+              episode: ep,
+            });
+          }
+          map.set(s, list);
+        }
+      }
+    }
+
+    if (map.size === 0 && activeVodItem?.type === 'series') {
+      const sNum = selectedSeason || 1;
+      const epMax = Math.min(
+        120,
+        Math.max(
+          Number(activeVodItem.episodesCount) || 12,
+          selectedEpisode || 1
+        )
+      );
+      const list: SeriesEpisode[] = [];
+      for (let ep = 1; ep <= epMax; ep++) {
+        list.push({
+          id: `fl_cnt_${sNum}_${ep}`,
+          name: '',
+          season: sNum,
+          episode: ep,
+        });
+      }
+      map.set(sNum, list);
+    }
+
     return map;
-  }, [detailedMeta, resolvedDirectStream, resolvedFileListStream]);
+  }, [
+    activeVodItem,
+    detailedMeta,
+    resolvedDirectStream,
+    resolvedFileListStream,
+    selectedSeason,
+    selectedEpisode,
+  ]);
 
   const availableSeasons = useMemo(
     () => Array.from(seasonsMap.keys()).sort((a, b) => a - b),
@@ -7041,9 +7315,42 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const [episodesSortDesc, setEpisodesSortDesc] = useState<boolean>(false);
 
+  useEffect(() => {
+    if (!activeVodItem) return;
+    const saved = watchProgressMap[activeVodItem.id];
+    setEpisodesSortDesc(loadSeriesEpisodeSortDesc(activeVodItem.id, saved));
+  }, [activeVodItem?.id]);
+
+  const handleSetSeriesEpisodesSortDesc = useCallback(
+    (desc: boolean) => {
+      setEpisodesSortDesc(desc);
+      if (!activeVodItem) return;
+      saveSeriesEpisodeSortDesc(activeVodItem.id, desc);
+      setWatchProgressMap((prev) => {
+        const existing = prev[activeVodItem.id];
+        if (!existing) return prev;
+        const next: Record<string, VodWatchProgressEntry> = {
+          ...prev,
+          [activeVodItem.id]: {
+            ...existing,
+            episodesSortDesc: desc,
+            updatedAt: Date.now(),
+          },
+        };
+        saveWatchProgressMap(next, activeProfileId);
+        return next;
+      });
+    },
+    [activeVodItem, activeProfileId]
+  );
+
   const episodesForSeason = useMemo(
-    () => seasonsMap.get(selectedSeason) || [],
-    [seasonsMap, selectedSeason]
+    () =>
+      seasonsMap.get(selectedSeason) ||
+      (availableSeasons.length > 0
+        ? seasonsMap.get(availableSeasons[0]) || []
+        : []),
+    [seasonsMap, selectedSeason, availableSeasons]
   );
 
   const displayedEpisodesForSeason = useMemo(
@@ -7053,6 +7360,136 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         : episodesForSeason,
     [episodesForSeason, episodesSortDesc]
   );
+
+  const nextEpisodeInfo = useMemo((): {
+    season: number;
+    episode: number;
+    label: string;
+  } | null => {
+    if (!activeVodItem || activeVodItem.type !== 'series') return null;
+    if (episodesSortDesc) {
+      const descList = [...episodesForSeason].sort(
+        (a, b) => b.episode - a.episode
+      );
+      const nextDescInSeason = descList.find(
+        (ep) => ep.episode < selectedEpisode
+      );
+      if (nextDescInSeason) {
+        return {
+          season: selectedSeason,
+          episode: nextDescInSeason.episode,
+          label: `Ep. ${nextDescInSeason.episode}`,
+        };
+      }
+      if (episodesForSeason.length === 0 && selectedEpisode > 1) {
+        return {
+          season: selectedSeason,
+          episode: selectedEpisode - 1,
+          label: `Ep. ${selectedEpisode - 1}`,
+        };
+      }
+      const prevSeason = [...availableSeasons]
+        .sort((a, b) => b - a)
+        .find((s) => s < selectedSeason);
+      if (prevSeason) {
+        const prevSeasonEps = seasonsMap.get(prevSeason) || [];
+        const highestEp =
+          prevSeasonEps.length > 0
+            ? Math.max(...prevSeasonEps.map((e) => e.episode))
+            : 1;
+        return {
+          season: prevSeason,
+          episode: highestEp,
+          label: `Sezonul ${prevSeason} · Ep. ${highestEp}`,
+        };
+      }
+      return null;
+    }
+
+    const ascList = [...episodesForSeason].sort(
+      (a, b) => a.episode - b.episode
+    );
+    const nextAscInSeason = ascList.find(
+      (ep) => ep.episode > selectedEpisode
+    );
+    if (nextAscInSeason) {
+      return {
+        season: selectedSeason,
+        episode: nextAscInSeason.episode,
+        label: `Ep. ${nextAscInSeason.episode}`,
+      };
+    }
+    const isLastInKnownSeason =
+      ascList.length > 0 &&
+      selectedEpisode >= ascList[ascList.length - 1].episode;
+    const nextSeason = isLastInKnownSeason
+      ? availableSeasons.find((s) => s > selectedSeason)
+      : undefined;
+    if (nextSeason) {
+      return {
+        season: nextSeason,
+        episode: 1,
+        label: `Sezonul ${nextSeason} · Ep. 1`,
+      };
+    }
+    if (ascList.length === 0) {
+      return {
+        season: selectedSeason,
+        episode: selectedEpisode + 1,
+        label: `Ep. ${selectedEpisode + 1}`,
+      };
+    }
+    return null;
+  }, [
+    activeVodItem,
+    episodesSortDesc,
+    episodesForSeason,
+    selectedEpisode,
+    selectedSeason,
+    availableSeasons,
+    seasonsMap,
+  ]);
+
+  const prevEpisodeInfo = useMemo((): {
+    season: number;
+    episode: number;
+    label: string;
+  } | null => {
+    if (!activeVodItem || activeVodItem.type !== 'series') return null;
+    if (episodesSortDesc) {
+      const ascList = [...episodesForSeason].sort(
+        (a, b) => a.episode - b.episode
+      );
+      const prevInDesc = ascList.find((ep) => ep.episode > selectedEpisode);
+      if (prevInDesc) {
+        return {
+          season: selectedSeason,
+          episode: prevInDesc.episode,
+          label: `Ep. ${prevInDesc.episode}`,
+        };
+      }
+      return null;
+    }
+    if (selectedEpisode > 1) {
+      const descList = [...episodesForSeason].sort(
+        (a, b) => b.episode - a.episode
+      );
+      const prevInAsc = descList.find((ep) => ep.episode < selectedEpisode);
+      const targetEp = prevInAsc ? prevInAsc.episode : selectedEpisode - 1;
+      return {
+        season: selectedSeason,
+        episode: targetEp,
+        label: `Ep. ${targetEp}`,
+      };
+    }
+    return null;
+  }, [
+    activeVodItem,
+    episodesSortDesc,
+    episodesForSeason,
+    selectedEpisode,
+    selectedSeason,
+  ]);
 
   const updateWatchProgress = useCallback(
     (
@@ -7130,6 +7567,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               : existing?.totalEpisodesInSeason,
           totalSeasons:
             totalSeasonsCount > 0 ? totalSeasonsCount : existing?.totalSeasons,
+          episodesSortDesc:
+            typeof episodesSortDesc === 'boolean'
+              ? episodesSortDesc
+              : existing?.episodesSortDesc,
           episodeProgressMap: {
             ...(existing?.episodeProgressMap || {}),
             [epKey]: {
@@ -7151,6 +7592,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       seasonsMap,
       availableSeasons.length,
       resolvedFileListStream,
+      episodesSortDesc,
     ]
   );
 
@@ -7206,66 +7648,115 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     return () => window.clearTimeout(t);
   }, [pendingResumePromptSec]);
 
-  // Sync watch progress & saved favorites across devices (4s on Home Wi-Fi, 120s smart sync on Netlify / 4G / 5G)
+  // Sync watch progress & saved favorites across devices (local + cloud filmio.my real-time continuity)
   useEffect(() => {
-    const syncProgressAndSaved = () => {
-      const local = loadWatchProgressMap(activeProfileId);
-      fetch(
-        `/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(local),
+    const applyRemoteProgress = (
+      remote: Record<string, VodWatchProgressEntry> | null
+    ) => {
+      if (!remote || typeof remote !== 'object') return;
+      setWatchProgressMap((prev) => {
+        const merged = { ...prev };
+        let changed = false;
+        const localFl = isLocalHomeServer();
+        for (const [k, v] of Object.entries(remote)) {
+          if (!v || typeof v !== 'object' || !v.item) continue;
+          const existing = merged[k];
+          const vCleared =
+            (v.currentTime || 0) === 0 &&
+            (!v.episodeProgressMap ||
+              Object.keys(v.episodeProgressMap).length === 0);
+          const mergedEpMap = vCleared
+            ? {}
+            : {
+                ...(existing?.episodeProgressMap || {}),
+                ...(v.episodeProgressMap || {}),
+              };
+          if (
+            !vCleared &&
+            existing?.episodeProgressMap &&
+            v.episodeProgressMap
+          ) {
+            for (const [epK, epV] of Object.entries(v.episodeProgressMap)) {
+              const prevEp = existing.episodeProgressMap[epK];
+              if (!prevEp || (epV?.updatedAt || 0) >= (prevEp?.updatedAt || 0)) {
+                mergedEpMap[epK] = epV;
+              } else {
+                mergedEpMap[epK] = prevEp;
+              }
+            }
+          }
+          const cleanEntry: VodWatchProgressEntry = {
+            ...existing,
+            ...v,
+            deviceName: v.deviceName
+              ? sanitizeDeviceName(v.deviceName)
+              : v.deviceName,
+            server:
+              !localFl &&
+              (v.server === 'filelist_torrent' || v.server === 'vidspark')
+                ? 'kinogram_hls'
+                : v.server,
+            episodeProgressMap: mergedEpMap,
+          };
+          if (
+            !existing ||
+            (cleanEntry.updatedAt || 0) > (existing.updatedAt || 0) ||
+            Object.keys(mergedEpMap).length >
+              Object.keys(existing.episodeProgressMap || {}).length ||
+            existing.deviceName !== sanitizeDeviceName(existing.deviceName)
+          ) {
+            merged[k] =
+              !existing || (cleanEntry.updatedAt || 0) >= (existing.updatedAt || 0)
+                ? cleanEntry
+                : { ...existing, episodeProgressMap: mergedEpMap };
+            changed = true;
+          }
         }
-      )
+        if (changed) {
+          try {
+            localStorage.setItem(
+              getWatchProgressKeyForProfile(activeProfileId),
+              JSON.stringify(merged)
+            );
+          } catch {
+            // ignore
+          }
+          return merged;
+        }
+        return prev;
+      });
+    };
+
+    const syncProgressAndSaved = () => {
+      const cleanProf = encodeURIComponent(activeProfileId);
+      const local = loadWatchProgressMap(activeProfileId);
+      const bodyStr = JSON.stringify(local);
+      fetch(`/api/tv-progress?profileId=${cleanProf}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: bodyStr,
+      })
         .then((r) => (r.ok ? r.json() : null))
         .then((remote: Record<string, VodWatchProgressEntry> | null) => {
-          if (!remote || typeof remote !== 'object') return;
-          setWatchProgressMap((prev) => {
-            const merged = { ...prev };
-            let changed = false;
-            const localFl = isLocalHomeServer();
-            for (const [k, v] of Object.entries(remote)) {
-              if (!v || typeof v !== 'object' || !v.item) continue;
-              const cleanEntry: VodWatchProgressEntry = {
-                ...v,
-                deviceName: v.deviceName
-                  ? sanitizeDeviceName(v.deviceName)
-                  : v.deviceName,
-                server:
-                  !localFl &&
-                    (v.server === 'filelist_torrent' || v.server === 'vidspark')
-                    ? 'kinogram_hls'
-                    : v.server,
-              };
-              const existing = merged[k];
-              if (
-                !existing ||
-                (cleanEntry.updatedAt || 0) > (existing.updatedAt || 0) ||
-                existing.deviceName !== sanitizeDeviceName(existing.deviceName)
-              ) {
-                merged[k] = cleanEntry;
-                changed = true;
-              }
-            }
-            if (changed) {
-              try {
-                localStorage.setItem(
-                  getWatchProgressKeyForProfile(activeProfileId),
-                  JSON.stringify(merged)
-                );
-              } catch {
-                // ignore
-              }
-              return merged;
-            }
-            return prev;
-          });
+          applyRemoteProgress(remote);
+          if (isLocalHomeServer()) {
+            const payloadToCloud = JSON.stringify(
+              remote && typeof remote === 'object' ? remote : local
+            );
+            fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payloadToCloud,
+            })
+              .then((cr) => (cr.ok ? cr.json() : null))
+              .then((cloudRemote) => applyRemoteProgress(cloudRemote))
+              .catch(() => {});
+          }
         })
-        .catch(() => { });
+        .catch(() => {});
 
       const localSaved = loadSavedVodItems(activeProfileId);
-      fetch(`/api/tv-saved?profileId=${encodeURIComponent(activeProfileId)}`, {
+      fetch(`/api/tv-saved?profileId=${cleanProf}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(localSaved),
@@ -7299,11 +7790,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             });
           }
         })
-        .catch(() => { });
+        .catch(() => {});
     };
 
     syncProgressAndSaved();
-    const intervalMs = isLocalHomeServer() ? 10000 : 120000;
+    const intervalMs = isLocalHomeServer() ? 10000 : 20000;
     const timer = window.setInterval(syncProgressAndSaved, intervalMs);
     const onFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
@@ -7317,7 +7808,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [activeProfileId]);
+  }, [activeProfileId, section === 'history' || section === 'saved' || section === 'home']);
 
   // Handle cross-device handoff URL parameters (?profile=...&resume=tt...&s=...&e=...&t=...)
   const handledUrlResumeRef = useRef<boolean>(false);
@@ -8289,6 +8780,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     Icon: Film,
                   },
                   {
+                    id: 'ru_shows',
+                    label: tr('Emisiuni RU', 'RU TV Shows', 'ТВ-Шоу RU'),
+                    Icon: Flame,
+                  },
+                  {
                     id: 'tv',
                     label: tr('TV Online', 'Live TV', 'ТВ Онлайн'),
                     Icon: Monitor,
@@ -8351,7 +8847,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               )
                 .filter(
                   (item) =>
-                    item.id !== 'iedem_vod' ||
+                    (item.id !== 'iedem_vod' && item.id !== 'ru_shows') ||
                     (!isPinLockRequired && canProfileAccessIedem(activeProfile))
                 )
                 .map(({ id, label, Icon }) => {
@@ -8900,9 +9396,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       onClick={() => {
                         setIsMobileCustomFullscreen(false);
                         setIsPlayingVod(false);
-                        if (activeVodItem.id.startsWith('yt_')) {
+                        if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
                           setActiveVodItem(null);
-                          setIsSidebarOpen(true);
+                          if (!activeVodItem.isAdultKlubnichka) {
+                            setIsSidebarOpen(true);
+                          }
                         }
                       }}
                       className={`${
@@ -9043,6 +9541,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               ytVideoId
                             )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
                             title={activeVodItem.name}
+                            referrerPolicy="strict-origin-when-cross-origin"
                             allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
                             allowFullScreen
                             className="relative z-10 w-full h-full border-0 bg-transparent"
@@ -9202,84 +9701,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         onHideOsd={hideVodOsd}
                         onClosePlayer={() => {
                           setIsPlayingVod(false);
-                          if (activeVodItem.id.startsWith('yt_')) {
+                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
                             setActiveVodItem(null);
-                            setIsSidebarOpen(true);
+                            if (!activeVodItem.isAdultKlubnichka) {
+                              setIsSidebarOpen(true);
+                            }
                           }
                         }}
-                        prevEpisodeLabel={
-                          activeVodItem.type === 'series' && selectedEpisode > 1
-                            ? `Ep. ${selectedEpisode - 1}`
-                            : undefined
-                        }
-                        nextEpisodeLabel={
-                          activeVodItem.type === 'series'
-                            ? (() => {
-                                const nextInSeason = episodesForSeason.find(
-                                  (ep) => ep.episode > selectedEpisode
-                                );
-                                if (nextInSeason) {
-                                  return `Ep. ${nextInSeason.episode}`;
-                                }
-                                const isLastInKnownSeason =
-                                  episodesForSeason.length > 0 &&
-                                  selectedEpisode >=
-                                    episodesForSeason[
-                                      episodesForSeason.length - 1
-                                    ].episode;
-                                const nextSeason = isLastInKnownSeason
-                                  ? availableSeasons.find(
-                                      (s) => s > selectedSeason
-                                    )
-                                  : undefined;
-                                if (nextSeason) {
-                                  return `Sezonul ${nextSeason} · Ep. 1`;
-                                }
-                                return `Ep. ${selectedEpisode + 1}`;
-                              })()
-                            : undefined
-                        }
+                        prevEpisodeLabel={prevEpisodeInfo?.label}
+                        nextEpisodeLabel={nextEpisodeInfo?.label}
                         onPrevEpisode={
-                          activeVodItem.type === 'series' && selectedEpisode > 1
+                          prevEpisodeInfo
                             ? () => {
-                              userSelectedFlTorrentIdRef.current = null;
-                              setSelectedEpisode(selectedEpisode - 1);
-                              setResumeStartSeconds(0);
-                            }
+                                userSelectedFlTorrentIdRef.current = null;
+                                if (prevEpisodeInfo.season !== selectedSeason) {
+                                  setSelectedSeason(prevEpisodeInfo.season);
+                                }
+                                setSelectedEpisode(prevEpisodeInfo.episode);
+                                setResumeStartSeconds(0);
+                              }
                             : undefined
                         }
                         onNextEpisode={
-                          activeVodItem.type === 'series'
+                          nextEpisodeInfo
                             ? () => {
-                              userSelectedFlTorrentIdRef.current = null;
-                              const nextInSeason = episodesForSeason.find(
-                                (ep) => ep.episode > selectedEpisode
-                              );
-                              if (nextInSeason) {
-                                setSelectedEpisode(nextInSeason.episode);
+                                userSelectedFlTorrentIdRef.current = null;
+                                if (nextEpisodeInfo.season !== selectedSeason) {
+                                  setSelectedSeason(nextEpisodeInfo.season);
+                                }
+                                setSelectedEpisode(nextEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
-                                return;
                               }
-                              const isLastInKnownSeason =
-                                episodesForSeason.length > 0 &&
-                                selectedEpisode >=
-                                  episodesForSeason[
-                                    episodesForSeason.length - 1
-                                  ].episode;
-                              const nextSeason = isLastInKnownSeason
-                                ? availableSeasons.find(
-                                    (s) => s > selectedSeason
-                                  )
-                                : undefined;
-                              if (nextSeason) {
-                                setSelectedSeason(nextSeason);
-                                setSelectedEpisode(1);
-                                setResumeStartSeconds(0);
-                                return;
-                              }
-                              setSelectedEpisode(selectedEpisode + 1);
-                              setResumeStartSeconds(0);
-                            }
                             : undefined
                         }
                         onOpenEpisodesDrawer={
@@ -9463,9 +9915,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               return;
                             }
                           }
-                          if (!resolvedDirectStream?.ok && !matchedOfflineVodItem) {
-                            setActiveServer('vidspark');
-                          }
+
                         }}
                         durationHintSec={(() => {
                           if (
@@ -9566,84 +10016,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         onHideOsd={hideVodOsd}
                         onClosePlayer={() => {
                           setIsPlayingVod(false);
-                          if (activeVodItem.id.startsWith('yt_')) {
+                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
                             setActiveVodItem(null);
-                            setIsSidebarOpen(true);
+                            if (!activeVodItem.isAdultKlubnichka) {
+                              setIsSidebarOpen(true);
+                            }
                           }
                         }}
-                        prevEpisodeLabel={
-                          activeVodItem.type === 'series' && selectedEpisode > 1
-                            ? `Ep. ${selectedEpisode - 1}`
-                            : undefined
-                        }
-                        nextEpisodeLabel={
-                          activeVodItem.type === 'series'
-                            ? (() => {
-                                const nextInSeason = episodesForSeason.find(
-                                  (ep) => ep.episode > selectedEpisode
-                                );
-                                if (nextInSeason) {
-                                  return `Ep. ${nextInSeason.episode}`;
-                                }
-                                const isLastInKnownSeason =
-                                  episodesForSeason.length > 0 &&
-                                  selectedEpisode >=
-                                    episodesForSeason[
-                                      episodesForSeason.length - 1
-                                    ].episode;
-                                const nextSeason = isLastInKnownSeason
-                                  ? availableSeasons.find(
-                                      (s) => s > selectedSeason
-                                    )
-                                  : undefined;
-                                if (nextSeason) {
-                                  return `Sezonul ${nextSeason} · Ep. 1`;
-                                }
-                                return `Ep. ${selectedEpisode + 1}`;
-                              })()
-                            : undefined
-                        }
+                        prevEpisodeLabel={prevEpisodeInfo?.label}
+                        nextEpisodeLabel={nextEpisodeInfo?.label}
                         onPrevEpisode={
-                          activeVodItem.type === 'series' && selectedEpisode > 1
+                          prevEpisodeInfo
                             ? () => {
-                              userSelectedFlTorrentIdRef.current = null;
-                              setSelectedEpisode(selectedEpisode - 1);
-                              setResumeStartSeconds(0);
-                            }
+                                userSelectedFlTorrentIdRef.current = null;
+                                if (prevEpisodeInfo.season !== selectedSeason) {
+                                  setSelectedSeason(prevEpisodeInfo.season);
+                                }
+                                setSelectedEpisode(prevEpisodeInfo.episode);
+                                setResumeStartSeconds(0);
+                              }
                             : undefined
                         }
                         onNextEpisode={
-                          activeVodItem.type === 'series'
+                          nextEpisodeInfo
                             ? () => {
-                              userSelectedFlTorrentIdRef.current = null;
-                              const nextInSeason = episodesForSeason.find(
-                                (ep) => ep.episode > selectedEpisode
-                              );
-                              if (nextInSeason) {
-                                setSelectedEpisode(nextInSeason.episode);
+                                userSelectedFlTorrentIdRef.current = null;
+                                if (nextEpisodeInfo.season !== selectedSeason) {
+                                  setSelectedSeason(nextEpisodeInfo.season);
+                                }
+                                setSelectedEpisode(nextEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
-                                return;
                               }
-                              const isLastInKnownSeason =
-                                episodesForSeason.length > 0 &&
-                                selectedEpisode >=
-                                  episodesForSeason[
-                                    episodesForSeason.length - 1
-                                  ].episode;
-                              const nextSeason = isLastInKnownSeason
-                                ? availableSeasons.find(
-                                    (s) => s > selectedSeason
-                                  )
-                                : undefined;
-                              if (nextSeason) {
-                                setSelectedSeason(nextSeason);
-                                setSelectedEpisode(1);
-                                setResumeStartSeconds(0);
-                                return;
-                              }
-                              setSelectedEpisode(selectedEpisode + 1);
-                              setResumeStartSeconds(0);
-                            }
                             : undefined
                         }
                         onOpenEpisodesDrawer={
@@ -9737,6 +10140,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
                         title={activeVodItem.name}
                         className="relative z-10 w-full h-full border-0"
+                        referrerPolicy="strict-origin-when-cross-origin"
                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                         allowFullScreen
                       />
@@ -9744,8 +10148,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       <iframe
                         src={
                           activeVodItem.klubnichkaEmbedUrl ||
+                          resolvedDirectStream?.embedUrl ||
                           buildVodEmbedUrl(
-                            'vidspark',
+                            'vidsrc_pm',
                             detailedMeta || activeVodItem,
                             selectedSeason,
                             selectedEpisode,
@@ -9757,6 +10162,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         }
                         title={activeVodItem.name}
                         className="relative z-10 w-full h-full border-0"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+                        referrerPolicy="strict-origin-when-cross-origin"
                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                         allowFullScreen
                       />
@@ -9769,23 +10176,29 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
                       title={activeVodItem.name}
                       className="relative z-10 w-full h-full border-0"
+                      referrerPolicy="strict-origin-when-cross-origin"
                       allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                       allowFullScreen
                     />
                   ) : (
                     <iframe
-                      src={buildVodEmbedUrl(
-                        activeServer,
-                        detailedMeta || activeVodItem,
-                        selectedSeason,
-                        selectedEpisode,
-                        preferredSubLang,
-                        resumeStartSeconds,
-                        detailedMeta?.imdbId ||
-                          resolvedFileListStream?.selectedTorrent?.imdbId
-                      )}
+                      src={
+                        resolvedDirectStream?.embedUrl ||
+                        buildVodEmbedUrl(
+                          activeServer,
+                          detailedMeta || activeVodItem,
+                          selectedSeason,
+                          selectedEpisode,
+                          preferredSubLang,
+                          resumeStartSeconds,
+                          detailedMeta?.imdbId ||
+                            resolvedFileListStream?.selectedTorrent?.imdbId
+                        )
+                      }
                       title={activeVodItem.name}
                       className="relative z-10 w-full h-full border-0"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+                      referrerPolicy="strict-origin-when-cross-origin"
                       allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                       allowFullScreen
                     />
@@ -9916,7 +10329,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </button>
 
                             {activeVodItem.type === 'series' &&
-                              selectedEpisode > 1 && (
+                              prevEpisodeInfo && (
                                 <button
                                   type="button"
                                   data-vod-prev-ep-btn="true"
@@ -9924,31 +10337,39 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   onClick={() => {
                                     wakeVodOsd();
                                     userSelectedFlTorrentIdRef.current = null;
-                                    setSelectedEpisode(selectedEpisode - 1);
+                                    if (prevEpisodeInfo.season !== selectedSeason) {
+                                      setSelectedSeason(prevEpisodeInfo.season);
+                                    }
+                                    setSelectedEpisode(prevEpisodeInfo.episode);
                                     setResumeStartSeconds(0);
                                   }}
                                   className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                                 >
-                                  <span>Ep. {selectedEpisode - 1}</span>
+                                  <span>{prevEpisodeInfo.label}</span>
                                 </button>
                               )}
 
                             {activeVodItem.type === 'series' && (
                               <>
-                                <button
-                                  type="button"
-                                  data-vod-next-ep-btn="true"
-                                  onFocus={wakeVodOsd}
-                                  onClick={() => {
-                                    wakeVodOsd();
-                                    userSelectedFlTorrentIdRef.current = null;
-                                    setSelectedEpisode(selectedEpisode + 1);
-                                    setResumeStartSeconds(0);
-                                  }}
-                                  className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                                >
-                                  <span>Ep. {selectedEpisode + 1}</span>
-                                </button>
+                                {nextEpisodeInfo && (
+                                  <button
+                                    type="button"
+                                    data-vod-next-ep-btn="true"
+                                    onFocus={wakeVodOsd}
+                                    onClick={() => {
+                                      wakeVodOsd();
+                                      userSelectedFlTorrentIdRef.current = null;
+                                      if (nextEpisodeInfo.season !== selectedSeason) {
+                                        setSelectedSeason(nextEpisodeInfo.season);
+                                      }
+                                      setSelectedEpisode(nextEpisodeInfo.episode);
+                                      setResumeStartSeconds(0);
+                                    }}
+                                    className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                  >
+                                    <span>{nextEpisodeInfo.label}</span>
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   data-vod-bottom-episodes-btn="true"
@@ -10313,7 +10734,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               <div className="flex items-center gap-1 bg-white/[0.06] p-1 rounded-full border border-white/15">
                                 <button
                                   type="button"
-                                  onClick={() => setEpisodesSortDesc(false)}
+                                  onClick={() => handleSetSeriesEpisodesSortDesc(false)}
                                   className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${!episodesSortDesc
                                     ? 'bg-white text-[#141414] shadow-sm'
                                     : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
@@ -10323,7 +10744,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setEpisodesSortDesc(true)}
+                                  onClick={() => handleSetSeriesEpisodesSortDesc(true)}
                                   className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${episodesSortDesc
                                     ? 'bg-white text-[#141414] shadow-sm'
                                     : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
@@ -10379,7 +10800,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               : detailedMeta?.imdbId || '';
                             const isRuSeriesEp = isRussianVodItem(activeVodItem);
                             const epThumb =
-                              (!isRuSeriesEp && ep.thumbnail ? ep.thumbnail : '') ||
+                              ((ep.thumbnail || "")) ||
                               (!isRuSeriesEp && resolvedImdb
                                 ? `https://episodes.metahub.space/${resolvedImdb}/${selectedSeason}/${ep.episode}/w780.jpg`
                                 : '') ||
@@ -10405,7 +10826,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   isCurrent ? 'true' : undefined
                                 }
                                 data-drawer-next-ep={
-                                  ep.episode === selectedEpisode + 1
+                                  nextEpisodeInfo &&
+                                  nextEpisodeInfo.season === selectedSeason &&
+                                  ep.episode === nextEpisodeInfo.episode
                                     ? 'true'
                                     : undefined
                                 }
@@ -11962,7 +12385,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           <div className="ml-auto flex items-center gap-1.5 bg-white/[0.06] p-1 rounded-full border border-white/15">
                             <button
                               type="button"
-                              onClick={() => setEpisodesSortDesc(false)}
+                              onClick={() => handleSetSeriesEpisodesSortDesc(false)}
                               className={`h-8 px-3.5 rounded-full text-xs font-extrabold transition-all cursor-pointer ${!episodesSortDesc
                                 ? 'bg-white text-zinc-950 shadow-sm'
                                 : 'text-zinc-300 hover:text-white focus:bg-white focus:text-zinc-950'
@@ -11976,7 +12399,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => setEpisodesSortDesc(true)}
+                              onClick={() => handleSetSeriesEpisodesSortDesc(true)}
                               className={`h-8 px-3.5 rounded-full text-xs font-extrabold transition-all cursor-pointer ${episodesSortDesc
                                 ? 'bg-white text-zinc-950 shadow-sm'
                                 : 'text-zinc-300 hover:text-white focus:bg-white focus:text-zinc-950'
@@ -12029,7 +12452,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             : detailedMeta?.imdbId || '';
                           const isRuSeriesEp = isRussianVodItem(activeVodItem);
                           const epThumb =
-                            (!isRuSeriesEp && ep.thumbnail ? ep.thumbnail : '') ||
+                            ((ep.thumbnail || "")) ||
                             (!isRuSeriesEp && resolvedImdb
                               ? `https://episodes.metahub.space/${resolvedImdb}/${selectedSeason}/${ep.episode}/w780.jpg`
                               : '') ||
@@ -13148,7 +13571,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   !isPinLockRequired &&
                   canProfileAccessIedem(activeProfile) && (
                     <IedemMediatekaSection
+                      key="kinozal_tab"
                       uiLang={uiLang}
+                      onOpenVodItem={handleOpenVod}
+                    />
+                  )}
+
+                {section === 'ru_shows' &&
+                  !isPinLockRequired &&
+                  canProfileAccessIedem(activeProfile) && (
+                    <IedemMediatekaSection
+                      key="ru_shows_tab"
+                      uiLang={uiLang}
+                      initialCategoryId="tvshows_ru"
+                      dedicatedShowsMode
                       onOpenVodItem={handleOpenVod}
                     />
                   )}

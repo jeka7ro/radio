@@ -16,6 +16,11 @@ export default async (req) => {
     const customRef = reqUrl.searchParams.get('ref') || '';
     const customUa = reqUrl.searchParams.get('ua') || '';
     const rawMode = reqUrl.searchParams.get('raw') === '1';
+    const audioIdxParam = reqUrl.searchParams.get('audioIdx');
+    const requestedAudioIdx =
+      audioIdxParam !== null && /^\d+$/.test(audioIdxParam)
+        ? Number(audioIdxParam)
+        : -1;
 
     if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
       return new Response('Invalid or missing url parameter', {
@@ -92,6 +97,20 @@ export default async (req) => {
       }
     };
 
+    if (rawMode) {
+      const text = await upstreamRes.text();
+      return new Response(text, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': contentType.includes('json')
+            ? 'application/json; charset=utf-8'
+            : 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        },
+      });
+    }
+
     if (isPls) {
       const text = await upstreamRes.text();
       const fileMatch = text.match(/^File\d+=(https?:\/\/[^\r\n]+)/im);
@@ -108,16 +127,6 @@ export default async (req) => {
 
     if (isM3u8) {
       let text = await upstreamRes.text();
-      if (rawMode) {
-        return new Response(text, {
-          status: 200,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type': 'text/plain; charset=utf-8',
-            'Cache-Control': 'no-cache, no-store',
-          },
-        });
-      }
       if (!text.includes('#EXT-X-')) {
         const firstStreamLine = text
           .split(/\r?\n/)
@@ -184,6 +193,12 @@ export default async (req) => {
         }
         return true;
       });
+      const audioLinesCount = rawLines.filter(
+        (l) =>
+          l.trim().startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(l)
+      ).length;
+      const useExplicitAudioIdx =
+        requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
       const hasOriginalAudioTrack = rawLines.some(
         (l) =>
           l.trim().startsWith('#EXT-X-MEDIA:') &&
@@ -192,60 +207,107 @@ export default async (req) => {
             /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(l))
       );
       let promotedOriginalAudio = false;
+      let currentAudioLineIdx = 0;
 
-      const rewritten = rawLines
-        .map((line) => {
-          let currentLine = line;
-          const trimmed = currentLine.trim();
-          if (!trimmed) return currentLine;
-          if (
-            hasOriginalAudioTrack &&
-            trimmed.startsWith('#EXT-X-MEDIA:') &&
-            /TYPE=AUDIO/i.test(trimmed)
-          ) {
-            const isOrig =
-              !promotedOriginalAudio &&
+      const rewrittenLines = rawLines.map((line) => {
+        let currentLine = line;
+        const trimmed = currentLine.trim();
+        if (!trimmed) return currentLine;
+        if (
+          (useExplicitAudioIdx || hasOriginalAudioTrack) &&
+          trimmed.startsWith('#EXT-X-MEDIA:') &&
+          /TYPE=AUDIO/i.test(trimmed)
+        ) {
+          const thisAudioIdx = currentAudioLineIdx++;
+          const shouldPromote = useExplicitAudioIdx
+            ? thisAudioIdx === requestedAudioIdx
+            : !promotedOriginalAudio &&
               (/LANGUAGE="en"/i.test(trimmed) ||
                 /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(trimmed));
-            if (isOrig) {
-              promotedOriginalAudio = true;
-              currentLine = currentLine
-                .replace(/DEFAULT=NO/gi, 'DEFAULT=YES')
-                .replace(/AUTOSELECT=NO/gi, 'AUTOSELECT=YES');
-            } else {
-              currentLine = currentLine
-                .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
-                .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
-            }
-          }
-          if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+          if (shouldPromote) {
+            promotedOriginalAudio = true;
             currentLine = currentLine
-              .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
-              .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
+              .replace(/DEFAULT=NO/gi, 'DEFAULT=YES')
+              .replace(/AUTOSELECT=NO/gi, 'AUTOSELECT=YES');
+          } else {
+            currentLine = currentLine
+              .replace(/DEFAULT=YES/gi, 'DEFAULT=NO')
+              .replace(/AUTOSELECT=YES/gi, 'AUTOSELECT=NO');
           }
-          if (trimmed.startsWith('#')) {
-            return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
-              return `URI="${buildProxyUrl(uri)}"`;
-            });
-          }
-          // Resolve HTTPS binary video segments directly when no custom Referer is needed;
-          // proxy HTTP segments through /api/tv-proxy so https://filmio.my never hits Mixed Content blocks!
-          const isHeavySegment = /\.(ts|m4s|mp4|mkv|webm|aac)(\?|$)/i.test(
-            trimmed
-          );
-          if (isHeavySegment) {
-            try {
-              const resolvedSegUrl = new URL(trimmed, finalUrl).toString();
-              if (resolvedSegUrl.startsWith('https://') && !customRef) {
-                return resolvedSegUrl;
-              }
-            } catch {
-              // fall through to proxy URL
+        }
+        if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
+          currentLine = currentLine
+            .replace(/,?\s*SUBTITLES="[^"]*"/gi, '')
+            .replace(/,?\s*CLOSED-CAPTIONS="[^"]*"/gi, '');
+        }
+        if (trimmed.startsWith('#')) {
+          return currentLine.replace(/URI="([^"]+)"/gi, (_m, uri) => {
+            return `URI="${buildProxyUrl(uri)}"`;
+          });
+        }
+        // Resolve HTTPS binary video segments directly unless the CDN enforces User-Agent / IP signature binding (e.g. VK Video okcdn.ru / vkuser.net).
+        const isHeavySegment = /\.(ts|m4s|mp4|mkv|webm|aac)(\?|$)/i.test(
+          trimmed
+        );
+        if (isHeavySegment) {
+          try {
+            const resolvedSegUrl = new URL(trimmed, finalUrl).toString();
+            const requiresSignedProxy =
+              /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|rtbcdn\.ru|rutube\.ru|srcAg|srcIp)/i.test(
+                resolvedSegUrl
+              );
+            if (resolvedSegUrl.startsWith('https://') && !requiresSignedProxy) {
+              return resolvedSegUrl;
             }
+          } catch {
+            // fall through to proxy URL
           }
-          return buildProxyUrl(trimmed);
-        })
-        .join('\n');
+        }
+        return buildProxyUrl(trimmed);
+      });
+
+      let rewritten = rewrittenLines.join('\n');
+      if (rewrittenLines.some((l) => l.trim().startsWith('#EXT-X-STREAM-INF:'))) {
+        const headerLines = [];
+        const variantPairs = [];
+        for (let i = 0; i < rewrittenLines.length; i++) {
+          const ln = rewrittenLines[i];
+          const tr = ln.trim();
+          if (tr.startsWith('#EXT-X-STREAM-INF:')) {
+            let uriLine = '';
+            while (i + 1 < rewrittenLines.length) {
+              const nextLn = rewrittenLines[i + 1];
+              const nextTr = nextLn.trim();
+              i++;
+              if (!nextTr) continue;
+              uriLine = nextLn;
+              break;
+            }
+            if (uriLine) {
+              const resMatch = tr.match(/RESOLUTION=(\d+)x(\d+)/i);
+              const bwMatch = tr.match(/(?:^|,)BANDWIDTH=(\d+)/i);
+              const w = resMatch ? Number(resMatch[1]) : 0;
+              const h = resMatch ? Number(resMatch[2]) : 0;
+              const height = w && h ? Math.min(w, h) : h;
+              const bandwidth = bwMatch ? Number(bwMatch[1]) : 0;
+              variantPairs.push({ infLine: ln, uriLine, height, bandwidth });
+            } else {
+              headerLines.push(ln);
+            }
+          } else {
+            headerLines.push(ln);
+          }
+        }
+        if (variantPairs.length > 1) {
+          variantPairs.sort(
+            (a, b) => b.height - a.height || b.bandwidth - a.bandwidth
+          );
+          rewritten = [
+            ...headerLines,
+            ...variantPairs.flatMap((p) => [p.infLine, p.uriLine]),
+          ].join('\n');
+        }
+      }
 
       return new Response(rewritten, {
         status: 200,
@@ -257,9 +319,8 @@ export default async (req) => {
       });
     }
 
-    // For plain HTTP streams or streams requiring custom Referer, pipe the binary body over HTTPS
-    // so https://filmio.my never gets blocked by browser Mixed Content policy.
-    if (finalUrl.startsWith('http://') || customRef) {
+    // Only pipe plain HTTP streams over HTTPS (for Mixed Content); all HTTPS streams use 302 redirect (0 Netlify bandwidth).
+    if (finalUrl.startsWith('http://')) {
       return new Response(upstreamRes.body, {
         status: 200,
         headers: {

@@ -26,6 +26,7 @@ import {
   IedemVodDetailResponse,
   fetchIedemCatalogItems,
   fetchKinozalTopBannerItems,
+  fetchRussianTvShowsTopBannerItems,
   cleanIedemBaseTitle,
   searchIedemVod,
   fetchIedemItemDetail,
@@ -40,6 +41,8 @@ import { CinemetaItem, getVodCardRatingInfo } from '../../views/smartTvLampaHelp
 
 interface IedemMediatekaSectionProps {
   uiLang?: string;
+  initialCategoryId?: string;
+  dedicatedShowsMode?: boolean;
   onOpenVodItem?: (
     item: CinemetaItem,
     autoPlayImmediately?: boolean,
@@ -50,12 +53,15 @@ interface IedemMediatekaSectionProps {
 
 export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
   uiLang = 'ro',
+  initialCategoryId,
+  dedicatedShowsMode = false,
   onOpenVodItem,
 }) => {
   const playTvChannel = useRadioStore((state) => state.playTvChannel);
 
-  const [selectedCategoryId, setSelectedCategoryId] =
-    useState<string>('series_ru');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>(
+    initialCategoryId || (dedicatedShowsMode ? 'tvshows_ru' : 'series_ru')
+  );
   const [selectedTvNetwork, setSelectedTvNetwork] =
     useState<IedemTvShowNetworkId>('all');
   const [selectedYear, setSelectedYear] = useState<string>('');
@@ -81,8 +87,25 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
   const [activeBannerIdx, setActiveBannerIdx] = useState<number>(0);
 
   useEffect(() => {
+    if (initialCategoryId) {
+      setSelectedCategoryId(initialCategoryId);
+    } else if (dedicatedShowsMode) {
+      setSelectedCategoryId('tvshows_ru');
+    }
+  }, [initialCategoryId, dedicatedShowsMode]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
+      if (dedicatedShowsMode || selectedCategoryId === 'tvshows_ru') {
+        const showsTop = await fetchRussianTvShowsTopBannerItems(selectedTvNetwork);
+        if (!cancelled) {
+          setTopBannerItems(showsTop);
+          setActiveBannerIdx(0);
+        }
+        return;
+      }
+
       const rawTop = await fetchKinozalTopBannerItems();
       if (cancelled || rawTop.length === 0) return;
       setTopBannerItems(rawTop);
@@ -114,7 +137,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [dedicatedShowsMode, selectedCategoryId, selectedTvNetwork]);
 
   useEffect(() => {
     if (topBannerItems.length <= 1 || debouncedQuery) return;
@@ -192,8 +215,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
               changed = true;
               continue;
             }
-            const nextYear =
-              meta?.year && meta.year !== it.year ? meta.year : it.year;
+            const nextYear = it.year || meta?.year;
             const nextRating =
               meta?.ratingKinopoisk && meta.ratingKinopoisk !== it.ratingKinopoisk
                 ? meta.ratingKinopoisk
@@ -345,17 +367,23 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
       const parsedSeason =
         item.explicitSeason || (seasonMatch ? Number(seasonMatch[1]) : 1);
       const cachedMeta = getCachedIedemVerifiedMeta(item);
-      const verifiedYear = cachedMeta?.year || item.year;
+      const verifiedYear = item.year || cachedMeta?.year;
       const verifiedRating = cachedMeta?.ratingKinopoisk || item.ratingKinopoisk;
       const yearStr = verifiedYear ? String(verifiedYear) : '';
       const hasDirectIedemFid = item.fid > 0;
+      const kzTorrentId =
+        item.kinozalFid ||
+        (item.fid < 0 && item.kinozalHash ? item.fid : undefined);
       const resolvedKpId = item.kpId || cachedMeta?.kpId;
       onOpenVodItem(
         {
           id: hasDirectIedemFid
             ? `iedem_${item.fid}`
-            : `kp_${resolvedKpId || Math.abs(item.fid)}`,
+            : kzTorrentId
+              ? `kinozal_${Math.abs(kzTorrentId)}`
+              : `kp_${resolvedKpId || Math.abs(item.fid)}`,
           iedemFid: hasDirectIedemFid ? item.fid : undefined,
+          flTorrentId: kzTorrentId,
           iedemStreamUrl: item.url,
           kpId: resolvedKpId ? String(resolvedKpId) : undefined,
           type: isSeries ? 'series' : 'movie',
@@ -370,6 +398,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           runtime: item.duration ? `${item.duration} min` : undefined,
           country: 'Россия',
           ageRating: item.agelimit ? `${item.agelimit}+` : '16+',
+          seasonsCount: item.seasonsCount,
           episodesCount:
             item.episodesCount ||
             (isSeries && seriesEpCounts[item.fid]
@@ -472,12 +501,22 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
       >
         <div className="flex items-center gap-3">
           <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#1e3a8a] to-[#2563eb] border border-[#60a5fa]/40 flex items-center justify-center shadow-lg shadow-blue-900/40 shrink-0">
-            <Film className="w-6 h-6 text-white" />
+            {dedicatedShowsMode ? (
+              <Flame className="w-6 h-6 text-white" />
+            ) : (
+              <Film className="w-6 h-6 text-white" />
+            )}
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-white">
-                Kinozal
+                {dedicatedShowsMode
+                  ? uiLang === 'ro'
+                    ? 'Emisiuni RU'
+                    : uiLang === 'en'
+                      ? 'RU TV Shows'
+                      : 'ТВ-Шоу RU'
+                  : 'Kinozal'}
               </h2>
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#1e3a8a]/80 text-[#93c5fd] border border-[#3b82f6]/40 inline-flex items-center gap-1.5">
                 <img
@@ -485,15 +524,25 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                   alt="RU"
                   className="w-3.5 h-2.5 rounded-[2px] object-cover"
                 />
-                <span>VIP • 4K & 1080p • Kinozal + iEdem RU</span>
+                <span>
+                  {dedicatedShowsMode
+                    ? 'VK Video 4K & 1080p • ТНТ • Пятница! • НТВ • СТС'
+                    : 'VIP • 4K & 1080p • Kinozal + iEdem RU'}
+                </span>
               </span>
             </div>
             <p className="text-xs text-zinc-400">
-              {uiLang === 'ro'
-                ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Filme, Seriale, Documentare & TV Rusești'
-                : uiLang === 'en'
-                  ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Russian Movies, Series, Documentaries & TV'
-                  : 'Kinozal VIP (popescu20210) + iEdem Медиатека — Русские сериалы, фильмы, документальные и ТВ'}
+              {dedicatedShowsMode
+                ? uiLang === 'ro'
+                  ? 'Кстати, Звёзды, Сокровища императора, Звёзды в Африке, Выживалити, Титаны, Пятница! & Comedy Club'
+                  : uiLang === 'en'
+                    ? 'Кстати, Звёзды, Сокровища императора, Звёзды в Африке, Выживалити, Титаны, Пятница! & Comedy Club'
+                    : 'Кстати, Звёзды, Сокровища императора, Звёзды в Африке, Выживалити, Титаны, Пятница! и Comedy Club'
+                : uiLang === 'ro'
+                  ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Filme, Seriale, Documentare & TV Rusești'
+                  : uiLang === 'en'
+                    ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Russian Movies, Series, Documentaries & TV'
+                    : 'Kinozal VIP (popescu20210) + iEdem Медиатека — Русские сериалы, фильмы, документальные и ТВ'}
             </p>
           </div>
         </div>
@@ -672,21 +721,30 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
             <div className="relative z-10 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <span className="px-2.5 py-1 rounded-md bg-[#E50914] text-white text-[10px] sm:text-xs font-black uppercase tracking-wider shadow">
-                  KINOZAL
+                  {dedicatedShowsMode || selectedCategoryId === 'tvshows_ru'
+                    ? bannerItem.networkBadge || 'ТВ-ШОУ RU'
+                    : 'KINOZAL'}
                 </span>
                 <span className="text-[11px] sm:text-xs font-black uppercase tracking-[0.22em] text-zinc-200 drop-shadow">
-                  НАШЕ КИНО •{' '}
-                  {isSeriesBanner
+                  {dedicatedShowsMode || selectedCategoryId === 'tvshows_ru'
                     ? uiLang === 'ro'
-                      ? 'SERIAL RECOMANDAT'
+                      ? 'TOP EMISIUNE RUSEASCĂ • 1080p FULL HD'
                       : uiLang === 'en'
-                        ? 'FEATURED SERIES'
-                        : 'СЕРИАЛ • ПРЕМЬЕРА'
-                    : uiLang === 'ro'
-                      ? 'FILM RECOMANDAT'
-                      : uiLang === 'en'
-                        ? 'FEATURED MOVIE'
-                        : 'ФИЛЬМ • ПРЕМЬЕРА'}
+                        ? 'FEATURED RUSSIAN TV SHOW • 1080p FULL HD'
+                        : 'ТОП ТЕЛЕШОУ • 1080p FULL HD'
+                    : `НАШЕ КИНО • ${
+                        isSeriesBanner
+                          ? uiLang === 'ro'
+                            ? 'SERIAL RECOMANDAT'
+                            : uiLang === 'en'
+                              ? 'FEATURED SERIES'
+                              : 'СЕРИАЛ • ПРЕМЬЕРА'
+                          : uiLang === 'ro'
+                            ? 'FILM RECOMANDAT'
+                            : uiLang === 'en'
+                              ? 'FEATURED MOVIE'
+                              : 'ФИЛЬМ • ПРЕМЬЕРА'
+                      }`}
                 </span>
               </div>
 
@@ -847,40 +905,42 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
         );
       })()}
 
-            {/* Category Pills (Wrapped cleanly, Russian Movies & Russian Series separated first with clean vector & flag icons) */}
-      <div className="flex flex-wrap items-center gap-2">
-        {IEDEM_VOD_CATEGORIES.map((cat) => {
-          const active = selectedCategoryId === cat.id && !debouncedQuery;
-          const catTitle =
-            uiLang === 'en'
-              ? cat.labelEn || cat.label
-              : uiLang === 'ru'
-                ? cat.label
-                : cat.labelRo || cat.label;
-          return (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setDebouncedQuery('');
-                setSelectedCategoryId(cat.id);
-              }}
-              className={`px-4 py-2 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
-                active
-                  ? 'bg-[#1e3a8a] text-white border-[#60a5fa]/60 shadow-lg shadow-blue-900/40'
-                  : 'bg-[#101829]/85 text-zinc-300 border-white/10 hover:bg-[#172554] hover:text-white focus:bg-white focus:text-[#141414]'
-              }`}
-            >
-              {renderCategoryIcon(cat)}
-              <span>{catTitle}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* Category Pills (Wrapped cleanly, Russian Movies & Russian Series separated first with clean vector & flag icons) */}
+      {!dedicatedShowsMode && (
+        <div className="flex flex-wrap items-center gap-2">
+          {IEDEM_VOD_CATEGORIES.map((cat) => {
+            const active = selectedCategoryId === cat.id && !debouncedQuery;
+            const catTitle =
+              uiLang === 'en'
+                ? cat.labelEn || cat.label
+                : uiLang === 'ru'
+                  ? cat.label
+                  : cat.labelRo || cat.label;
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setDebouncedQuery('');
+                  setSelectedCategoryId(cat.id);
+                }}
+                className={`px-4 py-2 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 whitespace-nowrap transition-all border focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                  active
+                    ? 'bg-[#1e3a8a] text-white border-[#60a5fa]/60 shadow-lg shadow-blue-900/40'
+                    : 'bg-[#101829]/85 text-zinc-300 border-white/10 hover:bg-[#172554] hover:text-white focus:bg-white focus:text-[#141414]'
+                }`}
+              >
+                {renderCategoryIcon(cat)}
+                <span>{catTitle}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* TV Show Channel / Platform Filters (ТНТ • VK Видео & Звёзды • Пятница! • СТС / НТВ / КВН) */}
-      {selectedCategoryId === 'tvshows_ru' && !debouncedQuery && (
+      {(dedicatedShowsMode || selectedCategoryId === 'tvshows_ru') && !debouncedQuery && (
         <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-2xl bg-[#0b1324]/90 border border-[#3b82f6]/30 shadow-inner">
           <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#93c5fd] px-2">
             {uiLang === 'ro'

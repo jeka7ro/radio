@@ -40,6 +40,7 @@ export type TvSectionId =
   | 'series'
   | 'uhd_4k'
   | 'iedem_vod'
+  | 'ru_shows'
   | StreamingPlatformId
   | 'youtube'
   | 'torrents'
@@ -527,14 +528,22 @@ export interface ResolvedDirectVodStream {
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
+  embedUrl?: string;
   title?: string;
   duration?: number;
   audioNames?: string[];
+  vkQualities?: Array<{
+    id: string;
+    height: number;
+    label: string;
+    url: string;
+  }>;
   seasons?: Array<{
     season: number;
     episodes: Array<{
       episode: number;
       title: string;
+      thumbnail?: string;
       duration: number;
       audioNames?: string[];
     }>;
@@ -562,6 +571,49 @@ export interface VodWatchProgressEntry {
   totalEpisodesInSeason?: number;
   totalSeasons?: number;
   episodeProgressMap?: Record<string, EpisodeProgress>;
+  episodesSortDesc?: boolean;
+}
+
+export const SERIES_EPISODE_SORT_STORAGE_KEY = 'aether_series_episode_sort_v1';
+
+export function loadSeriesEpisodeSortDesc(
+  seriesId?: string | null,
+  progressEntry?: VodWatchProgressEntry | null
+): boolean {
+  if (!seriesId) return false;
+  if (typeof progressEntry?.episodesSortDesc === 'boolean') {
+    return progressEntry.episodesSortDesc;
+  }
+  try {
+    const raw = localStorage.getItem(SERIES_EPISODE_SORT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, string | boolean>;
+      if (parsed && typeof parsed === 'object' && seriesId in parsed) {
+        return parsed[seriesId] === 'desc' || parsed[seriesId] === true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+export function saveSeriesEpisodeSortDesc(
+  seriesId: string,
+  desc: boolean
+): void {
+  if (!seriesId) return;
+  try {
+    const raw = localStorage.getItem(SERIES_EPISODE_SORT_STORAGE_KEY);
+    const parsed: Record<string, 'asc' | 'desc'> = raw ? JSON.parse(raw) : {};
+    parsed[seriesId] = desc ? 'desc' : 'asc';
+    localStorage.setItem(
+      SERIES_EPISODE_SORT_STORAGE_KEY,
+      JSON.stringify(parsed)
+    );
+  } catch {
+    // ignore
+  }
 }
 
 export const SAVED_VOD_STORAGE_KEY = 'aether_saved_vod_items_v1';
@@ -882,7 +934,7 @@ export function loadWatchProgressMap(
       return out;
     };
     const storageKey = getWatchProgressKeyForProfile(profileId);
-    const seedAppliedKey = `filmio_seed_progress_v2_${profileId}`;
+    const seedAppliedKey = `filmio_seed_progress_v3_${profileId}`;
     const raw = localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : null;
     if (
@@ -900,31 +952,57 @@ export function loadWatchProgressMap(
       }
       return {};
     }
-    if (profileId === 'p1' && seedMap['tt31510819']) {
-      const existingMobland = parsed['tt31510819'];
-      if (!existingMobland || (existingMobland.currentTime || 0) < 5) {
-        parsed['tt31510819'] = {
-          ...seedMap['tt31510819'],
-          ...existingMobland,
-          currentTime: Math.max(
-            60,
-            existingMobland?.currentTime || 0,
-            seedMap['tt31510819'].currentTime || 60
-          ),
-          updatedAt: Math.max(
-            existingMobland?.updatedAt || 0,
-            seedMap['tt31510819'].updatedAt || 1794071260000
-          ),
-          episodeProgressMap: {
-            ...(seedMap['tt31510819'].episodeProgressMap || {}),
-            ...(existingMobland?.episodeProgressMap || {}),
-          },
-        };
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(parsed));
-        } catch {
-          // ignore
+    let mergedFromSeed = false;
+    for (const [k, seedEntry] of Object.entries(seedMap)) {
+      if (!seedEntry || typeof seedEntry !== 'object' || !seedEntry.item) continue;
+      const existing = parsed[k];
+      if (!existing) {
+        parsed[k] = { ...seedEntry };
+        mergedFromSeed = true;
+      } else {
+        const existingCleared =
+          (existing.currentTime || 0) === 0 &&
+          (!existing.episodeProgressMap ||
+            Object.keys(existing.episodeProgressMap).length === 0) &&
+          (existing.updatedAt || 0) > (seedEntry.updatedAt || 0);
+        if (!existingCleared) {
+          const mergedEpMap = {
+            ...(seedEntry.episodeProgressMap || {}),
+            ...(existing.episodeProgressMap || {}),
+          };
+          if (seedEntry.episodeProgressMap && existing.episodeProgressMap) {
+            for (const [epK, epV] of Object.entries(seedEntry.episodeProgressMap)) {
+              const curEp = existing.episodeProgressMap[epK];
+              if (!curEp || (epV?.updatedAt || 0) > (curEp?.updatedAt || 0)) {
+                mergedEpMap[epK] = epV;
+              }
+            }
+          }
+          if ((seedEntry.updatedAt || 0) > (existing.updatedAt || 0)) {
+            parsed[k] = {
+              ...existing,
+              ...seedEntry,
+              episodeProgressMap: mergedEpMap,
+            };
+            mergedFromSeed = true;
+          } else if (
+            Object.keys(mergedEpMap).length >
+            Object.keys(existing.episodeProgressMap || {}).length
+          ) {
+            parsed[k] = {
+              ...existing,
+              episodeProgressMap: mergedEpMap,
+            };
+            mergedFromSeed = true;
+          }
         }
+      }
+    }
+    if (mergedFromSeed) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(parsed));
+      } catch {
+        // ignore
       }
     }
     return sanitizeMap(parsed);
@@ -937,22 +1015,33 @@ export function saveWatchProgressMap(
   map: Record<string, VodWatchProgressEntry>,
   profileId = 'p1'
 ): void {
+  const cleanProf = encodeURIComponent(profileId || 'p1');
   try {
     localStorage.setItem(
       getWatchProgressKeyForProfile(profileId),
       JSON.stringify(map)
     );
-    localStorage.setItem(`filmio_seed_progress_v2_${profileId}`, '1');
+    localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
   } catch {
     // ignore
   }
-  if (true) {
+  const payload = JSON.stringify(map);
+  try {
+    fetch(`/api/tv-progress?profileId=${cleanProf}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+  if (isLocalHomeServer()) {
     try {
-      fetch(`/api/tv-progress?profileId=${encodeURIComponent(profileId || 'p1')}`, {
+      fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(map),
-      }).catch(() => { });
+        body: payload,
+      }).catch(() => {});
     } catch {
       // ignore
     }
@@ -964,15 +1053,34 @@ export function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
     (DEFAULT_SEED_SAVED_BY_PROFILE[profileId] as CinemetaItem[]) || [];
   try {
     const storageKey = getSavedVodKeyForProfile(profileId);
+    const seedSavedKey = `filmio_seed_saved_v3_${profileId}`;
     const raw = localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : null;
     if (!Array.isArray(parsed) || (parsed.length === 0 && seedList.length > 0)) {
       if (seedList.length > 0) {
         const cloned = [...seedList];
         localStorage.setItem(storageKey, JSON.stringify(cloned));
+        localStorage.setItem(seedSavedKey, '1');
         return cloned;
       }
       return [];
+    }
+    if (!localStorage.getItem(seedSavedKey) && seedList.length > 0) {
+      const seen = new Set(parsed.map((x: CinemetaItem) => x?.id).filter(Boolean));
+      const merged = [...parsed];
+      let added = false;
+      for (const item of seedList) {
+        if (item && item.id && !seen.has(item.id)) {
+          seen.add(item.id);
+          merged.push(item);
+          added = true;
+        }
+      }
+      localStorage.setItem(seedSavedKey, '1');
+      if (added) {
+        localStorage.setItem(storageKey, JSON.stringify(merged));
+        return merged;
+      }
     }
     return parsed;
   } catch {
@@ -981,22 +1089,36 @@ export function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
 }
 
 export function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void {
+  const cleanProf = encodeURIComponent(profileId || 'p1');
   try {
     localStorage.setItem(
       getSavedVodKeyForProfile(profileId),
       JSON.stringify(items)
     );
+    localStorage.setItem(`filmio_seed_saved_v3_${profileId}`, '1');
   } catch {
     // ignore
   }
+  const payload = JSON.stringify(items);
   try {
-    fetch(`/api/tv-saved?profileId=${encodeURIComponent(profileId || 'p1')}`, {
+    fetch(`/api/tv-saved?profileId=${cleanProf}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(items),
-    }).catch(() => { });
+      body: payload,
+    }).catch(() => {});
   } catch {
     // ignore
+  }
+  if (isLocalHomeServer()) {
+    try {
+      fetch(`https://filmio.my/api/tv-saved?profileId=${cleanProf}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -1043,36 +1165,9 @@ export function buildVodEmbedUrl(
       const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
       return `https://api.kinogram.best/embed/${path}${qs}`;
     }
-    case 'vidspark': {
-      const params = new URLSearchParams();
-      params.set('autoplay', 'true');
-      params.set('lang', subLang);
-      if (start > 5) {
-        params.set('startAt', String(start));
-        params.set('t', String(start));
-      }
-      const targetVidsparkId =
-        imdbId === 'tt10295772' && item.moviedb_id
-          ? String(item.moviedb_id)
-          : imdbId || tmdbOrImdbId;
-      return isSeries
-        ? `https://vidspark.to/tv/${targetVidsparkId}/${season}/${episode}?${params.toString()}`
-        : `https://vidspark.to/movie/${targetVidsparkId}?${params.toString()}`;
-    }
-    case 'vidzee': {
-      const params = new URLSearchParams();
-      if (start > 5) params.set('startAt', String(start));
-      const qs = params.toString();
-      const suffix = qs ? `?${qs}` : '';
-      return isSeries
-        ? `https://player.vidzee.wtf/embed/tv/${tmdbOrImdbId}/${season}/${episode}${suffix}`
-        : `https://player.vidzee.wtf/embed/movie/${tmdbOrImdbId}${suffix}`;
-    }
-    case 'nontongo': {
-      return isSeries
-        ? `https://multiembed.mov/?video_id=${imdbId}&s=${season}&e=${episode}`
-        : `https://multiembed.mov/?video_id=${imdbId}`;
-    }
+    case 'vidspark':
+    case 'vidzee':
+    case 'nontongo':
     case 'vidsrc_pm': {
       const params = new URLSearchParams();
       params.set('autoplay', 'true');
@@ -1082,8 +1177,8 @@ export function buildVodEmbedUrl(
         params.set('t', String(start));
       }
       return isSeries
-        ? `https://vidsrc.pm/embed/tv/${imdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidsrc.pm/embed/movie/${imdbId}?${params.toString()}`;
+        ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
+        : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
     }
   }
 }

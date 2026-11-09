@@ -573,19 +573,28 @@ function saveWatchProgressMap(
   syncServer = true
 ): void {
   try {
+    const payload = JSON.stringify(map);
     localStorage.setItem(
       `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`,
-      JSON.stringify(map)
+      payload
     );
     if (profileId === 'p1') {
-      localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, JSON.stringify(map));
+      localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, payload);
     }
-    if (syncServer && isLocalHomeServer()) {
-      fetch(`/api/tv-progress?profileId=${encodeURIComponent(profileId)}`, {
+    if (syncServer) {
+      const cleanProf = encodeURIComponent(profileId);
+      fetch(`/api/tv-progress?profileId=${cleanProf}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(map),
+        body: payload,
       }).catch(() => {});
+      if (isLocalHomeServer()) {
+        fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        }).catch(() => {});
+      }
     }
   } catch {
     // ignore storage quota errors

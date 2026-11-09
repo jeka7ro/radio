@@ -837,17 +837,33 @@ export function saveSharedProfiles(
   } catch {
     // ignore
   }
+  const payload = JSON.stringify(finalProfiles);
+  const deletedHeader = JSON.stringify(Array.from(deletedIds));
   try {
     fetch('/api/tv-profiles', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Deleted-Profile-Ids': JSON.stringify(Array.from(deletedIds)),
+        'X-Deleted-Profile-Ids': deletedHeader,
       },
-      body: JSON.stringify(finalProfiles),
+      body: payload,
     }).catch(() => {});
   } catch {
     // ignore
+  }
+  if (isLocalHomeServer()) {
+    try {
+      fetch('https://filmio.my/api/tv-profiles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Deleted-Profile-Ids': deletedHeader,
+        },
+        body: payload,
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
   }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
