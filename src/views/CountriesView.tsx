@@ -117,8 +117,7 @@ export const CountriesView: React.FC<CountriesViewProps> = ({
       >
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-2xl sm:text-3xl leading-none" aria-hidden="true">
-            🌍
-          </span>
+            </span>
           <div className="min-w-0">
             <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-zinc-100 truncate">
               {t.countries.allCountries}
@@ -129,7 +128,7 @@ export const CountriesView: React.FC<CountriesViewProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-lg bg-brand-100 dark:bg-brand-950 text-brand-800 dark:text-brand-300">
+          <span className="text-[11px] tabular-nums font-bold px-2 py-0.5 rounded-lg bg-brand-100 dark:bg-brand-950 text-brand-800 dark:text-brand-300">
             ALL
           </span>
           {selectedCountryCode.toUpperCase() === 'ALL' && (
@@ -202,7 +201,7 @@ export const CountriesView: React.FC<CountriesViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <span className="text-[11px] font-mono px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
+                  <span className="text-[11px] tabular-nums px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
                     {country.iso_3166_1}
                   </span>
                   {isSelected && (

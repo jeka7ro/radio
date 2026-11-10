@@ -517,7 +517,7 @@ export const OnlineSubtitleFinderModal: React.FC<
                     </span>
                   </div>
                   <p
-                    className="text-[11px] text-zinc-400 truncate font-mono"
+                    className="text-[11px] text-zinc-400 truncate tabular-nums"
                     title={sub.fileName}
                   >
                     {sub.fileName}

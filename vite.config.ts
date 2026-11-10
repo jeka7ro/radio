@@ -1495,6 +1495,30 @@ function tvStreamProxyPlugin(): Plugin {
         for (const [k, v] of Object.entries(incomingMap || {})) {
           if (!v || typeof v !== 'object') continue;
           const cleanV = { ...(v as Record<string, any>) };
+          if (cleanV.item && typeof cleanV.item === 'object') {
+            cleanV.item = { ...cleanV.item };
+            if (
+              !/^мама$|^mama$/i.test(String(cleanV.item.name || '').trim()) &&
+              (String(cleanV.item.poster || '').includes('11303084') ||
+                cleanV.item.imdbId === 'tt43353255' ||
+                cleanV.item.nameOriginal === 'MAMA')
+            ) {
+              if (/жизнь\s+заново/i.test(String(cleanV.item.name || ''))) {
+                cleanV.item.kpId = '7958160';
+                cleanV.item.poster =
+                  'https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg';
+                cleanV.item.background =
+                  'https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg';
+                cleanV.item.description =
+                  '2026 год. Жизнь сорокалетнего врача скорой помощи Димы пошла под откос: жена ушла, коллеги презирают, а сам он живёт у деспотичной матери.';
+              } else {
+                delete cleanV.item.poster;
+                delete cleanV.item.background;
+              }
+              delete cleanV.item.imdbId;
+              delete cleanV.item.nameOriginal;
+            }
+          }
           if (
             cleanV.episodeProgressMap &&
             typeof cleanV.episodeProgressMap === 'object'
@@ -2177,6 +2201,16 @@ function tvStreamProxyPlugin(): Plugin {
       });
 
       server.middlewares.use('/api/vod-stream', async (req, res) => {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
+            'Access-Control-Allow-Private-Network': 'true',
+          });
+          res.end();
+          return;
+        }
         try {
           const reqUrl = new URL(req.url || '', 'http://localhost');
           const kp = reqUrl.searchParams.get('kp') || '';
@@ -2187,8 +2221,15 @@ function tvStreamProxyPlugin(): Plugin {
           const season = Number(reqUrl.searchParams.get('season')) || 1;
           const episode = Number(reqUrl.searchParams.get('episode')) || 1;
           const reqUa = String(req.headers['user-agent'] || '');
-          // @ts-expect-error .mjs dynamic import
-          const mod = await import('./netlify/functions/vod-stream.mjs');
+          const vodStreamPath = path.resolve(
+            __dirname,
+            'netlify/functions/vod-stream.mjs'
+          );
+          const vodMtime = fs.existsSync(vodStreamPath)
+            ? Math.floor(fs.statSync(vodStreamPath).mtimeMs)
+            : 0;
+          const vodStreamUrl = `file://${vodStreamPath}?t=${vodMtime}`;
+          const mod = await import(/* @vite-ignore */ vodStreamUrl);
           const result = await mod.resolveVodStreamData({
             kp,
             imdb,
@@ -2202,14 +2243,16 @@ function tvStreamProxyPlugin(): Plugin {
           if (result.ok && result.hlsUrl) {
             if (String(result.hlsUrl).startsWith('/api/tv-proxy')) {
               result.proxyHlsUrl = result.hlsUrl;
-            } else {
+            } else if (!result.proxyHlsUrl) {
               const safeDesktopUa =
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+                result.userAgent ||
+                reqUa ||
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
               const proxyRef = /rutube\.ru|rtbcdn\.ru/i.test(result.hlsUrl)
                 ? 'https://rutube.ru/'
                 : /vkvideo\.ru|okcdn\.ru|vkuser/i.test(result.hlsUrl)
                   ? 'https://vkvideo.ru/'
-                  : 'https://api.kinogram.best/';
+                  : 'https://api.namy.ws/';
               result.proxyHlsUrl = `/api/tv-proxy?url=${encodeURIComponent(
                 result.hlsUrl
               )}&ref=${encodeURIComponent(
@@ -2223,6 +2266,7 @@ function tvStreamProxyPlugin(): Plugin {
           );
           res.writeHead(result.ok ? 200 : 404, {
             'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Private-Network': 'true',
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'no-cache',
           });
@@ -2230,6 +2274,7 @@ function tvStreamProxyPlugin(): Plugin {
         } catch (err) {
           res.writeHead(500, {
             'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Private-Network': 'true',
             'Content-Type': 'application/json; charset=utf-8',
           });
           res.end(
@@ -2301,7 +2346,13 @@ function tvStreamProxyPlugin(): Plugin {
 
         try {
           const reqUrl = new URL(req.url || '', 'http://localhost');
-          const targetUrl = reqUrl.searchParams.get('url');
+          const rawTargetUrl = reqUrl.searchParams.get('url');
+          const targetUrl = rawTargetUrl
+            ? rawTargetUrl.replace(
+                /\/\/live7digi\.antenaplay\.ro\//gi,
+                '//live4ro.antenaplay.ro/'
+              )
+            : null;
           const customRef = reqUrl.searchParams.get('ref') || '';
           const customUa = reqUrl.searchParams.get('ua') || '';
           const rawMode = reqUrl.searchParams.get('raw') === '1';
@@ -2335,7 +2386,7 @@ function tvStreamProxyPlugin(): Plugin {
 
           const isLikelyDirectRadioStream =
             skipAd &&
-            !/\.(?:ts|m4s|mp4|jpg|jpeg|png|webp|vtt|srt)(\?|$)/i.test(
+            !/\.(?:ts|m4s|mp4|aac|jpg|jpeg|png|webp|vtt|srt)(\?|$)/i.test(
               parsedTarget.pathname
             ) &&
             !/\.m3u8?(\?|$)/i.test(parsedTarget.pathname);
@@ -2746,7 +2797,7 @@ function tvStreamProxyPlugin(): Plugin {
           }
 
           const isVideoTsSegment =
-            /\.(ts|m4s|mp4)(\?|$)/i.test(finalUrl) ||
+            /\.(ts|m4s|mp4|aac)(\?|$)/i.test(finalUrl) ||
             contentType.includes('mp2t') ||
             contentType.includes('video/');
           const isLiveAudioStream =

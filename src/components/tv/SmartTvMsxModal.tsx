@@ -242,7 +242,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
                   <Sparkles className="w-3.5 h-3.5 text-brand-400" />
                   Adresa Start Parameter pentru aplicația Media Station X pe televizorul LG:
                 </div>
-                <div className="text-sm font-mono font-bold text-emerald-400 select-all mt-0.5">
+                <div className="text-sm tabular-nums font-bold text-emerald-400 select-all mt-0.5">
                   {hostDomain}
                 </div>
               </div>
@@ -311,7 +311,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
                   <div className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
                     Start Parameter în Media Station X:
                   </div>
-                  <div className="text-sm sm:text-base font-mono font-bold text-emerald-400 select-all mt-0.5">
+                  <div className="text-sm sm:text-base tabular-nums font-bold text-emerald-400 select-all mt-0.5">
                     {hostDomain}
                   </div>
                 </div>
@@ -352,7 +352,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
               </p>
 
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-zinc-900 border border-white/10">
-                <span className="text-xs sm:text-sm font-mono font-semibold text-sky-400 px-2 truncate select-all">
+                <span className="text-xs sm:text-sm tabular-nums font-semibold text-sky-400 px-2 truncate select-all">
                   {fullAppUrl}
                 </span>
                 <div className="flex items-center gap-2 shrink-0">

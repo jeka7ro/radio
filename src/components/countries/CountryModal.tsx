@@ -167,8 +167,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({ countries }) => {
           >
             <div className="flex items-center gap-3 min-w-0">
               <span className="text-2xl leading-none" aria-hidden="true">
-                🌍
-              </span>
+                </span>
               <div className="min-w-0">
                 <span className="text-sm font-bold block truncate">
                   {t.countries.allCountries}
@@ -186,7 +185,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({ countries }) => {
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <span
-                className={`text-xs font-mono px-2 py-0.5 rounded ${
+                className={`text-xs tabular-nums px-2 py-0.5 rounded ${
                   selectedCountryCode.toUpperCase() === 'ALL'
                     ? 'bg-white/20 text-white'
                     : 'bg-brand-100 dark:bg-brand-900/60 text-brand-800 dark:text-brand-300'
@@ -243,7 +242,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({ countries }) => {
 
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span
-                      className={`text-xs font-mono px-2 py-0.5 rounded ${
+                      className={`text-xs tabular-nums px-2 py-0.5 rounded ${
                         isSelected
                           ? 'bg-white/20 text-white'
                           : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400'

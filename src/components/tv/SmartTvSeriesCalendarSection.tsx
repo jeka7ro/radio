@@ -796,8 +796,7 @@ export const SmartTvSeriesCalendarSection: React.FC<
             ) : null}
             {epItem.isFavoriteSeries && (
               <span className="w-6 h-6 rounded-full bg-black/70 backdrop-blur-md border border-white/15 inline-flex items-center justify-center text-rose-500 text-xs">
-                ❤
-              </span>
+                </span>
             )}
           </div>
 
@@ -1125,9 +1124,9 @@ export const SmartTvSeriesCalendarSection: React.FC<
           </div>
           <h2 className="text-base sm:text-lg font-bold text-white">
             {tr(
-              'Nu ai adăugat încă niciun serial la Favorite ❤',
-              'You have no TV series saved in Favorites ❤ yet',
-              'У вас пока нет сериалов в Избранном ❤'
+              'Nu ai adăugat încă niciun serial la Favorite ',
+              'You have no TV series saved in Favorites yet',
+              'У вас пока нет сериалов в Избранном '
             )}
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400 max-w-xl mx-auto">
@@ -1293,7 +1292,7 @@ export const SmartTvSeriesCalendarSection: React.FC<
                       {sug.name}
                     </div>
                     <div className="text-[10px] text-zinc-400 truncate mt-0.5">
-                      {sug.releaseInfo} {sug.imdbRating ? `• ★ ${sug.imdbRating}` : ''}
+                      {sug.releaseInfo} {sug.imdbRating ? `• ${sug.imdbRating}` : ''}
                     </div>
                   </div>
                 </button>

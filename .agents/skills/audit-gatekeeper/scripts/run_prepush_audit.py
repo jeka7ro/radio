@@ -460,9 +460,15 @@ def vector4_ui_and_architecture(skip_build: bool = False) -> Tuple[bool, str, Li
                 f"Toate cele {len(vod_iframes)} elemente `<iframe>` VOD externe au `sandbox` strict fără `allow-popups` (+ {len(yt_iframes)} trailere YouTube oficiale)"
             )
 
-    # 4. Compilare completă TypeScript + Vite (`npm run build`)
+    # 4. Compilare completă TypeScript + Vite (`npm run build`) sau Typecheck rapid (`npx tsc --noEmit`)
     if skip_build:
-        details.append("Compilarea `npm run build` a fost omisă (--skip-build activat)")
+        t0 = time.time()
+        code, out, err = run_cmd(["npx", "tsc", "--noEmit"], timeout=60)
+        elapsed = time.time() - t0
+        if code != 0:
+            errors.append(f"`npx tsc --noEmit` a eșuat (cod {code}): {(err or out)[-300:]}")
+        else:
+            details.append(f"`npx tsc --noEmit` (verificare exporturi/tipuri TS) finalizat curat în {elapsed:.1f}s (--skip-build)")
     else:
         t0 = time.time()
         code, out, err = run_cmd(["npm", "run", "build"], timeout=240)

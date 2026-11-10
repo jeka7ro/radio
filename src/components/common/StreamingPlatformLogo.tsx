@@ -724,7 +724,7 @@ export const ProducerStudioLogoBadge: React.FC<{
       case 'legendary':
         return (
           <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-950 text-[9px] font-black tracking-wider uppercase leading-none">
-            ❖ LEGENDARY
+            LEGENDARY
           </span>
         );
       case 'blumhouse':
@@ -838,8 +838,7 @@ export const ProducerStudioLogoBadge: React.FC<{
         </span>
       ) : (
         <span className="w-5 h-5 rounded-md bg-white/15 border border-white/20 inline-flex items-center justify-center text-[10px] font-black text-amber-300 shrink-0">
-          🎬
-        </span>
+          </span>
       )}
       <span className="ml-2 truncate max-w-[180px]">{studio.name}</span>
     </span>

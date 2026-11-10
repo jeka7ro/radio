@@ -266,7 +266,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ selectedCountry }) => {
         <div className="hidden sm:flex items-center justify-between gap-3 bg-white dark:bg-zinc-900/90 px-4 py-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 shadow-xs">
           <div className="flex items-center gap-3 min-w-0">
             <span className="text-3xl leading-none select-none shrink-0" aria-hidden="true">
-              {isGlobalSelected ? '🌍' : selectedCountry.flag}
+              {isGlobalSelected ? '' : selectedCountry.flag}
             </span>
             <div className="min-w-0">
               <h1
@@ -401,7 +401,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ selectedCountry }) => {
                       : 'text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <span aria-hidden="true">🌍</span>
+                  <span aria-hidden="true"></span>
                   <span>{t.home.searchScopeAll}</span>
                   {searchScope === 'all' && (
                     <span className="text-[10px] opacity-85">

@@ -76,6 +76,9 @@ import {
   loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isLocalHomeServer,
+  buildFileListApiUrl,
+  normalizeFileListResolveData,
+  isFileListExclusiveRomanianTitle,
   canProfileAccessIedem,
 } from '../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
@@ -271,7 +274,7 @@ const GENRE_FILTERS: Array<{
   { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
   { id: 'Romance', label: 'Romantic', Icon: Heart },
   { id: 'Documentary', label: 'Documentare', Icon: Globe },
-  { id: 'Adult', label: '🔞 18+ Adulți / Для взрослых', Icon: Flame },
+  { id: 'Adult', label: '18+ Adulți / Для взрослых', Icon: Flame },
 ];
 
 const ORIGIN_COUNTRIES: Array<{
@@ -635,7 +638,7 @@ function buildVodEmbedUrl(
     case 'kinogram_embed': {
       const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;
       const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-      return `https://api.kinogram.best/embed/${path}${qs}`;
+      return `https://api.namy.ws/embed/${path}${qs}`;
     }
     case 'vidspark': {
       const params = new URLSearchParams();
@@ -1295,18 +1298,49 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           setLiveDuration(data.duration);
         }
         if (data?.ok && (data.dashUrl || data.hlsUrl)) {
-          if (data.dashUrl || !imdb) {
+          setActiveServer('kinogram_hls');
+          return;
+        }
+        if (isLocalHomeServer()) {
+          const flParams = new URLSearchParams({
+            type: activeVodItem.type,
+            s: String(selectedSeason),
+            e: String(selectedEpisode),
+            q: title,
+          });
+          if (imdb) flParams.set('imdb', imdb);
+          const flRes = await fetch(
+            buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`)
+          ).catch(() => null);
+          const rawFl = flRes?.ok ? await flRes.json().catch(() => null) : null;
+          const flData = normalizeFileListResolveData(rawFl);
+          if (!cancelled && flData?.ok && flData.streamUrl) {
+            setResolvedDirectStream({
+              ok: true,
+              hlsUrl: flData.streamUrl,
+              duration: flData.durationSec,
+              audioNames: flData.audioNames,
+            });
+            if (flData.durationSec && flData.durationSec > 60) {
+              setLiveDuration(flData.durationSec);
+            }
             setActiveServer('kinogram_hls');
-          } else {
-            setActiveServer('nontongo');
+            return;
           }
+        }
+        if (isFileListExclusiveRomanianTitle(activeVodItem)) {
+          setActiveServer('kinogram_hls');
         } else {
           setActiveServer(imdb ? 'nontongo' : 'kinogram_embed');
         }
       } catch {
         if (!cancelled) {
           setResolvedDirectStream({ ok: false });
-          setActiveServer(imdb ? 'nontongo' : 'kinogram_embed');
+          if (isFileListExclusiveRomanianTitle(activeVodItem)) {
+            setActiveServer('kinogram_hls');
+          } else {
+            setActiveServer(imdb ? 'nontongo' : 'kinogram_embed');
+          }
         }
       } finally {
         if (!cancelled) setIsDirectStreamLoading(false);
@@ -2569,7 +2603,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 <History className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span>
                   Reluat automat de la{' '}
-                  <strong className="text-amber-300 font-mono">
+                  <strong className="text-amber-300 tabular-nums">
                     {formatWatchSeconds(pendingResumePromptSec)}
                   </strong>
                 </span>
@@ -2599,8 +2633,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   onClick={() => setPendingResumePromptSec(null)}
                   className="px-1.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold cursor-pointer"
                 >
-                  ✕
-                </button>
+                  </button>
               </div>
             )}
 
@@ -2667,6 +2700,40 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     )
                   }
                 />
+              ) : isFileListExclusiveRomanianTitle(activeVodItem) ? (
+                <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
+                  <div className="text-base font-extrabold text-white">
+                    {activeVodItem.name}
+                    {activeVodItem.type === 'series'
+                      ? ` • S${selectedSeason}:E${selectedEpisode}`
+                      : ''}
+                  </div>
+                  <p className="text-xs text-zinc-400 max-w-md">
+                    Acest titlu românesc (FileList.io 1080p) se redă direct prin serverul local P2P pentru a garanta episodul real.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <a
+                      href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                        activeVodItem.id
+                      )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                        resumeStartSeconds || 0
+                      )}`}
+                      className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-600 text-white font-bold text-xs"
+                    >
+                      Deschide pe Wi-Fi Local (192.168.2.57)
+                    </a>
+                    <a
+                      href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
+                        activeVodItem.id
+                      )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                        resumeStartSeconds || 0
+                      )}`}
+                      className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs"
+                    >
+                      Deschide prin Tailscale (100.79.113.57)
+                    </a>
+                  </div>
+                </div>
               ) : (
                 <div className="relative w-full h-full">
                   <iframe
@@ -2697,14 +2764,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
                         >
                           -1s
                         </button>
                         <button
                           type="button"
                           onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
                         >
                           +1s
                         </button>
@@ -2717,8 +2784,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           }}
                           className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
                         >
-                          ✕
-                        </button>
+                          </button>
                       </div>
                       {(() => {
                         const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
@@ -2786,14 +2852,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
                       >
                         -1s
                       </button>
                       <button
                         type="button"
                         onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-mono text-[10px]"
+                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
                       >
                         +1s
                       </button>
@@ -2806,8 +2872,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         }}
                         className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
                       >
-                        ✕
-                      </button>
+                        </button>
                     </div>
                     {(() => {
                       const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
@@ -2846,7 +2911,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       <span>{activeDownloadProgress.stage}</span>
                     </span>
                     <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-white">
+                      <span className="tabular-nums font-bold text-white">
                         {activeDownloadProgress.percent}% •{' '}
                         {formatBytes(activeDownloadProgress.downloadedBytes)}
                       </span>
@@ -3155,7 +3220,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
                             {item.qualityLabel}
                           </span>
-                          <span className="text-[11px] font-mono text-slate-500 dark:text-zinc-400">
+                          <span className="text-[11px] tabular-nums text-slate-500 dark:text-zinc-400">
                             {formatBytes(item.sizeBytes)}
                           </span>
                         </div>
@@ -3231,7 +3296,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 </h2>
                 {activeProfile && (
                   <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
-                    {activeProfile.avatarEmoji || activeProfile.avatar || '🎬'}{' '}
+                    {activeProfile.avatarEmoji || activeProfile.avatar || ''}{' '}
                     {activeProfile.name}
                   </span>
                 )}
@@ -3861,7 +3926,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         </div>
 
                         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/60 dark:border-zinc-800">
-                          <code className="text-[11px] font-mono text-brand-700 dark:text-brand-300 truncate">
+                          <code className="text-[11px] tabular-nums text-brand-700 dark:text-brand-300 truncate">
                             {plugin.url}
                           </code>
                           <button

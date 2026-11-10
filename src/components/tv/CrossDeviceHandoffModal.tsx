@@ -1376,7 +1376,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           'No PIN (or e.g. 1234)',
                           'Без PIN (или 1234)'
                         )}
-                        className="w-full h-11 px-4 pr-24 rounded-xl bg-[#121212] border border-white/20 focus:border-amber-400 text-sm sm:text-base font-mono font-extrabold text-white focus:outline-none"
+                        className="w-full h-11 px-4 pr-24 rounded-xl bg-[#121212] border border-white/20 focus:border-amber-400 text-sm sm:text-base tabular-nums font-extrabold text-white focus:outline-none"
                       />
                       {draftPin && (
                         <button
@@ -1546,7 +1546,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                   onClick={handleSaveAccount}
                   className="h-11 px-6 rounded-2xl bg-blue-400 hover:bg-blue-300 text-zinc-950 font-extrabold text-sm shadow-lg cursor-pointer"
                 >
-                  ✓{' '}
+                  {' '}
                   {editingProfileId === 'NEW'
                     ? tr(
                         'Creează Contul & Intră',

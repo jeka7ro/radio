@@ -1,3 +1,6 @@
+import { buildFileListApiUrl } from '../views/smartTvLampaHelpers';
+import { hasLocalLoopbackBridge } from './deviceContinuityService';
+
 export interface ResolvedDirectVodStream {
   ok: boolean;
   type?: 'movie' | 'series';
@@ -61,35 +64,46 @@ export async function resolveDirectVodStreamClient(params: {
       window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1');
 
-  try {
-    const qs = new URLSearchParams({
-      kp,
-      imdb,
-      title,
-      type: mediaType,
-      year,
-      season: String(season),
-      episode: String(episode),
-    });
-    const res = await fetch(`/api/vod-stream?${qs.toString()}`);
-    if (res.ok || res.status === 404) {
-      const data = (await res.json()) as ResolvedDirectVodStream;
-      if (data?.ok && data.hlsUrl) {
-        if (isLocalLan && data.proxyHlsUrl) {
-          return {
-            ...data,
-            rawHlsUrl: data.rawHlsUrl || data.hlsUrl,
-            hlsUrl: data.proxyHlsUrl,
-          };
+  const qs = new URLSearchParams({
+    kp,
+    imdb,
+    title,
+    type: mediaType,
+    year,
+    season: String(season),
+    episode: String(episode),
+  });
+  const relativePath = `/api/vod-stream?${qs.toString()}`;
+  const urlsToTry =
+    !isLocalLan && hasLocalLoopbackBridge()
+      ? [buildFileListApiUrl(relativePath), relativePath]
+      : [relativePath];
+
+  for (const url of urlsToTry) {
+    try {
+      const res = await fetch(url);
+      if (res.ok || res.status === 404) {
+        const data = (await res.json()) as ResolvedDirectVodStream;
+        if (data?.ok && data.hlsUrl) {
+          if (isLocalLan && data.proxyHlsUrl) {
+            return {
+              ...data,
+              rawHlsUrl: data.rawHlsUrl || data.hlsUrl,
+              hlsUrl: data.proxyHlsUrl,
+            };
+          }
+          return data;
         }
-        return data;
+        if (
+          data?.embedUrl ||
+          (Array.isArray(data?.seasons) && data.seasons.length > 0)
+        ) {
+          return data;
+        }
       }
-      if (data?.embedUrl || (Array.isArray(data?.seasons) && data.seasons.length > 0)) {
-        return data;
-      }
+    } catch {
+      // try next URL
     }
-  } catch {
-    // ignore
   }
 
   return { ok: false };

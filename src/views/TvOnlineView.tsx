@@ -136,7 +136,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
         group = {
           countryCode: code,
           countryName: localizedName,
-          flag: code === 'INT' ? '🌐' : getCountryFlagEmoji(code),
+          flag: code === 'INT' ? '' : getCountryFlagEmoji(code),
           channels: [],
         };
         groupsMap.set(code, group);
@@ -366,7 +366,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2 sm:bg-white sm:dark:bg-zinc-900/90 sm:px-4 sm:py-3 sm:rounded-2xl sm:border sm:border-slate-200/80 sm:dark:border-zinc-800/80 sm:shadow-xs overflow-hidden">
           <div className="hidden sm:flex items-center gap-3 min-w-0">
             <span className="text-3xl leading-none select-none shrink-0" aria-hidden="true">
-              {isGlobalSelected ? '🌍' : selectedCountry.flag}
+              {isGlobalSelected ? '' : selectedCountry.flag}
             </span>
             <div className="min-w-0 flex-1">
               <h1
@@ -388,9 +388,9 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
 
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 max-w-full">
             {[
-              { code: 'RO', flag: '🇷🇴', label: 'RO HD' },
-              { code: 'MD', flag: '🇲🇩', label: 'MD HD' },
-              { code: 'RU', flag: '🇷🇺', label: 'RU HD' },
+              { code: 'RO', flag: '', label: 'RO HD' },
+              { code: 'MD', flag: '', label: 'MD HD' },
+              { code: 'RU', flag: '', label: 'RU HD' },
             ].map((item) => {
               const isSelectedCountry =
                 selectedCountry.iso_3166_1 === item.code &&
@@ -571,8 +571,8 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                   }
                   setM3uFeedback(
                     count > 0
-                      ? `✅ Am importat ${count} canale TV din fișierul "${file.name}"! Afișez acum playlistul tău.`
-                      : `⚠️ Nu am găsit canale valide în fișierul "${file.name}".`
+                      ? `Am importat ${count} canale TV din fișierul "${file.name}"! Afișez acum playlistul tău.`
+                      : `Nu am găsit canale valide în fișierul "${file.name}".`
                   );
                   e.target.value = '';
                 }}
@@ -629,13 +629,13 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                     }
                     setM3uFeedback(
                       count > 0
-                        ? `✅ Am importat ${count} canale TV din link! Afișez acum playlistul tău.`
-                        : '⚠️ Link-ul a răspuns, dar nu conține canale #EXTINF valide.'
+                        ? `Am importat ${count} canale TV din link! Afișez acum playlistul tău.`
+                        : 'Link-ul a răspuns, dar nu conține canale #EXTINF valide.'
                     );
                     if (count > 0) setM3uUrlInput('');
                   } catch {
                     setM3uFeedback(
-                      '⚠️ Nu am putut descărca link-ul M3U. Descarcă fișierul .m3u8 în calculator și apasă pe „Încarcă fișierul .m3u / .m3u8”.'
+                      'Nu am putut descărca link-ul M3U. Descarcă fișierul .m3u8 în calculator și apasă pe „Încarcă fișierul .m3u / .m3u8”.'
                     );
                   }
                 }}
@@ -652,7 +652,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                   value={m3uRawTextInput}
                   onChange={(e) => setM3uRawTextInput(e.target.value)}
                   placeholder={'#EXTM3U\n#EXTINF:0,Первый канал HD\n#EXTGRP:Общие\nhttp://.../index.m3u8'}
-                  className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-zinc-100"
+                  className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-xs tabular-nums text-slate-900 dark:text-zinc-100"
                 />
                 <button
                   type="button"
@@ -674,8 +674,8 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                     }
                     setM3uFeedback(
                       count > 0
-                        ? `✅ Am importat ${count} canale TV din textul M3U!`
-                        : '⚠️ Nu am găsit linii #EXTINF + http:// valide în text.'
+                        ? `Am importat ${count} canale TV din textul M3U!`
+                        : 'Nu am găsit linii #EXTINF + http:// valide în text.'
                     );
                   }}
                   className="min-h-[38px] px-4 py-1.5 rounded-full bg-brand-700 hover:bg-brand-600 text-white text-xs font-semibold transition-colors"
@@ -837,7 +837,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                       : 'text-slate-700 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
-                  <span aria-hidden="true">🌍</span>
+                  <span aria-hidden="true"></span>
                   <span>{t.home.searchScopeAll}</span>
                   {searchScope === 'all' && (
                     <span className="text-[10px] opacity-85">
@@ -942,7 +942,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                   : 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/80 hover:bg-amber-100'
               }`}
             >
-              <span aria-hidden="true">🎬</span>
+              <span aria-hidden="true"></span>
               <span>Cinema</span>
             </button>
 
@@ -961,7 +961,7 @@ export const TvOnlineView: React.FC<TvOnlineViewProps> = ({
                     : 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-300/80 dark:border-rose-800/80 hover:bg-rose-100'
                 }`}
               >
-                <span aria-hidden="true">🔞</span>
+                <span aria-hidden="true"></span>
                 <span>18+ Adulți / Для взрослых</span>
               </button>
             )}

@@ -934,8 +934,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     if (idMatch) queryParts.push(`id=${idMatch[1]}`);
     if (fileIdxMatch) queryParts.push(`fileIdx=${fileIdxMatch[1]}`);
     const idQuery = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+    let statsOrigin = '';
+    if (hlsUrl.startsWith('http://') || hlsUrl.startsWith('https://')) {
+      try {
+        statsOrigin = new URL(hlsUrl).origin;
+      } catch {
+        statsOrigin = '';
+      }
+    }
     const fetchStats = () => {
-      fetch(`/api/filelist/stats${idQuery}`)
+      fetch(`${statsOrigin}/api/filelist/stats${idQuery}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (active && d && d.ok && d.active) {
@@ -1327,7 +1335,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               ? candidateCodec
               : fallbackCodec;
 
-            const sb = ms.addSourceBuffer(mime);
+            let sb: SourceBuffer;
+            try {
+              sb = ms.addSourceBuffer(mime);
+            } catch {
+              try {
+                reader.cancel();
+              } catch {
+                // ignore
+              }
+              isSeekingFileListRef.current = false;
+              video.src = flStreamUrl;
+              ensureAutoPlay(video);
+              return;
+            }
             flSourceBufferRef.current = sb;
             const waitUpdate = () =>
               new Promise<void>((resolve) => {
@@ -1340,15 +1361,27 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 });
               });
 
-            sb.appendBuffer(initBuf);
-            await waitUpdate();
+            try {
+              sb.appendBuffer(initBuf);
+              await waitUpdate();
+            } catch {
+              try {
+                reader.cancel();
+              } catch {
+                // ignore
+              }
+              isSeekingFileListRef.current = false;
+              video.src = flStreamUrl;
+              ensureAutoPlay(video);
+              return;
+            }
             let startedPlay = false;
 
             const checkAndStartPlayback = () => {
               if (sb.buffered.length > 0) {
                 const bStart = sb.buffered.start(0);
                 const bEnd = sb.buffered.end(sb.buffered.length - 1);
-                if (bStart > 0.01 && video.currentTime < bStart) {
+                if (!startedPlay && bStart > 0.01 && video.currentTime < bStart) {
                   try {
                     video.currentTime = bStart + 0.02;
                   } catch {
@@ -1360,6 +1393,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   (video.readyState >= 2 || bEnd - bStart >= 0.35)
                 ) {
                   startedPlay = true;
+                  appliedStartRef.current = true;
+                  lastTimeUpdateWallMsRef.current = Date.now();
                   isSeekingFileListRef.current = false;
                   syncVideoDims(video);
                   ensureAutoPlay(video);
@@ -1375,6 +1410,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }
               } else if (!startedPlay && video.readyState >= 2) {
                 startedPlay = true;
+                appliedStartRef.current = true;
+                lastTimeUpdateWallMsRef.current = Date.now();
                 isSeekingFileListRef.current = false;
                 syncVideoDims(video);
                 ensureAutoPlay(video);
@@ -1960,7 +1997,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           /(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(
             targetUrl
           )) &&
-        !/\.m3u8(\?|$)/i.test(targetUrl)
+        !/\.m3u8(\?|%3F|&|$)/i.test(targetUrl) &&
+        !/video\.m3u8/i.test(targetUrl)
       ) {
         switchToNativeVideoHls(targetUrl, 'direct_mp4_stream');
         return;
@@ -2082,9 +2120,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               });
             }
           });
-          const sortedFull = Array.from(bestByHeight.values()).sort(
+          const allSortedFull = Array.from(bestByHeight.values()).sort(
             (a, b) => b.height - a.height || b.bitrate - a.bitrate
           );
+          const hdOnlyFull = allSortedFull.filter((x) => x.height >= 720);
+          const sortedFull =
+            hdOnlyFull.length > 0 ? hdOnlyFull : allSortedFull;
           const sortedLevels = sortedFull.map(({ index, height }) => ({
             index,
             height,
@@ -2395,9 +2436,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }
               });
 
-              const sortedFull = Array.from(bestByHeight.values()).sort(
+              const allSortedFull = Array.from(bestByHeight.values()).sort(
                 (a, b) => b.height - a.height || b.bitrate - a.bitrate
               );
+              const hdOnlyFull = allSortedFull.filter((x) => x.height >= 720);
+              const sortedFull =
+                hdOnlyFull.length > 0 ? hdOnlyFull : allSortedFull;
               const sortedLevels = sortedFull.map(({ index, height }) => ({
                 index,
                 height,
@@ -2789,9 +2833,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           (c) =>
             c.start > firstTheme.start + 12 &&
             c.start <= firstTheme.start + 105 &&
-            !isExplicitThemeMarker(c.text) &&
-            !(c.text || '').includes('♪') &&
-            !(c.text || '').includes('♫')
+            !isExplicitThemeMarker(c.text)
         );
         const startSec = Math.max(2, Math.floor(firstTheme.start));
         const endSec = nextSpoken
@@ -2828,8 +2870,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const isMusicOrThemeCue = (text: string): boolean => {
         const t = (text || '').toLowerCase();
         return (
-          t.includes('♪') ||
-          t.includes('♫') ||
           t.includes('[music') ||
           t.includes('(music') ||
           isExplicitThemeMarker(t)
@@ -3597,7 +3637,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       userIntentionallyPausedRef.current = true;
       v.pause();
       setIsPaused(true);
-      showTransportToast('❚❚ Pauză');
+      showTransportToast('Pauză');
     }
   };
 
@@ -3677,7 +3717,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         if (v && !v.paused) {
           v.pause();
           setIsPaused(true);
-          showTransportToast('❚❚ Pauză');
+          showTransportToast('Pauză');
         }
         onWakeOsd?.();
         return;
@@ -3716,7 +3756,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           if (v) {
             v.pause();
             setIsPaused(true);
-            showTransportToast('❚❚ Pauză');
+            showTransportToast('Pauză');
           }
         });
         navigator.mediaSession.setActionHandler('seekbackward', () => {
@@ -4256,7 +4296,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               setIsAutoMuted(false);
             }
           }}
-          onPause={() => setIsPaused(true)}
+          onPause={(e) => {
+            if (
+              !userIntentionallyPausedRef.current &&
+              isFileListStream &&
+              (e.currentTarget.ended || flMseReaderDoneRef.current) &&
+              remainingTimeSec > 180 &&
+              currentTimeSec > 5
+            ) {
+              resumeOrRecoverPlayback(e.currentTarget, false);
+              return;
+            }
+            setIsPaused(true);
+          }}
           onDurationChange={(e) => {
             if (isFileListStream) return;
             const d = e.currentTarget.duration;
@@ -4499,6 +4551,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }}
           onEnded={() => {
             if (
+              isFileListStream &&
+              remainingTimeSec > 180 &&
+              currentTimeSec > 5 &&
+              !userIntentionallyPausedRef.current &&
+              videoRef.current
+            ) {
+              resumeOrRecoverPlayback(videoRef.current, false);
+              return;
+            }
+            if (
+              isFileListStream &&
+              remainingTimeSec > 180 &&
+              currentTimeSec > 5 &&
+              !userIntentionallyPausedRef.current &&
+              videoRef.current
+            ) {
+              resumeOrRecoverPlayback(videoRef.current, false);
+              return;
+            }
+            if (
               mediaType === 'series' &&
               onNextEpisode &&
               !autoNextDismissed &&
@@ -4647,7 +4719,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 <span className="relative z-10 text-zinc-950">
                   Următorul Episod · {nextEpisodeLabel || `Ep. ${episode + 1}`}
                 </span>
-                <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 font-mono text-[11px] font-bold tabular-nums">
+                <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 tabular-nums text-[11px] font-bold tabular-nums">
                   -{formatSeekTime(outroRemainingSec)}
                 </span>
               </button>
@@ -4737,7 +4809,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   <span className="relative z-10 text-zinc-950">
                     Închide Filmul · Înapoi la Detalii
                   </span>
-                  <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 font-mono text-[11px] font-bold tabular-nums">
+                  <span className="relative z-10 ml-2 px-2 py-0.5 rounded-full bg-zinc-900/15 text-zinc-900 tabular-nums text-[11px] font-bold tabular-nums">
                     -{formatSeekTime(outroRemainingSec)}
                   </span>
                 </button>
@@ -5366,9 +5438,63 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       </button>
                     </div>
 
-                    {/* 1. Native Stream Resolutions (HLS / DASH Levels) */}
+                    {/* 1. External Source Resolution Variants (4K UHD -> 1080p Full HD -> 720p HD) */}
+                    {!offlineItem && externalQualityOptions.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
+                          Stream-uri Video ({externalQualityOptions.length})
+                        </div>
+                        {externalQualityOptions.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            data-quality-opt="true"
+                            data-quality-opt-active={
+                              opt.active ? 'true' : undefined
+                            }
+                            onClick={() => {
+                              opt.onSelect();
+                              setOpenMenu('none');
+                            }}
+                            className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
+                              opt.active
+                                ? 'bg-white text-zinc-950 font-semibold'
+                                : 'text-white/90 hover:bg-white/15'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate leading-snug">{opt.label}</span>
+                                {opt.badge && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                                      opt.active
+                                        ? 'bg-zinc-950/15 text-zinc-950'
+                                        : 'bg-white/15 text-white'
+                                    }`}
+                                  >
+                                    {opt.badge}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {opt.active && (
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 2. Native Stream Resolutions (HLS / DASH Levels) */}
                     {qualityLevels.length > 0 && (
-                      <div className="space-y-1">
+                      <div
+                        className={`space-y-1 ${
+                          !offlineItem && externalQualityOptions.length > 0
+                            ? 'pt-1.5 border-t border-white/10'
+                            : ''
+                        }`}
+                      >
                         {qualityLevels.map((q) => {
                           const active = activeQuality === q.index;
                           const tierText = formatQualityTierLabel(q.height);
@@ -5422,54 +5548,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                             )}
                           </button>
                         )}
-                      </div>
-                    )}
-
-                    {/* 2. External Source Resolution Variants */}
-                    {!offlineItem && externalQualityOptions.length > 0 && (
-                      <div className="space-y-1.5 pt-1.5 border-t border-white/10">
-                        <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
-                          Stream-uri Video ({externalQualityOptions.length})
-                        </div>
-                        {externalQualityOptions.map((opt) => (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            data-quality-opt="true"
-                            data-quality-opt-active={
-                              opt.active ? 'true' : undefined
-                            }
-                            onClick={() => {
-                              opt.onSelect();
-                              setOpenMenu('none');
-                            }}
-                            className={`w-full px-3 py-2.5 rounded-xl text-left text-xs font-medium flex items-center justify-between gap-2 transition-colors focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer ${
-                              opt.active
-                                ? 'bg-white text-zinc-950 font-semibold'
-                                : 'text-white/90 hover:bg-white/15'
-                            }`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="truncate leading-snug">{opt.label}</span>
-                                {opt.badge && (
-                                  <span
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
-                                      opt.active
-                                        ? 'bg-zinc-950/15 text-zinc-950'
-                                        : 'bg-white/15 text-white'
-                                    }`}
-                                  >
-                                    {opt.badge}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            {opt.active && (
-                              <Check className="w-3.5 h-3.5 shrink-0" />
-                            )}
-                          </button>
-                        ))}
                       </div>
                     )}
 

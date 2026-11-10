@@ -2,11 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
+import { createRequire } from 'node:module';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-// @ts-expect-error torrent-stream has no official types
-import torrentStream from 'torrent-stream';
 import ffmpegPath from 'ffmpeg-static';
+
+const requireCjs = createRequire(import.meta.url);
+const torrentStream = requireCjs('./fastTorrentEngine.cjs') as (
+  link: Buffer | string,
+  opts?: Record<string, unknown>
+) => any;
 
 if (!(globalThis as any).__aetherUncaughtGuardInstalled) {
   (globalThis as any).__aetherUncaughtGuardInstalled = true;
@@ -103,6 +108,7 @@ interface ActiveTorrentEngine {
   readyPromise: Promise<void>;
   lastAccessed: number;
   activeStreams: Set<() => void>;
+  verifiedPieces: Set<number>;
   files: Array<{
     index: number;
     name: string;
@@ -928,21 +934,21 @@ async function fetchTorrentioStreams(
       if (!/^[a-f0-9]{40}$/.test(infoHash)) continue;
       const lines = String(s.title || '').split('\n').map((l) => l.trim()).filter(Boolean);
       const releaseLine = s.behaviorHints?.filename || lines[0] || `Torrentio ${infoHash.slice(0, 8)}`;
-      const statsLine = lines.find((l) => l.includes('👤') || l.includes('💾')) || lines[1] || '';
+      const statsLine = lines.find((l) => l.includes('') || l.includes('')) || lines[1] || '';
       const audioLine = lines.length >= 3 ? lines[lines.length - 1] : '';
 
-      const seedMatch = statsLine.match(/👤\s*(\d+)/);
+      const seedMatch = statsLine.match(/\s*(\d+)/);
       const seeders = seedMatch ? parseInt(seedMatch[1], 10) : 15;
       if (seeders < 2) continue;
 
-      const sizeMatch = statsLine.match(/💾\s*([\d.]+\s*[GMK]B)/i);
+      const sizeMatch = statsLine.match(/\s*([\d.]+\s*[GMK]B)/i);
       const sizeFormatted = sizeMatch ? sizeMatch[1] : '2.4 GB';
       const sizeNum = parseFloat(sizeFormatted) || 2.4;
       const sizeBytes = /GB/i.test(sizeFormatted)
         ? Math.round(sizeNum * 1024 * 1024 * 1024)
         : Math.round(sizeNum * 1024 * 1024);
 
-      const trackerMatch = statsLine.match(/⚙️\s*([^\n]+)/);
+      const trackerMatch = statsLine.match(/\s*([^\n]+)/);
       const trackerName = trackerMatch ? trackerMatch[1].trim() : 'P2P';
 
       const combinedText = `${s.name || ''} ${releaseLine}`;
@@ -966,7 +972,7 @@ async function fetchTorrentioStreams(
         releaseTitle: releaseLine,
       });
 
-      const isRo = /🇷🇴|\b(RO|ROsub|Romanian)\b/i.test(String(s.title || ''));
+      const isRo = /|\b(RO|ROsub|Romanian)\b/i.test(String(s.title || ''));
       results.push({
         id: synId,
         flId: `tio:${infoHash}`,
@@ -990,7 +996,7 @@ async function fetchTorrentioStreams(
         provider: 'torrentio',
         infoHash,
         fileIdx: typeof s.fileIdx === 'number' ? s.fileIdx : undefined,
-        audioInfo: audioLine && !audioLine.includes('👤') ? audioLine : undefined,
+        audioInfo: audioLine && !audioLine.includes('') ? audioLine : undefined,
       });
     }
     return results.slice(0, 18);
@@ -1197,18 +1203,26 @@ async function fetchKinozalRussianTorrents(
     }
 
     // Filter to items whose clean name matches our Russian query (prefer exact title match so "Тверская" never pollutes "Тверская: Здесь и сейчас")
+    const stripGenericShowPrefix = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/^(?:новые\s+|новый\s+|шоу\s+)+/gi, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
     const normQ = cleanQuery
       .toLowerCase()
       .replace(/ё/g, 'е')
       .replace(/[^\p{L}\p{N}]+/gu, '');
+    const strippedQ = stripGenericShowPrefix(cleanQuery);
     const exactMatched = combined.filter((item) => {
       const normName = item.name
         .toLowerCase()
         .replace(/ё/g, 'е')
         .replace(/[^\p{L}\p{N}]+/gu, '');
+      const strippedName = stripGenericShowPrefix(item.name);
       return (
         normName === normQ ||
-        normName.replace(/^новые/, '') === normQ.replace(/^новые/, '')
+        (strippedQ.length >= 3 && strippedName === strippedQ)
       );
     });
     const matched =
@@ -1222,11 +1236,25 @@ async function fetchKinozalRussianTorrents(
             return (
               normName.length >= 4 &&
               normQ.length >= 4 &&
-              (normName.includes(normQ) || normQ.includes(normName))
+              normName.startsWith(normQ)
             );
           });
 
-    const pool = matched.length > 0 ? matched : combined;
+    const getKzQualityScore = (q: string) =>
+      q === '4K UHD'
+        ? 4
+        : q === '1080p Full HD'
+          ? 3
+          : q === '720p HD'
+            ? 2
+            : 1;
+    const rawPool = matched;
+    const hdPool = rawPool.filter((t) => getKzQualityScore(t.quality) >= 2);
+    const pool = (hdPool.length > 0 ? hdPool : rawPool).sort(
+      (a, b) =>
+        getKzQualityScore(b.quality) - getKzQualityScore(a.quality) ||
+        b.seeders - a.seeders
+    );
 
     if (type === 'series' && season) {
       const sPad = `S${String(season).padStart(2, '0')}`;
@@ -1584,7 +1612,7 @@ async function getOrStartTorrentEngine(
           trackers: cleanTrackers,
           connections: 75,
           uploads: 2,
-          verify: false,
+          verify: true,
         });
       } else {
         const trQuery = cleanTrackers
@@ -1600,7 +1628,7 @@ async function getOrStartTorrentEngine(
           trackers: DEFAULT_PUBLIC_TRACKERS,
           connections: 75,
           uploads: 2,
-          verify: false,
+          verify: true,
         });
       }
     } else {
@@ -1648,9 +1676,9 @@ async function getOrStartTorrentEngine(
         id: peerId,
         dht: false,
         tracker: true,
-        connections: 60,
-        uploads: 2,
-        verify: false,
+        connections: 90,
+        uploads: 4,
+        verify: true,
       });
     }
 
@@ -1661,9 +1689,20 @@ async function getOrStartTorrentEngine(
       readyPromise: Promise.resolve(),
       lastAccessed: Date.now(),
       activeStreams: new Set(),
+      verifiedPieces: new Set<number>(),
       files: [],
       probeCache: new Map(),
     };
+
+    engine.on('verify', (pieceIdx: number) => {
+      if (typeof pieceIdx === 'number' && pieceIdx >= 0) {
+        entry.verifiedPieces.add(pieceIdx);
+      }
+    });
+
+    engine.on('verify-complete', () => {
+      startBackgroundDiskVerification(entry);
+    });
 
     entry.readyPromise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -1674,7 +1713,7 @@ async function getOrStartTorrentEngine(
           // ignore
         }
         reject(new Error('Torrent metadata timeout'));
-      }, 15000);
+      }, 30000);
 
       engine.on('ready', () => {
         clearTimeout(timeout);
@@ -1685,6 +1724,7 @@ async function getOrStartTorrentEngine(
           path: String(f.path || f.name || ''),
           length: Number(f.length || 0),
         }));
+        startBackgroundDiskVerification(entry);
         resolve();
       });
 
@@ -1710,6 +1750,156 @@ async function getOrStartTorrentEngine(
     return await startPromise;
   } finally {
     inFlightEngines.delete(torrentId);
+  }
+}
+
+const verifiedCompleteDiskFiles = new Map<string, string>();
+
+function getDiskFilePathForTorrentFile(
+  entry: ActiveTorrentEngine,
+  fileIdx: number
+): string | null {
+  try {
+    const infoHash = String(
+      entry.engine?.infoHash || entry.engine?.torrent?.infoHash || ''
+    ).toLowerCase();
+    const rawFile = entry.engine?.files?.[fileIdx];
+    if (!infoHash || !rawFile) return null;
+    const relPath = String(rawFile.path || rawFile.name || '');
+    if (!relPath) return null;
+    const candidate = path.join(
+      TORRENT_CACHE_DIR,
+      'torrent-stream',
+      infoHash,
+      relPath
+    );
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function getVerifiedCompleteDiskFilePath(
+  entry: ActiveTorrentEngine,
+  fileIdx: number
+): string | null {
+  try {
+    const cacheKey = `${entry.id}:${fileIdx}`;
+    const cachedPath = verifiedCompleteDiskFiles.get(cacheKey);
+    if (cachedPath && fs.existsSync(cachedPath)) {
+      return cachedPath;
+    }
+    const diskPath = getDiskFilePathForTorrentFile(entry, fileIdx);
+    if (!diskPath) return null;
+    const rawFile = entry.engine?.files?.[fileIdx];
+    const torrent = entry.engine?.torrent;
+    const pieceLen = Number(torrent?.pieceLength || 0);
+    const pieces: string[] | undefined = torrent?.pieces;
+    const fileLen = Number(rawFile?.length || 0);
+    const fileOffset = Number(rawFile?.offset || 0);
+    if (!fileLen || !pieceLen || !Array.isArray(pieces) || pieces.length === 0) {
+      return null;
+    }
+    const st = fs.statSync(diskPath);
+    if (st.size < fileLen) return null;
+
+    const firstPiece = Math.max(0, Math.floor(fileOffset / pieceLen));
+    const lastPiece = Math.min(
+      pieces.length - 1,
+      Math.floor((fileOffset + fileLen - 1) / pieceLen)
+    );
+    if (lastPiece < firstPiece) return null;
+
+    // Strict 100% piece-by-piece check: EVERY piece of the file must be SHA-1 verified by torrent-stream (zero holes!)
+    for (let p = firstPiece; p <= lastPiece; p++) {
+      if (!entry.verifiedPieces.has(p)) {
+        return null;
+      }
+    }
+
+    verifiedCompleteDiskFiles.set(cacheKey, diskPath);
+    return diskPath;
+  } catch {
+    return null;
+  }
+}
+
+function verifyDiskPiecesForByteRange(
+  entry: ActiveTorrentEngine,
+  fileIdx: number,
+  startByte: number,
+  endByte: number
+): string | null {
+  try {
+    const complete = getVerifiedCompleteDiskFilePath(entry, fileIdx);
+    if (complete) return complete;
+
+    const diskPath = getDiskFilePathForTorrentFile(entry, fileIdx);
+    if (!diskPath) return null;
+    const rawFile = entry.engine?.files?.[fileIdx];
+    const torrent = entry.engine?.torrent;
+    const pieceLen = Number(torrent?.pieceLength || 0);
+    const pieces: string[] | undefined = torrent?.pieces;
+    const fileLen = Number(rawFile?.length || 0);
+    const fileOffset = Number(rawFile?.offset || 0);
+    if (!fileLen || !pieceLen || !Array.isArray(pieces) || pieces.length === 0) {
+      return null;
+    }
+    const st = fs.statSync(diskPath);
+    if (st.size <= endByte) return null;
+
+    const firstPiece = Math.max(
+      0,
+      Math.floor((fileOffset + startByte) / pieceLen)
+    );
+    const lastPiece = Math.min(
+      pieces.length - 1,
+      Math.floor((fileOffset + endByte) / pieceLen)
+    );
+    if (lastPiece < firstPiece) return null;
+
+    for (let p = firstPiece; p <= lastPiece; p++) {
+      if (!entry.verifiedPieces.has(p)) {
+        return null;
+      }
+    }
+    return diskPath;
+  } catch {
+    return null;
+  }
+}
+
+function startBackgroundDiskVerification(entry: ActiveTorrentEngine): void {
+  try {
+    const torrent = entry.engine?.torrent;
+    const totalPieces = Array.isArray(torrent?.pieces)
+      ? torrent.pieces.length
+      : 0;
+    if (totalPieces <= 0) return;
+
+    const verifiedCount = entry.verifiedPieces.size;
+    // If the file is almost completely downloaded on disk (e.g. 99% cached with a few missing pieces like Piece 29),
+    // immediately heal the missing pieces in the background so the file becomes 100% complete on disk!
+    if (verifiedCount > 0 && verifiedCount < totalPieces) {
+      const missingCount = totalPieces - verifiedCount;
+      if (missingCount <= 64) {
+        for (let p = 0; p < totalPieces; p++) {
+          if (!entry.verifiedPieces.has(p)) {
+            try {
+              entry.engine.select?.(p, p, true);
+              entry.engine.critical?.(p, 1);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -1741,7 +1931,7 @@ async function probeTorrentVideoFile(
     return {
       durationSec: 0,
       videoCodec: 'h264',
-      audioTracks: [{ index: 0, lang: 'orig', codec: 'aac', title: 'Original', label: '★ ORIGINAL AUDIO' }],
+      audioTracks: [{ index: 0, lang: 'orig', codec: 'aac', title: 'Original', label: 'ORIGINAL AUDIO' }],
     };
   }
 
@@ -1756,35 +1946,60 @@ async function probeTorrentVideoFile(
       label: string;
     }>;
   }>((resolve) => {
-    const ff = spawn(ffmpegPath as string, ['-hide_banner', '-i', 'pipe:0']);
+    const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
+    const ff = spawn(ffmpegPath as string, [
+      '-hide_banner',
+      '-i',
+      verifiedDiskPath || 'pipe:0',
+    ]);
     let stderr = '';
     ff.stderr.on('data', (d) => {
       stderr += d.toString();
     });
 
-    const probeBytes = Math.min(rawFile.length - 1, 2 * 1024 * 1024);
-    const rs = rawFile.createReadStream({ start: 0, end: probeBytes });
-    rs.pipe(ff.stdin).on('error', () => {});
-
-    // Pre-warm the tail 1.5MB of the MKV file (where Matroska Cues seek index resides) for instant seeking
+    let rs: any = null;
     let tailStream: any = null;
-    if (rawFile.length > 4 * 1024 * 1024) {
-      try {
-        const tailStart = Math.max(0, rawFile.length - 1536 * 1024);
-        tailStream = rawFile.createReadStream({
-          start: tailStart,
-          end: rawFile.length - 1,
-        });
-        tailStream.on('data', () => {});
-        tailStream.on('error', () => {});
-      } catch {
-        // ignore
+    if (!verifiedDiskPath) {
+      const probeBytes = Math.min(rawFile.length - 1, 2 * 1024 * 1024);
+      const headerDiskPath = verifyDiskPiecesForByteRange(
+        entry,
+        fileIdx,
+        0,
+        probeBytes
+      );
+      rs = headerDiskPath
+        ? fs.createReadStream(headerDiskPath, { start: 0, end: probeBytes })
+        : rawFile.createReadStream({ start: 0, end: probeBytes });
+      rs.pipe(ff.stdin).on('error', () => {});
+
+      // Pre-warm the tail 1.5MB of the MKV file (where Matroska Cues seek index resides) for instant seeking
+      if (rawFile.length > 4 * 1024 * 1024) {
+        try {
+          const tailStart = Math.max(0, rawFile.length - 1536 * 1024);
+          if (
+            !verifyDiskPiecesForByteRange(
+              entry,
+              fileIdx,
+              tailStart,
+              rawFile.length - 1
+            )
+          ) {
+            tailStream = rawFile.createReadStream({
+              start: tailStart,
+              end: rawFile.length - 1,
+            });
+            tailStream.on('data', () => {});
+            tailStream.on('error', () => {});
+          }
+        } catch {
+          // ignore
+        }
       }
     }
 
     const timer = setTimeout(() => {
       try {
-        rs.destroy();
+        rs?.destroy();
         tailStream?.destroy();
         ff.kill('SIGKILL');
       } catch {
@@ -1795,6 +2010,7 @@ async function probeTorrentVideoFile(
     ff.on('close', () => {
       clearTimeout(timer);
       try {
+        rs?.destroy();
         tailStream?.destroy();
       } catch {
         // ignore
@@ -1834,7 +2050,7 @@ async function probeTorrentVideoFile(
         const codec = (match[3] || 'audio').toUpperCase();
         const extra = (match[4] || '').includes('5.1') ? '5.1' : 'Stereo';
         const metaTitle = (match[5] || '').trim();
-        const prefix = audioOrder === 0 ? '★ ORIGINAL • ' : '';
+        const prefix = audioOrder === 0 ? 'ORIGINAL • ' : '';
         const label = `${prefix}${lang} (${codec} ${extra})${metaTitle ? ` — ${metaTitle}` : ''}`;
         audioTracks.push({
           index: audioOrder,
@@ -1852,7 +2068,7 @@ async function probeTorrentVideoFile(
           lang: 'ORIG',
           codec: 'AAC',
           title: 'Original',
-          label: '★ ORIGINAL AUDIO (Stereo)',
+          label: 'ORIGINAL AUDIO (Stereo)',
         });
       }
 
@@ -1872,11 +2088,16 @@ async function probeTorrentVideoFile(
   }
 }
 
+let inFlightRangeServerPromise: Promise<number> | null = null;
+
 function ensureInternalRangeServer(): Promise<number> {
   if (gState.internalRangeServerPort > 0) {
     return Promise.resolve(gState.internalRangeServerPort);
   }
-  return new Promise((resolve) => {
+  if (inFlightRangeServerPromise) {
+    return inFlightRangeServerPromise;
+  }
+  inFlightRangeServerPromise = new Promise((resolve) => {
     const srv = http.createServer(async (req, res) => {
       try {
         const u = new URL(req.url || '/', 'http://127.0.0.1');
@@ -1915,15 +2136,28 @@ function ensureInternalRangeServer(): Promise<number> {
           });
         }
 
-        // Close any previous open Range streams on this engine so torrent-stream focuses 100% of peer bandwidth on the active seek offset
-        for (const closeOld of Array.from(entry.activeStreams)) {
-          try {
-            closeOld();
-          } catch {
-            // ignore
-          }
+        const verifiedDiskPath =
+          getVerifiedCompleteDiskFilePath(entry, fileIdx) ||
+          verifyDiskPiecesForByteRange(entry, fileIdx, start, end);
+        if (verifiedDiskPath) {
+          const diskStream = fs.createReadStream(verifiedDiskPath, {
+            start,
+            end,
+          });
+          const closeDiskStream = () => {
+            try {
+              diskStream.destroy();
+            } catch {
+              // ignore
+            }
+          };
+          req.on('close', closeDiskStream);
+          req.on('aborted', closeDiskStream);
+          res.on('close', closeDiskStream);
+          diskStream.on('error', closeDiskStream);
+          diskStream.pipe(res);
+          return;
         }
-        entry.activeStreams.clear();
 
         const s = videoFile.createReadStream({ start, end });
         try {
@@ -2011,6 +2245,16 @@ export async function handleFileListRequest(
   const rawUrl = req.url || '';
   if (!rawUrl.startsWith('/api/filelist')) {
     return false;
+  }
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return true;
   }
 
   const parsedUrl = new URL(rawUrl, 'http://localhost');
@@ -2379,6 +2623,19 @@ export async function handleFileListRequest(
         matchingTorrents = [...matchingTorrents, ...torrentioTorrents];
       }
 
+      // Strictly enforce quality hierarchy: 4K UHD -> 1080p Full HD -> 720p HD (exclude < 720p whenever HD exists)
+      const hdMatching = matchingTorrents.filter(
+        (t) => getQualityScore(t.quality) >= 2
+      );
+      if (hdMatching.length > 0) {
+        matchingTorrents = hdMatching;
+      }
+      matchingTorrents.sort(
+        (a, b) =>
+          getQualityScore(b.quality) - getQualityScore(a.quality) ||
+          b.seeders - a.seeders
+      );
+
       const strictIdParam = parsedUrl.searchParams.get('strictId') === '1';
       if (
         targetTorrentId < 0 &&
@@ -2498,14 +2755,14 @@ export async function handleFileListRequest(
             streamUrl: `/api/filelist/stream?id=${targetTorrentId}&fileIdx=${magnetPresetIdx}`,
             durationSec: 0,
             videoCodec: 'h264',
-            audioNames: ['★ ORIGINAL AUDIO (Stereo)'],
+            audioNames: ['ORIGINAL AUDIO (Stereo)'],
             audioTracks: [
               {
                 index: 0,
                 lang: 'ORIG',
                 codec: 'AAC',
                 title: 'Original',
-                label: '★ ORIGINAL AUDIO (Stereo)',
+                label: 'ORIGINAL AUDIO (Stereo)',
               },
             ],
           })
@@ -2582,7 +2839,15 @@ export async function handleFileListRequest(
         cachedProbe = undefined;
       }
       if (!cachedProbe) {
-        probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
+        if (getVerifiedCompleteDiskFilePath(entry, selectedFileIdx)) {
+          try {
+            cachedProbe = await probeTorrentVideoFile(entry, selectedFileIdx);
+          } catch {
+            // ignore
+          }
+        } else {
+          probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
+        }
       }
       const inferredCodec = /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(
         selectedFile?.name || ''
@@ -2663,17 +2928,42 @@ export async function handleFileListRequest(
         return true;
       }
 
-      if (gState.activeStreamProcess) {
+      const rawIp = String(req.socket?.remoteAddress || 'local');
+      const clientKey =
+        rawIp === '::1' || rawIp === '::ffff:127.0.0.1' || rawIp === '127.0.0.1'
+          ? 'localhost'
+          : rawIp;
+
+      // Kill any previous stream from THIS SAME client immediately so seeking never leaves a zombie ffmpeg competing for peer bandwidth!
+      if (!(gState as any).activeStreamCleanupByClient) {
+        (gState as any).activeStreamCleanupByClient = new Map<string, () => void>();
+      }
+      const prevClientCleanup = (
+        gState as any
+      ).activeStreamCleanupByClient.get(clientKey);
+      if (typeof prevClientCleanup === 'function') {
         try {
-          gState.activeStreamProcess.kill('SIGKILL');
+          prevClientCleanup();
         } catch {
           // ignore
         }
-        gState.activeStreamProcess = null;
       }
 
+      let clientDisconnectedEarly = false;
+      const markEarlyClose = () => {
+        clientDisconnectedEarly = true;
+      };
+      req.once('close', markEarlyClose);
+      req.once('aborted', markEarlyClose);
+
       const entry = await getOrStartTorrentEngine(id);
-      // Deselect streams on any other inactive torrent engines so 100% of network & disk bandwidth goes to the active movie
+      if (clientDisconnectedEarly || req.destroyed || res.writableEnded) {
+        return true;
+      }
+      const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
+
+      // Deselect streams ONLY on OTHER inactive torrent engines (never kill active streams on the same id,
+      // as LAN Smart TV and localhost or parallel Range reads may share the same torrent engine simultaneously)
       for (const [otherId, otherEntry] of gState.activeEngines.entries()) {
         if (otherId !== id && otherEntry.activeStreams) {
           for (const closeOther of Array.from(otherEntry.activeStreams)) {
@@ -2685,16 +2975,6 @@ export async function handleFileListRequest(
           }
           otherEntry.activeStreams.clear();
         }
-      }
-      if (entry.activeStreams) {
-        for (const closeOld of Array.from(entry.activeStreams)) {
-          try {
-            closeOld();
-          } catch {
-            // ignore
-          }
-        }
-        entry.activeStreams.clear();
       }
       const rawFile = entry.engine.files[fileIdx] || entry.engine.files[0];
       if (!rawFile) {
@@ -2709,7 +2989,13 @@ export async function handleFileListRequest(
         cachedProbe = undefined;
       }
       if (!cachedProbe) {
-        if (startSec <= 1) {
+        if (verifiedDiskPath) {
+          try {
+            cachedProbe = await probeTorrentVideoFile(entry, fileIdx);
+          } catch {
+            // ignore
+          }
+        } else if (startSec <= 1) {
           probeTorrentVideoFile(entry, fileIdx).catch(() => {});
         } else {
           setTimeout(() => {
@@ -2742,9 +3028,14 @@ export async function handleFileListRequest(
       res.writeHead(200, streamHeaders);
 
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
-      const useDirectPipe = startSec <= 1;
+      const useDirectPipe = !verifiedDiskPath && startSec <= 1;
 
-      if (!useDirectPipe) {
+      if (verifiedDiskPath) {
+        if (startSec > 1) {
+          ffArgs.push('-noaccurate_seek', '-ss', String(Math.floor(startSec)));
+        }
+        ffArgs.push('-i', verifiedDiskPath);
+      } else if (!useDirectPipe) {
         const rangePort = await ensureInternalRangeServer();
         ffArgs.push(
           '-noaccurate_seek',
@@ -2824,13 +3115,20 @@ export async function handleFileListRequest(
         ffArgs.push('-c:v', 'copy');
       }
 
+      const selectedAudioMeta = cachedProbe?.audioTracks?.[safeAudioIdx];
+      const isAacStereo =
+        (selectedAudioMeta &&
+          selectedAudioMeta.codec.toUpperCase() === 'AAC' &&
+          !selectedAudioMeta.label.includes('5.1')) ||
+        (!selectedAudioMeta && /\baac2\.?0\b/i.test(rawFile.name || ''));
+
+      if (isAacStereo && !isHevc) {
+        ffArgs.push('-c:a', 'copy');
+      } else {
+        ffArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
+      }
+
       ffArgs.push(
-        '-c:a',
-        'aac',
-        '-ac',
-        '2',
-        '-b:a',
-        '192k',
         '-f',
         'mp4',
         '-brand',
@@ -2839,10 +3137,8 @@ export async function handleFileListRequest(
         '0',
         '-avoid_negative_ts',
         'make_zero',
-        '-frag_duration',
-        '500000',
         '-movflags',
-        'empty_moov+default_base_moof',
+        'frag_keyframe+empty_moov+default_base_moof',
         'pipe:1'
       );
 
@@ -2908,6 +3204,9 @@ export async function handleFileListRequest(
       });
 
       const cleanup = () => {
+        if ((gState as any).activeStreamCleanupByClient?.get(clientKey) === cleanup) {
+          (gState as any).activeStreamCleanupByClient.delete(clientKey);
+        }
         if (directReadStream) {
           try {
             directReadStream.destroy();
@@ -2926,6 +3225,11 @@ export async function handleFileListRequest(
         }
       };
 
+      (gState as any).activeStreamCleanupByClient.set(clientKey, cleanup);
+      if (clientDisconnectedEarly || req.destroyed) {
+        cleanup();
+        return true;
+      }
       req.on('close', cleanup);
       res.on('close', cleanup);
     } catch (err) {

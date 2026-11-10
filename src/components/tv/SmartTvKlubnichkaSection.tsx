@@ -641,7 +641,7 @@ export const SmartTvKlubnichkaSection: React.FC<
                     {/* Top Right: Rating / Freeleech */}
                     {card.rating && (
                       <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-black/85 border border-white/15 text-amber-300 text-[10px] font-extrabold uppercase tracking-wider shadow">
-                        ★ {card.rating}
+                        {card.rating}
                       </span>
                     )}
 
@@ -657,7 +657,7 @@ export const SmartTvKlubnichkaSection: React.FC<
                       <span className="px-2 py-0.5 rounded bg-blue-500/20 border border-blue-400/40 text-blue-300 tabular-nums">
                         {card.viewsFormatted}
                       </span>
-                      <span className="px-2 py-0.5 rounded bg-black/85 text-zinc-100 font-mono tabular-nums">
+                      <span className="px-2 py-0.5 rounded bg-black/85 text-zinc-100 tabular-nums tabular-nums">
                         {card.durationText}
                       </span>
                     </div>

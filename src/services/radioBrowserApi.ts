@@ -182,6 +182,14 @@ function normalizeStationsList(
       );
     }
 
+    // Upgrade retired AntenaPlay live7digi radio edge (Radio ZU, Radio DOR, etc.) to active live4ro edge
+    if (/\/\/live7digi\.antenaplay\.ro\//i.test(streamUrl)) {
+      streamUrl = streamUrl.replace(
+        /\/\/live7digi\.antenaplay\.ro\//gi,
+        '//live4ro.antenaplay.ro/'
+      );
+    }
+
     const homepage = (st.homepage || '').trim();
     const domain = extractDomainFromUrl(homepage);
     let favicon = (st.favicon || '').trim();
@@ -199,7 +207,9 @@ function normalizeStationsList(
     cleaned.push({
       stationuuid: st.stationuuid,
       name: (st.name || 'Unknown Station').trim(),
-      url: (st.url || streamUrl).trim(),
+      url: (st.url || streamUrl)
+        .trim()
+        .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/'),
       url_resolved: streamUrl,
       homepage,
       favicon,

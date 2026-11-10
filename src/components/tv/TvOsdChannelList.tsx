@@ -571,8 +571,8 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     }> = [
       {
         id: 'FAV',
-        title: '★ Favourites',
-        shortLabel: '★ Favourites',
+        title: 'Favourites',
+        shortLabel: 'Favourites',
         Icon: Star,
         count: favoriteTvChannels.length,
       },
@@ -2272,7 +2272,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
             <span className="text-xs sm:text-sm font-extrabold tracking-tight whitespace-nowrap">
               {selectedThemeId === 'FAV'
                 ? 'Favorite TV'
-                : activeThemeTab.shortLabel.replace(/^★\s*/, '')}
+                : activeThemeTab.shortLabel.replace(/^\s*/, '')}
             </span>
             <span className="text-[11px] font-bold text-sky-300/90 whitespace-nowrap">
               • {flatChannels.length}
@@ -2324,8 +2324,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
               aria-label="Închide lista"
               className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 hover:bg-rose-600 text-xs font-bold text-zinc-200 hover:text-white shrink-0 inline-flex items-center justify-center transition-all cursor-pointer"
             >
-              ✕
-            </button>
+              </button>
           )}
         </div>
       </div>
@@ -2569,8 +2568,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
                     <div className="flex items-center gap-1.5 min-w-0">
                       {isFav && selectedThemeId !== 'FAV' && (
                         <span className="text-amber-400 text-xs leading-none shrink-0">
-                          ★
-                        </span>
+                          </span>
                       )}
                       <span className="text-[14px] font-extrabold text-white truncate leading-tight">
                         {ch.name}
@@ -2623,8 +2621,7 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
         <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-5">
           <div className="w-full max-w-sm rounded-2xl bg-slate-900 border border-white/20 p-5 shadow-2xl space-y-4 text-center">
             <div className="w-11 h-11 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 mx-auto flex items-center justify-center text-lg font-black">
-              ★
-            </div>
+              </div>
             <div className="space-y-1.5">
               <h3 className="text-base font-extrabold text-white">
                 Șterge din Favorite?

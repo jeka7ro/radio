@@ -482,7 +482,7 @@ export const ExpandedPlayer: React.FC = () => {
                 className="w-full h-2 cursor-pointer"
               />
             </div>
-            <span className="text-xs font-mono text-slate-600 dark:text-zinc-400 w-10 text-right pr-2">
+            <span className="text-xs tabular-nums text-slate-600 dark:text-zinc-400 w-10 text-right pr-2">
               {effectiveVolumePercent}%
             </span>
           </div>

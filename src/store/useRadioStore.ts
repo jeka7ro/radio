@@ -50,8 +50,8 @@ export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
   {
     stationuuid: 'fav-radio-zu-ro',
     name: 'Radio ZU',
-    url: 'https://live7digi.antenaplay.ro/radiozu/radiozu-48000.m3u8',
-    url_resolved: 'https://live7digi.antenaplay.ro/radiozu/radiozu-48000.m3u8',
+    url: 'https://live4ro.antenaplay.ro/radiozu/radiozu-48000.m3u8',
+    url_resolved: 'https://live4ro.antenaplay.ro/radiozu/radiozu-48000.m3u8',
     homepage: 'https://radiozu.ro',
     favicon: 'https://radiozu.ro/favicon-96x96.png',
     tags: 'pop,hits,romania,top 40',
@@ -943,11 +943,36 @@ export const useRadioStore = create<RadioState>()(
         } else {
           merged.favoriteTvChannels = existingFavs;
         }
+        const migrateStationUrl = (st: Station): Station => {
+          const fixUrl = (u?: string) =>
+            (u || '').replace(
+              /\/\/live7digi\.antenaplay\.ro\//gi,
+              '//live4ro.antenaplay.ro/'
+            );
+          if (
+            /live7digi\.antenaplay\.ro/i.test(
+              `${st.url || ''} ${st.url_resolved || ''}`
+            )
+          ) {
+            return {
+              ...st,
+              url: fixUrl(st.url),
+              url_resolved: fixUrl(st.url_resolved || st.url),
+            };
+          }
+          return st;
+        };
         if (
           !Array.isArray(persisted.favorites) ||
           persisted.favorites.length === 0
         ) {
           merged.favorites = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+        } else {
+          merged.favorites = persisted.favorites.map(migrateStationUrl);
+        }
+        if (Array.isArray(persisted.recentlyPlayed)) {
+          merged.recentlyPlayed =
+            persisted.recentlyPlayed.map(migrateStationUrl);
         }
         return merged;
       },

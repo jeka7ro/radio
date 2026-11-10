@@ -64,7 +64,7 @@ export function useCountries() {
         name: 'All Countries',
         localizedName: dict.countries.allCountries,
         stationcount: totalGlobalStations || 45000,
-        flag: '🌍',
+        flag: '',
       };
     }
 

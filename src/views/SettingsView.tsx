@@ -66,8 +66,8 @@ export const SettingsView: React.FC = () => {
     ];
 
   const langOptions: { id: LanguageCode; label: string; flag: string }[] = [
-    { id: 'ro', label: t.settings.langRo, flag: '🇷🇴' },
-    { id: 'en', label: t.settings.langEn, flag: '🇬🇧' },
+    { id: 'ro', label: t.settings.langRo, flag: '' },
+    { id: 'en', label: t.settings.langEn, flag: '' },
   ];
 
   return (
@@ -298,7 +298,7 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-xs sm:text-sm font-mono font-bold text-brand-700 dark:text-emerald-400 select-all">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-xs sm:text-sm tabular-nums font-bold text-brand-700 dark:text-emerald-400 select-all">
             <span>{msxHost}</span>
           </div>
 

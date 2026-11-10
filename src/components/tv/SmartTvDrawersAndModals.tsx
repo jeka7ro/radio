@@ -377,7 +377,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                               }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -411,7 +411,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                               }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -447,7 +447,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                               }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -481,7 +481,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                               }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -515,7 +515,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                               }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -992,7 +992,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                         }`}
                     >
                       {tvSettings.autoFullscreenOnPlay && (
-                        <span className="text-xs font-black">✓</span>
+                        <span className="text-xs font-black"></span>
                       )}
                     </span>
                   </button>
@@ -1395,7 +1395,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1446,7 +1446,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1482,7 +1482,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1523,7 +1523,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1575,7 +1575,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1611,7 +1611,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             }`}
                           >
                             {checked && (
-                              <span className="text-xs font-black">✓</span>
+                              <span className="text-xs font-black"></span>
                             )}
                           </span>
                         </button>
@@ -1691,7 +1691,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   className="!w-44 !h-44 sm:!w-56 sm:!h-56 !rounded-3xl shadow-[0_25px_70px_rgba(0,0,0,0.85)] border-2 border-white/20"
                 />
                 <span className="absolute bottom-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/20 text-[10px] font-black uppercase tracking-wider text-zinc-200">
-                  📻 {tr('Post Radio', 'Radio Station', 'Радиостанция')}
+                  {tr('Post Radio', 'Radio Station', 'Радиостанция')}
                 </span>
               </div>
 
@@ -1743,7 +1743,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                       />
                     )}
                   <span className="absolute bottom-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-amber-400/40 text-[10px] font-black uppercase tracking-wider text-amber-300">
-                    🎵 {tr('Piesa / Artist', 'Song / Artist', 'Трек / Артист')}
+                    {tr('Piesa / Artist', 'Song / Artist', 'Трек / Артист')}
                   </span>
                 </button>
               )}
@@ -1813,7 +1813,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                             <span className="w-0.5 h-3 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
                           </span>
                         ) : (
-                          <span>🎵</span>
+                          <span></span>
                         )}
                         <span>{tr('Acum pe post', 'Now Playing', 'Сейчас играет')}</span>
                       </span>
@@ -1899,7 +1899,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                         )}
                         className="text-base sm:text-lg font-bold text-amber-300 hover:underline truncate inline-flex items-center gap-2 cursor-pointer"
                       >
-                        <span>🎤</span>
+                        <span></span>
                         <span className="truncate">
                           {activeRadioTrack.artist || currentStation.name}
                         </span>

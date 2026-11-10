@@ -2077,8 +2077,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                             verticalAlign: 'middle',
                           }}
                         >
-                          ★
-                        </span>
+                          </span>
                       )}
                       <span
                         style={{

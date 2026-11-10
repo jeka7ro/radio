@@ -880,8 +880,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -970,8 +969,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         })()}
                                         {isFav && (
                                           <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                            ❤
-                                          </span>
+                                            </span>
                                         )}
                                       </div>
                                       <div className="mt-2.5 px-0.5">
@@ -1147,7 +1145,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             onClick={() => setUhdSearchQuery('')}
                             className="col-span-4 h-10 sm:h-11 rounded-xl bg-[#2a2a2a] hover:bg-[#343434] focus:bg-rose-600 focus:text-white focus:outline-none text-rose-400 font-bold text-xs sm:text-sm flex items-center justify-center border border-white/10 transition-colors cursor-pointer"
                           >
-                            ✕ {tr('Curăță', 'Clear', 'Очистить')}
+                            {tr('Curăță', 'Clear', 'Очистить')}
                           </button>
                         </div>
                       )}
@@ -1261,8 +1259,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     })()}
                                     {isFav && (
                                       <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                        ❤
-                                      </span>
+                                        </span>
                                     )}
                                   </div>
                                   <div className="mt-2.5 px-0.5">
@@ -1344,8 +1341,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -1491,8 +1487,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   })()}
                                   {isFav && (
                                     <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                      ❤
-                                    </span>
+                                      </span>
                                   )}
                                 </div>
                                 <div className="mt-2.5 px-0.5">
@@ -2062,7 +2057,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               onClick={() => setRadioSearchQuery('')}
                               className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-extrabold text-zinc-200 shrink-0 cursor-pointer"
                             >
-                              ✕ {tr('Șterge', 'Clear', 'Сброс')}
+                              {tr('Șterge', 'Clear', 'Сброс')}
                             </button>
                           )}
                         </div>
@@ -2199,7 +2194,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   : 'Niciun post radio găsit pentru această țară'}
                             </div>
                             <p className="text-xs text-zinc-400">
-                              Apasă pe inima ❤ din dreptul oricărui post radio pentru a-l salva la Favorite.
+                              Apasă pe inima din dreptul oricărui post radio pentru a-l salva la Favorite.
                             </p>
                           </div>
                         );
@@ -2265,7 +2260,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                               className="w-7 h-7 rounded-md object-cover shrink-0 border border-white/20 shadow-sm"
                                             />
                                           ) : (
-                                            <span className="shrink-0">🎵</span>
+                                            <span className="shrink-0"></span>
                                           )}
                                           <span className="text-blue-300 font-semibold truncate">
                                             {stTrack.artist
@@ -3624,7 +3619,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           onClick={() => setSection('calendar')}
                           className="h-9 px-4 rounded-full bg-white/10 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:outline-none text-xs font-bold text-zinc-100 border border-white/15 inline-flex items-center gap-2 transition-all cursor-pointer"
                         >
-                          <span>📅</span>
+                          <span></span>
                           <span>
                             {tr(
                               'Calendar Episoade Noi →',
@@ -3664,8 +3659,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     className="w-full h-full object-cover"
                                   />
                                   <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                    ❤
-                                  </span>
+                                    </span>
                                   {(() => {
                                     const rInfo = getVodCardRatingInfo(item);
                                     return (
@@ -3754,7 +3748,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     <div className="text-[11px] text-zinc-400 truncate mt-0.5">
                                       {nowProg?.title ? (
                                         <span className="text-blue-300 font-semibold">
-                                          📺 {nowProg.title}
+                                          {nowProg.title}
                                         </span>
                                       ) : (
                                         `${ch.countryCode} • ${ch.group || 'Live HD'}`
@@ -3850,7 +3844,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                               className="w-7 h-7 rounded-md object-cover shrink-0 border border-white/20 shadow-sm"
                                             />
                                           ) : (
-                                            <span className="shrink-0">🎵</span>
+                                            <span className="shrink-0"></span>
                                           )}
                                           <span className="text-blue-300 font-semibold truncate">
                                             {stTrack.artist
@@ -3919,7 +3913,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       {likedMusicTracks.length === 0 ? (
                         <p className="text-xs sm:text-sm text-zinc-400">
                           {tr(
-                            'Nicio piesă salvată la Favorite în Muzică încă. Apasă pe inima ❤ din dreptul oricărei piese în secțiunea Muzică.',
+                            'Nicio piesă salvată la Favorite în Muzică încă. Apasă pe inima din dreptul oricărei piese în secțiunea Muzică.',
                             'No favorite music tracks saved yet.',
                             'В избранном пока нет музыкальных треков.'
                           )}

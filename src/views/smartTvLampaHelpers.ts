@@ -11,6 +11,11 @@ import {
   loadSharedActiveProfileId,
   saveSharedActiveProfileId,
   isLocalHomeServer,
+  hasLocalLoopbackBridge,
+  retryProbeLocalBridge,
+  isFileListExclusiveRomanianTitle,
+  buildFileListApiUrl,
+  normalizeFileListResolveData,
   isAdminJekaProfile,
   canProfileAccessAdult,
   canProfileAccessIedem,
@@ -18,7 +23,16 @@ import {
   saveActiveProfileMediaPrefs,
 } from "../services/deviceContinuityService";
 
-export { isAdminJekaProfile, canProfileAccessAdult, canProfileAccessIedem };
+export {
+  isAdminJekaProfile,
+  canProfileAccessAdult,
+  canProfileAccessIedem,
+  hasLocalLoopbackBridge,
+  retryProbeLocalBridge,
+  isFileListExclusiveRomanianTitle,
+  buildFileListApiUrl,
+  normalizeFileListResolveData,
+};
 import {
   DEFAULT_SEED_PROGRESS_BY_PROFILE,
   DEFAULT_SEED_SAVED_BY_PROFILE,
@@ -737,10 +751,10 @@ export const LAMPA_FILTER_RATINGS: Array<{
   minRating?: number;
 }> = [
     { id: 'any', label: 'Orice notă', labelEn: 'Any Rating', labelRu: 'Не выбрано' },
-    { id: '8', label: 'Peste 8.0 ★', labelEn: '8.0 ★ and above', labelRu: 'От 8.0 и выше', minRating: 8 },
-    { id: '7', label: 'Peste 7.0 ★', labelEn: '7.0 ★ and above', labelRu: 'От 7.0 и выше', minRating: 7 },
-    { id: '6', label: 'Peste 6.0 ★', labelEn: '6.0 ★ and above', labelRu: 'От 6.0 и выше', minRating: 6 },
-    { id: '5', label: 'Peste 5.0 ★', labelEn: '5.0 ★ and above', labelRu: 'От 5.0 и выше', minRating: 5 },
+    { id: '8', label: 'Peste 8.0 ', labelEn: '8.0 and above', labelRu: 'От 8.0 и выше', minRating: 8 },
+    { id: '7', label: 'Peste 7.0 ', labelEn: '7.0 and above', labelRu: 'От 7.0 и выше', minRating: 7 },
+    { id: '6', label: 'Peste 6.0 ', labelEn: '6.0 and above', labelRu: 'От 6.0 и выше', minRating: 6 },
+    { id: '5', label: 'Peste 5.0 ', labelEn: '5.0 and above', labelRu: 'От 5.0 и выше', minRating: 5 },
   ];
 
 export const LAMPA_FILTER_YEARS: Array<{
@@ -770,7 +784,7 @@ export const TV_LIVE_REGIONS: Array<{
   country: string;
   group?: string;
 }> = [
-    { id: 'FAV', label: '★ Favourites', labelEn: '★ Favourites', labelRu: '★ Favourites', country: 'FAV' },
+    { id: 'FAV', label: 'Favourites', labelEn: 'Favourites', labelRu: 'Favourites', country: 'FAV' },
     { id: 'IEDEM', label: 'iEdem / Playlist M3U', labelEn: 'iEdem / M3U Playlist', labelRu: 'iEdem / Плейлист M3U', country: 'IEDEM' },
     { id: 'RO', label: 'RO • România HD', labelEn: 'RO • Romania HD', labelRu: 'RO • Румыния HD', country: 'RO' },
     { id: 'MD', label: 'MD • Moldova HD', labelEn: 'MD • Moldova HD', labelRu: 'MD • Молдова HD', country: 'MD' },
@@ -887,7 +901,28 @@ export function loadWatchProgressMap(
       const out: Record<string, VodWatchProgressEntry> = {};
       for (const [key, val] of Object.entries(m)) {
         if (!val || typeof val !== 'object' || !val.item) continue;
-        const nextVal: VodWatchProgressEntry = { ...val };
+        const nextVal: VodWatchProgressEntry = { ...val, item: { ...val.item } };
+        if (
+          !/^мама$|^mama$/i.test(String(nextVal.item.name || '').trim()) &&
+          (String(nextVal.item.poster || '').includes('11303084') ||
+            nextVal.item.imdbId === 'tt43353255' ||
+            nextVal.item.nameOriginal === 'MAMA')
+        ) {
+          if (/жизнь\s+заново/i.test(String(nextVal.item.name || ''))) {
+            nextVal.item.kpId = '7958160';
+            nextVal.item.poster =
+              'https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg';
+            nextVal.item.background =
+              'https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg';
+            nextVal.item.description =
+              '2026 год. Жизнь сорокалетнего врача скорой помощи Димы пошла под откос: жена ушла, коллеги презирают, а сам он живёт у деспотичной матери.';
+          } else {
+            nextVal.item.poster = undefined;
+            nextVal.item.background = undefined;
+          }
+          delete nextVal.item.imdbId;
+          delete nextVal.item.nameOriginal;
+        }
         if (nextVal.deviceName) {
           nextVal.deviceName = sanitizeDeviceName(nextVal.deviceName);
         }
@@ -1154,7 +1189,7 @@ export function buildVodEmbedUrl(
   // If no IMDb ID or TMDB ID is available and only kpId exists, fallback to Kinogram embed
   if (!imdbId && !item.moviedb_id && kpId) {
     const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-    return `https://api.kinogram.best/embed/kp/${kpId}${qs}`;
+    return `https://api.namy.ws/embed/kp/${kpId}${qs}`;
   }
 
   switch (server) {
@@ -1163,7 +1198,7 @@ export function buildVodEmbedUrl(
     case 'kinogram_embed': {
       const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;
       const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-      return `https://api.kinogram.best/embed/${path}${qs}`;
+      return `https://api.namy.ws/embed/${path}${qs}`;
     }
     case 'vidspark':
     case 'vidzee':
@@ -1879,14 +1914,14 @@ export interface YouTubeCategoryDef {
 }
 
 export const YOUTUBE_CATEGORIES: YouTubeCategoryDef[] = [
-  { id: 'trending_ro', label: '🔥 Trending RO', query: 'trending romania 2026 oficial' },
-  { id: 'music_ro', label: '🎵 Muzică RO 4K', query: 'muzica romaneasca noua oficial 4k' },
-  { id: 'podcasts_ro', label: '🎙️ Podcasturi RO', query: 'podcast romania 2026 episod complet' },
-  { id: 'comedy_ro', label: '😂 Stand-Up & Umor', query: 'stand up comedy romania complet' },
-  { id: 'movies_ro', label: '🎬 Filme & Documentare', query: 'documentar romania istorie natura hd' },
-  { id: 'manele_party', label: '🎉 Petrecere & Hits', query: 'muzica de petrecere top hituri romania' },
-  { id: 'hits_intl', label: '🌍 Top Hits Global', query: 'top music videos 4k hits official' },
-  { id: 'kids_ro', label: '🧸 Pentru Copii', query: 'desene animate in romana episoade complete' },
+  { id: 'trending_ro', label: 'Trending RO', query: 'trending romania 2026 oficial' },
+  { id: 'music_ro', label: 'Muzică RO 4K', query: 'muzica romaneasca noua oficial 4k' },
+  { id: 'podcasts_ro', label: 'Podcasturi RO', query: 'podcast romania 2026 episod complet' },
+  { id: 'comedy_ro', label: 'Stand-Up & Umor', query: 'stand up comedy romania complet' },
+  { id: 'movies_ro', label: 'Filme & Documentare', query: 'documentar romania istorie natura hd' },
+  { id: 'manele_party', label: 'Petrecere & Hits', query: 'muzica de petrecere top hituri romania' },
+  { id: 'hits_intl', label: 'Top Hits Global', query: 'top music videos 4k hits official' },
+  { id: 'kids_ro', label: 'Pentru Copii', query: 'desene animate in romana episoade complete' },
 ];
 
 

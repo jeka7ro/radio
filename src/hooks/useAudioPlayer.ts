@@ -113,7 +113,9 @@ export function useAudioPlayer() {
     let isCancelled = false;
     let localRetryCount = 0;
 
-    const rawUrl = (currentStation.url_resolved || currentStation.url || '').trim();
+    const rawUrl = (currentStation.url_resolved || currentStation.url || '')
+      .trim()
+      .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/');
     const isPageHttps =
       typeof window !== 'undefined' && window.location.protocol === 'https:';
     const isSmartTvOrLan =

@@ -756,7 +756,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                       <button
                         key={`kz_hero_dot_${hItem.fid}_${hItem.title}`}
                         type="button"
-                        title={`${hItem.title} (★ KP ${hItem.ratingKinopoisk || '7.8'})`}
+                        title={`${hItem.title} (KP ${hItem.ratingKinopoisk || '7.8'})`}
                         onClick={() => setActiveBannerIdx(idx)}
                         className={`h-2.5 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
                           isCurrentHero
@@ -814,7 +814,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                     <>
                       <span className="text-zinc-500">•</span>
                       <span className="px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-xs font-black shadow">
-                        ★ KP {bannerItem.ratingKinopoisk}
+                        KP {bannerItem.ratingKinopoisk}
                       </span>
                     </>
                   )}

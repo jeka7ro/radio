@@ -12,7 +12,13 @@ export default async (req) => {
 
   try {
     const reqUrl = new URL(req.url);
-    const targetUrl = reqUrl.searchParams.get('url');
+    const rawTargetUrl = reqUrl.searchParams.get('url');
+    const targetUrl = rawTargetUrl
+      ? rawTargetUrl.replace(
+          /\/\/live7digi\.antenaplay\.ro\//gi,
+          '//live4ro.antenaplay.ro/'
+        )
+      : null;
     const customRef = reqUrl.searchParams.get('ref') || '';
     const customUa = reqUrl.searchParams.get('ua') || '';
     const rawMode = reqUrl.searchParams.get('raw') === '1';

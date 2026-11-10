@@ -1128,11 +1128,14 @@ export interface IedemVerifiedMeta {
   checkedAt: number;
 }
 
-const IEDEM_KP_CACHE_KEY = 'iedem_kp_verified_meta_v6';
+const IEDEM_KP_CACHE_KEY = 'iedem_kp_verified_meta_v7';
 const iedemKpCache = new Map<string, IedemVerifiedMeta>();
 
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
+    for (let v = 1; v <= 6; v++) {
+      window.localStorage.removeItem(`iedem_kp_verified_meta_v${v}`);
+    }
     const raw = window.localStorage.getItem(IEDEM_KP_CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, IedemVerifiedMeta>;
@@ -1266,11 +1269,22 @@ export async function resolveIedemKinopoiskMeta(
     const films = Array.isArray(data.films) ? data.films : [];
     const wantSeries = item.type === 'multistream';
 
+    const colonPrefix = baseTitle.includes(':') ? baseTitle.split(':')[0].trim() : '';
+    const normColonPrefix = colonPrefix.length >= 3 ? normalizeRuCompareKey(colonPrefix) : '';
+
     const exactMatches = films.filter((f) => {
       const fNormRu = normalizeRuCompareKey(f.nameRu);
       const fNormEn = normalizeRuCompareKey(f.nameEn);
       return fNormRu === normTarget || (fNormEn && fNormEn === normTarget);
     });
+
+    const prefixSeriesMatches =
+      wantSeries && normColonPrefix
+        ? films.filter((f) => {
+            const fNormRu = normalizeRuCompareKey(f.nameRu);
+            return fNormRu === normColonPrefix;
+          })
+        : [];
 
     const isSeriesType = (t?: string) =>
       t === 'TV_SERIES' || t === 'MINI_SERIES' || t === 'TV_SHOW';
@@ -1299,6 +1313,15 @@ export async function resolveIedemKinopoiskMeta(
       return Math.abs(py - targetYear) <= 1;
     };
 
+    const isUnindexedNewYear = (fYear?: string | number) =>
+      (!fYear || fYear === 'null') && (!targetYear || targetYear >= 2025);
+
+    const isMultiSeasonPriorYear = (fYear?: string | number) => {
+      if (!wantSeries || !fYear || fYear === 'null' || !targetYear) return false;
+      const py = Number(String(fYear).slice(0, 4));
+      return Number.isFinite(py) && py >= 2000 && py <= targetYear;
+    };
+
     // Prefer exact match with matching media type, target year (±1), and Russian/USSR origin
     const chosen =
       exactMatches.find(
@@ -1312,6 +1335,29 @@ export async function resolveIedemKinopoiskMeta(
           isSeriesType(f.type) === wantSeries &&
           matchesTargetYear(f.year)
       ) ||
+      exactMatches.find(
+        (f) =>
+          isSeriesType(f.type) === wantSeries &&
+          isRuCountryList(f.countries) &&
+          isUnindexedNewYear(f.year)
+      ) ||
+      exactMatches.find(
+        (f) =>
+          isSeriesType(f.type) === wantSeries &&
+          isUnindexedNewYear(f.year)
+      ) ||
+      exactMatches.find(
+        (f) =>
+          isSeriesType(f.type) === wantSeries &&
+          isRuCountryList(f.countries) &&
+          isMultiSeasonPriorYear(f.year)
+      ) ||
+      prefixSeriesMatches.find(
+        (f) =>
+          isSeriesType(f.type) === wantSeries &&
+          isRuCountryList(f.countries) &&
+          (matchesTargetYear(f.year) || isMultiSeasonPriorYear(f.year))
+      ) ||
       (!item.kinozalHash
         ? exactMatches.find(
             (f) => isRuCountryList(f.countries) && matchesTargetYear(f.year)
@@ -1323,7 +1369,7 @@ export async function resolveIedemKinopoiskMeta(
       const validYear =
         Number.isFinite(parsedYear) && parsedYear >= 1930 && parsedYear <= 2026
           ? parsedYear
-          : undefined;
+          : targetYear;
       const hasCountries =
         Array.isArray(chosen.countries) && chosen.countries.length > 0;
       const isRu = hasCountries ? isRuCountryList(chosen.countries) : undefined;

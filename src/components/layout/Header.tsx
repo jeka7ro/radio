@@ -192,7 +192,7 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
                 />
               ) : (
                 <span className="text-sm leading-none">
-                  {activeProfile.avatarEmoji || activeProfile.avatar || '🎬'}
+                  {activeProfile.avatarEmoji || activeProfile.avatar || ''}
                 </span>
               )}
               <span className="max-w-[78px] sm:max-w-[110px] truncate">

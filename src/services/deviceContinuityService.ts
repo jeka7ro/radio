@@ -685,13 +685,7 @@ export function normalizeProfile(p: Partial<SharedTvProfile>, idx = 0): SharedTv
   };
 }
 
-/**
- * Detects whether the app is running on the user's Local Home Server (localhost / LAN 192.168.x.x)
- * vs. a public Cloud host (Netlify, Cloudflare Pages, etc.).
- * Option B: On Cloud hosts, local-only API polling and heavy stream proxying are automatically skipped
- * so Netlify bandwidth & function invocations stay at 0 (100% Free).
- */
-export function isLocalHomeServer(): boolean {
+export function isDirectLocalHost(): boolean {
   if (typeof window === 'undefined') return false;
   const h = window.location.hostname.toLowerCase();
   return (
@@ -700,9 +694,169 @@ export function isLocalHomeServer(): boolean {
     h === '0.0.0.0' ||
     h.startsWith('192.168.') ||
     h.startsWith('10.') ||
+    h.startsWith('100.') ||
     /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) ||
     h.endsWith('.local')
   );
+}
+
+const LOCAL_BRIDGE_ORIGIN = 'http://localhost:8769';
+let localBridgeAvailable: boolean | null = null;
+let localBridgeProbeStarted = false;
+
+function notifyLocalBridgeChanged(nextVal: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('aether:local-bridge-changed', { detail: nextVal })
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function probeLocalBridge(force = false): Promise<boolean> {
+  if (typeof window === 'undefined') return Promise.resolve(false);
+  if (isDirectLocalHost()) {
+    localBridgeAvailable = true;
+    localBridgeProbeStarted = true;
+    return Promise.resolve(true);
+  }
+  if (localBridgeProbeStarted && !force) {
+    return Promise.resolve(Boolean(localBridgeAvailable));
+  }
+  localBridgeProbeStarted = true;
+
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const isDesktop =
+    /Macintosh|Mac OS X|Windows|Linux/i.test(ua) &&
+    !/Android|iPhone|iPad|iPod|Mobile|Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+      ua
+    );
+  if (localBridgeAvailable === null) {
+    try {
+      const cached = sessionStorage.getItem('filmio_local_bridge_ok');
+      localBridgeAvailable = cached === '1' ? true : isDesktop;
+    } catch {
+      localBridgeAvailable = isDesktop;
+    }
+  }
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 2500);
+  return fetch(`${LOCAL_BRIDGE_ORIGIN}/api/filelist/status`, {
+    signal: controller.signal,
+  })
+    .then((r) => {
+      const prev = localBridgeAvailable;
+      localBridgeAvailable = r.ok;
+      try {
+        if (r.ok) sessionStorage.setItem('filmio_local_bridge_ok', '1');
+        else sessionStorage.removeItem('filmio_local_bridge_ok');
+      } catch {
+        // ignore
+      }
+      if (prev !== localBridgeAvailable) {
+        notifyLocalBridgeChanged(Boolean(localBridgeAvailable));
+      }
+      return Boolean(localBridgeAvailable);
+    })
+    .catch(() => {
+      const prev = localBridgeAvailable;
+      localBridgeAvailable = false;
+      try {
+        sessionStorage.removeItem('filmio_local_bridge_ok');
+      } catch {
+        // ignore
+      }
+      if (prev !== false) {
+        notifyLocalBridgeChanged(false);
+      }
+      return false;
+    })
+    .finally(() => window.clearTimeout(timer));
+}
+
+export function retryProbeLocalBridge(): Promise<boolean> {
+  return probeLocalBridge(true);
+}
+
+if (typeof window !== 'undefined') {
+  void probeLocalBridge();
+}
+
+/**
+ * Detects whether the app is running on the user's Local Home Server (localhost / LAN 192.168.x.x)
+ * OR connected via the Local Loopback Bridge (http://localhost:8769 while browsing https://filmio.my).
+ */
+export function isLocalHomeServer(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (isDirectLocalHost()) return true;
+  if (localBridgeAvailable === null) void probeLocalBridge();
+  return Boolean(localBridgeAvailable);
+}
+
+export function hasLocalLoopbackBridge(): boolean {
+  if (typeof window === 'undefined' || isDirectLocalHost()) return false;
+  if (localBridgeAvailable === null) void probeLocalBridge();
+  return Boolean(localBridgeAvailable);
+}
+
+export function isFileListExclusiveRomanianTitle(
+  item?: {
+    id?: string;
+    imdbId?: string;
+    name?: string;
+    nameOriginal?: string;
+    releaseTitle?: string;
+    country?: string;
+    isRo?: boolean;
+    flTorrentId?: number;
+  } | null
+): boolean {
+  if (!item) return false;
+  const imdb = String(item.imdbId || (item.id?.startsWith('tt') ? item.id.split(':')[0] : '') || '').trim();
+  if (imdb === 'tt10295772') return true;
+  const combined = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`;
+  if (
+    /\b(Asia[.\s_-]*Express|America[.\s_-]*Express|Power[.\s_-]*Couple|Insula[.\s_-]*Iubirii|Chefi[.\s_-]*la[.\s_-]*Cutite|Las[.\s_-]*Fierbinti|Clanul|Tatuajul|Scara[.\s_-]*B|Camera[.\s_-]*609|Survivor[.\s_-]*Romania|ANTP\.WEB-?DL|PROTV\.WEB-?DL|VOYO\.WEB-?DL)\b/i.test(
+      combined
+    )
+  ) {
+    return true;
+  }
+  if (item.flTorrentId && item.flTorrentId > 0 && /Rom[aâ]nia|Romania/i.test(String(item.country || ''))) {
+    return true;
+  }
+  return false;
+}
+
+export function getFileListServerBase(): string {
+  if (typeof window === 'undefined' || isDirectLocalHost()) return '';
+  return LOCAL_BRIDGE_ORIGIN;
+}
+
+export function buildFileListApiUrl(path: string): string {
+  if (!path) return path;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  const base = getFileListServerBase();
+  return base ? `${base}${path.startsWith('/') ? path : `/${path}`}` : path;
+}
+
+export function normalizeFileListResolveData<
+  T extends { streamUrl?: string; ok?: boolean } | null | undefined,
+>(data: T): T {
+  if (!data || typeof data !== 'object') return data;
+  if (data.ok && !isDirectLocalHost()) {
+    localBridgeAvailable = true;
+  }
+  if (typeof data.streamUrl === 'string' && data.streamUrl.startsWith('/')) {
+    return {
+      ...data,
+      streamUrl: buildFileListApiUrl(data.streamUrl),
+    };
+  }
+  return data;
 }
 
 export function loadSharedProfiles(): SharedTvProfile[] {

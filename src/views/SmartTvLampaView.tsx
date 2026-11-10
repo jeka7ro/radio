@@ -140,6 +140,10 @@ import {
   unmarkProfileDeleted,
   normalizeProfile,
   isLocalHomeServer,
+  retryProbeLocalBridge,
+  isFileListExclusiveRomanianTitle,
+  buildFileListApiUrl,
+  normalizeFileListResolveData,
   isProfileRememberedOnDevice,
   rememberProfileOnDevice,
 } from '../services/deviceContinuityService';
@@ -1219,6 +1223,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   ]);
   const [isFileListStreamLoading, setIsFileListStreamLoading] =
     useState<boolean>(false);
+  const [localBridgeTick, setLocalBridgeTick] = useState<number>(0);
+
+  useEffect(() => {
+    const onBridgeChange = () => {
+      setLocalBridgeTick((t) => t + 1);
+    };
+    window.addEventListener('aether:local-bridge-changed', onBridgeChange);
+    return () =>
+      window.removeEventListener('aether:local-bridge-changed', onBridgeChange);
+  }, []);
   const [flItems, setFlItems] = useState<FileListTorrentInfo[]>([]);
   const [isFlLoading, setIsFlLoading] = useState<boolean>(false);
   const [flCategory, setFlCategory] = useState<string>('ro');
@@ -1232,7 +1246,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [isYtKeyboardOpen, setIsYtKeyboardOpen] = useState<boolean>(false);
   const [activeYtDurationSec, setActiveYtDurationSec] = useState<number>(0);
   const [ytUseEmbedFallback, setYtUseEmbedFallback] = useState<boolean>(() => !isLocalHomeServer());
-  const [fallbackYtVideoId, setFallbackYtVideoId] = useState<string | null>(null);
   const [activeServer, setActiveServer] = useState<VodServerId>(() =>
     tvSettings.defaultVodServer === 'auto_best' ||
       (tvSettings.defaultVodServer === 'filelist_torrent' && !isLocalHomeServer())
@@ -5229,10 +5242,24 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 .trim() || item.name,
           }
           : item;
+      if (
+        !/^мама$|^mama$/i.test(String(normalizedItem.name || "").trim()) &&
+        (String(normalizedItem.poster || "").includes("11303084") ||
+          normalizedItem.imdbId === "tt43353255" ||
+          normalizedItem.nameOriginal === "MAMA")
+      ) {
+        if (/жизнь\s+заново/i.test(String(normalizedItem.name || ""))) {
+          normalizedItem.kpId = "7958160";
+          normalizedItem.poster = "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg";
+          normalizedItem.background = "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg";
+          normalizedItem.description = "2026 год. Жизнь сорокалетнего врача скорой помощи Димы пошла под откос: жена ушла, коллеги презирают, а сам он живёт у деспотичной матери.";
+        }
+        delete normalizedItem.imdbId;
+        delete normalizedItem.nameOriginal;
+      }
       setIsDirectStreamLoading(true);
       setResolvedDirectStream(null);
       setResolvedFileListStream(null);
-      setFallbackYtVideoId(null);
       setActiveVodItem(normalizedItem);
       setIsSidebarOpen(false);
       setIsPlayingVod(autoPlayImmediately);
@@ -5323,6 +5350,38 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       tvSettings.defaultSubLang,
     ]
   );
+
+  const handledDeepLinkVodRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (handledDeepLinkVodRef.current || typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const playVodId = (sp.get('playVod') || '').trim();
+    if (!playVodId) return;
+    const savedEntry = watchProgressMap[playVodId];
+    if (!savedEntry?.item) return;
+    handledDeepLinkVodRef.current = true;
+    const sParam = Number(sp.get('s') || savedEntry.season || 1) || 1;
+    const eParam = Number(sp.get('e') || savedEntry.episode || 1) || 1;
+    const tParam = Number(sp.get('t') || 0);
+    handleOpenVod(savedEntry.item, true, sParam, eParam);
+    if (tParam > 5) {
+      setResumeStartSeconds(tParam);
+    }
+    try {
+      sp.delete('playVod');
+      sp.delete('s');
+      sp.delete('e');
+      sp.delete('t');
+      const nextQs = sp.toString();
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${nextQs ? `?${nextQs}` : ''}`
+      );
+    } catch {
+      // ignore
+    }
+  }, [watchProgressMap, handleOpenVod]);
 
   const handleStartVodPlayback = useCallback(
     (customStartSec?: number, openAudioSheet = false) => {
@@ -5611,7 +5670,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const itemKey = activeVodItem.id;
     const epKey = `S${selectedSeason}E${selectedEpisode}`;
-    setFallbackYtVideoId(null);
     if (lastResolvedItemKeyRef.current !== itemKey) {
       lastResolvedItemKeyRef.current = itemKey;
       lastResolvedEpKeyRef.current = epKey;
@@ -5641,7 +5699,28 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     let cancelled = false;
     setIsDirectStreamLoading(true);
-    setDetailedMeta({ ...activeVodItem });
+    const isPoisonedMamaMeta =
+      !/^мама$|^mama$/i.test(String(activeVodItem.name || "").trim()) &&
+      (String(activeVodItem.poster || "").includes("11303084") ||
+        activeVodItem.imdbId === "tt43353255" ||
+        activeVodItem.nameOriginal === "MAMA");
+    const sanitizedVodItem = isPoisonedMamaMeta
+      ? {
+          ...activeVodItem,
+          kpId: /жизнь\s+заново/i.test(activeVodItem.name) ? "7958160" : activeVodItem.kpId,
+          poster: /жизнь\s+заново/i.test(activeVodItem.name)
+            ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
+            : activeVodItem.iedemFid
+              ? `/api/iedem-vod?poster=${encodeURIComponent(`http://895890bd73a7.jmeekos.com/posters/h/p_${String(activeVodItem.iedemFid).padStart(8, "0")}.jpg`)}`
+              : undefined,
+          background: /жизнь\s+заново/i.test(activeVodItem.name)
+            ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
+            : undefined,
+          imdbId: undefined,
+          nameOriginal: undefined,
+        }
+      : activeVodItem;
+    setDetailedMeta({ ...sanitizedVodItem });
 
     const isKlubnichkaStream = Boolean(
       activeVodItem.klubnichkaRawId ||
@@ -5833,7 +5912,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 searchData.films.find(
                   (f: any) =>
                     normF(f.nameRu) === normCleanTitle &&
+                    isSeriesFilm(f) === wantSeries &&
+                    (!f.year || f.year === "null")
+                ) ||
+                searchData.films.find(
+                  (f: any) =>
+                    normF(f.nameRu) === normCleanTitle &&
+                    isSeriesFilm(f) === wantSeries
+                ) ||
+                searchData.films.find(
+                  (f: any) =>
+                    normF(f.nameRu) === normCleanTitle &&
                     matchesYr(f.year)
+                ) ||
+                searchData.films.find(
+                  (f: any) =>
+                    normF(f.nameRu) === normCleanTitle &&
+                    (!f.year || f.year === "null")
                 );
               if (matchedFilm?.filmId) {
                 foundKpId = String(matchedFilm.filmId);
@@ -5882,12 +5977,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     ? `${kpData.filmLength} min`
                     : undefined;
                   setDetailedMeta((prev) => {
-                    const base = prev || { ...activeVodItem };
+                    const base = prev || { ...sanitizedVodItem };
+                    const hasTechnicalTorrentDesc = /Kinozal VIP|сидов|semințe|WEB-DL|WEBRip/i.test(
+                      String(base.description || "")
+                    );
                     return {
                       ...base,
                       kpId: foundKpId,
-                      imdbId: resolvedImdb || base.imdbId,
-                      nameOriginal: origName || base.nameOriginal,
+                      imdbId:
+                        resolvedImdb ||
+                        (base.id.startsWith("tt") ? base.id : undefined),
+                      nameOriginal: origName || undefined,
                       releaseInfo: kpYearStr || base.releaseInfo,
                       year: kpYearStr || base.year,
                       poster:
@@ -5895,9 +5995,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         kpData.posterUrlPreview ||
                         base.poster,
                       description:
-                        base.description ||
-                        kpData.description ||
-                        kpData.shortDescription,
+                        hasTechnicalTorrentDesc
+                          ? kpData.description ||
+                            kpData.shortDescription ||
+                            base.description
+                          : base.description ||
+                            kpData.description ||
+                            kpData.shortDescription,
                       slogan: kpData.slogan || base.slogan,
                       ratingKinopoisk: kpData.ratingKinopoisk
                         ? String(kpData.ratingKinopoisk)
@@ -5905,7 +6009,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       imdbRating: kpData.ratingImdb
                         ? String(kpData.ratingImdb)
                         : base.imdbRating,
-                      country: countriesStr || base.country || 'Россия',
+                      country: countriesStr || base.country || "Россия",
                       genres: genresArr?.length ? genresArr : base.genres,
                       ageRating: ageStr || base.ageRating,
                       runtime: runtimeStr || base.runtime,
@@ -5913,7 +6017,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         kpData.coverUrl ||
                         kpData.posterUrl ||
                         kpData.posterUrlPreview ||
-                        base.background ||
                         base.poster,
                     };
                   });
@@ -5966,9 +6069,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               e: String(selectedEpisode),
               ru: '1',
             });
-            fetch(`/api/filelist/resolve?${flParams.toString()}`)
+            fetch(buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`))
               .then((r) => (r.ok ? r.json() : null))
-              .then((flData: ResolvedFileListStream | null) => {
+              .then((rawFlData: ResolvedFileListStream | null) => {
+                const flData = normalizeFileListResolveData(rawFlData);
                 if (cancelled) return;
                 if (flData) {
                   setResolvedFileListStream((prev) => {
@@ -6106,7 +6210,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     .filter(Boolean)
                 : undefined;
               setDetailedMeta((prev) => {
-                const base = prev || { ...activeVodItem };
+                const base = prev || { ...sanitizedVodItem };
+                const hasTechnicalTorrentDesc = /Kinozal VIP|сидов|semințe|WEB-DL|WEBRip/i.test(
+                  String(base.description || "")
+                );
                 return {
                   ...base,
                   kpId: resolvedKpIdStr,
@@ -6118,12 +6225,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   background:
                     kpData.coverUrl ||
                     kpData.posterUrl ||
+                    kpData.posterUrlPreview ||
                     meta.posterUrl ||
-                    base.background,
+                    base.poster,
                   description:
-                    base.description ||
-                    kpData.description ||
-                    kpData.shortDescription,
+                    hasTechnicalTorrentDesc
+                      ? kpData.description ||
+                        kpData.shortDescription ||
+                        base.description
+                      : base.description ||
+                        kpData.description ||
+                        kpData.shortDescription,
                   ratingKinopoisk: kpData.ratingKinopoisk
                     ? String(kpData.ratingKinopoisk)
                     : base.ratingKinopoisk,
@@ -6398,9 +6510,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     String(userSelectedFlTorrentIdRef.current)
                   );
                 }
-                fetch(`/api/filelist/resolve?${extraFlParams.toString()}`)
+                fetch(buildFileListApiUrl(`/api/filelist/resolve?${extraFlParams.toString()}`))
                   .then((r) => (r.ok ? r.json() : null))
-                  .then((flData: ResolvedFileListStream | null) => {
+                  .then((rawFlData: ResolvedFileListStream | null) => {
+                    const flData = normalizeFileListResolveData(rawFlData);
                     if (cancelled) return;
                     flFinished = true;
                     if (flData?.ok) {
@@ -6581,32 +6694,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (cancelled) return;
         setResolvedDirectStream(data);
         directResolvedOk = Boolean(data?.ok && (data.dashUrl || data.hlsUrl));
-        if (
-          !directResolvedOk &&
-          !isLocalHomeServer() &&
-          (imdb === 'tt10295772' ||
-            activeVodItem.isRo ||
-            Boolean(activeVodItem.flTorrentId))
-        ) {
-          const ytQuery =
-            activeVodItem.type === 'series'
-              ? `${activeVodItem.name} Sezonul ${selectedSeason} Episodul ${selectedEpisode}`
-              : `${activeVodItem.name} ${activeVodItem.releaseInfo || ''} film complet`;
-          fetch(`/api/youtube/search?q=${encodeURIComponent(ytQuery.trim())}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((ytData) => {
-              if (cancelled || !Array.isArray(ytData?.items) || ytData.items.length === 0) {
-                return;
-              }
-              const bestYt =
-                ytData.items.find((x: { durationSec?: number }) => (x.durationSec || 0) >= 600) ||
-                ytData.items[0];
-              if (bestYt?.videoId) {
-                setFallbackYtVideoId(String(bestYt.videoId));
-              }
-            })
-            .catch(() => { });
-        }
+
         // Never override activeServer or audio track if user already picked FileList or another server!
         if (
           userManuallySelectedServerRef.current ||
@@ -6748,9 +6836,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         flParams.set('imdb', imdb);
       }
 
-      fetch(`/api/filelist/resolve?${flParams.toString()}`)
+      fetch(buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`))
         .then((r) => (r.ok ? r.json() : { ok: false }))
-        .then((flData: ResolvedFileListStream) => {
+        .then((rawFlData: ResolvedFileListStream) => {
+          const flData = normalizeFileListResolveData(rawFlData);
           if (cancelled) return;
           flFinished = true;
           flResolvedOk = Boolean(flData?.ok);
@@ -6765,15 +6854,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
             return !flData?.ok && prev?.ok && prev.streamUrl ? prev : flData;
           });
+          const isFastFileListSeedbox = Boolean(
+            flData?.torrentId && flData.torrentId > 0
+          );
           if (
             flData?.ok &&
             !userManuallySelectedServerRef.current &&
-            !activeVodItem.id.startsWith('kp_') &&
-            (isForeignVod ||
-              activeVodItem.flTorrentId ||
+            (isFastFileListSeedbox ||
+              isForeignVod ||
               userSelectedFlTorrentIdRef.current !== null ||
-              !directResolvedOk ||
-              tvSettings.defaultVodServer === 'filelist_torrent')
+              !directResolvedOk)
           ) {
             setActiveServer('filelist_torrent');
           } else if (
@@ -6783,7 +6873,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ) {
             if (directResolvedOk) {
               setActiveServer('kinogram_hls');
-            } else if (!activeVodItem.flTorrentId || imdb) {
+            } else if (
+              !isFileListExclusiveRomanianTitle(activeVodItem) &&
+              (!activeVodItem.flTorrentId || imdb)
+            ) {
               setActiveServer('kinogram_hls');
             }
           }
@@ -6820,6 +6913,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     tvSettings.defaultAudioPref,
     tvSettings.defaultVodServer,
     uiLang,
+    localBridgeTick,
   ]);
 
   // Automatically translate movie/series description & country into the selected UI language (RO / EN / RU)
@@ -6906,7 +7000,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ok: true,
           torrentId,
           selectedTorrent: clickedTor,
-          streamUrl: `/api/filelist/stream?id=${torrentId}&fileIdx=${typeof fileIdx === 'number' ? fileIdx : 0}`,
+          streamUrl: buildFileListApiUrl(`/api/filelist/stream?id=${torrentId}&fileIdx=${typeof fileIdx === 'number' ? fileIdx : 0}`),
         };
       });
       setIsFileListStreamLoading(true);
@@ -6955,9 +7049,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (typeof fileIdx === 'number') {
         p.set('fileIdx', String(fileIdx));
       }
-      fetch(`/api/filelist/resolve?${p.toString()}`)
+      fetch(buildFileListApiUrl(`/api/filelist/resolve?${p.toString()}`))
         .then((r) => (r.ok ? r.json() : { ok: false }))
-        .then((flData: ResolvedFileListStream) => {
+        .then((rawFlData: ResolvedFileListStream) => {
+          const flData = normalizeFileListResolveData(rawFlData);
           if (
             userSelectedFlTorrentIdRef.current &&
             userSelectedFlTorrentIdRef.current !== torrentId
@@ -7030,36 +7125,99 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         },
       }));
     }
-    const vkOpts: VodExternalQualityOption[] = (
-      resolvedDirectStream?.vkQualities || []
-    ).map((q) => ({
-      id: q.id,
-      label: `${q.label} • VK Видео Direct`,
-      badge:
-        q.height >= 2160
-          ? '4K UHD'
-          : q.height >= 1440
-            ? '2K QHD'
-            : q.height >= 1080
-              ? 'Full HD'
-              : 'HD',
-      subLabel: resolvedDirectStream?.title || activeVodItem?.name || '',
-      active:
-        activeServer === 'kinogram_hls' &&
-        resolvedDirectStream?.hlsUrl === q.url,
-      onSelect: () => {
-        setActiveServer('kinogram_hls');
-        setResolvedDirectStream((prev) =>
-          prev
-            ? {
-                ...prev,
-                hlsUrl: q.url,
-                sourcePath: `VK Видео Direct (${q.label})`,
-              }
-            : prev
-        );
-      },
+    const parseHeightRank = (txt = ''): number => {
+      const s = txt.toLowerCase();
+      if (s.includes('2160') || s.includes('4k') || s.includes('uhd')) return 2160;
+      if (s.includes('1440') || s.includes('2k') || s.includes('qhd')) return 1440;
+      if (s.includes('1080') || s.includes('full hd') || s.includes('fhd')) return 1080;
+      if (s.includes('720')) return 720;
+      if (s.includes('480')) return 480;
+      if (s.includes('360')) return 360;
+      return 1080;
+    };
+    const rawVkQuals = (resolvedDirectStream?.vkQualities || []).filter(
+      (q) => q.height >= 720
+    );
+    const vkOptsWithRank = rawVkQuals.map((q) => ({
+      heightRank: q.height || parseHeightRank(q.label),
+      seedRank: 5,
+      sourcePriority: 1,
+      opt: {
+        id: q.id,
+        label: `${q.label} • VK Видео Direct`,
+        badge:
+          q.height >= 2160
+            ? '4K UHD'
+            : q.height >= 1440
+              ? '2K QHD'
+              : q.height >= 1080
+                ? 'Full HD'
+                : 'HD',
+        subLabel: resolvedDirectStream?.title || activeVodItem?.name || '',
+        active:
+          activeServer === 'kinogram_hls' &&
+          resolvedDirectStream?.hlsUrl === q.url,
+        onSelect: () => {
+          userManuallySelectedServerRef.current = true;
+          setActiveServer('kinogram_hls');
+          setResolvedDirectStream((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  hlsUrl: q.url,
+                  sourcePath: `VK Видео Direct (${q.label})`,
+                }
+              : prev
+          );
+        },
+      } as VodExternalQualityOption,
     }));
+    const directHlsOptsWithRank: Array<{
+      heightRank: number;
+      seedRank: number;
+      sourcePriority: number;
+      opt: VodExternalQualityOption;
+    }> = [];
+    if (
+      vkOptsWithRank.length === 0 &&
+      resolvedDirectStream?.ok &&
+      (resolvedDirectStream.dashUrl || resolvedDirectStream.hlsUrl)
+    ) {
+      const sp = String(resolvedDirectStream.sourcePath || '');
+      const hUrl = String(resolvedDirectStream.hlsUrl || '');
+      const dHeight =
+        /2160|4k|uhd/i.test(sp)
+          ? 2160
+          : /1080|rutube|iedem/i.test(sp) || /1080_/i.test(hUrl)
+            ? 1080
+            : 720;
+      const dLabel =
+        dHeight >= 2160
+          ? '4K UHD (2160p)'
+          : dHeight >= 1080
+            ? '1080p Full HD'
+            : '720p HD';
+      directHlsOptsWithRank.push({
+        heightRank: dHeight,
+        seedRank: 1,
+        sourcePriority: 1,
+        opt: {
+          id: 'direct_hls_primary',
+          label: `${dLabel} • Direct HLS`,
+          badge: dHeight >= 2160 ? '4K INSTANT' : dHeight >= 1080 ? 'Full HD' : 'HD',
+          subLabel:
+            (resolvedDirectStream.audioNames || ['Original'])
+              .slice(0, 2)
+              .join(' • '),
+          active: activeServer === 'kinogram_hls',
+          onSelect: () => {
+            userManuallySelectedServerRef.current = true;
+            userSelectedFlTorrentIdRef.current = null;
+            setActiveServer('kinogram_hls');
+          },
+        },
+      });
+    }
     const flList =
       resolvedFileListStream?.torrents &&
         resolvedFileListStream.torrents.length > 0
@@ -7067,21 +7225,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         : resolvedFileListStream?.selectedTorrent
           ? [resolvedFileListStream.selectedTorrent]
           : [];
-    const flOpts = flList.map((tor) => ({
-      id: `fl_q_${tor.id}`,
-      label: `${tor.quality || '1080p Full HD'}${tor.isRo ? ' • RO' : ''}${tor.source === 'kinozal' ? ' • Kinozal VIP' : tor.source === 'torrentio' ? ' • Torrentio' : ' • FileList'
-        }`,
-      badge: `${tor.seeders} seed • ${tor.sizeFormatted}${tor.audioInfo ? ` • ${tor.audioInfo}` : ''
-        }`,
-      subLabel: tor.releaseTitle || tor.name,
-      active:
-        activeServer === 'filelist_torrent' &&
-        resolvedFileListStream?.torrentId === tor.id,
-      onSelect: () => {
-        handleSelectFileListTorrent(tor.id, tor.fileIdx, true);
-      },
-    }));
-    return [...vkOpts, ...flOpts];
+    const flOptsWithRank = flList.map((tor) => {
+      const qStr = tor.quality || '1080p Full HD';
+      return {
+        heightRank: parseHeightRank(qStr),
+        seedRank: Number(tor.seeders) || 0,
+        sourcePriority: tor.source === 'filelist' || tor.source === 'kinozal' ? 3 : 2,
+        opt: {
+          id: `fl_q_${tor.id}`,
+          label: `${qStr}${tor.isRo ? ' • RO' : ''}${tor.source === 'kinozal' ? ' • Kinozal VIP' : tor.source === 'torrentio' ? ' • Torrentio' : ' • FileList'
+            }`,
+          badge: `${tor.seeders} seed • ${tor.sizeFormatted}${tor.audioInfo ? ` • ${tor.audioInfo}` : ''
+            }`,
+          subLabel: tor.releaseTitle || tor.name,
+          active:
+            activeServer === 'filelist_torrent' &&
+            resolvedFileListStream?.torrentId === tor.id,
+          onSelect: () => {
+            handleSelectFileListTorrent(tor.id, tor.fileIdx, true);
+          },
+        } as VodExternalQualityOption,
+      };
+    });
+    return [...flOptsWithRank, ...vkOptsWithRank, ...directHlsOptsWithRank]
+      .sort(
+        (a, b) =>
+          b.heightRank - a.heightRank ||
+          b.sourcePriority - a.sourcePriority ||
+          b.seedRank - a.seedRank
+      )
+      .map((x) => x.opt);
   }, [resolvedFileListStream, activeServer, handleSelectFileListTorrent, klubnichkaQualities, activeVodItem, resolvedDirectStream]);
 
   // Seasons & Episodes list for Series
@@ -7312,6 +7485,79 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     () => Array.from(seasonsMap.keys()).sort((a, b) => a - b),
     [seasonsMap]
   );
+
+  const seasonYearsMap = useMemo(() => {
+    const yMap = new Map<number, string>();
+    const currentYear = new Date().getFullYear();
+
+    // 1. Extract from episode release dates (Cinemeta / TMDB) or episode titles
+    for (const sNum of availableSeasons) {
+      const eps = seasonsMap.get(sNum) || [];
+      for (const ep of eps) {
+        if (ep.released) {
+          const m = String(ep.released).match(/\b(19\d{2}|20[0-3]\d)\b/);
+          if (m) {
+            yMap.set(sNum, m[1]);
+            break;
+          }
+        }
+      }
+      if (!yMap.has(sNum)) {
+        for (const ep of eps) {
+          const m = String(ep.name || "").match(/\b(?:\d{2}\.\d{2}\.)?(20[0-3]\d)\b/);
+          if (m && Number(m[1]) <= currentYear + 1) {
+            yMap.set(sNum, m[1]);
+            break;
+          }
+        }
+      }
+    }
+
+    // 2. Extract from Kinozal VIP / FileList.io single-season torrent titles
+    const flTorrents = resolvedFileListStream?.torrents || [];
+    for (const sNum of availableSeasons) {
+      if (yMap.has(sNum)) continue;
+      for (const tor of flTorrents) {
+        const t = String(tor.name || "");
+        if (/\bS\d{1,2}\s*-\s*S?\d{1,2}\b|\b\d{1,2}\s*-\s*\d{1,2}\s*сезон/i.test(t)) {
+          continue;
+        }
+        const sRe = new RegExp(
+          `(?:\\bS0*${sNum}(?:\\b|E)|\\bSeason\\s*0*${sNum}\\b|(?:^|[^\\d])0*${sNum}\\s*сезон)`,
+          "i"
+        );
+        if (sRe.test(t)) {
+          const ym =
+            t.match(/\/\s*(19\d{2}|20[0-3]\d)\s*\//) ||
+            t.match(/[.(/\s](19\d{2}|20[0-3]\d)[.)/\s]/);
+          if (ym && Number(ym[1]) <= currentYear + 1) {
+            yMap.set(sNum, ym[1]);
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Fallback from series releaseInfo start year for any remaining season
+    const rawRel = String(
+      detailedMeta?.releaseInfo || activeVodItem?.releaseInfo || ""
+    );
+    const baseYearMatch = rawRel.match(/\b(19\d{2}|20[0-3]\d)\b/);
+    const baseYear = baseYearMatch ? Number(baseYearMatch[1]) : 0;
+    if (baseYear > 1950) {
+      for (const sNum of availableSeasons) {
+        if (!yMap.has(sNum)) {
+          const prevY = sNum > 1 && yMap.has(sNum - 1) ? Number(yMap.get(sNum - 1)) : 0;
+          const estYear = prevY > 0
+            ? Math.min(currentYear, prevY + 1)
+            : Math.min(currentYear, baseYear + (sNum - 1));
+          yMap.set(sNum, String(estYear));
+        }
+      }
+    }
+
+    return yMap;
+  }, [availableSeasons, seasonsMap, resolvedFileListStream, detailedMeta, activeVodItem]);
 
   const [episodesSortDesc, setEpisodesSortDesc] = useState<boolean>(false);
 
@@ -8308,7 +8554,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           className={`relative z-20 h-14 sm:h-16 px-3 sm:px-7 flex items-center justify-between gap-2 sm:gap-4 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-[#141414]'
             }`}
         >
-          {/* Left: < Back (when viewing movie/series) + ☰ Menu + Section Name */}
+          {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
           <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
             {activeVodItem && (
               <button
@@ -8351,7 +8597,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   return next;
                 });
               }}
-              title={tr('Meniu Lateral (☰)', 'Sidebar Menu (☰)', 'Меню (☰)')}
+              title={tr('Meniu Lateral ()', 'Sidebar Menu ()', 'Меню ()')}
               className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer ${isSidebarOpen && activeVodItem
                 ? 'bg-white text-[#141414]'
                 : 'text-zinc-200 hover:bg-white/10 focus:bg-white focus:text-zinc-950'
@@ -9696,6 +9942,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           activeVodItem.qualityBadge
                         }
                         externalQualityOptions={flQualityOptions}
+                        onStreamError={() => {
+                          if (
+                            resolvedDirectStream?.ok &&
+                            (resolvedDirectStream.dashUrl ||
+                              resolvedDirectStream.hlsUrl)
+                          ) {
+                            setActiveServer('kinogram_hls');
+                          }
+                        }}
                         onResolutionChange={setLiveVodResolution}
                         onWakeOsd={wakeVodOsd}
                         onHideOsd={hideVodOsd}
@@ -9856,9 +10111,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   ? activeVodItem.id
                                   : detailedMeta?.imdbId || '';
                                 if (curImdb) p.set('imdb', curImdb);
-                                fetch(`/api/filelist/resolve?${p.toString()}`)
+                                fetch(buildFileListApiUrl(`/api/filelist/resolve?${p.toString()}`))
                                   .then((r) => (r.ok ? r.json() : { ok: false }))
-                                  .then((d) => setResolvedFileListStream(d))
+                                  .then((d) => setResolvedFileListStream(normalizeFileListResolveData(d)))
                                   .catch(() => {})
                                   .finally(() => setIsFileListStreamLoading(false));
                               }
@@ -9915,7 +10170,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               return;
                             }
                           }
-
+                          if (
+                            isLocalHomeServer() &&
+                            resolvedFileListStream?.ok &&
+                            resolvedFileListStream.streamUrl
+                          ) {
+                            setActiveServer('filelist_torrent');
+                          }
                         }}
                         durationHintSec={(() => {
                           if (
@@ -10132,18 +10393,79 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           }
                         }}
                       />
-                    ) : fallbackYtVideoId ? (
-                      <iframe
-                        key={`yt_fallback_${fallbackYtVideoId}`}
-                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
-                          fallbackYtVideoId
-                        )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
-                        title={activeVodItem.name}
-                        className="relative z-10 w-full h-full border-0"
-                        referrerPolicy="strict-origin-when-cross-origin"
-                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                        allowFullScreen
-                      />
+                    ) : isFileListExclusiveRomanianTitle(
+                        detailedMeta || activeVodItem
+                      ) &&
+                      !activeVodItem.klubnichkaEmbedUrl &&
+                      !resolvedDirectStream?.embedUrl ? (
+                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
+                        <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+                          <div className="text-lg sm:text-xl font-extrabold text-white">
+                            {activeVodItem.name}
+                            {activeVodItem.type === 'series'
+                              ? ` • S${selectedSeason}:E${selectedEpisode}`
+                              : ''}
+                          </div>
+                          <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                            {tr(
+                              'Acest titlu românesc (FileList.io 1080p Original) se redă direct prin motorul local P2P pentru a garanta episodul real fără reclame sau înlocuiri greșite.',
+                              'This Romanian FileList.io 1080p title streams directly via your Local Home Server P2P engine so the exact episode plays without wrong replacements.',
+                              'Этот румынский релиз FileList.io 1080p воспроизводится напрямую через локальный сервер P2P.'
+                            )}
+                          </p>
+                          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsFileListStreamLoading(true);
+                                void retryProbeLocalBridge().then((ok) => {
+                                  if (ok) {
+                                    setActiveServer('filelist_torrent');
+                                    setLocalBridgeTick((t) => t + 1);
+                                  } else {
+                                    setIsFileListStreamLoading(false);
+                                  }
+                                });
+                              }}
+                              className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
+                            >
+                              {tr(
+                                'Conectează la localhost:8769',
+                                'Connect to localhost:8769',
+                                'Подключить localhost:8769'
+                              )}
+                            </button>
+                            <a
+                              href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                                activeVodItem.id
+                              )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                                resumeStartSeconds || 0
+                              )}`}
+                              className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
+                            >
+                              {tr(
+                                'Deschide pe Wi-Fi Local (192.168.2.57)',
+                                'Open on Home Wi-Fi (192.168.2.57)',
+                                'Открыть в домашней Wi-Fi (192.168.2.57)'
+                              )}
+                            </a>
+                            <a
+                              href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
+                                activeVodItem.id
+                              )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                                resumeStartSeconds || 0
+                              )}`}
+                              className="h-10 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white border border-white/20 font-extrabold text-xs inline-flex items-center justify-center"
+                            >
+                              {tr(
+                                'Deschide prin Tailscale (100.79.113.57)',
+                                'Open via Tailscale (100.79.113.57)',
+                                'Открыть через Tailscale (100.79.113.57)'
+                              )}
+                            </a>
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <iframe
                         src={
@@ -10168,18 +10490,63 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         allowFullScreen
                       />
                     )
-                  ) : fallbackYtVideoId && activeServer === 'vidspark' ? (
-                    <iframe
-                      key={`yt_fallback_srv_${fallbackYtVideoId}`}
-                      src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
-                        fallbackYtVideoId
-                      )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
-                      title={activeVodItem.name}
-                      className="relative z-10 w-full h-full border-0"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                      allowFullScreen
-                    />
+                  ) : isFileListExclusiveRomanianTitle(
+                      detailedMeta || activeVodItem
+                    ) && !resolvedDirectStream?.embedUrl ? (
+                    <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
+                      <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+                        <div className="text-lg sm:text-xl font-extrabold text-white">
+                          {activeVodItem.name}
+                          {activeVodItem.type === 'series'
+                            ? ` • S${selectedSeason}:E${selectedEpisode}`
+                            : ''}
+                        </div>
+                        <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                          {tr(
+                            'Acest titlu românesc (FileList.io 1080p Original) nu există pe serverele externe de embed — pornește-l prin S1: FileList.io pe serverul local.',
+                            'This Romanian FileList.io 1080p title is only available on your Local Home Server via S1: FileList.io.',
+                            'Этот румынский релиз доступен только через локальный сервер S1: FileList.io.'
+                          )}
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsFileListStreamLoading(true);
+                              void retryProbeLocalBridge().then((ok) => {
+                                setActiveServer('filelist_torrent');
+                                if (ok) {
+                                  setLocalBridgeTick((t) => t + 1);
+                                } else {
+                                  setIsFileListStreamLoading(false);
+                                }
+                              });
+                            }}
+                            className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
+                          >
+                            {tr(
+                              'Comută pe S1: FileList.io 1080p',
+                              'Switch to S1: FileList.io 1080p',
+                              'Переключить на S1: FileList.io 1080p'
+                            )}
+                          </button>
+                          <a
+                            href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                              activeVodItem.id
+                            )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                              resumeStartSeconds || 0
+                            )}`}
+                            className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
+                          >
+                            {tr(
+                              'Deschide pe Wi-Fi Local (192.168.2.57)',
+                              'Open on Home Wi-Fi (192.168.2.57)',
+                              'Открыть в домашней Wi-Fi (192.168.2.57)'
+                            )}
+                          </a>
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <iframe
                       src={
@@ -10725,7 +11092,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   : 'bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15'
                                   }`}
                               >
-                                Sezonul {sNum}
+                                {tr(
+                                  `Sezonul ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                                  `Season ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                                  `Сезон ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`
+                                )}
                               </button>
                             ))}
                           </div>
@@ -11532,18 +11903,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     {(
                                       [
                                         {
-                                          h: 360 as const,
-                                          label: '360p',
+                                          h: 1080 as const,
+                                          label: '1080p',
                                           size: isSeriesVod
-                                            ? '~110MB'
-                                            : '~280MB',
-                                        },
-                                        {
-                                          h: 480 as const,
-                                          label: '480p',
-                                          size: isSeriesVod
-                                            ? '~180MB'
-                                            : '~450MB',
+                                            ? '~650MB'
+                                            : '~1.5GB',
                                         },
                                         {
                                           h: 720 as const,
@@ -11553,11 +11917,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                             : '~750MB',
                                         },
                                         {
-                                          h: 1080 as const,
-                                          label: '1080p',
+                                          h: 480 as const,
+                                          label: '480p',
                                           size: isSeriesVod
-                                            ? '~650MB'
-                                            : '~1.5GB',
+                                            ? '~180MB'
+                                            : '~450MB',
+                                        },
+                                        {
+                                          h: 360 as const,
+                                          label: '360p',
+                                          size: isSeriesVod
+                                            ? '~110MB'
+                                            : '~280MB',
                                         },
                                       ]
                                     ).map((qOpt) => {
@@ -11681,7 +12052,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                                   : 'bg-white/[0.06] hover:bg-white/12 text-zinc-300 border-white/15'
                                                 }`}
                                             >
-                                              S{sNum}
+                                              S{sNum}{seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}
                                             </button>
                                           );
                                         })}
@@ -12036,7 +12407,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         }`}
                                     >
                                       <span className="truncate leading-normal">{aName}</span>
-                                      {isSel && <span className="shrink-0">✓</span>}
+                                      {isSel && <span className="shrink-0"></span>}
                                     </button>
                                   );
                                 })}
@@ -12101,53 +12472,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 </button>
                               </div>
                               <div className="max-h-[460px] xl:max-h-[500px] overflow-y-auto no-scrollbar space-y-2 p-1">
-                                {hasDirectHls && (
-                                  <button
-                                    type="button"
-                                    data-vod-compact-option="true"
-                                    data-vod-compact-active-item={activeServer === 'kinogram_hls' ? 'true' : undefined}
-                                    onClick={() => {
-                                      userManuallySelectedServerRef.current = true;
-                                      userSelectedFlTorrentIdRef.current = null;
-                                      setActiveServer('kinogram_hls');
-                                      setOpenVodCompactPanel(null);
-                                      handleStartVodPlayback();
-                                    }}
-                                    className={`w-full px-3.5 py-2.5 rounded-xl text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${activeServer === 'kinogram_hls'
-                                      ? 'bg-[#1e3a8a] text-white border-[#60a5fa] font-extrabold shadow-md'
-                                      : 'bg-white/[0.07] hover:bg-white/15 focus:bg-white focus:text-[#141414] text-zinc-100 border-white/10'
-                                      }`}
-                                  >
-                                    <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold leading-snug">
-                                      <div className="flex items-center gap-1.5">
-                                        <span
-                                          className={`px-2 py-0.5 rounded-md text-[10px] ${activeServer === 'kinogram_hls'
-                                            ? 'bg-white/20 text-white'
-                                            : 'bg-sky-500/25 text-sky-300'
-                                            }`}
-                                        >
-                                          1080p INSTANT
-                                        </span>
-                                        <span className="px-2 py-0.5 rounded-md bg-blue-500/25 text-blue-200 text-[10px]">
-                                          Direct HLS
-                                        </span>
-                                      </div>
-                                      <span className="text-[10px] font-black uppercase tracking-wider opacity-90">
-                                        Fără Buffer
-                                      </span>
-                                    </div>
-                                    <div className="text-xs leading-normal truncate mt-1 opacity-90 font-semibold">
-                                      {(
-                                        resolvedDirectStream?.audioNames || [
-                                          'Original Multi-Audio',
-                                        ]
-                                      )
-                                        .slice(0, 3)
-                                        .join(' • ')}
-                                    </div>
-                                  </button>
-                                )}
-                                {flList.map((flTor) => {
+                                {[...flList]
+                                  .sort((a, b) => {
+                                    const rankQ = (q = ''): number => {
+                                      const u = q.toUpperCase();
+                                      if (u.includes('2160') || u.includes('4K') || u.includes('UHD')) return 2160;
+                                      if (u.includes('1440') || u.includes('2K')) return 1440;
+                                      if (u.includes('1080') || u.includes('FULL HD')) return 1080;
+                                      if (u.includes('720')) return 720;
+                                      if (u.includes('480')) return 480;
+                                      return 1080;
+                                    };
+                                    return (
+                                      rankQ(b.quality) - rankQ(a.quality) ||
+                                      (Number(b.seeders) || 0) - (Number(a.seeders) || 0)
+                                    );
+                                  })
+                                  .map((flTor) => {
                                   const isSelectedTor =
                                     activeServer === 'filelist_torrent' &&
                                     resolvedFileListStream?.torrentId === flTor.id;
@@ -12234,8 +12575,57 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     </button>
                                   );
                                 })}
-
-
+                                {hasDirectHls && (
+                                  <button
+                                    type="button"
+                                    data-vod-compact-option="true"
+                                    data-vod-compact-active-item={activeServer === 'kinogram_hls' ? 'true' : undefined}
+                                    onClick={() => {
+                                      userManuallySelectedServerRef.current = true;
+                                      userSelectedFlTorrentIdRef.current = null;
+                                      setActiveServer('kinogram_hls');
+                                      setOpenVodCompactPanel(null);
+                                      handleStartVodPlayback();
+                                    }}
+                                    className={`w-full px-3.5 py-2.5 rounded-xl text-left border transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${activeServer === 'kinogram_hls'
+                                      ? 'bg-[#1e3a8a] text-white border-[#60a5fa] font-extrabold shadow-md'
+                                      : 'bg-white/[0.07] hover:bg-white/15 focus:bg-white focus:text-[#141414] text-zinc-100 border-white/10'
+                                      }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2 text-[11px] font-extrabold leading-snug">
+                                      <div className="flex items-center gap-1.5">
+                                        <span
+                                          className={`px-2 py-0.5 rounded-md text-[10px] ${activeServer === 'kinogram_hls'
+                                            ? 'bg-white/20 text-white'
+                                            : 'bg-sky-500/25 text-sky-300'
+                                            }`}
+                                        >
+                                          {/2160|4k|uhd/i.test(String(resolvedDirectStream?.sourcePath || ''))
+                                            ? '4K UHD INSTANT'
+                                            : /1080|rutube|iedem/i.test(String(resolvedDirectStream?.sourcePath || '')) ||
+                                                /1080_/i.test(String(resolvedDirectStream?.hlsUrl || ''))
+                                              ? '1080p INSTANT'
+                                              : '720p HD INSTANT'}
+                                        </span>
+                                        <span className="px-2 py-0.5 rounded-md bg-blue-500/25 text-blue-200 text-[10px]">
+                                          Direct HLS
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] font-black uppercase tracking-wider opacity-90">
+                                        Fără Buffer
+                                      </span>
+                                    </div>
+                                    <div className="text-xs leading-normal truncate mt-1 opacity-90 font-semibold">
+                                      {(
+                                        resolvedDirectStream?.audioNames || [
+                                          'Original Multi-Audio',
+                                        ]
+                                      )
+                                        .slice(0, 3)
+                                        .join(' • ')}
+                                    </div>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           );
@@ -12378,7 +12768,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               : 'bg-white/10 hover:bg-white/20 focus:bg-white focus:text-zinc-950 text-zinc-200 border border-white/15'
                               }`}
                           >
-                            {tr(`Sezonul ${sNum}`, `Season ${sNum}`, `Сезон ${sNum}`)}
+                            {tr(
+                              `Sezonul ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                              `Season ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                              `Сезон ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`
+                            )}
                           </button>
                         ))}
                         {episodesForSeason.length > 1 && (
@@ -12567,9 +12961,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   <p className="text-[11px] text-zinc-400 group-focus:text-zinc-600 truncate font-medium">
                                     {detailedMeta?.name || activeVodItem.name} •{' '}
                                     {tr(
-                                      `Sezonul ${selectedSeason}`,
-                                      `Season ${selectedSeason}`,
-                                      `Сезон ${selectedSeason}`
+                                      `Sezonul ${selectedSeason}${seasonYearsMap.get(selectedSeason) ? ` (${seasonYearsMap.get(selectedSeason)})` : ""}`,
+                                      `Season ${selectedSeason}${seasonYearsMap.get(selectedSeason) ? ` (${seasonYearsMap.get(selectedSeason)})` : ""}`,
+                                      `Сезон ${selectedSeason}${seasonYearsMap.get(selectedSeason) ? ` (${seasonYearsMap.get(selectedSeason)})` : ""}`
                                     )}
                                   </p>
                                 )}
@@ -12739,7 +13133,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           <button
                                             key={`hero_dot_${hItem.id}`}
                                             type="button"
-                                            title={`${hItem.name} (★ ${hItem.imdbRating || '8.5'})`}
+                                            title={`${hItem.name} (${hItem.imdbRating || '8.5'})`}
                                             onClick={() => {
                                               setHomeHeroIdx(idx);
                                               handleFocusVodItem(hItem);
@@ -12807,7 +13201,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                             •
                                           </span>
                                           <span className="px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-xs font-black shadow">
-                                            ★ IMDb {heroItem.imdbRating}
+                                            IMDb {heroItem.imdbRating}
                                           </span>
                                         </>
                                       )}
@@ -12904,7 +13298,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               'в Фильмах'
                                             )}{' '}
                                           {heroItem.imdbRating
-                                            ? `(★ ${heroItem.imdbRating})`
+                                            ? `(${heroItem.imdbRating})`
                                             : ''}
                                         </span>
                                       </span>
@@ -13097,8 +13491,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -13179,8 +13572,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-9 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -13264,8 +13656,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -13349,8 +13740,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -13434,8 +13824,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
@@ -13514,8 +13903,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       })()}
                                       {isFav && (
                                         <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          ❤
-                                        </span>
+                                          </span>
                                       )}
                                     </div>
                                     <div className="mt-2.5 px-0.5">
