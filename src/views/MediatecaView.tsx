@@ -83,7 +83,12 @@ import {
 } from '../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
 import { IedemMediatekaSection } from '../components/tv/IedemMediatekaSection';
-import { sortVodItemsByProductionYear } from './smartTvLampaHelpers';
+import {
+  sortVodItemsByProductionYear,
+  isRussianVodItem,
+  isRussianTvShowItem,
+  isVkDirectSourcePath,
+} from './smartTvLampaHelpers';
 
 interface MediatecaViewProps {
   selectedCountry: EnrichedCountry;
@@ -122,10 +127,15 @@ type YearFilterId =
 
 interface CinemetaItem {
   id: string; // IMDb ID e.g. tt15239678 or kp_5304403
+  imdbId?: string;
   kpId?: string; // Kinopoisk ID e.g. 5304403
+  iedemFid?: number;
   moviedb_id?: number | string; // TMDB ID e.g. 693134
   type: 'movie' | 'series';
   name: string;
+  nameOriginal?: string;
+  releaseTitle?: string;
+  country?: string;
   releaseInfo?: string;
   year?: string;
   imdbRating?: string;
@@ -200,6 +210,7 @@ interface ResolvedDirectVodStream {
     episodes: Array<{
       episode: number;
       title: string;
+      thumbnail?: string;
       duration: number;
       audioNames?: string[];
     }>;
@@ -1080,7 +1091,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           (saved && item.type === 'series')
       );
 
-      setActiveVodItem(item);
+      const normalizedVodItem: CinemetaItem =
+        item.type === 'series'
+          ? {
+              ...item,
+              releaseTitle: item.releaseTitle || item.name,
+              name:
+                item.name
+                  .replace(/\s*\(S\d+[^)]*\)\s*/gi, '')
+                  .replace(/[.\s•-]*Сезон\s*\d+.*$/i, '')
+                  .trim() || item.name,
+            }
+          : item;
+
+      setActiveVodItem(normalizedVodItem);
       setSelectedSeason(targetSeason);
       setSelectedEpisode(targetEpisode);
       setActiveServer(targetServer);
@@ -1261,29 +1285,67 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     return () => window.clearTimeout(t);
   }, [pendingResumePromptSec]);
 
+  const cachedDirectSeasonsRef = useRef<{
+    itemId: string;
+    seasons: NonNullable<ResolvedDirectVodStream['seasons']>;
+  }>({ itemId: '', seasons: [] });
+  const fallbackDirectStreamRef = useRef<ResolvedDirectVodStream | null>(null);
+
   // Resolve Direct HLS Stream & Seasons/Episodes directly in browser first (with /api/vod-stream fallback)
   useEffect(() => {
     if (!activeVodItem) {
+      cachedDirectSeasonsRef.current = { itemId: '', seasons: [] };
       setResolvedDirectStream(null);
       return;
     }
 
     let cancelled = false;
     setIsDirectStreamLoading(true);
+    if (cachedDirectSeasonsRef.current.itemId !== activeVodItem.id) {
+      cachedDirectSeasonsRef.current = { itemId: activeVodItem.id, seasons: [] };
+      setResolvedDirectStream(null);
+    } else {
+      setResolvedDirectStream((prev) =>
+        cachedDirectSeasonsRef.current.seasons.length > 0
+          ? {
+              ok: false,
+              type: prev?.type || 'series',
+              seasons: cachedDirectSeasonsRef.current.seasons,
+            }
+          : null
+      );
+    }
 
     const kp =
       activeVodItem.kpId ||
       (activeVodItem.id.startsWith('kp_')
         ? activeVodItem.id.replace(/^kp_/, '')
         : '');
-    const imdb = activeVodItem.id.startsWith('tt') ? activeVodItem.id : '';
+    const imdb =
+      activeVodItem.imdbId ||
+      (activeVodItem.id.startsWith('tt') ? activeVodItem.id : '');
     const title = activeVodItem.name || '';
     const mediaType = activeVodItem.type || '';
     const year = activeVodItem.releaseInfo || activeVodItem.year || '';
 
     const fetchDirectStream = async () => {
       try {
-        const data = await resolveDirectVodStreamClient({
+        fallbackDirectStreamRef.current = null;
+        const isRuVod = isRussianVodItem(activeVodItem);
+        const isRuTvShow = isRussianTvShowItem(activeVodItem);
+        const cleanQuery = (
+          isRuVod
+            ? activeVodItem.name || activeVodItem.nameOriginal || ''
+            : activeVodItem.nameOriginal || activeVodItem.name || ''
+        )
+          .replace(/\(\d{4}\)/g, ' ')
+          .replace(/\[.*?\]/g, ' ')
+          .replace(/•.*$/g, ' ')
+          .replace(/[.\s-]*Сезон\s*\d+\.?/gi, ' ')
+          .replace(/\s{2,}/g, ' ')
+          .trim() || title;
+
+        const directPromise = resolveDirectVodStreamClient({
           kp,
           imdb,
           title,
@@ -1291,43 +1353,103 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           year,
           season: selectedSeason,
           episode: selectedEpisode,
-        });
+        }).catch(() => ({ ok: false } as ResolvedDirectVodStream));
+
+        const torrentPromise = isLocalHomeServer()
+          ? (async () => {
+              const flParams = new URLSearchParams({
+                type: activeVodItem.type,
+                s: String(selectedSeason),
+                e: String(selectedEpisode),
+                q: cleanQuery,
+                ru: isRuVod ? '1' : '0',
+              });
+              if (year) flParams.set('year', String(year).slice(0, 4));
+              if (imdb) flParams.set('imdb', imdb);
+              const flRes = await fetch(
+                buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`)
+              ).catch(() => null);
+              const rawFl = flRes?.ok ? await flRes.json().catch(() => null) : null;
+              return normalizeFileListResolveData(rawFl);
+            })()
+          : Promise.resolve(null);
+
+        const [data, flData] = await Promise.all([directPromise, torrentPromise]);
         if (cancelled) return;
-        setResolvedDirectStream(data);
-        if (data.duration && data.duration > 60) {
-          setLiveDuration(data.duration);
+
+        const mergedSeasons =
+          data?.seasons && data.seasons.length > 0
+            ? data.seasons
+            : cachedDirectSeasonsRef.current.itemId === activeVodItem.id &&
+                cachedDirectSeasonsRef.current.seasons.length > 0
+              ? cachedDirectSeasonsRef.current.seasons
+              : undefined;
+        if (mergedSeasons && mergedSeasons.length > 0) {
+          cachedDirectSeasonsRef.current = {
+            itemId: activeVodItem.id,
+            seasons: mergedSeasons,
+          };
         }
-        if (data?.ok && (data.dashUrl || data.hlsUrl)) {
+
+        const mergedData: ResolvedDirectVodStream = mergedSeasons
+          ? { ...data, seasons: mergedSeasons }
+          : data;
+        const hasDirect = Boolean(
+          mergedData?.ok && (mergedData.dashUrl || mergedData.hlsUrl)
+        );
+        const hasVkDirect = Boolean(
+          hasDirect && isVkDirectSourcePath(mergedData.sourcePath)
+        );
+        const hasTorrent = Boolean(flData?.ok && flData.streamUrl);
+
+        const torrentStreamObj: ResolvedDirectVodStream | null =
+          hasTorrent && flData
+            ? {
+                ok: true,
+                sourcePath: isRuVod
+                  ? 'Kinozal VIP Torrent (4K / 1080p)'
+                  : 'FileList.io VIP Torrent (4K / 1080p)',
+                hlsUrl: flData.streamUrl,
+                duration: flData.durationSec || mergedData?.duration,
+                audioNames: flData.audioNames,
+                ...(mergedSeasons ? { seasons: mergedSeasons } : {}),
+              }
+            : null;
+
+        // Priority Matrix:
+        // 1) Russian TV Shows (ТВ-Шоу): VK Видео Direct -> Kinozal VIP Torrent -> iEdem VIP MediaLibrary
+        // 2) Russian Movies & Series: Kinozal VIP Torrent -> iEdem VIP MediaLibrary
+        // 3) Foreign & Romanian Movies & Series: FileList.io VIP Torrent -> Direct HLS
+        let chosenStream: ResolvedDirectVodStream | null = null;
+        if (isRuTvShow) {
+          if (hasVkDirect) {
+            chosenStream = mergedData;
+            fallbackDirectStreamRef.current = torrentStreamObj;
+          } else if (torrentStreamObj) {
+            chosenStream = torrentStreamObj;
+            fallbackDirectStreamRef.current = hasDirect ? mergedData : null;
+          } else if (hasDirect) {
+            chosenStream = mergedData;
+          }
+        } else {
+          if (torrentStreamObj) {
+            chosenStream = torrentStreamObj;
+            fallbackDirectStreamRef.current = hasDirect ? mergedData : null;
+          } else if (hasDirect) {
+            chosenStream = mergedData;
+          }
+        }
+
+        if (chosenStream) {
+          setResolvedDirectStream(chosenStream);
+          if (chosenStream.duration && chosenStream.duration > 60) {
+            setLiveDuration(chosenStream.duration);
+          }
           setActiveServer('kinogram_hls');
           return;
         }
-        if (isLocalHomeServer()) {
-          const flParams = new URLSearchParams({
-            type: activeVodItem.type,
-            s: String(selectedSeason),
-            e: String(selectedEpisode),
-            q: title,
-          });
-          if (imdb) flParams.set('imdb', imdb);
-          const flRes = await fetch(
-            buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`)
-          ).catch(() => null);
-          const rawFl = flRes?.ok ? await flRes.json().catch(() => null) : null;
-          const flData = normalizeFileListResolveData(rawFl);
-          if (!cancelled && flData?.ok && flData.streamUrl) {
-            setResolvedDirectStream({
-              ok: true,
-              hlsUrl: flData.streamUrl,
-              duration: flData.durationSec,
-              audioNames: flData.audioNames,
-            });
-            if (flData.durationSec && flData.durationSec > 60) {
-              setLiveDuration(flData.durationSec);
-            }
-            setActiveServer('kinogram_hls');
-            return;
-          }
-        }
+
+        setResolvedDirectStream(mergedData);
         if (isFileListExclusiveRomanianTitle(activeVodItem)) {
           setActiveServer('kinogram_hls');
         } else {
@@ -1335,7 +1457,15 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         }
       } catch {
         if (!cancelled) {
-          setResolvedDirectStream({ ok: false });
+          const keptSeasons =
+            cachedDirectSeasonsRef.current.itemId === activeVodItem.id &&
+            cachedDirectSeasonsRef.current.seasons.length > 0
+              ? cachedDirectSeasonsRef.current.seasons
+              : undefined;
+          setResolvedDirectStream({
+            ok: false,
+            ...(keptSeasons ? { type: 'series', seasons: keptSeasons } : {}),
+          });
           if (isFileListExclusiveRomanianTitle(activeVodItem)) {
             setActiveServer('kinogram_hls');
           } else {
@@ -1869,7 +1999,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             )
           ).sort((a, b) => a - b);
 
-          if (validSeasons.length > 0) {
+          if (validSeasons.length > 0 && selectedSeason <= 1 && !validSeasons.includes(selectedSeason)) {
             setSelectedSeason(validSeasons[0]);
             const firstEp = data.meta.videos
               .filter((v) => v.season === validSeasons[0])
@@ -1895,30 +2025,90 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     };
   }, [activeVodItem]);
 
-  // Combine Cinemeta episodes with Kinogram/Collaps episodes (so Russian series ALWAYS have all seasons & episodes!)
+  // Combine Cinemeta episodes with VK/Kinogram/Collaps episodes so multi-season Russian & international series NEVER lose seasons!
   const effectiveVideos = useMemo<SeriesEpisode[]>(() => {
-    if (detailedMeta?.videos && detailedMeta.videos.length > 0) {
-      return detailedMeta.videos;
-    }
+    const epByKey = new Map<string, SeriesEpisode>();
+    const directSeasonSet = new Set<number>();
+    const isRuSeries = isRussianVodItem(activeVodItem);
+
     if (
       resolvedDirectStream?.seasons &&
       resolvedDirectStream.seasons.length > 0
     ) {
-      const list: SeriesEpisode[] = [];
       for (const s of resolvedDirectStream.seasons) {
+        directSeasonSet.add(s.season);
         for (const ep of s.episodes) {
-          list.push({
+          epByKey.set(`${s.season}_${ep.episode}`, {
             id: `kp_s${s.season}_e${ep.episode}`,
             name: ep.title || `Серия ${ep.episode}`,
+            thumbnail: ep.thumbnail,
             season: s.season,
             episode: ep.episode,
           });
         }
       }
-      return list;
     }
-    return [];
-  }, [detailedMeta?.videos, resolvedDirectStream?.seasons]);
+
+    if (detailedMeta?.videos && detailedMeta.videos.length > 0) {
+      for (const v of detailedMeta.videos) {
+        const sNum = Number(v.season);
+        const epNum = Number(v.episode ?? v.number);
+        if (!sNum || sNum <= 0 || !epNum) continue;
+        const key = `${sNum}_${epNum}`;
+        const prev = epByKey.get(key);
+        if (prev) {
+          const keepDirectRuName = Boolean(
+            isRuSeries &&
+              prev.name &&
+              /[а-яёА-ЯЁ]/.test(prev.name) &&
+              !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(prev.name)
+          );
+          epByKey.set(key, {
+            ...v,
+            ...prev,
+            name: keepDirectRuName ? prev.name : v.name || prev.name,
+            thumbnail: prev.thumbnail || v.thumbnail,
+            season: sNum,
+            episode: epNum,
+          });
+        } else if (!(isRuSeries && directSeasonSet.has(sNum))) {
+          epByKey.set(key, {
+            ...v,
+            season: sNum,
+            episode: epNum,
+          });
+        }
+      }
+    }
+
+    if (
+      activeVodItem?.type === 'series' &&
+      selectedSeason > 0 &&
+      !Array.from(epByKey.values()).some((v) => v.season === selectedSeason)
+    ) {
+      const epMax = Math.max(1, selectedEpisode || 1);
+      for (let ep = 1; ep <= epMax; ep++) {
+        epByKey.set(`${selectedSeason}_${ep}`, {
+          id: `pending_s${selectedSeason}_e${ep}`,
+          name: `Episodul ${ep}`,
+          season: selectedSeason,
+          episode: ep,
+        });
+      }
+    }
+
+    return Array.from(epByKey.values()).sort(
+      (a, b) =>
+        (a.season || 1) - (b.season || 1) ||
+        (a.episode || a.number || 1) - (b.episode || b.number || 1)
+    );
+  }, [
+    activeVodItem,
+    detailedMeta?.videos,
+    resolvedDirectStream?.seasons,
+    selectedSeason,
+    selectedEpisode,
+  ]);
 
   const availableSeasons = useMemo(() => {
     if (effectiveVideos.length === 0) return [];
@@ -2649,9 +2839,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 (resolvedDirectStream.dashUrl ||
                   resolvedDirectStream.hlsUrl) ? (
                 <VodNativeHlsPlayer
-                  key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                  key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${resolvedDirectStream.sourcePath || 'direct'}`}
                   dashUrl={resolvedDirectStream.dashUrl}
                   hlsUrl={resolvedDirectStream.hlsUrl}
+                  preferredQuality="max"
                   audioTrackLabels={resolvedDirectStream.audioNames}
                   startAtSeconds={resumeStartSeconds}
                   imdbId={
@@ -2692,13 +2883,19 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       preferredSubLang
                     );
                   }}
-                  onStreamError={() =>
+                  onStreamError={() => {
+                    if (fallbackDirectStreamRef.current) {
+                      const nextStream = fallbackDirectStreamRef.current;
+                      fallbackDirectStreamRef.current = null;
+                      setResolvedDirectStream(nextStream);
+                      return;
+                    }
                     setActiveServer(
                       activeVodItem.id.startsWith('kp_')
                         ? 'kinogram_embed'
                         : 'vidspark'
-                    )
-                  }
+                    );
+                  }}
                 />
               ) : isFileListExclusiveRomanianTitle(activeVodItem) ? (
                 <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
@@ -3794,7 +3991,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       {/* iEDEM MEDIATEKA (1080P & 4K RU MOVIES & SERIES) */}
       {activeTab === 'iedem' && canProfileAccessIedem(activeProfile) && (
         <div className="rounded-2xl bg-zinc-950 p-4 sm:p-5 border border-zinc-800">
-          <IedemMediatekaSection uiLang="ro" />
+          <IedemMediatekaSection
+            uiLang="ro"
+            onOpenVodItem={(item, _autoPlay, s, e) =>
+              handleOpenVodItem(item, s, e)
+            }
+          />
         </div>
       )}
 

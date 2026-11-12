@@ -439,7 +439,22 @@ export function useAudioPlayer() {
       });
 
       navigator.mediaSession.setActionHandler('play', () => {
+        const handledByTvHome =
+          typeof window !== 'undefined' &&
+          !window.dispatchEvent(
+            new CustomEvent('aether:tv-home-play-request', { cancelable: true })
+          );
+        if (handledByTvHome) {
+          return;
+        }
         const state = useRadioStore.getState();
+        if (
+          typeof document !== 'undefined' &&
+          document.documentElement.classList.contains('smart-tv-mode') &&
+          state.playerStatus !== 'playing'
+        ) {
+          return;
+        }
         if (state.currentStation) {
           state.triggerStreamReload();
         }

@@ -15,7 +15,7 @@ import { MediatecaView } from './views/MediatecaView';
 import { CountriesView } from './views/CountriesView';
 import { FavoritesView } from './views/FavoritesView';
 import { SettingsView } from './views/SettingsView';
-import { SmartTvLampaView } from './views/SmartTvLampaView';
+import { SmartTvLampaView } from './views/SmartTvLampaViewCore';
 
 export const App: React.FC = () => {
   useTheme();

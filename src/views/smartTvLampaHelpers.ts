@@ -259,6 +259,19 @@ export async function resolveSeriesEpisodeStats(
         }
       }
 
+      let bestStats: SeriesEpisodeStats | null = null;
+      const considerStats = (cand: SeriesEpisodeStats | null) => {
+        if (!cand || cand.episodesCount <= 0) return;
+        if (
+          !bestStats ||
+          cand.seasonsCount > bestStats.seasonsCount ||
+          (cand.seasonsCount === bestStats.seasonsCount &&
+            cand.episodesCount > bestStats.episodesCount)
+        ) {
+          bestStats = cand;
+        }
+      };
+
       if (targetImdb) {
         const res = await fetch(
           `https://v3-cinemeta.strem.io/meta/series/${targetImdb}.json`
@@ -279,22 +292,24 @@ export async function resolveSeriesEpisodeStats(
             }
             const seasonsCount = Object.keys(episodesBySeason).length;
             if (totalEps > 0) {
-              const stats: SeriesEpisodeStats = {
+              considerStats({
                 seasonsCount: Math.max(1, seasonsCount),
                 episodesCount: totalEps,
                 episodesBySeason,
-              };
-              SERIES_EP_STATS_MEM_CACHE.set(item.id, stats);
-              if (targetImdb !== item.id) {
-                SERIES_EP_STATS_MEM_CACHE.set(targetImdb, stats);
+              });
+              if (!rawKp && !isRussianVodItem(item) && bestStats) {
+                SERIES_EP_STATS_MEM_CACHE.set(item.id, bestStats);
+                if (targetImdb !== item.id) {
+                  SERIES_EP_STATS_MEM_CACHE.set(targetImdb, bestStats);
+                }
+                return bestStats;
               }
-              return stats;
             }
           }
         }
       }
 
-      // 3. Kinopoisk /seasons endpoint
+      // 3. Kinopoisk /seasons endpoint + /api/vod-stream multi-season catalog for Russian series/shows
       if (rawKp) {
         const kpRes = await fetch(
           `https://kinopoiskapiunofficial.tech/api/v2.2/films/${encodeURIComponent(
@@ -305,9 +320,9 @@ export async function resolveSeriesEpisodeStats(
               'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
             },
           }
-        );
-        if (kpRes.ok) {
-          const kpSeasons = await kpRes.json();
+        ).catch(() => null);
+        if (kpRes?.ok) {
+          const kpSeasons = await kpRes.json().catch(() => null);
           if (Array.isArray(kpSeasons?.items) && kpSeasons.items.length > 0) {
             const episodesBySeason: Record<number, number> = {};
             let totalEps = 0;
@@ -322,19 +337,63 @@ export async function resolveSeriesEpisodeStats(
               }
             }
             if (totalEps > 0) {
-              const stats: SeriesEpisodeStats = {
+              considerStats({
                 seasonsCount: Math.max(
                   1,
                   Object.keys(episodesBySeason).length || Number(kpSeasons.total) || 1
                 ),
                 episodesCount: totalEps,
                 episodesBySeason,
-              };
-              SERIES_EP_STATS_MEM_CACHE.set(item.id, stats);
-              return stats;
+              });
             }
           }
         }
+      }
+
+      if (rawKp || isRussianVodItem(item)) {
+        const qs = new URLSearchParams({
+          type: 'series',
+          season: '1',
+          episode: '1',
+        });
+        if (rawKp) qs.set('kp', rawKp);
+        if (targetImdb) qs.set('imdb', targetImdb);
+        if (item.name) qs.set('title', item.name);
+        const vodRes = await fetch(`/api/vod-stream?${qs.toString()}`).catch(
+          () => null
+        );
+        if (vodRes?.ok) {
+          const vodData = await vodRes.json().catch(() => null);
+          if (Array.isArray(vodData?.seasons) && vodData.seasons.length > 0) {
+            const episodesBySeason: Record<number, number> = {};
+            let totalEps = 0;
+            for (const sObj of vodData.seasons) {
+              const sNum = Number(sObj?.season) || 1;
+              const epLen = Array.isArray(sObj?.episodes)
+                ? sObj.episodes.length
+                : 0;
+              if (sNum > 0 && epLen > 0) {
+                episodesBySeason[sNum] = epLen;
+                totalEps += epLen;
+              }
+            }
+            if (totalEps > 0) {
+              considerStats({
+                seasonsCount: Math.max(1, Object.keys(episodesBySeason).length),
+                episodesCount: totalEps,
+                episodesBySeason,
+              });
+            }
+          }
+        }
+      }
+
+      if (bestStats) {
+        SERIES_EP_STATS_MEM_CACHE.set(item.id, bestStats);
+        if (targetImdb && targetImdb !== item.id) {
+          SERIES_EP_STATS_MEM_CACHE.set(targetImdb, bestStats);
+        }
+        return bestStats;
       }
     } catch {
       // ignore network error
@@ -373,6 +432,13 @@ export function formatSeriesCardBadgeText(
   );
 }
 
+const CURATED_RU_TV_SHOW_KP_IDS = new Set<number>([
+  5508530, 5318639, 5423568, 4761950, 1178436, 5367740, 5189043, 5459661,
+  5320563, 5326185, 911219, 5267860, 5255425, 5463968, 14171220, 5463970,
+  5617914, 5582628, 5331422, 7429055, 5500883, 842497, 5509905, 5354824,
+  5189047, 5320550, 5618003, 4374613, 573840, 1344492, 5190505,
+]);
+
 export function isRussianVodItem(
   item: Partial<CinemetaItem> | null | undefined
 ): boolean {
@@ -395,6 +461,18 @@ export function isRussianVodItem(
       return false;
     }
   }
+  const rawKpIdNum = Number(
+    item.kpId ||
+      (String(item.id || '').startsWith('kp_')
+        ? String(item.id || '').replace(/^kp_/, '')
+        : 0)
+  );
+  if (
+    (rawKpIdNum >= 9001000 && rawKpIdNum <= 9001999) ||
+    CURATED_RU_TV_SHOW_KP_IDS.has(rawKpIdNum)
+  ) {
+    return true;
+  }
   const hasCyrillicName = /[а-яёА-ЯЁ]/.test(String(item.name || ''));
   const hasLatinOrig = /[a-zA-Z]/.test(String(item.nameOriginal || ''));
   if (hasCyrillicName && !hasLatinOrig) {
@@ -404,6 +482,48 @@ export function isRussianVodItem(
     return true;
   }
   return false;
+}
+
+export function isRussianTvShowItem(
+  item: Partial<CinemetaItem> | null | undefined
+): boolean {
+  if (!item) return false;
+  const rawKpIdNum = Number(
+    item.kpId ||
+      (String(item.id || '').startsWith('kp_')
+        ? String(item.id || '').replace(/^kp_/, '')
+        : 0)
+  );
+  if (
+    (rawKpIdNum >= 9001000 && rawKpIdNum <= 9001999) ||
+    CURATED_RU_TV_SHOW_KP_IDS.has(rawKpIdNum)
+  ) {
+    return true;
+  }
+  if (!isRussianVodItem(item)) return false;
+  const genresText = Array.isArray(item.genres) ? item.genres.join(' ') : '';
+  if (
+    /(тв-шоу|реальное\s*тв|ток-шоу|игра|церемония|концерт|reality|talk[\s-]*show|game[\s-]*show)/i.test(
+      genresText
+    )
+  ) {
+    return true;
+  }
+  if (/VK\s*Видео/i.test(String(item.networkBadge || ''))) {
+    return true;
+  }
+  if (item.type === 'movie') return false;
+  const titleText = `${item.name || ''} ${item.releaseTitle || ''}`;
+  return /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
+    titleText
+  );
+}
+
+export function isVkDirectSourcePath(sourcePath?: string | null): boolean {
+  return Boolean(
+    sourcePath &&
+      /(?:VK\s*Видео|VK\s*\/\s*RUTUBE|RUTUBE\s+Official)/i.test(sourcePath)
+  );
 }
 
 export function getVodCardRatingInfo(
@@ -1051,16 +1171,13 @@ export function saveWatchProgressMap(
   profileId = 'p1'
 ): void {
   const cleanProf = encodeURIComponent(profileId || 'p1');
+  const payload = JSON.stringify(map);
   try {
-    localStorage.setItem(
-      getWatchProgressKeyForProfile(profileId),
-      JSON.stringify(map)
-    );
+    localStorage.setItem(getWatchProgressKeyForProfile(profileId), payload);
     localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
   } catch {
     // ignore
   }
-  const payload = JSON.stringify(map);
   try {
     fetch(`/api/tv-progress?profileId=${cleanProf}`, {
       method: 'POST',
@@ -1070,7 +1187,9 @@ export function saveWatchProgressMap(
   } catch {
     // ignore
   }
-  if (isLocalHomeServer()) {
+  const servedByLocalNode =
+    typeof window !== 'undefined' && window.location.port === '8769';
+  if (isLocalHomeServer() && !servedByLocalNode) {
     try {
       fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
         method: 'POST',

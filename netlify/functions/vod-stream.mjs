@@ -69,7 +69,16 @@ function decodeVkHtmlEntities(str) {
     .replace(/&raquo;/g, '»')
     .replace(/&ndash;/g, '–')
     .replace(/&mdash;/g, '—')
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = Number(dec);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : _;
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : _;
+    })
     .replace(/\\\//g, '/')
+    .normalize('NFC')
     .trim();
 }
 
@@ -115,11 +124,12 @@ async function fetchVkRawSectionList(oid, section) {
 function wrapTvProxyUrl(
   rawUrl,
   refUrl = 'https://vkvideo.ru/',
-  ua = DEFAULT_VOD_UA
+  ua = DEFAULT_VOD_UA,
+  extraParams = ''
 ) {
   if (!rawUrl) return '';
   if (String(rawUrl).startsWith('/api/tv-proxy')) return String(rawUrl);
-  return `/api/tv-proxy?url=${encodeURIComponent(rawUrl)}&ref=${encodeURIComponent(refUrl)}&ua=${encodeURIComponent(ua)}`;
+  return `/api/tv-proxy?url=${encodeURIComponent(rawUrl)}&ref=${encodeURIComponent(refUrl)}&ua=${encodeURIComponent(ua)}${extraParams}`;
 }
 
 async function extractVkVideoStreams(oid, vid) {
@@ -150,18 +160,24 @@ async function extractVkVideoStreams(oid, vid) {
       .filter((q) => q.height >= 720 && q.url)
       .sort((a, b) => b.height - a.height);
 
-    if (qualities.length === 0) return null;
+    if (qualities.length === 0 && !hlsUrl) return null;
     const bestMp4 = qualities[0];
+    const vkIdParam = `&vk=${encodeURIComponent(`${oid}_${vid}`)}`;
     const proxiedHls = hlsUrl
-      ? wrapTvProxyUrl(hlsUrl, 'https://vkvideo.ru/', DEFAULT_VOD_UA)
+      ? wrapTvProxyUrl(hlsUrl, 'https://vkvideo.ru/', DEFAULT_VOD_UA, vkIdParam)
       : '';
     const proxiedBestMp4 = bestMp4?.url
-      ? wrapTvProxyUrl(bestMp4.url, 'https://vkvideo.ru/', DEFAULT_VOD_UA)
+      ? wrapTvProxyUrl(
+          bestMp4.url,
+          'https://vkvideo.ru/',
+          DEFAULT_VOD_UA,
+          `${vkIdParam}&vkq=${bestMp4.height}`
+        )
       : '';
     return {
-      bestUrl: proxiedBestMp4 || proxiedHls,
+      bestUrl: proxiedHls || proxiedBestMp4,
       hlsUrl: proxiedHls || proxiedBestMp4,
-      rawHlsUrl: bestMp4?.url || hlsUrl,
+      rawHlsUrl: hlsUrl || bestMp4?.url,
       maxHeight: qualities[0]?.height || 1080,
       qualities: qualities.map((q) => ({
         id: `${q.height}p`,
@@ -174,7 +190,12 @@ async function extractVkVideoStreams(oid, vid) {
               : q.height >= 1080
                 ? 'Full HD (1080p)'
                 : `${q.height}p HD`,
-        url: wrapTvProxyUrl(q.url, 'https://vkvideo.ru/', DEFAULT_VOD_UA),
+        url: wrapTvProxyUrl(
+          q.url,
+          'https://vkvideo.ru/',
+          DEFAULT_VOD_UA,
+          `${vkIdParam}&vkq=${q.height}`
+        ),
       })),
     };
   } catch {
@@ -185,6 +206,67 @@ async function extractVkVideoStreams(oid, vid) {
 }
 
 const VK_CURATED_SHOWS = [
+  {
+    kpIds: ['5508530'],
+    titleRe:
+      /^(?!.*в\s+(?:африке|джунглях|тропиках))(?:шоу\s+)?зв[её]зды(?:\b|[.\s•(-]|$)/i,
+    buildSeasons: async () => {
+      const raw = await fetchVkRawSectionList(-220754053, 'all');
+      const seasonsMap = new Map();
+      let lastSeenSeason = 1;
+      for (const item of [...raw].reverse()) {
+        const title = decodeVkHtmlEntities(item[3]);
+        const dur = parseDurationToSeconds(item[5]);
+        if (dur < 2100) continue;
+        if (
+          !/^Зв[её]зды(?:\s+\d+)?[.\s:|]/i.test(title) ||
+          /тизер|трейлер|анонс|скоро\s+в\s+vk/i.test(title) ||
+          /в\s+(?:африке|джунглях|тропиках)/i.test(title)
+        ) {
+          continue;
+        }
+        const explicitSeasonMatch =
+          title.match(/^Зв[её]зды\s+(\d+)\s*[.:|]/i) ||
+          title.match(/(\d+)\s*сезон/i);
+        const isMainSeason1Ep =
+          !explicitSeasonMatch &&
+          /^Зв[её]зды\.\s*(?:Фестиваль|Дуэль|Финал)\b/i.test(title);
+        const sNum = explicitSeasonMatch
+          ? Number(explicitSeasonMatch[1]) || 1
+          : isMainSeason1Ep
+            ? 1
+            : lastSeenSeason;
+        if (explicitSeasonMatch || isMainSeason1Ep) {
+          lastSeenSeason = sNum;
+        }
+        if (!seasonsMap.has(sNum)) seasonsMap.set(sNum, []);
+        const list = seasonsMap.get(sNum);
+        const epNumMatch = title.match(/(\d+)\s*(?:выпуск|серия)\b/i);
+        const parsedEp = epNumMatch ? Number(epNumMatch[1]) : 0;
+        const nextSequentialEp =
+          (list.length > 0 ? list[list.length - 1].episode : 0) + 1;
+        const epNum =
+          parsedEp > 0 && !list.some((x) => x.episode === parsedEp)
+            ? parsedEp
+            : nextSequentialEp;
+        list.push({
+          season: sNum,
+          episode: epNum,
+          oid: item[0],
+          vid: item[1],
+          thumbnail: String(item[2] || '').replace(/\\\//g, '/'),
+          title,
+          duration: dur,
+        });
+      }
+      return [...seasonsMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([season, episodes]) => ({
+          season,
+          episodes: episodes.sort((a, b) => a.episode - b.episode),
+        }));
+    },
+  },
   {
     kpIds: ['5318639'],
     titleRe: /шоу\s*«?кстати»?/i,
@@ -1227,10 +1309,13 @@ async function fetchKinogramEmbed(path, userAgent = '') {
 }
 
 const KNOWN_SHOW_TITLE_TO_KP = [
-  { re: /^(новые\s+)?зв[её]зды\s+в\s+африке$/i, kpId: '4761950' },
-  { re: /^(камеди\s+клаб|comedy\s+club)$/i, kpId: '471505' },
-  { re: /^(шоу\s+)?зв[её]зды$/i, kpId: '5508530' },
-  { re: /^жизнь\s+заново$/i, kpId: '7958160' },
+  { re: /^(новые\s+)?зв[её]зды\s+в\s+африке(?:\b|[.\s•(-]|$)/i, kpId: '4761950' },
+  { re: /^(камеди\s+клаб|comedy\s+club)(?:\b|[.\s•(-]|$)/i, kpId: '471505' },
+  {
+    re: /^(?!.*в\s+(?:африке|джунглях|тропиках))(?:шоу\s+)?зв[её]зды(?:\b|[.\s•(-]|$)/i,
+    kpId: '5508530',
+  },
+  { re: /^жизнь\s+заново(?:\b|[.\s•(-]|$)/i, kpId: '7958160' },
 ];
 
 async function lookupKpIdsByTitle(title, mediaType = '', year = '') {
@@ -1623,22 +1708,50 @@ async function resolveFromIedemVip({
   const validSeasons = fetchedSeasons.filter((s) => s.episodes.length > 0);
   if (validSeasons.length === 0) return null;
 
+  const serializedIedemSeasons = validSeasons.map((s) => ({
+    season: s.season,
+    episodes: s.episodes.map((e) => ({
+      episode: e.episode,
+      title: e.title,
+      duration: e.duration,
+      audioNames: e.audioNames,
+    })),
+  }));
+
   const exactSeason = validSeasons.find(
     (s) => Number(s.season) === Number(season)
   );
-  if (!exactSeason) return null;
+  if (!exactSeason) {
+    return {
+      ok: false,
+      type: 'series',
+      seasons: serializedIedemSeasons,
+      error: 'Requested season not available on iEdem VIP',
+    };
+  }
   const targetSeasonObj = exactSeason;
-  const targetEpObj =
-    targetSeasonObj.episodes.find(
-      (e) => Number(e.episode) === Number(episode)
-    ) || targetSeasonObj.episodes[0];
+  const targetEpObj = targetSeasonObj.episodes.find(
+    (e) => Number(e.episode) === Number(episode)
+  );
 
-  if (!targetEpObj?.url) return null;
+  if (!targetEpObj?.url) {
+    return {
+      ok: false,
+      type: 'series',
+      seasons: serializedIedemSeasons,
+      error: 'Requested episode not available on iEdem VIP',
+    };
+  }
 
   // Verify the episode is a full episode (not a 12-second season teaser placeholder)
   const isFullEp = await verifyIedemHlsNotTrailer(targetEpObj.url);
   if (!isFullEp) {
-    return null;
+    return {
+      ok: false,
+      type: 'series',
+      seasons: serializedIedemSeasons,
+      error: 'iEdem VIP returned trailer placeholder',
+    };
   }
 
   const proxiedUrl = wrapTvProxyUrl(
@@ -1660,15 +1773,7 @@ async function resolveFromIedemVip({
     proxyHlsUrl: proxiedUrl,
     rawHlsUrl: targetEpObj.url,
     userAgent: effectiveUa,
-    seasons: validSeasons.map((s) => ({
-      season: s.season,
-      episodes: s.episodes.map((e) => ({
-        episode: e.episode,
-        title: e.title,
-        duration: e.duration,
-        audioNames: e.audioNames,
-      })),
-    })),
+    seasons: serializedIedemSeasons,
   };
 }
 
@@ -1749,8 +1854,29 @@ async function resolveFromVkVideoSearch({
           if (x.duration < 1200 || x.duration > 14400 || isTrailerOrJunk(x.title)) {
             return false;
           }
-          const seasonInTitle = String(x.title || '').match(/(\d+)\s*сезон/i);
-          if (seasonInTitle && Number(seasonInTitle[1]) !== Number(season)) {
+          const explicitSeasonNum = (() => {
+            const mSez =
+              String(x.title || '').match(/(\d+)\s*сезон/i) ||
+              String(x.title || '').match(/сезон\s*(\d+)/i) ||
+              String(x.title || '').match(/\bs0*(\d{1,2})(?:e\d{1,3}|\b)/i);
+            if (mSez) return Number(mSez[1]);
+            for (const cand of candidates) {
+              const escaped = String(cand || '')
+                .trim()
+                .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              if (!escaped) continue;
+              const mAfterTitle = String(x.title || '').match(
+                new RegExp(`(?:^|\\b)${escaped}\\s+(\\d{1,2})\\s*[.:|\\-]`, 'i')
+              );
+              if (mAfterTitle) return Number(mAfterTitle[1]);
+            }
+            return 0;
+          })();
+          if (Number(season) > 1) {
+            if (explicitSeasonNum !== Number(season)) {
+              return false;
+            }
+          } else if (explicitSeasonNum > 1) {
             return false;
           }
           const nt = normCompareTitle(x.title);
@@ -1864,6 +1990,60 @@ async function resolveFromAllohaEmbed({ imdb, kp, season = 1, episode = 1 }) {
   }
 }
 
+function isGenericBalancerEpTitle(title) {
+  const t = String(title || '').trim();
+  if (!t) return true;
+  if (/^(?:Episodul|Episode|Серия|Выпуск)\s*\d+$/i.test(t)) return true;
+  if (/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(t)) return true;
+  if (/^Сезон\s*\d+\s*•\s*Выпуск\s*\d+$/i.test(t)) return true;
+  return false;
+}
+
+function mergeSeasonsCatalogs(...catalogs) {
+  const seasonMap = new Map();
+  for (const cat of catalogs) {
+    if (!Array.isArray(cat)) continue;
+    for (const s of cat) {
+      const sNum = Number(s?.season);
+      if (!sNum || sNum <= 0 || !Array.isArray(s?.episodes)) continue;
+      if (!seasonMap.has(sNum)) {
+        seasonMap.set(sNum, new Map());
+      }
+      const epMap = seasonMap.get(sNum);
+      for (const ep of s.episodes) {
+        const epNum = Number(ep?.episode);
+        if (!epNum || epNum <= 0) continue;
+        const prev = epMap.get(epNum);
+        if (!prev) {
+          epMap.set(epNum, { ...ep, episode: epNum });
+        } else {
+          const preferNewTitle =
+            isGenericBalancerEpTitle(prev.title) &&
+            !isGenericBalancerEpTitle(ep.title);
+          epMap.set(epNum, {
+            ...prev,
+            title: preferNewTitle ? ep.title : prev.title || ep.title,
+            thumbnail: prev.thumbnail || ep.thumbnail,
+            duration: prev.duration || ep.duration || 0,
+            audioNames:
+              Array.isArray(prev.audioNames) && prev.audioNames.length > 0
+                ? prev.audioNames
+                : ep.audioNames,
+          });
+        }
+      }
+    }
+  }
+  const out = [...seasonMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([season, epMap]) => ({
+      season,
+      episodes: [...epMap.values()].sort((a, b) => a.episode - b.episode),
+    }))
+    .filter((s) => s.episodes.length > 0);
+  return out.length > 0 ? out : undefined;
+}
+
 export async function resolveVodStreamData({
   kp,
   imdb,
@@ -1877,6 +2057,7 @@ export async function resolveVodStreamData({
   const effectiveUa = pickSafeDesktopUa(userAgent);
   const cleanKp = String(kp || '').trim();
   const cleanTitle = String(title || '').trim();
+  let fallbackSeasonsCatalog = undefined;
 
   // 1. Check Official VK Video Curated Playlists & Verified Communities first
   const matchedVkShow = VK_CURATED_SHOWS.find(
@@ -1887,14 +2068,27 @@ export async function resolveVodStreamData({
   if (matchedVkShow) {
     const vkSeasons = await matchedVkShow.buildSeasons();
     if (Array.isArray(vkSeasons) && vkSeasons.length > 0) {
-      const targetSeason =
-        vkSeasons.find((s) => Number(s.season) === Number(season)) ||
-        vkSeasons[0];
-      const targetEp =
-        targetSeason.episodes.find(
-          (e) => Number(e.episode) === Number(episode)
-        ) || targetSeason.episodes[0];
-      if (targetEp) {
+      const serializedVkSeasons = vkSeasons.map((s) => ({
+        season: s.season,
+        episodes: s.episodes.map((ep) => ({
+          episode: ep.episode,
+          title: ep.title,
+          thumbnail: ep.thumbnail,
+          duration: ep.duration,
+          audioNames: ['Русский (VK Видео Direct)'],
+        })),
+      }));
+      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+        fallbackSeasonsCatalog,
+        serializedVkSeasons
+      );
+      const targetSeason = vkSeasons.find(
+        (s) => Number(s.season) === Number(season)
+      );
+      const targetEp = targetSeason?.episodes.find(
+        (e) => Number(e.episode) === Number(episode)
+      );
+      if (targetSeason && targetEp) {
         if (targetEp.rutubeVideoId) {
           const hlsUrl = await fetchRutubePlayHls(targetEp.rutubeVideoId);
           if (hlsUrl) {
@@ -1909,45 +2103,29 @@ export async function resolveVodStreamData({
               audioNames: ['Русский (Оригинал • 1080p)'],
               hlsUrl,
               userAgent: effectiveUa,
-              seasons: vkSeasons.map((s) => ({
-                season: s.season,
-                episodes: s.episodes.map((ep) => ({
-                  episode: ep.episode,
-                  title: ep.title,
-                  thumbnail: ep.thumbnail,
-                  duration: ep.duration,
-                  audioNames: ['Русский (Оригинал • 1080p)'],
-                })),
-              })),
+              seasons: fallbackSeasonsCatalog,
             };
           }
         }
-        const vkStream = await extractVkVideoStreams(targetEp.oid, targetEp.vid);
-        if (vkStream && vkStream.bestUrl) {
-          return {
-            ok: true,
-            type: 'series',
-            sourcePath: `VK Видео Direct (${vkStream.maxHeight >= 2160 ? '4K UHD' : '1080p Full HD'})`,
-            season: targetSeason.season,
-            episode: targetEp.episode,
-            title: targetEp.title,
-            duration: targetEp.duration,
-            audioNames: ['Русский (VK Видео Direct)'],
-            hlsUrl: vkStream.bestUrl,
-            rawHlsUrl: vkStream.hlsUrl || vkStream.bestUrl,
-            vkQualities: vkStream.qualities,
-            userAgent: effectiveUa,
-            seasons: vkSeasons.map((s) => ({
-              season: s.season,
-              episodes: s.episodes.map((ep) => ({
-                episode: ep.episode,
-                title: ep.title,
-                thumbnail: ep.thumbnail,
-                duration: ep.duration,
-                audioNames: ['Русский (VK Видео Direct)'],
-              })),
-            })),
-          };
+        if (targetEp.oid && targetEp.vid) {
+          const vkStream = await extractVkVideoStreams(targetEp.oid, targetEp.vid);
+          if (vkStream && vkStream.bestUrl) {
+            return {
+              ok: true,
+              type: 'series',
+              sourcePath: `VK Видео Direct (${vkStream.maxHeight >= 2160 ? '4K UHD' : '1080p Full HD'})`,
+              season: targetSeason.season,
+              episode: targetEp.episode,
+              title: targetEp.title,
+              duration: targetEp.duration,
+              audioNames: ['Русский (VK Видео Direct)'],
+              hlsUrl: vkStream.bestUrl,
+              rawHlsUrl: vkStream.hlsUrl || vkStream.bestUrl,
+              vkQualities: vkStream.qualities,
+              userAgent: effectiveUa,
+              seasons: fallbackSeasonsCatalog,
+            };
+          }
         }
       }
     }
@@ -1967,13 +2145,144 @@ export async function resolveVodStreamData({
       episode,
       effectiveUa
     );
-    if (rutubeRes && rutubeRes.ok) {
-      return rutubeRes;
-    }
     if (rutubeRes && Array.isArray(rutubeRes.seasons) && rutubeRes.seasons.length > 0) {
-      rutubeFallbackRes = rutubeRes;
+      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+        fallbackSeasonsCatalog,
+        rutubeRes.seasons
+      );
+      rutubeFallbackRes = {
+        ...rutubeRes,
+        seasons: fallbackSeasonsCatalog,
+      };
+    }
+    if (rutubeRes && rutubeRes.ok) {
+      return {
+        ...rutubeRes,
+        seasons: fallbackSeasonsCatalog || rutubeRes.seasons,
+      };
     }
   }
+
+  const isRuTvShowQuery =
+    Boolean(matchedVkShow || matchedRutubeShow) ||
+    (Number(cleanKp) >= 9001000 && Number(cleanKp) <= 9001999) ||
+    /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
+      cleanTitle
+    );
+  const isRussianNativeQuery = Boolean(
+    isRuTvShowQuery ||
+      /[а-яА-ЯёЁ]/.test(cleanTitle) ||
+      (cleanKp && !imdb)
+  );
+
+  // For Russian TV Shows (ТВ-Шоу / Emisiuni RU), prioritize VK Видео Direct (#1) before iEdem MediaLibrary & Kinogram!
+  if (isRuTvShowQuery && mediaType !== 'movie') {
+    const titleInfo = await resolveTitleCandidatesAndYear({
+      imdb,
+      kp: cleanKp,
+      title: cleanTitle,
+      mediaType: mediaType || 'series',
+      year,
+    });
+    const vkShowRes = await resolveFromVkVideoSearch({
+      ...titleInfo,
+      season,
+      episode,
+      effectiveUa,
+    });
+    if (vkShowRes && vkShowRes.ok) {
+      return {
+        ...vkShowRes,
+        ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+      };
+    }
+  }
+
+  const resolveSecondaryProviders = async () => {
+    const titleInfo = await resolveTitleCandidatesAndYear({
+      imdb,
+      kp: cleanKp,
+      title: cleanTitle,
+      mediaType,
+      year,
+    });
+
+    if (isRuTvShowQuery && (cleanKp || /[а-яА-ЯёЁ]/.test(cleanTitle) || titleInfo.ruTitle)) {
+      const vkSearchFirst = await resolveFromVkVideoSearch({
+        ...titleInfo,
+        season,
+        episode,
+        effectiveUa,
+      });
+      if (vkSearchFirst && vkSearchFirst.ok) {
+        return {
+          ...vkSearchFirst,
+          ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+        };
+      }
+    }
+
+    const iedemRes = await resolveFromIedemVip({
+      ...titleInfo,
+      season,
+      episode,
+      effectiveUa,
+    });
+    if (iedemRes && Array.isArray(iedemRes.seasons) && iedemRes.seasons.length > 0) {
+      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+        fallbackSeasonsCatalog,
+        iedemRes.seasons
+      );
+    }
+    if (iedemRes && iedemRes.ok) {
+      return {
+        ...iedemRes,
+        seasons: fallbackSeasonsCatalog || iedemRes.seasons,
+      };
+    }
+
+    if (!isRuTvShowQuery && (cleanKp || /[а-яА-ЯёЁ]/.test(cleanTitle) || titleInfo.ruTitle)) {
+      const vkSearchRes = await resolveFromVkVideoSearch({
+        ...titleInfo,
+        season,
+        episode,
+        effectiveUa,
+      });
+      if (vkSearchRes && vkSearchRes.ok) {
+        return {
+          ...vkSearchRes,
+          ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+        };
+      }
+    }
+
+    const embedUrl = await resolveFromAllohaEmbed({
+      imdb,
+      kp: cleanKp,
+      season,
+      episode,
+    });
+    if (rutubeFallbackRes || fallbackSeasonsCatalog) {
+      return {
+        ...(rutubeFallbackRes || {
+          ok: false,
+          type: 'series',
+          error: 'Requested season or episode not available on direct VOD providers',
+        }),
+        seasons: fallbackSeasonsCatalog || rutubeFallbackRes?.seasons,
+        ...(embedUrl ? { embedUrl, sourcePath: 'Alloha VIP (1080p)' } : {}),
+      };
+    }
+    if (embedUrl) {
+      return {
+        ok: false,
+        embedUrl,
+        sourcePath: 'Alloha VIP (1080p)',
+        error: 'Using clean Alloha VIP embed fallback',
+      };
+    }
+    return { ok: false, error: 'Stream not found on VOD balancer' };
+  };
 
   // 3. Check Kinogram / Collaps Balancer (Exact kp/ or imdb/ ID lookup — Full Multi-Season Catalog & Direct HLS/DASH)
   const candidates = [];
@@ -2008,71 +2317,7 @@ export async function resolveVodStreamData({
   }
 
   if (!html) {
-    // 4. Fallback: iEdem VIP MediaLibrary (4K UHD / 1080p Direct HLS) & VK Video Direct Search (>= 720p)
-    const titleInfo = await resolveTitleCandidatesAndYear({
-      imdb,
-      kp: cleanKp,
-      title: cleanTitle,
-      mediaType,
-      year,
-    });
-
-    const iedemRes = await resolveFromIedemVip({
-      ...titleInfo,
-      season,
-      episode,
-      effectiveUa,
-    });
-    if (iedemRes && iedemRes.ok) {
-      if (
-        rutubeFallbackRes &&
-        (!iedemRes.seasons ||
-          iedemRes.seasons.length < rutubeFallbackRes.seasons.length)
-      ) {
-        iedemRes.seasons = rutubeFallbackRes.seasons;
-      }
-      return iedemRes;
-    }
-
-    if (cleanKp || /[а-яА-ЯёЁ]/.test(cleanTitle) || titleInfo.ruTitle) {
-      const vkSearchRes = await resolveFromVkVideoSearch({
-        ...titleInfo,
-        season,
-        episode,
-        effectiveUa,
-      });
-      if (vkSearchRes && vkSearchRes.ok) {
-        if (
-          rutubeFallbackRes &&
-          (!vkSearchRes.seasons ||
-            vkSearchRes.seasons.length < rutubeFallbackRes.seasons.length)
-        ) {
-          vkSearchRes.seasons = rutubeFallbackRes.seasons;
-        }
-        return vkSearchRes;
-      }
-    }
-    const embedUrl = await resolveFromAllohaEmbed({
-      imdb,
-      kp: cleanKp,
-      season,
-      episode,
-    });
-    if (rutubeFallbackRes) {
-      return {
-        ...rutubeFallbackRes,
-        ...(embedUrl ? { embedUrl } : {}),
-      };
-    }
-    if (embedUrl) {
-      return {
-        ok: false,
-        embedUrl,
-        sourcePath: 'Alloha VIP (1080p)',
-        error: 'Using clean Alloha VIP embed fallback',
-      };
-    }
-    return { ok: false, error: 'Stream not found on VOD balancer' };
+    return resolveSecondaryProviders();
   }
 
   const addMatch = html.match(/else\s+o\[k\]\+=.\&.\+([a-zA-Z0-9_]+)/);
@@ -2113,18 +2358,29 @@ export async function resolveVodStreamData({
         };
       });
 
-      const targetSeason =
-        sortedRawSeasons.find((s) => Number(s.season) === Number(season)) ||
-        sortedRawSeasons[0];
+      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+        fallbackSeasonsCatalog,
+        cleanSeasons
+      );
+
+      const targetSeason = sortedRawSeasons.find(
+        (s) => Number(s.season) === Number(season)
+      );
       const episodes = Array.isArray(targetSeason?.episodes)
         ? [...targetSeason.episodes].sort(
             (a, b) => (Number(a?.episode) || 1) - (Number(b?.episode) || 1)
           )
         : [];
-      let targetEp =
-        episodes.find((e) => Number(e.episode) === Number(episode)) ||
-        episodes[0];
-      if (targetEp && !targetEp.dash && episodes.some((e) => e.dash)) {
+      let targetEp = episodes.find(
+        (e) => Number(e.episode) === Number(episode)
+      );
+      if (
+        cleanKp === '471505' &&
+        targetEp &&
+        !targetEp.dash &&
+        !targetEp.hls &&
+        episodes.some((e) => e.dash)
+      ) {
         targetEp =
           episodes.find(
             (e) => e.dash && Number(e.episode) >= Number(episode)
@@ -2134,13 +2390,7 @@ export async function resolveVodStreamData({
       }
 
       if (!targetSeason || !targetEp) {
-        return {
-          ok: false,
-          type: 'series',
-          sourcePath: usedPath,
-          seasons: cleanSeasons,
-          error: 'Requested season or episode not available on VOD balancer',
-        };
+        return resolveSecondaryProviders();
       }
 
       if (targetEp?.hls || targetEp?.dash) {
@@ -2154,8 +2404,8 @@ export async function resolveVodStreamData({
           ? targetEp.hls + (token ? `&${token}` : '')
           : undefined;
 
-        // If iEdem VIP has a native 1080p/4K H.264 .m3u8 for single-season Russian series (e.g. Жизнь заново), prefer its 1080p/4K HLS for Smart TV compatibility while keeping Collaps seasons & DASH!
-        if (cleanSeasons.length <= 1) {
+        // Prefer iEdem VIP MediaLibrary 4K/1080p H.264 .m3u8 for Russian series (and single-season series) while keeping Collaps seasons & DASH!
+        if (cleanSeasons.length <= 1 || isRussianNativeQuery) {
           try {
             const titleInfo = await resolveTitleCandidatesAndYear({
               imdb,
@@ -2176,9 +2426,8 @@ export async function resolveVodStreamData({
                 dashUrl: dashUrl || iedemRes.dashUrl,
                 dashaUrl: dashaUrl || iedemRes.dashaUrl,
                 seasons:
-                  cleanSeasons.length >= (iedemRes.seasons?.length || 0)
-                    ? cleanSeasons
-                    : iedemRes.seasons,
+                  mergeSeasonsCatalogs(fallbackSeasonsCatalog, iedemRes.seasons) ||
+                  cleanSeasons,
               };
             }
           } catch {
@@ -2206,17 +2455,11 @@ export async function resolveVodStreamData({
           proxyHlsUrl,
           rawHlsUrl: hlsUrl,
           userAgent: effectiveUa,
-          seasons: cleanSeasons,
+          seasons: fallbackSeasonsCatalog || cleanSeasons,
         };
       }
 
-      return {
-        ok: false,
-        type: 'series',
-        sourcePath: usedPath,
-        seasons: cleanSeasons,
-        error: 'Requested episode has no playable stream',
-      };
+      return resolveSecondaryProviders();
     }
   }
 
@@ -2252,6 +2495,34 @@ export async function resolveVodStreamData({
     const proxyHlsUrl = hlsUrl
       ? wrapTvProxyUrl(hlsUrl, `${lastWorkingKinogramHost}/`, effectiveUa)
       : undefined;
+
+    if (isRussianNativeQuery) {
+      try {
+        const titleInfo = await resolveTitleCandidatesAndYear({
+          imdb,
+          kp: cleanKp,
+          title: cleanTitle || titleMatch?.[1] || '',
+          mediaType: 'movie',
+          year,
+        });
+        const iedemMovieRes = await resolveFromIedemVip({
+          ...titleInfo,
+          season: 1,
+          episode: 1,
+          effectiveUa,
+        });
+        if (iedemMovieRes && iedemMovieRes.ok && iedemMovieRes.hlsUrl) {
+          return {
+            ...iedemMovieRes,
+            dashUrl: dashUrl || iedemMovieRes.dashUrl,
+            dashaUrl: dashaUrl || iedemMovieRes.dashaUrl,
+          };
+        }
+      } catch {
+        // ignore iEdem movie enrichment error
+      }
+    }
+
     return {
       ok: true,
       type: 'movie',

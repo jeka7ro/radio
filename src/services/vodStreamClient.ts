@@ -83,7 +83,26 @@ export async function resolveDirectVodStreamClient(params: {
     try {
       const res = await fetch(url);
       if (res.ok || res.status === 404) {
-        const data = (await res.json()) as ResolvedDirectVodStream;
+        const rawData = (await res.json()) as ResolvedDirectVodStream;
+        const isAbsoluteBridge = /^https?:\/\//i.test(url);
+        const bridgeOrigin = isAbsoluteBridge ? new URL(url).origin : '';
+        const toBridgeOrigin = (u?: string) =>
+          u && bridgeOrigin && u.startsWith('/') ? `${bridgeOrigin}${u}` : u;
+        const data: ResolvedDirectVodStream = bridgeOrigin
+          ? {
+              ...rawData,
+              hlsUrl: toBridgeOrigin(rawData.hlsUrl),
+              proxyHlsUrl: toBridgeOrigin(rawData.proxyHlsUrl),
+              dashUrl: toBridgeOrigin(rawData.dashUrl),
+              dashaUrl: toBridgeOrigin(rawData.dashaUrl),
+              vkQualities: Array.isArray(rawData.vkQualities)
+                ? rawData.vkQualities.map((q) => ({
+                    ...q,
+                    url: toBridgeOrigin(q.url) || q.url,
+                  }))
+                : rawData.vkQualities,
+            }
+          : rawData;
         if (data?.ok && data.hlsUrl) {
           if (isLocalLan && data.proxyHlsUrl) {
             return {

@@ -307,8 +307,13 @@ def vector3_business_invariants() -> Tuple[bool, str, List[str]]:
     else:
         details.append("Clasificare Kinozal etalon: WEB-DLRip fără tag HD = '480p SD' (scor 1), 2160p 4K (scor 4) > 1080p (scor 3)")
 
-    # 2. Verifică că în SmartTvLampaView.tsx nu mai există blocajul `isRuSeries ? [] : detailedMeta?.videos`
-    lampa_view = (ROOT_DIR / "src" / "views" / "SmartTvLampaView.tsx").read_text(encoding="utf-8", errors="ignore")
+    # 2. Verifică că în SmartTvLampaViewCore.tsx nu mai există blocajul `isRuSeries ? [] : detailedMeta?.videos`
+    lampa_core_path = ROOT_DIR / "src" / "views" / "SmartTvLampaViewCore.tsx"
+    lampa_view = (
+        lampa_core_path.read_text(encoding="utf-8", errors="ignore")
+        if lampa_core_path.exists()
+        else (ROOT_DIR / "src" / "views" / "SmartTvLampaView.tsx").read_text(encoding="utf-8", errors="ignore")
+    )
     if re.search(r"isRuSeries\s*\?\s*\[\s*\]\s*:\s*detailedMeta\?\.videos", lampa_view):
         errors.append("Regresie în SmartTvLampaView.tsx: `isRuSeries ? [] : detailedMeta?.videos` ascunde sezoanele la serialele rusești!")
     else:
@@ -433,7 +438,12 @@ def vector4_ui_and_architecture(skip_build: bool = False) -> Tuple[bool, str, Li
 
     # 2. Verificare interdicție `vidspark.to` (sursă generatoare de pop-up-uri Booking/AliExpress)
     helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
-    lampa_txt = (ROOT_DIR / "src" / "views" / "SmartTvLampaView.tsx").read_text(encoding="utf-8", errors="ignore")
+    lampa_core_p = ROOT_DIR / "src" / "views" / "SmartTvLampaViewCore.tsx"
+    lampa_txt = (
+        lampa_core_p.read_text(encoding="utf-8", errors="ignore")
+        if lampa_core_p.exists()
+        else (ROOT_DIR / "src" / "views" / "SmartTvLampaView.tsx").read_text(encoding="utf-8", errors="ignore")
+    )
     if "vidspark.to" in helpers_txt or "vidspark.to" in lampa_txt:
         errors.append("Sursa cu reclame pop-up `vidspark.to` este încă prezentă în smartTvLampaHelpers.ts sau SmartTvLampaView.tsx!")
     else:

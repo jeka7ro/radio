@@ -109,6 +109,7 @@ interface ActiveTorrentEngine {
   lastAccessed: number;
   activeStreams: Set<() => void>;
   verifiedPieces: Set<number>;
+  prewarmedFiles?: Set<number>;
   files: Array<{
     index: number;
     name: string;
@@ -1144,7 +1145,8 @@ function parseKinozalRowsFromHtml(
 async function fetchKinozalRussianTorrents(
   query: string,
   type: 'movie' | 'series',
-  season?: number
+  season?: number,
+  episode?: number
 ): Promise<FileListTorrentCard[]> {
   const cleanQuery = query
     .replace(/\([^)]*\)/g, ' ')
@@ -1259,17 +1261,48 @@ async function fetchKinozalRussianTorrents(
     if (type === 'series' && season) {
       const sPad = `S${String(season).padStart(2, '0')}`;
       const seasonRegex = new RegExp(
-        `(\\[${sPad}|\\b${sPad}\\b|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
+        `(\\[${sPad}|\\b${sPad}(?:E\\d+|\\b)|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
         'i'
       );
       const seasonMatches = pool.filter(
         (t) =>
           seasonRegex.test(t.releaseTitle) ||
-          (season === 1 && !/\[S0*[2-9]|\[0*[2-9]x|\b[2-9]\s*сезон/i.test(t.releaseTitle))
+          (season === 1 &&
+            !/\[S0*[2-9]|\[S[1-9]\d|\bS0*[2-9](?:E\d+|\b)|\[0*[2-9]x|\b(?:[2-9]|[1-9]\d)\s*сезон/i.test(
+              t.releaseTitle
+            ))
       );
-      if (seasonMatches.length > 0) {
-        return seasonMatches.slice(0, 25);
+      if (seasonMatches.length === 0) {
+        return [];
       }
+      if (episode && episode > 0) {
+        const matchesRequestedEpisode = (rel: string): boolean => {
+          const mRangeBracket =
+            rel.match(/\[(?:S?0*\d+x)?0*(\d+)\s*[-–]\s*0*(\d+)(?:\s*из\s*\d+)?\]/i) ||
+            rel.match(/\b0*(\d+)\s*[-–]\s*0*(\d+)\s*(?:сери|выпуск)/i) ||
+            rel.match(/\bS\d{1,2}E0*(\d+)\s*[-–]\s*E?0*(\d+)\b/i);
+          if (mRangeBracket) {
+            const startEp = Number(mRangeBracket[1]);
+            const endEp = Number(mRangeBracket[2]);
+            if (startEp > 0 && endEp >= startEp) {
+              return episode >= startEp && episode <= endEp;
+            }
+          }
+          const mSingle =
+            rel.match(/\[(?:S?0*\d+x)0*(\d+)\]/i) ||
+            rel.match(/\bS\d{1,2}[.\s_-]*E0*(\d+)\b/i) ||
+            rel.match(/(?:^|[^\d-])0*(\d+)\s*(?:серия|выпуск)\b/i);
+          if (mSingle) {
+            return Number(mSingle[1]) === episode;
+          }
+          return true;
+        };
+        const epMatches = seasonMatches.filter((t) =>
+          matchesRequestedEpisode(t.releaseTitle)
+        );
+        return epMatches.slice(0, 25);
+      }
+      return seasonMatches.slice(0, 25);
     }
 
     return pool.slice(0, 25);
@@ -1690,6 +1723,7 @@ async function getOrStartTorrentEngine(
       lastAccessed: Date.now(),
       activeStreams: new Set(),
       verifiedPieces: new Set<number>(),
+      prewarmedFiles: new Set<number>(),
       files: [],
       probeCache: new Map(),
     };
@@ -1905,6 +1939,81 @@ function startBackgroundDiskVerification(entry: ActiveTorrentEngine): void {
 
 const inFlightProbes = new Map<string, Promise<any>>();
 
+/**
+ * Persistently pre-warms the last 2MB of a torrent video file (where Matroska Cues / MP4 moov seek index resides)
+ * in the background until completion — NEVER destroyed early by probe exit — so Skip Intro & arbitrary seeks
+ * find the seek index on SSD in 0ms!
+ */
+function prewarmVideoTailCues(
+  entry: ActiveTorrentEngine,
+  fileIdx: number
+): void {
+  try {
+    if (!entry.prewarmedFiles) {
+      entry.prewarmedFiles = new Set<number>();
+    }
+    if (entry.prewarmedFiles.has(fileIdx)) return;
+
+    const rawFile = entry.engine?.files?.[fileIdx];
+    if (!rawFile || Number(rawFile.length) <= 4 * 1024 * 1024) return;
+    if (getVerifiedCompleteDiskFilePath(entry, fileIdx)) {
+      entry.prewarmedFiles.add(fileIdx);
+      return;
+    }
+
+    const totalLen = Number(rawFile.length);
+    const tailStart = Math.max(0, totalLen - 2 * 1024 * 1024);
+    if (verifyDiskPiecesForByteRange(entry, fileIdx, tailStart, totalLen - 1)) {
+      entry.prewarmedFiles.add(fileIdx);
+      return;
+    }
+
+    entry.prewarmedFiles.add(fileIdx);
+    const tailStream = rawFile.createReadStream({
+      start: tailStart,
+      end: totalLen - 1,
+    });
+    try {
+      if (typeof tailStream.startPiece === 'number' && entry.engine.critical) {
+        const span = Math.max(
+          1,
+          (tailStream.endPiece ?? tailStream.startPiece) -
+            tailStream.startPiece +
+            1
+        );
+        entry.engine.critical(tailStream.startPiece, Math.min(3, span));
+      }
+    } catch {
+      // ignore
+    }
+    const finishTail = () => {
+      try {
+        tailStream.destroy();
+      } catch {
+        // ignore
+      }
+    };
+    const safetyTimer = setTimeout(() => {
+      entry.prewarmedFiles?.delete(fileIdx);
+      finishTail();
+    }, 45_000);
+    if (typeof (safetyTimer as any).unref === 'function') {
+      (safetyTimer as any).unref();
+    }
+    tailStream.on('data', () => {});
+    tailStream.on('end', () => {
+      clearTimeout(safetyTimer);
+    });
+    tailStream.on('error', () => {
+      clearTimeout(safetyTimer);
+      entry.prewarmedFiles?.delete(fileIdx);
+      finishTail();
+    });
+  } catch {
+    // ignore
+  }
+}
+
 async function probeTorrentVideoFile(
   entry: ActiveTorrentEngine,
   fileIdx: number
@@ -1958,8 +2067,8 @@ async function probeTorrentVideoFile(
     });
 
     let rs: any = null;
-    let tailStream: any = null;
     if (!verifiedDiskPath) {
+      prewarmVideoTailCues(entry, fileIdx);
       const probeBytes = Math.min(rawFile.length - 1, 2 * 1024 * 1024);
       const headerDiskPath = verifyDiskPiecesForByteRange(
         entry,
@@ -1971,36 +2080,11 @@ async function probeTorrentVideoFile(
         ? fs.createReadStream(headerDiskPath, { start: 0, end: probeBytes })
         : rawFile.createReadStream({ start: 0, end: probeBytes });
       rs.pipe(ff.stdin).on('error', () => {});
-
-      // Pre-warm the tail 1.5MB of the MKV file (where Matroska Cues seek index resides) for instant seeking
-      if (rawFile.length > 4 * 1024 * 1024) {
-        try {
-          const tailStart = Math.max(0, rawFile.length - 1536 * 1024);
-          if (
-            !verifyDiskPiecesForByteRange(
-              entry,
-              fileIdx,
-              tailStart,
-              rawFile.length - 1
-            )
-          ) {
-            tailStream = rawFile.createReadStream({
-              start: tailStart,
-              end: rawFile.length - 1,
-            });
-            tailStream.on('data', () => {});
-            tailStream.on('error', () => {});
-          }
-        } catch {
-          // ignore
-        }
-      }
     }
 
     const timer = setTimeout(() => {
       try {
         rs?.destroy();
-        tailStream?.destroy();
         ff.kill('SIGKILL');
       } catch {
         // ignore
@@ -2011,7 +2095,6 @@ async function probeTorrentVideoFile(
       clearTimeout(timer);
       try {
         rs?.destroy();
-        tailStream?.destroy();
       } catch {
         // ignore
       }
@@ -2150,8 +2233,14 @@ function ensureInternalRangeServer(): Promise<number> {
             } catch {
               // ignore
             }
+            if (!res.writableEnded && !res.destroyed) {
+              try {
+                res.destroy();
+              } catch {
+                // ignore
+              }
+            }
           };
-          req.on('close', closeDiskStream);
           req.on('aborted', closeDiskStream);
           res.on('close', closeDiskStream);
           diskStream.on('error', closeDiskStream);
@@ -2178,9 +2267,15 @@ function ensureInternalRangeServer(): Promise<number> {
           } catch {
             // ignore
           }
+          if (!res.writableEnded && !res.destroyed) {
+            try {
+              res.destroy();
+            } catch {
+              // ignore
+            }
+          }
         };
         entry.activeStreams.add(closeStream);
-        req.on('close', closeStream);
         req.on('aborted', closeStream);
         res.on('close', closeStream);
         s.pipe(res);
@@ -2484,7 +2579,8 @@ export async function handleFileListRequest(
           ? fetchKinozalRussianTorrents(
               queryParam,
               typeParam === 'series' ? 'series' : 'movie',
-              season
+              season,
+              episode
             ).catch(() => [])
           : Promise.resolve([]),
         imdbParam && imdbParam.startsWith('tt')
@@ -2838,6 +2934,9 @@ export async function handleFileListRequest(
         entry.probeCache.delete(selectedFileIdx);
         cachedProbe = undefined;
       }
+      if (!getVerifiedCompleteDiskFilePath(entry, selectedFileIdx)) {
+        prewarmVideoTailCues(entry, selectedFileIdx);
+      }
       if (!cachedProbe) {
         if (getVerifiedCompleteDiskFilePath(entry, selectedFileIdx)) {
           try {
@@ -2953,19 +3052,31 @@ export async function handleFileListRequest(
       const markEarlyClose = () => {
         clientDisconnectedEarly = true;
       };
-      req.once('close', markEarlyClose);
+      res.once('close', markEarlyClose);
       req.once('aborted', markEarlyClose);
 
       const entry = await getOrStartTorrentEngine(id);
-      if (clientDisconnectedEarly || req.destroyed || res.writableEnded) {
+      if (
+        clientDisconnectedEarly ||
+        res.destroyed ||
+        res.writableEnded ||
+        Boolean(req.socket?.destroyed)
+      ) {
         return true;
       }
       const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
+      if (!verifiedDiskPath) {
+        prewarmVideoTailCues(entry, fileIdx);
+      }
 
-      // Deselect streams ONLY on OTHER inactive torrent engines (never kill active streams on the same id,
-      // as LAN Smart TV and localhost or parallel Range reads may share the same torrent engine simultaneously)
+      // Deselect streams ONLY on OTHER inactive torrent engines idle for > 4s
+      const nowMs = Date.now();
       for (const [otherId, otherEntry] of gState.activeEngines.entries()) {
-        if (otherId !== id && otherEntry.activeStreams) {
+        if (
+          otherId !== id &&
+          otherEntry.activeStreams &&
+          nowMs - (otherEntry.lastAccessed || 0) > 4000
+        ) {
           for (const closeOther of Array.from(otherEntry.activeStreams)) {
             try {
               closeOther();
@@ -3029,23 +3140,33 @@ export async function handleFileListRequest(
 
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
       const useDirectPipe = !verifiedDiskPath && startSec <= 1;
+      const hwDecodeArgs =
+        isHevc && process.platform === 'darwin'
+          ? ['-hwaccel', 'videotoolbox']
+          : [];
 
       if (verifiedDiskPath) {
         if (startSec > 1) {
-          ffArgs.push('-noaccurate_seek', '-ss', String(Math.floor(startSec)));
+          if (!isHevc) {
+            ffArgs.push('-noaccurate_seek');
+          }
+          ffArgs.push('-ss', String(Math.floor(startSec)));
         }
-        ffArgs.push('-i', verifiedDiskPath);
+        ffArgs.push(...hwDecodeArgs, '-i', verifiedDiskPath);
       } else if (!useDirectPipe) {
         const rangePort = await ensureInternalRangeServer();
+        if (!isHevc) {
+          ffArgs.push('-noaccurate_seek');
+        }
         ffArgs.push(
-          '-noaccurate_seek',
           '-ss',
           String(Math.floor(startSec)),
+          ...hwDecodeArgs,
           '-i',
           `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
         );
       } else {
-        ffArgs.push('-i', 'pipe:0');
+        ffArgs.push(...hwDecodeArgs, '-i', 'pipe:0');
       }
 
       ffArgs.push(
@@ -3071,6 +3192,8 @@ export async function handleFileListRequest(
             'h264_videotoolbox',
             '-realtime',
             'true',
+            '-g',
+            '48',
             '-b:v',
             is4kSource ? '15M' : '8M',
             '-maxrate',
@@ -3094,6 +3217,12 @@ export async function handleFileListRequest(
             'ultrafast',
             '-tune',
             'zerolatency',
+            '-g',
+            '48',
+            '-keyint_min',
+            '24',
+            '-sc_threshold',
+            '0',
             '-crf',
             '21',
             '-vf',
@@ -3223,14 +3352,26 @@ export async function handleFileListRequest(
         if (gState.activeStreamProcess === ff) {
           gState.activeStreamProcess = null;
         }
+        if (!res.writableEnded && !res.destroyed) {
+          try {
+            res.end();
+          } catch {
+            // ignore
+          }
+        }
       };
 
       (gState as any).activeStreamCleanupByClient.set(clientKey, cleanup);
-      if (clientDisconnectedEarly || req.destroyed) {
+      if (
+        clientDisconnectedEarly ||
+        res.destroyed ||
+        res.writableEnded ||
+        Boolean(req.socket?.destroyed)
+      ) {
         cleanup();
         return true;
       }
-      req.on('close', cleanup);
+      req.on('aborted', cleanup);
       res.on('close', cleanup);
     } catch (err) {
       if (!res.headersSent) {
@@ -3341,18 +3482,25 @@ export async function handleFileListRequest(
 
         const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
         const useDirectPipeHls = startSec <= 1;
+        const hwDecodeArgsHls =
+          isHevc && process.platform === 'darwin'
+            ? ['-hwaccel', 'videotoolbox']
+            : [];
 
         if (!useDirectPipeHls) {
           const rangePort = await ensureInternalRangeServer();
+          if (!isHevc) {
+            ffArgs.push('-noaccurate_seek');
+          }
           ffArgs.push(
-            '-noaccurate_seek',
             '-ss',
             String(startSec),
+            ...hwDecodeArgsHls,
             '-i',
             `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
           );
         } else {
-          ffArgs.push('-i', 'pipe:0');
+          ffArgs.push(...hwDecodeArgsHls, '-i', 'pipe:0');
         }
 
         ffArgs.push(

@@ -616,13 +616,16 @@ function fastTorrentStream(link, opts, cb) {
     };
 
     const onvalidatewire = function (wire) {
-      if (wire.requests.length) return;
+      if (wire.requests.length >= 4) return;
 
-      for (let i = engine.selection.length - 1; i >= 0; i--) {
+      for (let i = 0; i < engine.selection.length; i++) {
         const next = engine.selection[i];
-        for (let j = next.to; j >= next.from + next.offset; j--) {
+        for (let j = next.from + next.offset; j <= next.to; j++) {
           if (!wire.peerPieces[j]) continue;
-          if (onrequest(wire, j, false)) return;
+          while (wire.requests.length < 4 && onrequest(wire, j, false)) {
+            // pipeline initial validation blocks on the exact active piece
+          }
+          if (wire.requests.length) return;
         }
       }
     };
@@ -912,7 +915,9 @@ function fastTorrentStream(link, opts, cb) {
   };
 
   engine.select = function (from, to, priority, notify) {
-    engine.selection.push({
+    // Use unshift before stable priority sort so the latest seek Range request (e.g. MKV Cues or Skip Intro target)
+    // ALWAYS takes selection[0] ahead of any older lingering stream!
+    engine.selection.unshift({
       from: from,
       to: to,
       offset: 0,

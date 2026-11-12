@@ -922,6 +922,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     };
   }, [mediaType, imdbId, tmdbId, season, episode]);
 
+  const isOsdVisibleRef = useRef<boolean>(isOsdVisible);
+  isOsdVisibleRef.current = isOsdVisible;
+  const videoDurationSecRef = useRef<number>(videoDurationSec);
+  videoDurationSecRef.current = videoDurationSec;
+
   useEffect(() => {
     if (!hlsUrl || !hlsUrl.includes('/api/filelist/stream')) {
       setTorrentLiveStats(null);
@@ -943,6 +948,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
     }
     const fetchStats = () => {
+      if (!isOsdVisibleRef.current && videoDurationSecRef.current > 60) {
+        return;
+      }
       fetch(`${statsOrigin}/api/filelist/stats${idQuery}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
@@ -950,18 +958,20 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             const nextSpeed = d.downloadSpeedText || 'Buffer HD';
             const nextPeers = Number(d.numPeers || 0);
             const nextSource = d.source || 'FileList.io';
-            setTorrentLiveStats((prev) =>
-              prev &&
-              prev.downloadSpeedText === nextSpeed &&
-              prev.numPeers === nextPeers &&
-              prev.source === nextSource
-                ? prev
-                : {
-                    downloadSpeedText: nextSpeed,
-                    numPeers: nextPeers,
-                    source: nextSource,
-                  }
-            );
+            if (isOsdVisibleRef.current) {
+              setTorrentLiveStats((prev) =>
+                prev &&
+                prev.downloadSpeedText === nextSpeed &&
+                prev.numPeers === nextPeers &&
+                prev.source === nextSource
+                  ? prev
+                  : {
+                      downloadSpeedText: nextSpeed,
+                      numPeers: nextPeers,
+                      source: nextSource,
+                    }
+              );
+            }
             const probedDur = Number(d.durationSec || 0);
             if (Number.isFinite(probedDur) && probedDur > 60) {
               setVideoDurationSec((prev) =>
@@ -973,7 +983,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         .catch(() => {});
     };
     fetchStats();
-    const timer = window.setInterval(fetchStats, 2000);
+    const timer = window.setInterval(fetchStats, 5000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -1376,12 +1386,23 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               return;
             }
             let startedPlay = false;
+            let didAlignInitialStart = false;
+            let maxAheadSec = isHardwareTv ? 15 : 35;
+            const keepBehindMaxSec = isHardwareTv ? 12 : 30;
+            const keepBehindTargetSec = isHardwareTv ? 4 : 12;
+            let lastEvictMediaSec = -999;
 
             const checkAndStartPlayback = () => {
               if (sb.buffered.length > 0) {
                 const bStart = sb.buffered.start(0);
                 const bEnd = sb.buffered.end(sb.buffered.length - 1);
-                if (!startedPlay && bStart > 0.01 && video.currentTime < bStart) {
+                if (
+                  !startedPlay &&
+                  !didAlignInitialStart &&
+                  bStart > 0.04 &&
+                  video.currentTime < bStart - 0.01
+                ) {
+                  didAlignInitialStart = true;
                   try {
                     video.currentTime = bStart + 0.02;
                   } catch {
@@ -1390,7 +1411,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }
                 if (
                   !startedPlay &&
-                  (video.readyState >= 2 || bEnd - bStart >= 0.35)
+                  (video.readyState >= 2 || bEnd - bStart >= 0.45)
                 ) {
                   startedPlay = true;
                   appliedStartRef.current = true;
@@ -1404,7 +1425,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   startedPlay &&
                   !hasFiredPlaying &&
                   video.paused &&
-                  video.readyState >= 2
+                  video.readyState >= 2 &&
+                  !userIntentionallyPausedRef.current
                 ) {
                   ensureAutoPlay(video);
                 }
@@ -1423,14 +1445,22 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             checkAndStartPlayback();
 
             while (!controller.signal.aborted) {
-              if (video.currentTime > 120 && sb.buffered.length > 0) {
+              const curBefore = video.currentTime || 0;
+              if (sb.buffered.length > 0) {
                 const bStart = sb.buffered.start(0);
-                if (bStart < video.currentTime - 90) {
-                  try {
-                    sb.remove(bStart, video.currentTime - 45);
-                    await waitUpdate();
-                  } catch {
-                    // ignore
+                if (
+                  curBefore - bStart > keepBehindMaxSec &&
+                  curBefore - lastEvictMediaSec >= 4.0
+                ) {
+                  const trimTo = curBefore - keepBehindTargetSec;
+                  if (trimTo > bStart + 2.0) {
+                    lastEvictMediaSec = curBefore;
+                    try {
+                      sb.remove(bStart, trimTo);
+                      await waitUpdate();
+                    } catch {
+                      // ignore
+                    }
                   }
                 }
               }
@@ -1438,13 +1468,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               while (
                 !controller.signal.aborted &&
                 sb.buffered.length > 0 &&
-                sb.buffered.end(sb.buffered.length - 1) - video.currentTime >
-                  45
+                sb.buffered.end(sb.buffered.length - 1) -
+                  (video.currentTime || 0) >
+                  maxAheadSec
               ) {
-                if (!hasFiredPlaying && video.paused && video.readyState >= 2) {
+                if (
+                  !hasFiredPlaying &&
+                  video.paused &&
+                  video.readyState >= 2 &&
+                  !userIntentionallyPausedRef.current
+                ) {
                   ensureAutoPlay(video);
                 }
-                await new Promise((r) => window.setTimeout(r, 350));
+                await new Promise((r) => window.setTimeout(r, 250));
               }
               if (controller.signal.aborted) break;
 
@@ -1526,21 +1562,80 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 break;
               }
 
-              try {
-                sb.appendBuffer(value);
-                await waitUpdate();
-              } catch {
-                // Evict old buffer if QuotaExceededError on Smart TV
-                if (sb.buffered.length > 0 && video.currentTime > 5) {
+              // Lossless MSE append loop: NEVER discard `value` when hardware Smart TV hits QuotaExceededError!
+              let appendedOk = false;
+              let quotaRetries = 0;
+              while (!controller.signal.aborted && !appendedOk) {
+                try {
+                  sb.appendBuffer(value);
+                  await waitUpdate();
+                  appendedOk = true;
+                } catch (appendErr: unknown) {
+                  if (ms.readyState !== 'open') {
+                    break;
+                  }
+                  const errName = (appendErr as { name?: string })?.name || '';
+                  const errCode = (appendErr as { code?: number })?.code;
+                  const isQuota =
+                    errName === 'QuotaExceededError' ||
+                    errName === 'QuotaExceeded' ||
+                    errCode === 22 ||
+                    String(appendErr).toLowerCase().includes('quota');
+                  if (!isQuota) {
+                    break;
+                  }
+                  if (!userIntentionallyPausedRef.current) {
+                    quotaRetries += 1;
+                  }
+                  checkAndStartPlayback();
+
+                  const curNow = video.currentTime || 0;
+                  if (sb.buffered.length > 0) {
+                    const b0 = sb.buffered.start(0);
+                    const bEnd = sb.buffered.end(sb.buffered.length - 1);
+                    const aheadNow = Math.max(0, bEnd - curNow);
+                    if (aheadNow > 4) {
+                      maxAheadSec = Math.max(
+                        5,
+                        Math.min(maxAheadSec, Math.floor(aheadNow * 0.8))
+                      );
+                    }
+                    const safeMargin = quotaRetries <= 2 ? 4.0 : 2.0;
+                    const evictTo = curNow - safeMargin;
+                    if (evictTo > b0 + 0.4) {
+                      try {
+                        sb.remove(b0, evictTo);
+                        await waitUpdate();
+                        continue;
+                      } catch {
+                        // fall through to short wait
+                      }
+                    }
+                  }
+
+                  if (quotaRetries > 60) {
+                    break;
+                  }
+                  if (
+                    video.paused &&
+                    video.readyState >= 2 &&
+                    !userIntentionallyPausedRef.current
+                  ) {
+                    ensureAutoPlay(video);
+                  }
+                  await new Promise((r) => window.setTimeout(r, 250));
+                }
+              }
+
+              if (!appendedOk) {
+                if (!controller.signal.aborted) {
                   try {
-                    sb.remove(0, Math.max(0, video.currentTime - 3));
-                    await waitUpdate();
-                    sb.appendBuffer(value);
-                    await waitUpdate();
+                    await reader.cancel();
                   } catch {
                     // ignore
                   }
                 }
+                break;
               }
 
               checkAndStartPlayback();
@@ -1556,7 +1651,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       );
     };
 
-    if (isHardwareTv) {
+    if (
+      !isIosWebKit &&
+      flStreamUrl.includes('/api/filelist/stream') &&
+      typeof window !== 'undefined' &&
+      typeof window.MediaSource !== 'undefined'
+    ) {
       startMsePump();
       return;
     }
@@ -1803,6 +1903,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (objectUrlToRevoke) {
         URL.revokeObjectURL(objectUrlToRevoke);
         objectUrlToRevoke = null;
+      }
+      if (video) {
+        video.onloadedmetadata = null;
+        video.onerror = null;
+        if (video.getAttribute('src')) {
+          try {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+          } catch {
+            // ignore
+          }
+        }
       }
     };
 
@@ -3350,12 +3463,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       );
       isSeekingFileListRef.current = true;
       appliedStartRef.current = true;
+      lastTimeUpdateWallMsRef.current = Date.now();
       startAtSecondsRef.current = nextSec;
       streamOffsetRef.current = nextSec;
       setStreamOffsetSec(nextSec);
       setCurrentTimeSec(nextSec);
       setScrubPreviewSec(null);
       onTimeUpdate?.(Math.floor(nextSec), Math.floor(totalDur));
+
+      // Abort previous MSE fetch immediately so old ffmpeg stops competing for P2P bandwidth
+      cleanupFileListMse();
 
       const cleanBase = hlsUrl
         .replace(/([?&])start=\d+/g, '')
@@ -3365,15 +3482,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (flSeekDebounceRef.current) {
         window.clearTimeout(flSeekDebounceRef.current);
       }
-      flSeekDebounceRef.current = window.setTimeout(() => {
+      const isInstantJump = Boolean(
+        labelPrefix && /intro|recap|reluare/i.test(labelPrefix)
+      );
+      if (isInstantJump) {
         flSeekDebounceRef.current = null;
-        const targetVideo = videoRef.current;
-        if (!targetVideo) return;
         loadFileListStreamIntoVideo(
-          targetVideo,
+          v,
           `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
         );
-      }, 220);
+      } else {
+        flSeekDebounceRef.current = window.setTimeout(() => {
+          flSeekDebounceRef.current = null;
+          const targetVideo = videoRef.current;
+          if (!targetVideo) return;
+          loadFileListStreamIntoVideo(
+            targetVideo,
+            `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
+          );
+        }, 140);
+      }
 
       const remSec = Math.max(0, totalDur - nextSec);
       setSeekToast(
@@ -3566,6 +3694,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const resumeOrRecoverPlaybackRef = useRef(resumeOrRecoverPlayback);
   resumeOrRecoverPlaybackRef.current = resumeOrRecoverPlayback;
+  const remainingTimeSecRef = useRef<number>(remainingTimeSec);
+  remainingTimeSecRef.current = remainingTimeSec;
 
   // Automatic Stall Watchdog: if the movie freezes mid-playback without user pausing, auto-reconnect at exact second
   useEffect(() => {
@@ -3573,16 +3703,58 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const v = videoRef.current;
       if (
         !v ||
-        status !== 'playing' ||
         userIntentionallyPausedRef.current ||
-        isSeekingFileListRef.current ||
-        remainingTimeSec <= 35
+        remainingTimeSecRef.current <= 35
       ) {
         return;
       }
       const now = Date.now();
       const stalledMs = now - lastTimeUpdateWallMsRef.current;
+      if (isSeekingFileListRef.current) {
+        if (
+          isFileListStream &&
+          stalledMs >= 16000 &&
+          now - lastAutoRecoverWallMsRef.current >= 14000
+        ) {
+          isSeekingFileListRef.current = false;
+          lastAutoRecoverWallMsRef.current = now;
+          resumeOrRecoverPlaybackRef.current(v, false);
+        }
+        return;
+      }
+      if (status !== 'playing') {
+        return;
+      }
       if (isFileListStream) {
+        const sb = flSourceBufferRef.current;
+        if (sb && stalledMs >= 2600 && !v.seeking && !v.paused) {
+          try {
+            if (
+              sb.buffered.length > 0 &&
+              v.currentTime < 1.5 &&
+              v.currentTime < sb.buffered.start(0) - 0.15
+            ) {
+              v.currentTime = sb.buffered.start(0) + 0.02;
+              v.play().catch(() => {});
+              return;
+            }
+            for (let k = 0; k < (sb.buffered?.length || 0) - 1; k++) {
+              const gStart = sb.buffered.end(k);
+              const gEnd = sb.buffered.start(k + 1);
+              if (
+                gEnd - gStart <= 4.5 &&
+                v.currentTime >= gStart - 0.08 &&
+                v.currentTime < gEnd - 0.01
+              ) {
+                v.currentTime = gEnd + 0.02;
+                v.play().catch(() => {});
+                return;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
         // For FileList torrent streams, never kill an active ffmpeg stream during normal P2P piece buffering;
         // only reconnect if the HTTP stream genuinely ended/errored early, or if completely dead for >= 35s.
         const streamDiedEarly =
@@ -3612,7 +3784,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
     }, 2500);
     return () => window.clearInterval(watchdog);
-  }, [status, remainingTimeSec, isFileListStream]);
+  }, [status, isFileListStream]);
+
+  useEffect(() => {
+    if (!isOsdVisible) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const eff = streamOffsetRef.current + (v.currentTime || 0);
+    if (eff > 0) {
+      setCurrentTimeSec(eff);
+    }
+    try {
+      if (v.buffered && v.buffered.length > 0) {
+        setBufferedEndSec(
+          streamOffsetRef.current + v.buffered.end(v.buffered.length - 1)
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }, [isOsdVisible]);
 
   const handleRemotePlayPause = (mode: 'play' | 'pause' | 'toggle') => {
     const v = videoRef.current;
@@ -4317,11 +4508,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onProgress={(e) => {
+            if (!isOsdVisible && openMenu === 'none') return;
             const v = e.currentTarget;
             try {
               if (v.buffered && v.buffered.length > 0) {
-                const end = v.buffered.end(v.buffered.length - 1);
-                setBufferedEndSec(streamOffsetSec + end);
+                const nextEnd =
+                  streamOffsetSec + v.buffered.end(v.buffered.length - 1);
+                setBufferedEndSec((prev) =>
+                  Math.abs(prev - nextEnd) < 2 ? prev : nextEnd
+                );
               }
             } catch {
               // ignore
@@ -4436,7 +4631,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               setIsAutoMuted(false);
             }
             setStatus('playing');
-            if (!isMobilePhone || !hasInitialPlayWokenOsdRef.current) {
+            if (!hasInitialPlayWokenOsdRef.current) {
               hasInitialPlayWokenOsdRef.current = true;
               onWakeOsd?.();
             }
@@ -4520,22 +4715,48 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             if (!isFileListStream && Number.isFinite(vid.duration) && vid.duration > 60) {
               setVideoDurationSec(vid.duration);
             }
-            try {
-              if (vid.buffered && vid.buffered.length > 0) {
-                const end = streamOffsetSec + vid.buffered.end(vid.buffered.length - 1);
-                setBufferedEndSec((prev) =>
-                  Math.abs(prev - end) < 2 ? prev : end
-                );
+            if (isOsdVisible || openMenu !== 'none') {
+              try {
+                if (vid.buffered && vid.buffered.length > 0) {
+                  const end = streamOffsetSec + vid.buffered.end(vid.buffered.length - 1);
+                  setBufferedEndSec((prev) =>
+                    Math.abs(prev - end) < 2 ? prev : end
+                  );
+                }
+              } catch {
+                // ignore
               }
-            } catch {
-              // ignore
             }
             const reportedDuration = hasVerifiedDuration
               ? Math.floor(videoDurationSec)
               : durationHintSec && durationHintSec > 60
                 ? Math.floor(durationHintSec)
                 : Math.max(effectiveDurationSec, Math.floor(effectiveTime) + 30);
-            setCurrentTimeSec(effectiveTime);
+            setCurrentTimeSec((prev) => {
+              if (isOsdVisible || openMenu !== 'none' || showNextEpisodePrompt) {
+                return Math.abs(prev - effectiveTime) < 0.5 ? prev : effectiveTime;
+              }
+              if (subtitleCues && subtitleCues.length > 0) {
+                const prevSubT = prev - subOffsetSec;
+                const nextSubT = effectiveTime - subOffsetSec;
+                let prevText: string | null = null;
+                let nextText: string | null = null;
+                for (let i = 0; i < subtitleCues.length; i++) {
+                  const c = subtitleCues[i];
+                  if (prevText === null && prevSubT >= c.start && prevSubT <= c.end) {
+                    prevText = c.text;
+                  }
+                  if (nextText === null && nextSubT >= c.start && nextSubT <= c.end) {
+                    nextText = c.text;
+                  }
+                  if (prevText !== null && nextText !== null) break;
+                }
+                if (prevText !== nextText) {
+                  return effectiveTime;
+                }
+              }
+              return Math.abs(prev - effectiveTime) < 2.5 ? prev : effectiveTime;
+            });
             const floorCur = Math.floor(effectiveTime);
             if (
               watchedTicksInEpisodeRef.current >= 4 &&
@@ -4550,16 +4771,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onEnded={() => {
-            if (
-              isFileListStream &&
-              remainingTimeSec > 180 &&
-              currentTimeSec > 5 &&
-              !userIntentionallyPausedRef.current &&
-              videoRef.current
-            ) {
-              resumeOrRecoverPlayback(videoRef.current, false);
-              return;
-            }
             if (
               isFileListStream &&
               remainingTimeSec > 180 &&

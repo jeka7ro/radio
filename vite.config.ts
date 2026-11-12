@@ -1369,6 +1369,7 @@ function tvStreamProxyPlugin(): Plugin {
         const isLanTvClient =
           hostHeader.startsWith('192.168.') ||
           hostHeader.startsWith('10.') ||
+          hostHeader.startsWith('100.') ||
           hostHeader.includes('.local') ||
           hostHeader.includes('.lhr.life') ||
           /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
@@ -1377,7 +1378,18 @@ function tvStreamProxyPlugin(): Plugin {
 
         if (isLanTvClient && !rawUrl.startsWith('/api/') && !rawUrl.startsWith('/msx/')) {
           const distDir = path.resolve(process.cwd(), 'dist');
-          if (rawUrl.startsWith('/assets/') || rawUrl.startsWith('/icons/') || rawUrl === '/sw.js' || rawUrl === '/manifest.webmanifest') {
+          if (rawUrl === '/sw.js') {
+            res.writeHead(200, {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': 'application/javascript; charset=utf-8',
+              'Cache-Control': 'no-store, no-cache, must-revalidate',
+            });
+            res.end(
+              "self.addEventListener('install',function(){self.skipWaiting()});self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(k){return Promise.all(k.map(function(n){return caches.delete(n)}))}).then(function(){return self.registration.unregister()}))});"
+            );
+            return;
+          }
+          if (rawUrl.startsWith('/assets/') || rawUrl.startsWith('/icons/') || rawUrl === '/manifest.webmanifest') {
             let assetFile = path.join(distDir, rawUrl);
             if ((!fs.existsSync(assetFile) || !fs.statSync(assetFile).isFile()) && rawUrl.startsWith('/assets/')) {
               const assetsDir = path.join(distDir, 'assets');
@@ -1421,14 +1433,22 @@ function tvStreamProxyPlugin(): Plugin {
           } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/index.html') {
             const distIndex = path.join(distDir, 'index.html');
             if (fs.existsSync(distIndex)) {
-              console.log(`[LAN-TV] Serving compiled ES2015 bundle to ${hostHeader}${req.url} (${req.headers['user-agent'] || ''})`);
+              const ver = Math.floor(fs.statSync(distIndex).mtimeMs);
+              const rawHtml = fs.readFileSync(distIndex, 'utf-8');
+              const freshHtml = rawHtml.replace(
+                /(\/assets\/[^"'\s>]+\.(?:js|css))/g,
+                `$1?v=${ver}`
+              );
+              console.log(`[LAN-TV] Serving compiled ES2015 bundle (v=${ver}) to ${hostHeader}${req.url} (${req.headers['user-agent'] || ''})`);
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'text/html; charset=utf-8',
                 'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
                 'Referrer-Policy': 'no-referrer',
               });
-              res.end(fs.readFileSync(distIndex));
+              res.end(freshHtml);
               return;
             }
           }
@@ -2428,13 +2448,208 @@ function tvStreamProxyPlugin(): Plugin {
           const timeoutId = setTimeout(() => controller.abort(), 12000);
 
           const activeCookie = getRadioCookieHeader(targetUrl);
+          const rangeHeader = req.headers.range;
+
+          // VK / OK CDN Parallel Byte-Range Accelerator:
+          // vkuser.net / okcdn.ru throttles each individual HTTP connection (zs=65) to ~220 KB/s (1.76 Mbps),
+          // causing 1080p/4K streams (3.3–8 Mbps) to stall every ~20s. Clamped parallel Range slices boost throughput to 20–30 Mbps.
+          const isVkThrottledBinary =
+            req.method === 'GET' &&
+            !rawMode &&
+            /(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(targetUrl) &&
+            !/\.(m3u8?|pls)(\?|$)/i.test(parsedTarget.pathname) &&
+            !/\/video\/?$/i.test(parsedTarget.pathname);
+
+          if (isVkThrottledBinary) {
+            const accelCtrl = new AbortController();
+            const onEarlyClose = () => {
+              if (!res.writableEnded) accelCtrl.abort();
+            };
+            res.on('close', onEarlyClose);
+            try {
+              const headTimer = setTimeout(() => accelCtrl.abort(), 5000);
+              const headRes = await fetch(targetUrl, {
+                method: 'HEAD',
+                headers: {
+                  'User-Agent': effectiveUa,
+                  Referer: refererHeader,
+                  Origin: originHeader,
+                  Accept: '*/*',
+                },
+                redirect: 'follow',
+                signal: accelCtrl.signal,
+              });
+              clearTimeout(headTimer);
+
+              const headCt = (
+                headRes.headers.get('content-type') || ''
+              ).toLowerCase();
+              const totalBytes = Number(
+                headRes.headers.get('content-length') || 0
+              );
+
+              if (
+                headRes.ok &&
+                totalBytes > 0 &&
+                !headCt.includes('mpegurl') &&
+                !headCt.includes('m3u')
+              ) {
+                const resolvedMediaUrl = headRes.url || targetUrl;
+                const isTsSeg =
+                  /\.(ts|m4s|aac)(\?|$)/i.test(parsedTarget.pathname) ||
+                  headCt.includes('mp2t');
+                const rangeMatch = String(rangeHeader || '').match(
+                  /bytes=(\d+)-(\d*)/i
+                );
+
+                if (isTsSeg && !rangeMatch && totalBytes <= 25 * 1024 * 1024) {
+                  const sliceSize = 262144; // 256 KB
+                  const slices: Array<[number, number]> = [];
+                  for (let s = 0; s < totalBytes; s += sliceSize) {
+                    slices.push([s, Math.min(s + sliceSize - 1, totalBytes - 1)]);
+                  }
+                  const fetchSlice = async (
+                    s: number,
+                    e: number
+                  ): Promise<Buffer> => {
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                      const sr = await fetch(resolvedMediaUrl, {
+                        method: 'GET',
+                        headers: {
+                          'User-Agent': effectiveUa,
+                          Referer: refererHeader,
+                          Origin: originHeader,
+                          Accept: '*/*',
+                          Range: `bytes=${s}-${e}`,
+                        },
+                        redirect: 'follow',
+                        signal: accelCtrl.signal,
+                      });
+                      if (sr.ok || sr.status === 206) {
+                        const buf = Buffer.from(await sr.arrayBuffer());
+                        if (buf.length === e - s + 1) return buf;
+                      }
+                    }
+                    throw new Error('VK TS slice mismatch');
+                  };
+
+                  const maxConc = 8;
+                  const outBufs: Buffer[] = new Array(slices.length);
+                  for (let i = 0; i < slices.length; i += maxConc) {
+                    const batch = slices.slice(i, i + maxConc);
+                    const batchRes = await Promise.all(
+                      batch.map(([s, e]) => fetchSlice(s, e))
+                    );
+                    batchRes.forEach((b, idx) => {
+                      outBufs[i + idx] = b;
+                    });
+                  }
+                  const fullSeg = Buffer.concat(outBufs);
+                  res.off('close', onEarlyClose);
+                  res.writeHead(200, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Expose-Headers':
+                      'Content-Length, Content-Type, Accept-Ranges',
+                    'Content-Type': headCt || 'video/mp2t',
+                    'Content-Length': String(fullSeg.length),
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': 'public, max-age=60',
+                  });
+                  res.end(fullSeg);
+                  return;
+                }
+
+                // Progressive MP4 / WebM or explicit byte-range request: serve 206 Partial Content up to 4 MB window via parallel 512 KB slices
+                const maxWindow = 4 * 1024 * 1024; // 4 MB
+                const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
+                if (startByte >= totalBytes) {
+                  res.off('close', onEarlyClose);
+                  res.writeHead(416, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Content-Range': `bytes */${totalBytes}`,
+                  });
+                  res.end();
+                  return;
+                }
+                const requestedEnd =
+                  rangeMatch && rangeMatch[2]
+                    ? Number(rangeMatch[2])
+                    : startByte + maxWindow - 1;
+                const endByte = Math.min(
+                  requestedEnd,
+                  startByte + maxWindow - 1,
+                  totalBytes - 1
+                );
+                const sliceSize = 524288; // 512 KB
+                const slices: Array<[number, number]> = [];
+                for (let s = startByte; s <= endByte; s += sliceSize) {
+                  slices.push([s, Math.min(s + sliceSize - 1, endByte)]);
+                }
+                const fetchMp4Slice = async (
+                  s: number,
+                  e: number
+                ): Promise<Buffer> => {
+                  for (let attempt = 0; attempt < 2; attempt++) {
+                    const sr = await fetch(resolvedMediaUrl, {
+                      method: 'GET',
+                      headers: {
+                        'User-Agent': effectiveUa,
+                        Referer: refererHeader,
+                        Origin: originHeader,
+                        Accept: '*/*',
+                        Range: `bytes=${s}-${e}`,
+                      },
+                      redirect: 'follow',
+                      signal: accelCtrl.signal,
+                    });
+                    if (sr.ok || sr.status === 206) {
+                      const buf = Buffer.from(await sr.arrayBuffer());
+                      if (buf.length === e - s + 1) return buf;
+                    }
+                  }
+                  throw new Error('VK MP4 slice mismatch');
+                };
+                const maxConc = 8;
+                const outBufs: Buffer[] = new Array(slices.length);
+                for (let i = 0; i < slices.length; i += maxConc) {
+                  const batch = slices.slice(i, i + maxConc);
+                  const batchRes = await Promise.all(
+                    batch.map(([s, e]) => fetchMp4Slice(s, e))
+                  );
+                  batchRes.forEach((b, idx) => {
+                    outBufs[i + idx] = b;
+                  });
+                }
+                const windowBuf = Buffer.concat(outBufs);
+                res.off('close', onEarlyClose);
+                res.writeHead(206, {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Expose-Headers':
+                    'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                  'Content-Type': headCt || 'video/mp4',
+                  'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
+                  'Content-Length': String(windowBuf.length),
+                  'Accept-Ranges': 'bytes',
+                  'Cache-Control': 'public, max-age=60',
+                });
+                res.end(windowBuf);
+                return;
+              }
+            } catch {
+              // Fall back cleanly to standard single-stream proxy below
+            } finally {
+              res.off('close', onEarlyClose);
+            }
+          }
+
           const upstreamRes = await fetch(targetUrl, {
-            method: 'GET',
+            method: req.method === 'HEAD' ? 'HEAD' : 'GET',
             headers: {
               'User-Agent': effectiveUa,
               Referer: refererHeader,
               Origin: originHeader,
               Accept: '*/*',
+              ...(rangeHeader ? { Range: String(rangeHeader) } : {}),
               ...(activeCookie ? { Cookie: activeCookie } : {}),
             },
             redirect: 'follow',
@@ -2808,47 +3023,82 @@ function tvStreamProxyPlugin(): Plugin {
               contentType.includes('ogg') ||
               contentType.includes('octet-stream'));
 
-          if (isLiveAudioStream && upstreamRes.body) {
-            res.writeHead(200, {
-              'Access-Control-Allow-Origin': '*',
-              'Content-Type':
-                upstreamRes.headers.get('content-type') || 'audio/mpeg',
-              'Cache-Control': 'no-cache, no-store',
-              Connection: 'keep-alive',
-            });
-            const reader = upstreamRes.body.getReader();
-            const onClose = () => {
-              reader.cancel().catch(() => { });
-              controller.abort();
-            };
-            req.on('close', onClose);
-            res.on('close', onClose);
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done || res.writableEnded) break;
-                if (value) {
-                  res.write(Buffer.from(value));
-                }
-              }
-            } catch {
-              // client closed connection or upstream ended
-            } finally {
-              if (!res.writableEnded) res.end();
-            }
+          const outHeaders: Record<string, string> = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Expose-Headers':
+              'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+            'Content-Type':
+              upstreamRes.headers.get('content-type') ||
+              (isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'),
+            'Cache-Control': isLiveAudioStream
+              ? 'no-cache, no-store'
+              : 'public, max-age=10',
+          };
+          const upstreamLen = upstreamRes.headers.get('content-length');
+          const upstreamRange = upstreamRes.headers.get('content-range');
+          const upstreamAcceptRanges = upstreamRes.headers.get('accept-ranges');
+          if (upstreamLen && !isLiveAudioStream) {
+            outHeaders['Content-Length'] = upstreamLen;
+          }
+          if (upstreamRange) {
+            outHeaders['Content-Range'] = upstreamRange;
+          }
+          if (upstreamAcceptRanges) {
+            outHeaders['Accept-Ranges'] = upstreamAcceptRanges;
+          } else if (isVideoTsSegment) {
+            outHeaders['Accept-Ranges'] = 'bytes';
+          }
+          if (isLiveAudioStream) {
+            outHeaders['Connection'] = 'keep-alive';
+          }
+
+          if (req.method === 'HEAD' || !upstreamRes.body) {
+            res.writeHead(upstreamRes.status, outHeaders);
+            res.end();
             return;
           }
 
-          const arrayBuffer = await upstreamRes.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          res.writeHead(200, {
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type':
-              upstreamRes.headers.get('content-type') || 'video/mp2t',
-            'Content-Length': String(buffer.byteLength),
-            'Cache-Control': 'public, max-age=10',
-          });
-          res.end(buffer);
+          res.writeHead(upstreamRes.status, outHeaders);
+          const reader = upstreamRes.body.getReader();
+          let streamCompleted = false;
+          const onClientAbort = () => {
+            if (!streamCompleted) {
+              reader.cancel().catch(() => { });
+              controller.abort();
+            }
+          };
+          req.on('aborted', onClientAbort);
+          res.on('close', onClientAbort);
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done || res.writableEnded || res.destroyed) {
+                streamCompleted = true;
+                break;
+              }
+              if (value && value.byteLength > 0) {
+                const canContinue = res.write(Buffer.from(value));
+                if (!canContinue && !res.writableEnded && !res.destroyed) {
+                  await new Promise<void>((resolve) => {
+                    const doneWait = () => {
+                      res.off('drain', doneWait);
+                      res.off('close', doneWait);
+                      resolve();
+                    };
+                    res.once('drain', doneWait);
+                    res.once('close', doneWait);
+                  });
+                }
+              }
+            }
+          } catch {
+            // client closed connection or upstream ended
+          } finally {
+            streamCompleted = true;
+            req.off('aborted', onClientAbort);
+            res.off('close', onClientAbort);
+            if (!res.writableEnded) res.end();
+          }
         } catch (err) {
           if (!res.headersSent) {
             res.writeHead(502, {
