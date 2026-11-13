@@ -2359,6 +2359,7 @@ function tvStreamProxyPlugin(): Plugin {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
             'Access-Control-Allow-Headers': '*',
+            'Access-Control-Allow-Private-Network': 'true',
           });
           res.end();
           return;
@@ -2503,16 +2504,27 @@ function tvStreamProxyPlugin(): Plugin {
                 );
 
                 if (isTsSeg && !rangeMatch && totalBytes <= 25 * 1024 * 1024) {
-                  const sliceSize = 262144; // 256 KB
+                  clearTimeout(timeoutId);
                   const slices: Array<[number, number]> = [];
-                  for (let s = 0; s < totalBytes; s += sliceSize) {
-                    slices.push([s, Math.min(s + sliceSize - 1, totalBytes - 1)]);
+                  let cur = 0;
+                  if (cur < totalBytes) {
+                    const firstEnd = Math.min(cur + 65536 - 1, totalBytes - 1);
+                    slices.push([cur, firstEnd]);
+                    cur = firstEnd + 1;
+                  }
+                  const sliceSize = 262144; // 256 KB
+                  while (cur < totalBytes) {
+                    slices.push([cur, Math.min(cur + sliceSize - 1, totalBytes - 1)]);
+                    cur += sliceSize;
                   }
                   const fetchSlice = async (
                     s: number,
                     e: number
                   ): Promise<Buffer> => {
                     for (let attempt = 0; attempt < 2; attempt++) {
+                      if (accelCtrl.signal.aborted) {
+                        throw new Error('Client aborted');
+                      }
                       const sr = await fetch(resolvedMediaUrl, {
                         method: 'GET',
                         headers: {
@@ -2533,34 +2545,58 @@ function tvStreamProxyPlugin(): Plugin {
                     throw new Error('VK TS slice mismatch');
                   };
 
-                  const maxConc = 8;
-                  const outBufs: Buffer[] = new Array(slices.length);
-                  for (let i = 0; i < slices.length; i += maxConc) {
-                    const batch = slices.slice(i, i + maxConc);
-                    const batchRes = await Promise.all(
-                      batch.map(([s, e]) => fetchSlice(s, e))
-                    );
-                    batchRes.forEach((b, idx) => {
-                      outBufs[i + idx] = b;
+                  const slots = slices.map(() => {
+                    let resolve!: (b: Buffer) => void;
+                    let reject!: (err: unknown) => void;
+                    const promise = new Promise<Buffer>((resP, rejP) => {
+                      resolve = resP;
+                      reject = rejP;
                     });
+                    promise.catch(() => {});
+                    return { promise, resolve, reject };
+                  });
+                  let nextIdx = 0;
+                  const runWorker = async () => {
+                    while (!accelCtrl.signal.aborted) {
+                      const idx = nextIdx++;
+                      if (idx >= slices.length) return;
+                      const [s, e] = slices[idx];
+                      try {
+                        slots[idx].resolve(await fetchSlice(s, e));
+                      } catch (err) {
+                        slots[idx].reject(err);
+                        return;
+                      }
+                    }
+                  };
+                  const workerCount = Math.min(12, slices.length);
+                  for (let w = 0; w < workerCount; w++) {
+                    void runWorker();
                   }
-                  const fullSeg = Buffer.concat(outBufs);
-                  res.off('close', onEarlyClose);
+
+                  const firstChunk = await slots[0].promise;
                   res.writeHead(200, {
                     'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Private-Network': 'true',
                     'Access-Control-Expose-Headers':
                       'Content-Length, Content-Type, Accept-Ranges',
                     'Content-Type': headCt || 'video/mp2t',
-                    'Content-Length': String(fullSeg.length),
+                    'Content-Length': String(totalBytes),
                     'Accept-Ranges': 'bytes',
                     'Cache-Control': 'public, max-age=60',
                   });
-                  res.end(fullSeg);
+                  res.write(firstChunk);
+                  for (let i = 1; i < slots.length; i++) {
+                    if (accelCtrl.signal.aborted || res.writableEnded) break;
+                    res.write(await slots[i].promise);
+                  }
+                  res.off('close', onEarlyClose);
+                  res.end();
                   return;
                 }
 
-                // Progressive MP4 / WebM or explicit byte-range request: serve 206 Partial Content up to 4 MB window via parallel 512 KB slices
-                const maxWindow = 4 * 1024 * 1024; // 4 MB
+                // Progressive MP4 / WebM or explicit byte-range request: serve 206 Partial Content via parallel slices
+                const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 4 * 1024 * 1024;
                 const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
                 if (startByte >= totalBytes) {
                   res.off('close', onEarlyClose);
@@ -2580,7 +2616,7 @@ function tvStreamProxyPlugin(): Plugin {
                   startByte + maxWindow - 1,
                   totalBytes - 1
                 );
-                const sliceSize = 524288; // 512 KB
+                const sliceSize = isTsSeg ? 262144 : 524288;
                 const slices: Array<[number, number]> = [];
                 for (let s = startByte; s <= endByte; s += sliceSize) {
                   slices.push([s, Math.min(s + sliceSize - 1, endByte)]);
@@ -2609,7 +2645,7 @@ function tvStreamProxyPlugin(): Plugin {
                   }
                   throw new Error('VK MP4 slice mismatch');
                 };
-                const maxConc = 8;
+                const maxConc = 16;
                 const outBufs: Buffer[] = new Array(slices.length);
                 for (let i = 0; i < slices.length; i += maxConc) {
                   const batch = slices.slice(i, i + maxConc);
@@ -2624,9 +2660,12 @@ function tvStreamProxyPlugin(): Plugin {
                 res.off('close', onEarlyClose);
                 res.writeHead(206, {
                   'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Private-Network': 'true',
                   'Access-Control-Expose-Headers':
                     'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-                  'Content-Type': headCt || 'video/mp4',
+                  'Content-Type': isTsSeg
+                    ? headCt || 'video/mp2t'
+                    : headCt || 'video/mp4',
                   'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
                   'Content-Length': String(windowBuf.length),
                   'Accept-Ranges': 'bytes',
@@ -2636,6 +2675,13 @@ function tvStreamProxyPlugin(): Plugin {
                 return;
               }
             } catch {
+              accelCtrl.abort();
+              if (res.headersSent || res.writableEnded || res.destroyed) {
+                if (!res.writableEnded && !res.destroyed) {
+                  res.destroy();
+                }
+                return;
+              }
               // Fall back cleanly to standard single-stream proxy below
             } finally {
               res.off('close', onEarlyClose);
@@ -2976,11 +3022,13 @@ function tvStreamProxyPlugin(): Plugin {
                     const bwMatch = tr.match(/(?:^|,)BANDWIDTH=(\d+)/i);
                     const w = resMatch ? Number(resMatch[1]) : 0;
                     const h = resMatch ? Number(resMatch[2]) : 0;
+                    const width = w && h ? Math.max(w, h) : w;
                     const height = w && h ? Math.min(w, h) : h;
                     const bandwidth = bwMatch ? Number(bwMatch[1]) : 0;
                     variantPairs.push({
                       infLine: ln,
                       uriLine,
+                      width,
                       height,
                       bandwidth,
                     });
@@ -2995,15 +3043,21 @@ function tvStreamProxyPlugin(): Plugin {
                 variantPairs.sort(
                   (a, b) => b.height - a.height || b.bandwidth - a.bandwidth
                 );
+                const hdVariants = variantPairs.filter(
+                  (p) => p.height >= 720 || p.width >= 1200
+                );
+                const selectedVariants =
+                  hdVariants.length > 0 ? hdVariants : [variantPairs[0]];
                 rewritten = [
                   ...headerLines,
-                  ...variantPairs.flatMap((p) => [p.infLine, p.uriLine]),
+                  ...selectedVariants.flatMap((p) => [p.infLine, p.uriLine]),
                 ].join('\n');
               }
             }
 
             res.writeHead(200, {
               'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Private-Network': 'true',
               'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
               'Cache-Control': 'no-cache, no-store',
             });
@@ -3188,6 +3242,15 @@ export default defineConfig({
     port: 8769,
     strictPort: true,
     allowedHosts: true,
+    watch: {
+      ignored: [
+        '**/.tv-*.json',
+        '**/.filelist*/**',
+        '**/.tmp*/**',
+        '**/.chrome*/**',
+        '**/dist/**',
+      ],
+    },
   },
   esbuild: {
     target: 'es2015',

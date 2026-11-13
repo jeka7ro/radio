@@ -662,6 +662,7 @@ export interface ResolvedDirectVodStream {
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
+  backupHlsUrls?: string[];
   embedUrl?: string;
   title?: string;
   duration?: number;

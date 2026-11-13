@@ -202,6 +202,7 @@ interface ResolvedDirectVodStream {
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
+  backupHlsUrls?: string[];
   title?: string;
   duration?: number;
   audioNames?: string[];
@@ -2827,7 +2828,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               </div>
             )}
 
-            {activeServer === 'kinogram_hls' ? (
+            {activeServer === 'kinogram_hls' ||
+            (isFileListExclusiveRomanianTitle(activeVodItem) &&
+              (isDirectStreamLoading ||
+                Boolean(
+                  resolvedDirectStream?.ok &&
+                    (resolvedDirectStream.dashUrl ||
+                      resolvedDirectStream.hlsUrl)
+                ))) ? (
               isDirectStreamLoading ? (
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-zinc-300">
                   <Loader2 className="w-8 h-8 text-brand-400 animate-spin" />
@@ -2884,6 +2892,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                     );
                   }}
                   onStreamError={() => {
+                    if (
+                      resolvedDirectStream?.backupHlsUrls &&
+                      resolvedDirectStream.backupHlsUrls.length > 0
+                    ) {
+                      const [nextBackup, ...restBackups] =
+                        resolvedDirectStream.backupHlsUrls;
+                      if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
+                        setResolvedDirectStream((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                hlsUrl: nextBackup,
+                                backupHlsUrls: restBackups,
+                              }
+                            : prev
+                        );
+                        return;
+                      }
+                    }
                     if (fallbackDirectStreamRef.current) {
                       const nextStream = fallbackDirectStreamRef.current;
                       fallbackDirectStreamRef.current = null;

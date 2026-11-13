@@ -4,11 +4,10 @@
   "description": "Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web.",
   "start_url": "/",
   "scope": "/",
-  "display": "fullscreen",
-  "display_override": ["fullscreen", "standalone"],
+  "display": "standalone",
   "orientation": "any",
-  "background_color": "#090b10",
-  "theme_color": "#2563eb",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "categories": ["entertainment", "video", "music"],
   "icons": [
     {

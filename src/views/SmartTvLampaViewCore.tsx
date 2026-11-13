@@ -5246,13 +5246,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const relMatch = String(item.releaseTitle || item.name || '').match(
         /\bS(\d{1,2})[.\s_-]*E(\d{1,2})\b/i
       );
+      const seasonPackOnlyMatch = !relMatch
+        ? String(item.releaseTitle || item.name || '').match(/\bS(\d{1,2})\b/i)
+        : null;
       const useExplicitTorrentEp = Boolean(relMatch && section === 'torrents');
       const targetSeason =
         typeof explicitSeason === 'number' && explicitSeason > 0
           ? explicitSeason
           : useExplicitTorrentEp
             ? Number(relMatch![1])
-            : saved?.season || (relMatch ? Number(relMatch[1]) : 1);
+            : saved?.season ||
+              (relMatch
+                ? Number(relMatch[1])
+                : seasonPackOnlyMatch
+                  ? Number(seasonPackOnlyMatch[1])
+                  : 1);
       const targetEpisode =
         typeof explicitEpisode === 'number' && explicitEpisode > 0
           ? explicitEpisode
@@ -5427,12 +5435,28 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const playVodId = (sp.get('playVod') || '').trim();
     if (!playVodId) return;
     const savedEntry = watchProgressMap[playVodId];
-    if (!savedEntry?.item) return;
+    const nameParam = (sp.get('name') || '').trim();
+    const typeParam = sp.get('type') === 'movie' ? 'movie' : 'series';
+    const cleanTt = playVodId.startsWith('tt') ? playVodId.split(':')[0] : '';
+    const targetItem: CinemetaItem | undefined =
+      savedEntry?.item ||
+      (nameParam || cleanTt
+        ? {
+            id: playVodId,
+            imdbId: cleanTt || undefined,
+            name: nameParam || playVodId,
+            type: typeParam,
+            poster: cleanTt
+              ? `https://images.metahub.space/poster/medium/${cleanTt}/img`
+              : '',
+          }
+        : undefined);
+    if (!targetItem) return;
     handledDeepLinkVodRef.current = true;
-    const sParam = Number(sp.get('s') || savedEntry.season || 1) || 1;
-    const eParam = Number(sp.get('e') || savedEntry.episode || 1) || 1;
+    const sParam = Number(sp.get('s') || savedEntry?.season || 1) || 1;
+    const eParam = Number(sp.get('e') || savedEntry?.episode || 1) || 1;
     const tParam = Number(sp.get('t') || 0);
-    handleOpenVod(savedEntry.item, true, sParam, eParam);
+    handleOpenVod(targetItem, true, sParam, eParam);
     if (tParam > 5) {
       setResumeStartSeconds(tParam);
     }
@@ -5441,6 +5465,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       sp.delete('s');
       sp.delete('e');
       sp.delete('t');
+      sp.delete('name');
+      sp.delete('type');
       const nextQs = sp.toString();
       window.history.replaceState(
         {},
@@ -5477,6 +5503,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (latestSec > 10) {
           setResumeStartSeconds(latestSec);
           setPendingResumePromptSec(latestSec);
+        } else if (resumeStartSeconds > 10) {
+          setPendingResumePromptSec(resumeStartSeconds);
         } else {
           setResumeStartSeconds(0);
           setPendingResumePromptSec(null);
@@ -5507,6 +5535,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       watchProgressMap,
       selectedSeason,
       selectedEpisode,
+      resumeStartSeconds,
       requestTvFullscreen,
       wakeVodOsd,
       tvSettings.autoFullscreenOnPlay,
@@ -6817,6 +6846,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
         setActiveServer(
           !activeVodItem.id.startsWith('kp_') &&
+            !isFileListExclusiveRomanianTitle(activeVodItem) &&
             tvSettings.defaultVodServer !== 'auto_best' &&
             tvSettings.defaultVodServer !== 'nontongo' &&
             tvSettings.defaultVodServer !== 'filelist_torrent'
@@ -7382,8 +7412,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         });
     } else {
+      userSelectedFlTorrentIdRef.current = null;
       setIsFileListStreamLoading(false);
       setResolvedFileListStream(null);
+      setActiveServer((prev) =>
+        prev === 'filelist_torrent' ? 'kinogram_hls' : prev
+      );
     }
 
     return () => {
@@ -8453,12 +8487,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
   }, [isPlayingVod, activeVodItem?.id, activeProfileId]);
 
-  // Auto-hide resume prompt after 6 seconds so it never clutters the video screen
+  // Auto-hide resume prompt after 6 seconds of active video playback so it never clutters the video screen
   useEffect(() => {
-    if (pendingResumePromptSec === null) return;
+    if (pendingResumePromptSec === null || !isPlayingVod) return;
     const t = window.setTimeout(() => setPendingResumePromptSec(null), 6000);
     return () => window.clearTimeout(t);
-  }, [pendingResumePromptSec]);
+  }, [pendingResumePromptSec, isPlayingVod]);
 
   // Sync watch progress & saved favorites across devices (local + cloud filmio.my real-time continuity)
   useEffect(() => {
@@ -8773,7 +8807,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       !isPlayingVod &&
       !activeVodItem &&
       !currentTvChannel &&
-      !currentStation &&
+      playerStatus !== 'playing' &&
+      playerStatus !== 'loading' &&
       historyList.length > 0
     ) {
       try {
@@ -8795,7 +8830,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     isPlayingVod,
     activeVodItem,
     currentTvChannel,
-    currentStation,
+    playerStatus,
     historyList.length,
   ]);
 
@@ -9219,17 +9254,28 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           </div>
         )}
 
-      {/* TOP FULL-WIDTH LAMPA HEADER BAR (Identical to Lampa screenshot) */}
+      {/* TOP FULL-WIDTH LAMPA HEADER BAR (Identical to Lampa screenshot, safe-area aware for iPhone Home Screen PWA) */}
       {!isAnyFullModePlayer && (
         <header
-          className={`relative z-20 h-14 sm:h-16 px-3 sm:px-7 flex items-center justify-between gap-2 sm:gap-4 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-[#141414]'
+          style={{
+            paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+            paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
+            paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
+          }}
+          className={`relative z-20 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-[#141414]'
             }`}
         >
+          <div className="h-14 sm:h-16 px-3 sm:px-7 w-full flex items-center justify-between gap-2 sm:gap-4">
           {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
           <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
             {activeVodItem && (
               <button
                 type="button"
+                aria-label={tr(
+                  'Înapoi la catalog',
+                  'Back to catalog',
+                  'Назад к списку'
+                )}
                 title={tr(
                   'Înapoi la catalog',
                   'Back to catalog',
@@ -9243,13 +9289,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     setIsSidebarOpen(true);
                   }
                 }}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-zinc-100 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] transition-colors cursor-pointer"
+                className="w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-zinc-100 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] transition-colors cursor-pointer shrink-0"
               >
-                <ChevronLeft className="w-6 h-6 sm:w-7 sm:h-7 stroke-[2.4]" />
+                <ChevronLeft className="w-6 h-6 sm:w-7 sm:h-7 stroke-[2.4]" aria-hidden="true" />
               </button>
             )}
             <button
               type="button"
+              data-header-sidebar-btn="true"
+              aria-label={tr('Meniu Lateral', 'Sidebar Menu', 'Боковое меню')}
+              aria-expanded={isSidebarOpen}
               onClick={() => {
                 setIsSidebarOpen((prev) => {
                   const next = !prev;
@@ -9269,12 +9318,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 });
               }}
               title={tr('Meniu Lateral ()', 'Sidebar Menu ()', 'Меню ()')}
-              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer ${isSidebarOpen && activeVodItem
+              className={`w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${isSidebarOpen && activeVodItem
                 ? 'bg-white text-[#141414]'
                 : 'text-zinc-200 hover:bg-white/10 focus:bg-white focus:text-zinc-950'
                 }`}
             >
-              <Menu className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" />
+              <Menu className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" aria-hidden="true" />
             </button>
 
             <SmartCinemaLogo size="md" className="ml-0.5 sm:ml-1 shrink-0" />
@@ -9465,10 +9514,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 setActiveVodItem(null);
                 setSection('search');
               }}
+              aria-label={tr('Căutare', 'Search', 'Поиск')}
               title={tr('Căutare', 'Search', 'Поиск')}
               className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
             >
-              <Search className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Search className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
             </button>
 
             {/* Bell Icon with Red Dot -> Opens New Episodes Calendar */}
@@ -9478,10 +9528,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 setActiveVodItem(null);
                 setSection('calendar');
               }}
+              aria-label={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
               title={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
               className="hidden sm:flex relative w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
             >
-              <Bell className="w-5 h-5" />
+              <Bell className="w-5 h-5" aria-hidden="true" />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500" />
             </button>
 
@@ -9528,15 +9579,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     'Тема: Темная (Cinema Dark) — Нажмите для Светлой (Ambient TV)'
                   )
               }
+              aria-label={tr('Schimbă tema', 'Toggle theme', 'Сменить тему')}
               className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer ${tvSettings.tvTheme === 'ambient'
                   ? 'bg-amber-400/20 border-amber-300/50 text-amber-200 hover:bg-amber-400/30 shadow-sm'
                   : 'bg-white/10 border-white/15 text-zinc-300 hover:text-white hover:bg-white/15'
                 }`}
             >
               {tvSettings.tvTheme === 'ambient' ? (
-                <Sun className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" />
+                <Sun className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" aria-hidden="true" />
               ) : (
-                <Moon className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300 shrink-0" />
+                <Moon className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300 shrink-0" aria-hidden="true" />
               )}
             </button>
 
@@ -9544,6 +9596,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             <button
               type="button"
               data-header-profile-btn="true"
+              aria-label={tr(
+                `Cont activ: ${activeProfile.name}`,
+                `Active Account: ${activeProfile.name}`,
+                `Аккаунт: ${activeProfile.name}`
+              )}
               onClick={() => {
                 setIsHandoffModalOpen(true);
               }}
@@ -9572,6 +9629,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             {/* Smart TV Settings Icon (Настройки / Setări Smart TV) */}
             <button
               type="button"
+              data-header-settings-btn="true"
+              aria-label={tr('Setări', 'Settings', 'Настройки')}
               onClick={() => {
                 setIsFilterDrawerOpen(false);
                 setIsCatalogDrawerOpen(false);
@@ -9588,12 +9647,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 : 'text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none'
                 }`}
             >
-              <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Settings className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
             </button>
 
             {/* Fullscreen Icon */}
             <button
               type="button"
+              aria-label="Ecran Complet TV"
               onClick={() => {
                 if (
                   !document.fullscreenElement &&
@@ -9607,17 +9667,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               title="Ecran Complet TV"
               className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
             >
-              <Maximize2 className="w-5 h-5" />
+              <Maximize2 className="w-5 h-5" aria-hidden="true" />
             </button>
 
             {/* Reload Icon */}
             <button
               type="button"
+              aria-label="Reîncarcă Aplicația TV"
               onClick={() => window.location.reload()}
               title="Reîncarcă Aplicația TV"
               className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCw className="w-5 h-5" aria-hidden="true" />
             </button>
 
             {/* Lampa 3-Dot Status Indicator */}
@@ -9638,6 +9699,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               </div>
             </div>
           </div>
+          </div>
         </header>
       )}
 
@@ -9655,7 +9717,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         {!isAnyFullModePlayer && isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(false)}
-            className="md:hidden fixed inset-0 z-30 bg-black/70 backdrop-blur-xs"
+            className="md:hidden absolute inset-0 z-30 bg-black/70 backdrop-blur-xs"
           />
         )}
 
@@ -9663,7 +9725,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         {!isAnyFullModePlayer && isSidebarOpen && (
           <aside
             aria-label="Meniu Principal Smart TV Lampa"
-            className={`fixed md:static top-15 bottom-15 left-2 z-40 w-60 md:w-56 md:my-2 md:ml-3 py-2.5 px-3 rounded-[28px] overflow-y-auto shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl md:shadow-none ${activeVodItem
+            className={`absolute md:static top-2 bottom-2 left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 md:w-56 md:my-2 md:ml-3 py-2.5 px-3 rounded-[28px] overflow-y-auto shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl md:shadow-none ${activeVodItem
               ? 'z-40'
               : ''
               }`}
@@ -10268,10 +10330,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               right: 'max(16px, env(safe-area-inset-bottom, 16px))',
                             }
                           : {
-                              top: 'max(8px, env(safe-area-inset-top, 8px))',
-                              left: 'max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-top, 0px))',
+                              top: 'max(8px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px))',
+                              left: 'max(12px, var(--safe-left, env(safe-area-inset-left, 0px)))',
                               right:
-                                'max(12px, env(safe-area-inset-right, 0px), env(safe-area-inset-bottom, 0px))',
+                                'max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))',
                             }
                         : undefined
                     }
@@ -10814,7 +10876,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       </div>
                     )
                   ) : activeServer === 'kinogram_hls' ||
-                    Boolean(matchedOfflineVodItem) ? (
+                    Boolean(matchedOfflineVodItem) ||
+                    (isFileListExclusiveRomanianTitle(
+                      detailedMeta || activeVodItem
+                    ) &&
+                      (isDirectStreamLoading ||
+                        Boolean(
+                          resolvedDirectStream?.ok &&
+                            (resolvedDirectStream.dashUrl ||
+                              resolvedDirectStream.hlsUrl)
+                        ))) ? (
                     isDirectStreamLoading && !matchedOfflineVodItem ? (
                       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 text-zinc-200">
                         <Loader2 className="w-10 h-10 text-amber-400 animate-spin" />
@@ -10847,6 +10918,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             }
                           }
                           if (
+                            resolvedDirectStream?.backupHlsUrls &&
+                            resolvedDirectStream.backupHlsUrls.length > 0
+                          ) {
+                            const [nextBackup, ...restBackups] =
+                              resolvedDirectStream.backupHlsUrls;
+                            if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
+                              setResolvedDirectStream((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      hlsUrl: nextBackup,
+                                      backupHlsUrls: restBackups,
+                                    }
+                                  : prev
+                              );
+                              return;
+                            }
+                          }
+                          if (
                             isLocalHomeServer() &&
                             resolvedFileListStream?.ok &&
                             resolvedFileListStream.streamUrl
@@ -10860,6 +10950,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             matchedOfflineVodItem.duration > 60
                           ) {
                             return matchedOfflineVodItem.duration;
+                          }
+                          if (
+                            resolvedDirectStream?.duration &&
+                            resolvedDirectStream.duration > 60
+                          ) {
+                            return resolvedDirectStream.duration;
                           }
                           const rawRt = String(detailedMeta?.runtime || '');
                           const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
@@ -11095,30 +11191,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             )}
                           </p>
                           <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsFileListStreamLoading(true);
-                                void retryProbeLocalBridge().then((ok) => {
-                                  if (ok) {
-                                    setActiveServer('filelist_torrent');
-                                    setLocalBridgeTick((t) => t + 1);
-                                  } else {
-                                    setIsFileListStreamLoading(false);
-                                  }
-                                });
-                              }}
-                              className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
-                            >
-                              {tr(
-                                'Conectează la localhost:8769',
-                                'Connect to localhost:8769',
-                                'Подключить localhost:8769'
-                              )}
-                            </button>
+                            {!isMobilePhone && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsFileListStreamLoading(true);
+                                  void retryProbeLocalBridge().then((ok) => {
+                                    if (ok) {
+                                      setActiveServer('filelist_torrent');
+                                      setLocalBridgeTick((t) => t + 1);
+                                    } else {
+                                      setIsFileListStreamLoading(false);
+                                    }
+                                  });
+                                }}
+                                className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
+                              >
+                                {tr(
+                                  'Conectează la localhost:8769',
+                                  'Connect to localhost:8769',
+                                  'Подключить localhost:8769'
+                                )}
+                              </button>
+                            )}
                             <a
                               href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
                                 activeVodItem.id
+                              )}&name=${encodeURIComponent(
+                                activeVodItem.name
+                              )}&type=${encodeURIComponent(
+                                activeVodItem.type
                               )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
                                 resumeStartSeconds || 0
                               )}`}
@@ -11133,6 +11235,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             <a
                               href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
                                 activeVodItem.id
+                              )}&name=${encodeURIComponent(
+                                activeVodItem.name
+                              )}&type=${encodeURIComponent(
+                                activeVodItem.type
                               )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
                                 resumeStartSeconds || 0
                               )}`}
@@ -11749,6 +11855,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     availableSeasons.length > 0 && (
                       <div
                         data-episodes-drawer="true"
+                        style={
+                          isMobilePhone && !(isMobileCustomFullscreen && isPortraitViewport)
+                            ? {
+                                top: 'calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 3.5rem)',
+                                left: 'max(1rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                                right: 'max(1rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                                maxHeight:
+                                  'calc(100% - var(--safe-top, env(safe-area-inset-top, 0px)) - var(--safe-bottom, env(safe-area-inset-bottom, 0px)) - 5rem)',
+                              }
+                            : undefined
+                        }
                         className="absolute top-14 sm:top-16 inset-x-4 sm:inset-x-8 z-40 max-h-[calc(100%-5rem)] overflow-y-auto p-5 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] space-y-4"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -12176,12 +12293,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   (savedProg?.season === selectedSeason &&
                                     savedProg?.episode === selectedEpisode
                                     ? savedProg?.currentTime
-                                    : 0) ??
+                                    : undefined) ??
                                   pendingResumePromptSec ??
-                                  0)
+                                  (resumeStartSeconds > 10 ? resumeStartSeconds : 0))
                                 : (savedProg?.currentTime ??
                                   pendingResumePromptSec ??
-                                  0);
+                                  (resumeStartSeconds > 10 ? resumeStartSeconds : 0));
                             return (
                               <button
                                 ref={playVodBtnRef}
@@ -15150,12 +15267,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         </div>
       </div>
 
-      {/* MOBILE BOTTOM NAVIGATION BAR (Clean 1-tap switching on phones < 768px) */}
+      {/* MOBILE BOTTOM NAVIGATION BAR (Clean 1-tap switching on phones < 768px, safe-area aware for iPhone Home Screen PWA) */}
       {!isAnyFullModePlayer && (
         <nav
           aria-label="Navigare Mobilă"
-          className="md:hidden relative z-30 h-14 px-1 bg-[#0d111a]/95 backdrop-blur-xl border-t border-white/10 flex items-center justify-around shrink-0 select-none"
+          style={{
+            paddingBottom: 'var(--safe-bottom, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'max(0.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+            paddingRight: 'max(0.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+          }}
+          className="md:hidden relative z-30 bg-[#0d111a]/95 backdrop-blur-xl border-t border-white/10 shrink-0 select-none"
         >
+          <div className="h-14 w-full flex items-center justify-around">
           {(
             [
               {
@@ -15232,6 +15355,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           })}
           <button
             type="button"
+            aria-label={tr('Meniu', 'Menu', 'Меню')}
+            aria-expanded={isSidebarOpen}
             onClick={() => setIsSidebarOpen((prev) => !prev)}
             className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer ${
               isSidebarOpen
@@ -15239,11 +15364,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 : 'text-zinc-400 hover:text-zinc-200 font-semibold'
             }`}
           >
-            <Menu className="w-5 h-5 stroke-[2]" />
+            <Menu className="w-5 h-5 stroke-[2]" aria-hidden="true" />
             <span className="text-[10px] leading-none truncate max-w-[60px]">
               {tr('Meniu', 'Menu', 'Меню')}
             </span>
           </button>
+          </div>
         </nav>
       )}
 

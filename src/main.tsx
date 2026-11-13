@@ -53,9 +53,19 @@ if ('serviceWorker' in navigator) {
     }
   } else {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        // Service worker registration is progressive enhancement
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((reg) => {
+          void reg.update();
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              void reg.update();
+            }
+          });
+        })
+        .catch(() => {
+          // Service worker registration is progressive enhancement
+        });
     });
   }
 }

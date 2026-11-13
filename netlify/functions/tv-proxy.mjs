@@ -1,6 +1,111 @@
-// Per-container cache of freshly signed VK Video stream URLs (resolves srcIp mismatch across Netlify AWS Lambda containers)
+import { gzipSync } from 'node:zlib';
+
+// Per-container cache of freshly signed VK Video & Vidmoly stream URLs (resolves srcIp / ASN mismatch across Netlify AWS Lambda containers)
 const vkSignedContainerCache = new Map();
+const vidmolyContainerCache = new Map();
 const VK_SIGNED_CACHE_TTL_MS = 20 * 60 * 1000;
+
+async function refreshVidmolyTargetUrl(vmId, originalTargetUrl, ua) {
+  if (!vmId || !/^[a-zA-Z0-9_-]{6,32}$/.test(vmId)) return null;
+  let cached = vidmolyContainerCache.get(vmId);
+  if (!cached || Date.now() - cached.ts > VK_SIGNED_CACHE_TTL_MS) {
+    for (const host of [
+      'https://vidmoly.net',
+      'https://vidmoly.org',
+      'https://vidmoly.biz',
+      'https://vidmoly.to',
+    ]) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      try {
+        const res = await fetch(`${host}/embed-${vmId}.html`, {
+          headers: {
+            'User-Agent': ua,
+            Referer: 'https://veziaici.net/',
+          },
+          signal: ctrl.signal,
+        });
+        if (!res.ok) continue;
+        const html = await res.text();
+        const masterUrl = html.match(/https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i)?.[0];
+        if (masterUrl) {
+          cached = { ts: Date.now(), masterUrl, variantUrl: '' };
+          vidmolyContainerCache.set(vmId, cached);
+          break;
+        }
+      } catch {
+        // try next mirror
+      } finally {
+        clearTimeout(t);
+      }
+    }
+  }
+  if (!cached?.masterUrl) return null;
+  if (/master\.m3u8/i.test(originalTargetUrl)) return cached.masterUrl;
+  if (!cached.variantUrl) {
+    try {
+      const mRes = await fetch(cached.masterUrl, {
+        headers: {
+          'User-Agent': ua,
+          Referer: 'https://vidmoly.net/',
+          Origin: 'https://vidmoly.net',
+        },
+      });
+      if (mRes.ok) {
+        const mTxt = await mRes.text();
+        const mLines = mTxt.split(/\r?\n/);
+        let bestVar = '';
+        let bestH = -1;
+        for (let i = 0; i < mLines.length; i++) {
+          const tr = mLines[i].trim();
+          if (tr.startsWith('#EXT-X-STREAM-INF:')) {
+            const rm = tr.match(/RESOLUTION=(\d+)x(\d+)/i);
+            const h = rm ? Math.min(Number(rm[1]), Number(rm[2])) : 0;
+            let nxt = '';
+            while (i + 1 < mLines.length) {
+              const cand = mLines[++i].trim();
+              if (!cand) continue;
+              if (!cand.startsWith('#')) nxt = cand;
+              break;
+            }
+            if (nxt && h > bestH) {
+              bestH = h;
+              bestVar = nxt;
+            }
+          }
+        }
+        if (!bestVar) {
+          bestVar =
+            mLines.map((l) => l.trim()).find((l) => l && !l.startsWith('#')) ||
+            '';
+        }
+        if (bestVar) {
+          cached.variantUrl = new URL(bestVar, cached.masterUrl).href;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    const origParsed = new URL(originalTargetUrl);
+    if (/\.m3u8?(\?|$)/i.test(origParsed.pathname)) {
+      return cached.variantUrl || cached.masterUrl;
+    }
+    if (cached.variantUrl) {
+      const segFile = origParsed.pathname.split('/').pop();
+      if (segFile && /\.(ts|m4s|aac|mp4)$/i.test(segFile)) {
+        const varParsed = new URL(cached.variantUrl);
+        const healedSeg = new URL(segFile, varParsed.href);
+        healedSeg.search = varParsed.search;
+        return healedSeg.href;
+      }
+    }
+  } catch {
+    // ignore malformed original URL
+  }
+  return null;
+}
 
 async function refreshVkSignedTargetUrl(
   vkId,
@@ -9,7 +114,10 @@ async function refreshVkSignedTargetUrl(
   ua,
   forceRefresh = false
 ) {
-  if (!vkId || !/^-?\d+_\d+$/.test(vkId)) return null;
+  const vkMatch = String(vkId || '').match(/^(-?\d+_\d+)(?:_([a-zA-Z0-9]+))?$/);
+  if (!vkMatch) return null;
+  const baseVideoId = vkMatch[1];
+  const vkHash = vkMatch[2] || '';
   let entry = !forceRefresh ? vkSignedContainerCache.get(vkId) : null;
   if (!entry || Date.now() - entry.ts > VK_SIGNED_CACHE_TTL_MS) {
     const ctrl = new AbortController();
@@ -24,7 +132,7 @@ async function refreshVkSignedTargetUrl(
           Origin: 'https://vkvideo.ru',
           Referer: 'https://vkvideo.ru/',
         },
-        body: `act=show&al=1&video=${vkId}`,
+        body: `act=show&al=1&video=${baseVideoId}${vkHash ? `&list=${vkHash}` : ''}`,
         signal: ctrl.signal,
       });
       if (!res.ok) return null;
@@ -154,6 +262,7 @@ export default async (req) => {
     const customRef = reqUrl.searchParams.get('ref') || '';
     const customUa = reqUrl.searchParams.get('ua') || '';
     const vkParam = (reqUrl.searchParams.get('vk') || '').trim();
+    const vmParam = (reqUrl.searchParams.get('vm') || '').trim();
     const vkQualityParam = Number(reqUrl.searchParams.get('vkq') || 0);
     const rawMode = reqUrl.searchParams.get('raw') === '1';
     const audioIdxParam = reqUrl.searchParams.get('audioIdx');
@@ -288,8 +397,24 @@ export default async (req) => {
             headCt.includes('mp2t');
           const rangeMatch = rangeHeader.match(/bytes=(\d+)-(\d*)/i);
 
+          const streamAbort = new AbortController();
+          if (req.signal) {
+            if (req.signal.aborted) {
+              streamAbort.abort();
+            } else {
+              req.signal.addEventListener(
+                'abort',
+                () => streamAbort.abort(),
+                { once: true }
+              );
+            }
+          }
+
           const fetchClampedSlice = async (s, e) => {
             for (let attempt = 0; attempt < 2; attempt++) {
+              if (streamAbort.signal.aborted) {
+                throw new Error('Client aborted');
+              }
               const sr = await fetch(resolvedMediaUrl, {
                 method: 'GET',
                 headers: {
@@ -300,6 +425,7 @@ export default async (req) => {
                   Range: `bytes=${s}-${e}`,
                 },
                 redirect: 'follow',
+                signal: streamAbort.signal,
               });
               if (sr.ok || sr.status === 206) {
                 const u8 = new Uint8Array(await sr.arrayBuffer());
@@ -307,6 +433,93 @@ export default async (req) => {
               }
             }
             throw new Error('VK slice mismatch');
+          };
+
+          const buildSlicesForRange = (fromByte, toByte, fastFirstChunk) => {
+            const slices = [];
+            let cursor = fromByte;
+            if (fastFirstChunk && cursor <= toByte) {
+              const firstEnd = Math.min(cursor + 65536 - 1, toByte);
+              slices.push([cursor, firstEnd]);
+              cursor = firstEnd + 1;
+            }
+            const step = isTsSeg ? 262144 : 524288;
+            while (cursor <= toByte) {
+              slices.push([cursor, Math.min(cursor + step - 1, toByte)]);
+              cursor += step;
+            }
+            return slices;
+          };
+
+          const createSlidingWindowStream = async (slices, maxConc = 16) => {
+            const slots = slices.map(() => {
+              let resolve;
+              let reject;
+              const promise = new Promise((res, rej) => {
+                resolve = res;
+                reject = rej;
+              });
+              promise.catch(() => {});
+              return { promise, resolve, reject };
+            });
+            let cursor = 0;
+            const runWorker = async () => {
+              while (!streamAbort.signal.aborted) {
+                const idx = cursor++;
+                if (idx >= slices.length) return;
+                const [s, e] = slices[idx];
+                try {
+                  const data = await fetchClampedSlice(s, e);
+                  slots[idx].resolve(data);
+                } catch (err) {
+                  slots[idx].reject(err);
+                  return;
+                }
+              }
+            };
+            const workerCount = Math.min(maxConc, slices.length);
+            for (let w = 0; w < workerCount; w++) {
+              void runWorker();
+            }
+            let firstChunk;
+            try {
+              firstChunk = await slots[0].promise;
+            } catch (firstErr) {
+              streamAbort.abort();
+              throw firstErr;
+            }
+            let readIdx = 1;
+            return new ReadableStream({
+              start(streamCtrl) {
+                streamCtrl.enqueue(firstChunk);
+                if (readIdx >= slots.length) {
+                  streamCtrl.close();
+                }
+              },
+              async pull(streamCtrl) {
+                if (readIdx >= slots.length || streamAbort.signal.aborted) {
+                  try {
+                    streamCtrl.close();
+                  } catch {
+                    // already closed
+                  }
+                  return;
+                }
+                try {
+                  const chunk = await slots[readIdx++].promise;
+                  streamCtrl.enqueue(chunk);
+                  if (readIdx >= slots.length) {
+                    streamCtrl.close();
+                  }
+                } catch (streamErr) {
+                  streamAbort.abort();
+                  streamCtrl.error(streamErr);
+                }
+              },
+              cancel() {
+                streamAbort.abort();
+              },
+            });
           };
 
           const concatUint8 = (arrays) => {
@@ -322,42 +535,13 @@ export default async (req) => {
 
           if (isTsSeg && !rangeMatch && totalBytes <= 25 * 1024 * 1024) {
             clearTimeout(timeoutId);
-            const sliceSize = 262144;
-            const slices = [];
-            for (let s = 0; s < totalBytes; s += sliceSize) {
-              slices.push([s, Math.min(s + sliceSize - 1, totalBytes - 1)]);
-            }
-            const maxConc = 8;
-            // Fetch the first batch eagerly so any upstream error triggers clean fallback, then stream remaining batches via ReadableStream (bypasses Lambda 6 MB limit!)
-            const firstBatch = slices.slice(0, maxConc);
-            const firstChunks = await Promise.all(
-              firstBatch.map(([s, e]) => fetchClampedSlice(s, e))
-            );
-            const stream = new ReadableStream({
-              async start(streamCtrl) {
-                try {
-                  for (const chunk of firstChunks) {
-                    streamCtrl.enqueue(chunk);
-                  }
-                  for (let i = maxConc; i < slices.length; i += maxConc) {
-                    const batch = slices.slice(i, i + maxConc);
-                    const resBatch = await Promise.all(
-                      batch.map(([s, e]) => fetchClampedSlice(s, e))
-                    );
-                    for (const chunk of resBatch) {
-                      streamCtrl.enqueue(chunk);
-                    }
-                  }
-                  streamCtrl.close();
-                } catch (streamErr) {
-                  streamCtrl.error(streamErr);
-                }
-              },
-            });
+            const slices = buildSlicesForRange(0, totalBytes - 1, true);
+            const stream = await createSlidingWindowStream(slices, 16);
             return new Response(stream, {
               status: 200,
               headers: {
                 'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
                 'Access-Control-Expose-Headers':
                   'Content-Length, Content-Type, Accept-Ranges',
                 'Content-Type': headCt || 'video/mp2t',
@@ -368,8 +552,8 @@ export default async (req) => {
             });
           }
 
-          // Progressive MP4 / WebM or explicit Range request (capped to 4 MB < Netlify 6 MB limit)
-          const maxWindow = 4 * 1024 * 1024;
+          // Progressive MP4 / WebM or explicit Range request (supports instant-TTFB ReadableStream for iOS AVPlayer .ts ranges)
+          const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 4 * 1024 * 1024;
           const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
           if (startByte >= totalBytes) {
             return new Response(null, {
@@ -389,21 +573,42 @@ export default async (req) => {
             startByte + maxWindow - 1,
             totalBytes - 1
           );
-          const sliceSize = 524288;
-          const slices = [];
-          for (let s = startByte; s <= endByte; s += sliceSize) {
-            slices.push([s, Math.min(s + sliceSize - 1, endByte)]);
-          }
-          const maxConc = 8;
-          const out = new Array(slices.length);
-          for (let i = 0; i < slices.length; i += maxConc) {
-            const batch = slices.slice(i, i + maxConc);
-            const resBatch = await Promise.all(
-              batch.map(([s, e]) => fetchClampedSlice(s, e))
-            );
-            resBatch.forEach((b, idx) => {
-              out[i + idx] = b;
+          const rangeLen = endByte - startByte + 1;
+          if (isTsSeg && rangeLen > 65536) {
+            clearTimeout(timeoutId);
+            const slices = buildSlicesForRange(startByte, endByte, true);
+            const stream = await createSlidingWindowStream(slices, 16);
+            return new Response(stream, {
+              status: 206,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Access-Control-Expose-Headers':
+                  'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                'Content-Type': headCt || 'video/mp2t',
+                'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
+                'Content-Length': String(rangeLen),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=60',
+              },
             });
+          }
+          const slices = buildSlicesForRange(startByte, endByte, false);
+          const maxConc = 12;
+          const out = new Array(slices.length);
+          try {
+            for (let i = 0; i < slices.length; i += maxConc) {
+              const batch = slices.slice(i, i + maxConc);
+              const resBatch = await Promise.all(
+                batch.map(([s, e]) => fetchClampedSlice(s, e))
+              );
+              resBatch.forEach((b, idx) => {
+                out[i + idx] = b;
+              });
+            }
+          } catch (batchErr) {
+            streamAbort.abort();
+            throw batchErr;
           }
           const windowBuf = concatUint8(out);
           return new Response(windowBuf, {
@@ -412,7 +617,9 @@ export default async (req) => {
               'Access-Control-Allow-Origin': '*',
               'Access-Control-Expose-Headers':
                 'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-              'Content-Type': headCt || 'video/mp4',
+              'Content-Type': isTsSeg
+                ? headCt || 'video/mp2t'
+                : headCt || 'video/mp4',
               'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
               'Content-Length': String(windowBuf.byteLength),
               'Accept-Ranges': 'bytes',
@@ -421,6 +628,13 @@ export default async (req) => {
           });
         }
       } catch {
+        if (req.signal?.aborted) {
+          clearTimeout(timeoutId);
+          return new Response(null, {
+            status: 499,
+            headers: { 'Access-Control-Allow-Origin': '*' },
+          });
+        }
         // Fall through to standard fetch below
       }
     }
@@ -440,17 +654,19 @@ export default async (req) => {
 
     if (
       !upstreamRes.ok &&
-      vkParam &&
+      (vkParam || vmParam) &&
       (upstreamRes.status === 400 ||
         upstreamRes.status === 403 ||
         upstreamRes.status === 410)
     ) {
-      const healedUrl = await refreshVkSignedTargetUrl(
-        vkParam,
-        vkQualityParam,
-        targetUrl,
-        effectiveUa
-      );
+      const healedUrl = vkParam
+        ? await refreshVkSignedTargetUrl(
+            vkParam,
+            vkQualityParam,
+            targetUrl,
+            effectiveUa
+          )
+        : await refreshVidmolyTargetUrl(vmParam, targetUrl, effectiveUa);
       if (healedUrl && healedUrl !== targetUrl) {
         targetUrl = healedUrl;
         parsedTarget = new URL(targetUrl);
@@ -497,7 +713,7 @@ export default async (req) => {
       customRef ? `&ref=${encodeURIComponent(customRef)}` : ''
     }${customUa ? `&ua=${encodeURIComponent(customUa)}` : ''}${
       vkParam ? `&vk=${encodeURIComponent(vkParam)}` : ''
-    }`;
+    }${vmParam ? `&vm=${encodeURIComponent(vmParam)}` : ''}`;
 
     const buildProxyUrl = (rawUri) => {
       try {
@@ -664,7 +880,7 @@ export default async (req) => {
           try {
             const resolvedSegUrl = new URL(trimmed, finalUrl).toString();
             const requiresSignedProxy =
-              /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|rtbcdn\.ru|rutube\.ru|srcAg|srcIp)/i.test(
+              /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|rtbcdn\.ru|rutube\.ru|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly|srcAg|srcIp|asn=)/i.test(
                 resolvedSegUrl
               );
             if (resolvedSegUrl.startsWith('https://') && !requiresSignedProxy) {
@@ -699,9 +915,16 @@ export default async (req) => {
               const bwMatch = tr.match(/(?:^|,)BANDWIDTH=(\d+)/i);
               const w = resMatch ? Number(resMatch[1]) : 0;
               const h = resMatch ? Number(resMatch[2]) : 0;
+              const width = w && h ? Math.max(w, h) : w;
               const height = w && h ? Math.min(w, h) : h;
               const bandwidth = bwMatch ? Number(bwMatch[1]) : 0;
-              variantPairs.push({ infLine: ln, uriLine, height, bandwidth });
+              variantPairs.push({
+                infLine: ln,
+                uriLine,
+                width,
+                height,
+                bandwidth,
+              });
             } else {
               headerLines.push(ln);
             }
@@ -713,26 +936,47 @@ export default async (req) => {
           variantPairs.sort(
             (a, b) => b.height - a.height || b.bandwidth - a.bandwidth
           );
+          const hdVariants = variantPairs.filter(
+            (p) => p.height >= 720 || p.width >= 1200
+          );
+          const selectedVariants =
+            hdVariants.length > 0 ? hdVariants : [variantPairs[0]];
           rewritten = [
             ...headerLines,
-            ...variantPairs.flatMap((p) => [p.infLine, p.uriLine]),
+            ...selectedVariants.flatMap((p) => [p.infLine, p.uriLine]),
           ].join('\n');
         }
+      }
+
+      const acceptEnc = req.headers.get('accept-encoding') || '';
+      if (rewritten.length > 32768 && /\bgzip\b/i.test(acceptEnc)) {
+        const compressed = gzipSync(Buffer.from(rewritten, 'utf8'));
+        return new Response(compressed, {
+          status: 200,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Private-Network': 'true',
+            'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'no-cache, no-store',
+          },
+        });
       }
 
       return new Response(rewritten, {
         status: 200,
         headers: {
           'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Private-Network': 'true',
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
           'Cache-Control': 'no-cache, no-store',
         },
       });
     }
 
-    // Pipe plain HTTP streams (Mixed Content) AND signed-IP/CORS-restricted CDNs (vkuser.net / okcdn.ru); other HTTPS streams use 302 redirect.
+    // Pipe plain HTTP streams (Mixed Content) AND signed-IP/CORS-restricted CDNs (vkuser.net / okcdn.ru / vmpx.online); other HTTPS streams use 302 redirect.
     const mustPipeSignedHttps =
-      /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|srcAg=|srcIp=)/i.test(
+      /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|vmpx\.online|vidmoly|srcAg=|srcIp=|asn=)/i.test(
         finalUrl
       );
     if (finalUrl.startsWith('http://') || mustPipeSignedHttps) {

@@ -727,18 +727,12 @@ function probeLocalBridge(force = false): Promise<boolean> {
   }
   localBridgeProbeStarted = true;
 
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-  const isDesktop =
-    /Macintosh|Mac OS X|Windows|Linux/i.test(ua) &&
-    !/Android|iPhone|iPad|iPod|Mobile|Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
-      ua
-    );
   if (localBridgeAvailable === null) {
     try {
       const cached = sessionStorage.getItem('filmio_local_bridge_ok');
-      localBridgeAvailable = cached === '1' ? true : isDesktop;
+      localBridgeAvailable = cached === '1';
     } catch {
-      localBridgeAvailable = isDesktop;
+      localBridgeAvailable = false;
     }
   }
 
@@ -816,10 +810,36 @@ export function isFileListExclusiveRomanianTitle(
 ): boolean {
   if (!item) return false;
   const imdb = String(item.imdbId || (item.id?.startsWith('tt') ? item.id.split(':')[0] : '') || '').trim();
-  if (imdb === 'tt10295772') return true;
-  const combined = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`;
+  const RO_EXCLUSIVE_IMDB_IDS = new Set([
+    'tt10295772',
+    'tt26254014',
+    'tt26745180',
+    'tt28504410',
+    'tt8690918',
+    'tt35405683',
+    'tt31185469',
+    'tt13093364',
+    'tt6226256',
+    'tt1745739',
+    'tt2226317',
+    'tt2299807',
+    'tt21747100',
+    'tt11640352',
+    'tt22048376',
+    'tt33050045',
+    'tt33364262',
+    'tt28658272',
+  ]);
+  if (imdb && RO_EXCLUSIVE_IMDB_IDS.has(imdb)) return true;
+  const combined = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ăâ]/gi, 'a')
+    .replace(/[î]/gi, 'i')
+    .replace(/[șş]/gi, 's')
+    .replace(/[țţ]/gi, 't');
   if (
-    /\b(Asia[.\s_-]*Express|America[.\s_-]*Express|Power[.\s_-]*Couple|Insula[.\s_-]*Iubirii|Chefi[.\s_-]*la[.\s_-]*Cutite|Las[.\s_-]*Fierbinti|Clanul|Tatuajul|Scara[.\s_-]*B|Camera[.\s_-]*609|Survivor[.\s_-]*Romania|ANTP\.WEB-?DL|PROTV\.WEB-?DL|VOYO\.WEB-?DL)\b/i.test(
+    /\b(Asia[.\s_-]*Express|America[.\s_-]*Express|Power[.\s_-]*Couple|Insula[.\s_-]*Iubirii|Chefi[.\s_-]*la[.\s_-]*Cutite|Las[.\s_-]*Fierbinti|Clanul|Tatutu|Tatuajul|Scara[.\s_-]*B|Camera[.\s_-]*609|Survivor[.\s_-]*Romania|ANTP\.WEB-?DL|PROTV\.WEB-?DL|VOYO\.WEB-?DL)\b/i.test(
       combined
     )
   ) {

@@ -1128,8 +1128,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       }
     };
 
+    const isRealIosWebKit =
+      typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('-webkit-touch-callout', 'none');
     const isIosMobile =
       typeof navigator !== 'undefined' &&
+      isRealIosWebKit &&
       (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
     const isHardwareSmartTv =
@@ -1137,6 +1142,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       /Web0S|webOS|NetCast|SmartTV|Tizen|SMART-TV|VIDAA|Hisense|Viera|BRAVIA|Philips|HbbTV|Maple|Opera TV|InettvBrowser|AFT/i.test(
         navigator.userAgent
       );
+    const canVideoPlayNativeHls = Boolean(
+      video.canPlayType('application/vnd.apple.mpegurl') ||
+        video.canPlayType('audio/mpegurl')
+    );
     const canTryDirectHttp =
       typeof window === 'undefined' ||
       window.location.protocol !== 'https:' ||
@@ -1219,7 +1228,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
           let mediaRecoveryCount = 0;
 
           const hls = new Hls({
-            enableWorker: true,
+            enableWorker: !isHardwareSmartTv,
             lowLatencyMode: false,
             startFragPrefetch: true,
             liveSyncDurationCount: 1.2,
@@ -1306,6 +1315,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             hls.loadSource(proxiedUrl);
           });
 
+          hls.on(Hls.Events.FRAG_BUFFERED, () => {
+            clearWatchdog();
+          });
+
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (cancelled) return;
             syncTracks();
@@ -1313,11 +1326,12 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             clearWatchdog();
             frameWatchdogTimer = window.setTimeout(() => {
               if (cancelled) return;
-              if (video.videoWidth === 0 && video.readyState < 3) {
-                if (
-                  isHardwareSmartTv ||
-                  video.canPlayType('application/vnd.apple.mpegurl')
-                ) {
+              if (
+                video.videoWidth === 0 &&
+                video.readyState === 0 &&
+                (!video.buffered || video.buffered.length === 0)
+              ) {
+                if (canVideoPlayNativeHls) {
                   switchToNativeVideoHls(proxiedUrl);
                   return;
                 }
@@ -1326,7 +1340,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   setStreamIndex((prev) => prev + 1);
                 }
               }
-            }, 4800);
+            }, 12000);
           });
 
           hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncTracks);
@@ -1352,10 +1366,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 hls.recoverMediaError();
                 return;
               }
-              if (
-                isHardwareSmartTv ||
-                video.canPlayType('application/vnd.apple.mpegurl')
-              ) {
+              if (canVideoPlayNativeHls) {
                 switchToNativeVideoHls(proxiedUrl);
                 return;
               }
@@ -1676,7 +1687,21 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       >
         {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}
         {!effectiveTvFullMode && (
-          <div className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-[#0b111e] border-b border-white/10">
+          <div
+            style={
+              !inlineEmbeddedMode
+                ? {
+                    paddingTop:
+                      'max(0.375rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.25rem))',
+                    paddingLeft:
+                      'max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                    paddingRight:
+                      'max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                  }
+                : undefined
+            }
+            className="shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-[#0b111e] border-b border-white/10"
+          >
             <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <StationAvatar
                 name={currentTvChannel.name}
@@ -1931,6 +1956,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                       setIsAutoMuted(false);
                     }
                   }}
+                  style={{
+                    top: 'max(3.5rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.75rem))',
+                  }}
                   className="absolute top-14 left-1/2 -translate-x-1/2 z-30 px-5 py-2.5 rounded-full bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-2xl animate-pulse cursor-pointer"
                 >
                   <VolumeX className="w-4 h-4" />
@@ -1977,6 +2005,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     exitTvFullMode();
                   }}
                   style={{
+                    top: 'max(1.25rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+                    right: 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
                     backgroundColor: 'rgba(10, 15, 28, 0.88)',
                     border: '1px solid rgba(148, 163, 184, 0.28)',
                   }}
@@ -1995,6 +2025,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     setIsOsdOverlayOpen(true);
                   }}
                   style={{
+                    bottom: 'max(1.25rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.25rem))',
+                    left: 'max(1.5rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
+                    right: 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
                     backgroundColor: 'rgba(10, 15, 28, 0.92)',
                     border: '1px solid rgba(148, 163, 184, 0.22)',
                     borderRadius: '24px',

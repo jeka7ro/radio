@@ -343,6 +343,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const lastSeekAttemptMsRef = useRef<number>(0);
   const startAtSecondsRef = useRef<number>(startAtSeconds);
   const hasNotifiedInitialPlayOsdRef = useRef<boolean>(false);
+  const hasRenderedFirstFrameRef = useRef<boolean>(false);
+  const nativeHlsFallbackTimerRef = useRef<number | null>(null);
   const watchedTicksInEpisodeRef = useRef<number>(0);
   const activeEpisodeMediaKeyRef = useRef<string>(
     `${season}_${episode}_${hlsUrl || ''}_${dashUrl || ''}`
@@ -1858,6 +1860,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
     appliedStartRef.current = false;
     hasNotifiedInitialPlayOsdRef.current = false;
+    hasRenderedFirstFrameRef.current = false;
+    lastTimeUpdateWallMsRef.current = Date.now();
     setStatus('loading');
     setIsAutoMuted(false);
     setLiveVideoDims({ width: 0, height: 0 });
@@ -1887,6 +1891,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     let cancelled = false;
 
     const cleanup = () => {
+      if (nativeHlsFallbackTimerRef.current !== null) {
+        window.clearTimeout(nativeHlsFallbackTimerRef.current);
+        nativeHlsFallbackTimerRef.current = null;
+      }
       if (dashRef.current) {
         try {
           dashRef.current.destroy();
@@ -1932,13 +1940,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           targetStart,
           Math.max(0, video.duration - 5)
         );
-        if (
-          Math.abs(video.currentTime - clampedTarget) <= 15 &&
-          !video.seeking &&
-          video.readyState >= 2
-        ) {
-          appliedStartRef.current = true;
-        } else if (Date.now() - lastSeekAttemptMsRef.current >= 900) {
+        if (Math.abs(video.currentTime - clampedTarget) <= 15) {
+          if (!video.seeking && video.readyState >= 2) {
+            appliedStartRef.current = true;
+          }
+        } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
           lastSeekAttemptMsRef.current = Date.now();
           try {
             video.currentTime = clampedTarget;
@@ -2007,7 +2013,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       } catch {
         // ignore
       }
-      video.src = targetUrl;
+      const initialFragSec =
+        !appliedStartRef.current && startAtSecondsRef.current > 5
+          ? Math.floor(startAtSecondsRef.current)
+          : 0;
+      const nativeSrcUrl =
+        initialFragSec > 0 && !targetUrl.includes('#')
+          ? `${targetUrl}#t=${initialFragSec}`
+          : targetUrl;
+      video.src = nativeSrcUrl;
       video.onloadedmetadata = () => {
         logTvVod('native_loadedmetadata', String(video.duration));
         syncVideoDims(video);
@@ -2073,7 +2087,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           retriedNative = true;
           window.setTimeout(() => {
             if (!cancelled && video) {
-              video.src = targetUrl;
+              const initialFragSec =
+        !appliedStartRef.current && startAtSecondsRef.current > 5
+          ? Math.floor(startAtSecondsRef.current)
+          : 0;
+      const nativeSrcUrl =
+        initialFragSec > 0 && !targetUrl.includes('#')
+          ? `${targetUrl}#t=${initialFragSec}`
+          : targetUrl;
+      video.src = nativeSrcUrl;
               ensureAutoPlay(video);
             }
           }, 600);
@@ -2085,14 +2107,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       ensureAutoPlay(video);
     };
 
+    const isRealIosWebKit =
+      typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' &&
+      CSS.supports('-webkit-touch-callout', 'none');
     const isIosMobile =
       typeof navigator !== 'undefined' &&
+      isRealIosWebKit &&
       (/iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
-        (/Safari/i.test(navigator.userAgent) &&
-          !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Opera|Vivaldi|YaBrowser|Brave/i.test(
-            navigator.userAgent
-          )));
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
     const startHlsPlayback = (targetUrl: string) => {
       if (!targetUrl) {
@@ -2117,10 +2140,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         return;
       }
 
-      if (
-        isIosMobile &&
-        video.canPlayType('application/vnd.apple.mpegurl')
-      ) {
+      const canVideoPlayNativeHls = Boolean(
+        video.canPlayType('application/vnd.apple.mpegurl') ||
+          video.canPlayType('audio/mpegurl')
+      );
+
+      if (isIosMobile && canVideoPlayNativeHls) {
         if (offlineItem && offlineItem.mediaType === 'hls') {
           void buildIosNativeOfflineHlsBlobUrl(offlineItem)
             .then(({ masterBlobUrl }) => {
@@ -2148,6 +2173,39 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           autoStartLoad: false,
           enableWorker: !isHardwareSmartTv,
           capLevelToPlayerSize: false,
+          abrEwmaDefaultEstimate: 25_000_000,
+          fragLoadPolicy: {
+            default: {
+              maxTimeToFirstByteMs: 18000,
+              maxLoadTimeMs: 45000,
+              timeoutRetry: {
+                maxNumRetry: 4,
+                retryDelayMs: 500,
+                maxRetryDelayMs: 2000,
+              },
+              errorRetry: {
+                maxNumRetry: 4,
+                retryDelayMs: 500,
+                maxRetryDelayMs: 3000,
+              },
+            },
+          },
+          playlistLoadPolicy: {
+            default: {
+              maxTimeToFirstByteMs: 15000,
+              maxLoadTimeMs: 25000,
+              timeoutRetry: {
+                maxNumRetry: 3,
+                retryDelayMs: 500,
+                maxRetryDelayMs: 2000,
+              },
+              errorRetry: {
+                maxNumRetry: 3,
+                retryDelayMs: 500,
+                maxRetryDelayMs: 2000,
+              },
+            },
+          },
           enableCEA708Captions: false,
           enableWebVTT: false,
           enableIMSC1: false,
@@ -2168,20 +2226,35 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         hls.loadSource(targetUrl);
         hls.attachMedia(video);
 
-        // Smart TV fallback: if MSE stalls at 0:00 for 4.5s, switch to native <video src>
-        const nativeHlsFallbackTimer = window.setTimeout(() => {
-          if (
-            !cancelled &&
-            video &&
-            video.currentTime === 0 &&
-            video.readyState < 3 &&
-            !offlineItem &&
-            (isHardwareSmartTv ||
-              video.canPlayType('application/vnd.apple.mpegurl'))
-          ) {
-            switchToNativeVideoHls(targetUrl, 'mse_stall_timeout');
+        // Smart TV native HLS fallback: ONLY invoke <video src> if the browser natively supports M3U8
+        // (never on WebOS/Chromium where canPlayType('application/vnd.apple.mpegurl') === '', which would cause MEDIA_ERR_SRC_NOT_SUPPORTED)
+        if (nativeHlsFallbackTimerRef.current !== null) {
+          window.clearTimeout(nativeHlsFallbackTimerRef.current);
+          nativeHlsFallbackTimerRef.current = null;
+        }
+        if (canVideoPlayNativeHls && !offlineItem) {
+          nativeHlsFallbackTimerRef.current = window.setTimeout(() => {
+            nativeHlsFallbackTimerRef.current = null;
+            if (
+              !cancelled &&
+              video &&
+              video.currentTime === 0 &&
+              video.readyState === 0 &&
+              (!video.buffered || video.buffered.length === 0) &&
+              !offlineItem &&
+              canVideoPlayNativeHls
+            ) {
+              switchToNativeVideoHls(targetUrl, 'mse_stall_timeout');
+            }
+          }, 18000);
+        }
+
+        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+          if (nativeHlsFallbackTimerRef.current !== null) {
+            window.clearTimeout(nativeHlsFallbackTimerRef.current);
+            nativeHlsFallbackTimerRef.current = null;
           }
-        }, 4500);
+        });
 
         hls.on(Hls.Events.LEVEL_SWITCHED, (_ev, data) => {
           if (cancelled) return;
@@ -2197,7 +2270,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
         hls.on(Hls.Events.MANIFEST_PARSED, (_ev, data) => {
           if (cancelled) {
-            window.clearTimeout(nativeHlsFallbackTimer);
+            if (nativeHlsFallbackTimerRef.current !== null) {
+              window.clearTimeout(nativeHlsFallbackTimerRef.current);
+              nativeHlsFallbackTimerRef.current = null;
+            }
             return;
           }
           logTvVod('manifest_parsed', `levels=${data.levels.length}`);
@@ -2274,9 +2350,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }
 
+          if (startAtSecondsRef.current > 5) {
+            lastSeekAttemptMsRef.current = Date.now();
+          }
           hls.startLoad(
             startAtSecondsRef.current > 5 ? startAtSecondsRef.current : -1
           );
+          lastTimeUpdateWallMsRef.current = Date.now();
           ensureAutoPlay(video);
           setStatus('playing');
           onWakeOsd?.();
@@ -2368,25 +2448,29 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               data.type === Hls.ErrorTypes.MEDIA_ERROR
             ) {
               hls.recoverMediaError();
-            } else if (
-              !offlineItem &&
-              (isHardwareSmartTv ||
-                video.canPlayType('application/vnd.apple.mpegurl'))
-            ) {
-              window.clearTimeout(nativeHlsFallbackTimer);
+              if (highestLevelIndexRef.current >= 0) {
+                hls.currentLevel = highestLevelIndexRef.current;
+                hls.nextLevel = highestLevelIndexRef.current;
+                hls.loadLevel = highestLevelIndexRef.current;
+                hls.nextLoadLevel = highestLevelIndexRef.current;
+              }
+            } else if (!offlineItem && canVideoPlayNativeHls) {
+              if (nativeHlsFallbackTimerRef.current !== null) {
+                window.clearTimeout(nativeHlsFallbackTimerRef.current);
+                nativeHlsFallbackTimerRef.current = null;
+              }
               switchToNativeVideoHls(targetUrl, `fatal_${data.details}`);
             } else {
-              window.clearTimeout(nativeHlsFallbackTimer);
+              if (nativeHlsFallbackTimerRef.current !== null) {
+                window.clearTimeout(nativeHlsFallbackTimerRef.current);
+                nativeHlsFallbackTimerRef.current = null;
+              }
               setStatus('error');
               onStreamError?.();
             }
           }
         });
-      } else if (
-        !offlineItem &&
-        (isHardwareSmartTv ||
-          video.canPlayType('application/vnd.apple.mpegurl'))
-      ) {
+      } else if (!offlineItem && canVideoPlayNativeHls) {
         switchToNativeVideoHls(targetUrl, 'hls_not_supported');
       } else if (
         offlineItem &&
@@ -3775,8 +3859,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         }
         return;
       }
+      const stallThresholdMs = hasRenderedFirstFrameRef.current ? 6500 : 20000;
       if (
-        stalledMs >= 6500 &&
+        stalledMs >= stallThresholdMs &&
         now - lastAutoRecoverWallMsRef.current >= 8000
       ) {
         lastAutoRecoverWallMsRef.current = now;
@@ -4544,13 +4629,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 targetStart,
                 Math.max(0, v.duration - 5)
               );
-              if (
-                Math.abs(v.currentTime - clampedTarget) <= 15 &&
-                !v.seeking &&
-                v.readyState >= 2
-              ) {
-                appliedStartRef.current = true;
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 900) {
+              if (Math.abs(v.currentTime - clampedTarget) <= 15) {
+                if (!v.seeking && v.readyState >= 2) {
+                  appliedStartRef.current = true;
+                }
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -4562,6 +4645,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onCanPlay={(e) => {
+            if (nativeHlsFallbackTimerRef.current !== null) {
+              window.clearTimeout(nativeHlsFallbackTimerRef.current);
+              nativeHlsFallbackTimerRef.current = null;
+            }
             const targetStart = startAtSecondsRef.current;
             const v = e.currentTarget;
             syncVideoDims(v);
@@ -4576,13 +4663,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 targetStart,
                 Math.max(0, v.duration - 5)
               );
-              if (
-                Math.abs(v.currentTime - clampedTarget) <= 15 &&
-                !v.seeking &&
-                v.readyState >= 2
-              ) {
-                appliedStartRef.current = true;
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 900) {
+              if (Math.abs(v.currentTime - clampedTarget) <= 15) {
+                if (!v.seeking && v.readyState >= 2) {
+                  appliedStartRef.current = true;
+                }
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -4597,8 +4682,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onPlaying={(e) => {
+            if (nativeHlsFallbackTimerRef.current !== null) {
+              window.clearTimeout(nativeHlsFallbackTimerRef.current);
+              nativeHlsFallbackTimerRef.current = null;
+            }
             const targetStart = startAtSecondsRef.current;
             const v = e.currentTarget;
+            if (v.readyState >= 3) {
+              hasRenderedFirstFrameRef.current = true;
+            }
+            lastTimeUpdateWallMsRef.current = Date.now();
             syncVideoDims(v);
             if (
               !isFileListStream &&
@@ -4611,13 +4704,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 targetStart,
                 Math.max(0, v.duration - 5)
               );
-              if (
-                Math.abs(v.currentTime - clampedTarget) <= 15 &&
-                !v.seeking &&
-                v.readyState >= 2
-              ) {
-                appliedStartRef.current = true;
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 900) {
+              if (Math.abs(v.currentTime - clampedTarget) <= 15) {
+                if (!v.seeking && v.readyState >= 2) {
+                  appliedStartRef.current = true;
+                }
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -4679,14 +4770,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   targetStart,
                   Math.max(0, vid.duration - 5)
                 );
-                if (
-                  Math.abs(vid.currentTime - clampedTarget) <= 15 &&
-                  !vid.seeking &&
-                  vid.readyState >= 2
-                ) {
-                  appliedStartRef.current = true;
+                if (Math.abs(vid.currentTime - clampedTarget) <= 15) {
+                  if (!vid.seeking && vid.readyState >= 2) {
+                    appliedStartRef.current = true;
+                  } else {
+                    return;
+                  }
                 } else {
-                  if (Date.now() - lastSeekAttemptMsRef.current >= 900) {
+                  if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
                     lastSeekAttemptMsRef.current = Date.now();
                     try {
                       vid.currentTime = clampedTarget;
@@ -4708,6 +4799,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             if (Math.abs(effectiveTime - lastTimeUpdateMediaSecRef.current) >= 0.15) {
               lastTimeUpdateMediaSecRef.current = effectiveTime;
               lastTimeUpdateWallMsRef.current = Date.now();
+              if (vid.readyState >= 3) {
+                hasRenderedFirstFrameRef.current = true;
+              }
               if (!vid.paused && !vid.seeking) {
                 watchedTicksInEpisodeRef.current += 1;
               }
@@ -5187,10 +5281,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     right: 'max(16px, env(safe-area-inset-bottom, 16px))',
                   }
                 : {
-                    bottom: 'max(8px, env(safe-area-inset-bottom, 8px))',
-                    left: 'max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-top, 0px))',
+                    bottom:
+                      'max(8px, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))',
+                    left: 'max(12px, var(--safe-left, env(safe-area-inset-left, 0px)))',
                     right:
-                      'max(12px, env(safe-area-inset-right, 0px), env(safe-area-inset-bottom, 0px))',
+                      'max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))',
                   }
               : undefined
           }

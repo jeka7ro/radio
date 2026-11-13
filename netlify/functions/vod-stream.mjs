@@ -132,10 +132,11 @@ function wrapTvProxyUrl(
   return `/api/tv-proxy?url=${encodeURIComponent(rawUrl)}&ref=${encodeURIComponent(refUrl)}&ua=${encodeURIComponent(ua)}${extraParams}`;
 }
 
-async function extractVkVideoStreams(oid, vid) {
+async function extractVkVideoStreams(oid, vid, vkHash = '') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
+    const cleanHash = String(vkHash || '').replace(/[^a-zA-Z0-9]/g, '');
     const res = await fetch('https://vkvideo.ru/al_video.php?act=show', {
       method: 'POST',
       headers: {
@@ -145,7 +146,7 @@ async function extractVkVideoStreams(oid, vid) {
         Origin: 'https://vkvideo.ru',
         Referer: 'https://vkvideo.ru/',
       },
-      body: `act=show&al=1&video=${oid}_${vid}`,
+      body: `act=show&al=1&video=${oid}_${vid}${cleanHash ? `&list=${cleanHash}` : ''}`,
       signal: controller.signal,
     });
     if (!res.ok) return null;
@@ -154,7 +155,13 @@ async function extractVkVideoStreams(oid, vid) {
       u ? u.replace(/\\\//g, '/').replace(/\\u0026/g, '&') : '';
     const hlsMatch = text.match(/"hls"\s*:\s*"([^"]+)"/);
     const hlsUrl = unescapeUrl(hlsMatch?.[1]);
+    const durMatch = text.match(/"duration"\s*:\s*(\d+)/);
+    const durationSec = durMatch ? Number(durMatch[1]) || 0 : 0;
     const mp4Matches = [...text.matchAll(/"url(\d+)"\s*:\s*"([^"]+)"/g)];
+    const rawMaxMp4Height = mp4Matches.reduce(
+      (mx, m) => Math.max(mx, Number(m[1]) || 0),
+      0
+    );
     const qualities = mp4Matches
       .map((m) => ({ height: Number(m[1]), url: unescapeUrl(m[2]) }))
       .filter((q) => q.height >= 720 && q.url)
@@ -162,7 +169,10 @@ async function extractVkVideoStreams(oid, vid) {
 
     if (qualities.length === 0 && !hlsUrl) return null;
     const bestMp4 = qualities[0];
-    const vkIdParam = `&vk=${encodeURIComponent(`${oid}_${vid}`)}`;
+    const detectedMaxHeight =
+      qualities[0]?.height || (rawMaxMp4Height > 0 ? rawMaxMp4Height : 1080);
+    const vkIdToken = cleanHash ? `${oid}_${vid}_${cleanHash}` : `${oid}_${vid}`;
+    const vkIdParam = `&vk=${encodeURIComponent(vkIdToken)}`;
     const proxiedHls = hlsUrl
       ? wrapTvProxyUrl(hlsUrl, 'https://vkvideo.ru/', DEFAULT_VOD_UA, vkIdParam)
       : '';
@@ -178,7 +188,8 @@ async function extractVkVideoStreams(oid, vid) {
       bestUrl: proxiedHls || proxiedBestMp4,
       hlsUrl: proxiedHls || proxiedBestMp4,
       rawHlsUrl: hlsUrl || bestMp4?.url,
-      maxHeight: qualities[0]?.height || 1080,
+      duration: durationSec,
+      maxHeight: detectedMaxHeight,
       qualities: qualities.map((q) => ({
         id: `${q.height}p`,
         height: q.height,
@@ -208,8 +219,9 @@ async function extractVkVideoStreams(oid, vid) {
 const VK_CURATED_SHOWS = [
   {
     kpIds: ['5508530'],
+    imdbIds: ['tt31712367'],
     titleRe:
-      /^(?!.*в\s+(?:африке|джунглях|тропиках))(?:шоу\s+)?зв[её]зды(?:\b|[.\s•(-]|$)/i,
+      /^(?!.*в\s+(?:африке|джунглях|тропиках))(?:шоу\s+)?(?:зв[её]зды|zvyozdy)(?:\b|[.\s•(-]|$)/i,
     buildSeasons: async () => {
       const raw = await fetchVkRawSectionList(-220754053, 'all');
       const seasonsMap = new Map();
@@ -269,7 +281,8 @@ const VK_CURATED_SHOWS = [
   },
   {
     kpIds: ['5318639'],
-    titleRe: /шоу\s*«?кстати»?/i,
+    imdbIds: ['tt27998787'],
+    titleRe: /^(?:шоу\s*)?«?кстати»?(?:\b|$)|\bшоу\s*«?кстати»?|^by\s+the\s+way$/i,
     buildSeasons: async () => {
       const raw = await fetchVkRawSectionList(-220754053, 'playlist_3');
       const byEp = new Map();
@@ -2044,6 +2057,641 @@ function mergeSeasonsCatalogs(...catalogs) {
   return out.length > 0 ? out : undefined;
 }
 
+const roCategoryPostsCache = new Map();
+const RO_CATEGORY_CACHE_TTL_MS = 20 * 60 * 1000;
+
+function normalizeRoAscii(raw) {
+  return String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ăâ]/gi, 'a')
+    .replace(/[î]/gi, 'i')
+    .replace(/[șş]/gi, 's')
+    .replace(/[țţ]/gi, 't')
+    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/gi, '-')
+    .replace(/&#038;|&amp;/gi, '&')
+    .replace(/&#\d+;/g, ' ')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const ROMANIAN_CLOUD_SHOWS = [
+  {
+    imdbIds: ['tt10295772'],
+    titleRe: /\basia\s+express\b/i,
+    canonicalQuery: 'Asia Express',
+    coreTokens: ['asia', 'express'],
+    // IMDb/FileList omits the 2 "America Express" seasons (TV S5 & S6), so App S5=TV S7, S6=TV S8, S7=TV S9
+    toPortalSeason: (s) => (s >= 5 ? s + 2 : s),
+    knownCategories: [
+      { appSeason: 7, portalSeason: 9, catId: 234 },
+      { appSeason: 6, portalSeason: 8, catId: 186 },
+      { appSeason: 5, portalSeason: 7, catId: 170 },
+    ],
+  },
+  {
+    imdbIds: ['tt26254014', 'tt26745180'],
+    titleRe: /\bamerica\s+express\b/i,
+    canonicalQuery: 'America Express',
+    coreTokens: ['america', 'express'],
+    knownCategories: [
+      { appSeason: 2, portalSeason: 2, catId: 145 },
+      { appSeason: 1, portalSeason: 1, catId: 99 },
+    ],
+  },
+  {
+    imdbIds: ['tt28504410', 'tt8690918'],
+    titleRe: /\binsula\s+iubirii\b/i,
+    canonicalQuery: 'Insula Iubirii',
+    coreTokens: ['insula', 'iubirii'],
+  },
+  {
+    imdbIds: ['tt35405683', 'tt31185469'],
+    titleRe: /\bpower\s+couple\b/i,
+    canonicalQuery: 'Power Couple',
+    coreTokens: ['power', 'couple'],
+  },
+  {
+    imdbIds: ['tt13093364', 'tt6226256'],
+    titleRe: /\bchefi\s+la\s+cutite\b/i,
+    canonicalQuery: 'Chefi la Cutite',
+    coreTokens: ['chefi', 'cutite'],
+  },
+  {
+    imdbIds: ['tt1745739', 'tt2226317', 'tt2299807'],
+    titleRe: /\blas\s+fierbinti\b/i,
+    canonicalQuery: 'Las Fierbinti',
+    coreTokens: ['las', 'fierbinti'],
+  },
+  {
+    imdbIds: ['tt21747100', 'tt11640352'],
+    titleRe: /\bsurvivor\s+romania\b/i,
+    canonicalQuery: 'Survivor Romania',
+    coreTokens: ['survivor'],
+    knownCategories: [
+      { appSeason: 7, portalSeason: 7, catId: 196 },
+      { appSeason: 5, portalSeason: 5, catId: 155, allowAllStars: true },
+      { appSeason: 4, portalSeason: 4, catId: 102 },
+    ],
+  },
+  {
+    imdbIds: ['tt21603982'],
+    titleRe: /\bclanul\b/i,
+    canonicalQuery: 'Clanul',
+    coreTokens: ['clanul'],
+  },
+  {
+    imdbIds: ['tt33088572'],
+    titleRe: /\b(tatutu|tatuajul)\b/i,
+    canonicalQuery: 'Tatutu',
+    coreTokens: ['tatutu'],
+  },
+  {
+    imdbIds: ['tt34192055'],
+    titleRe: /\bscara\s+b\b/i,
+    canonicalQuery: 'Scara B',
+    coreTokens: ['scara'],
+  },
+  {
+    imdbIds: ['tt28803286'],
+    titleRe: /\bcamera\s*609\b/i,
+    canonicalQuery: 'Camera 609',
+    coreTokens: ['camera', '609'],
+  },
+  {
+    imdbIds: [],
+    titleRe: /\bana\s+mi\s+ai\s+fost\s+scrisa\s+in\s+adn\b/i,
+    canonicalQuery: 'Ana Mi-ai Fost Scrisa in ADN',
+    coreTokens: ['ana', 'adn'],
+  },
+  {
+    imdbIds: [],
+    titleRe: /\biubire\s+cu\s+parfum\s+de\s+lavanda\b/i,
+    canonicalQuery: 'Iubire cu parfum de lavanda',
+    coreTokens: ['parfum', 'lavanda'],
+  },
+  {
+    imdbIds: [],
+    titleRe: /\bpoftiti\s+pe\s+la\s+noi\b/i,
+    canonicalQuery: 'Poftiti Pe La Noi',
+    coreTokens: ['poftiti'],
+  },
+  {
+    imdbIds: [],
+    titleRe: /\bbravo\s+ai\s+stil\b/i,
+    canonicalQuery: 'Bravo Ai Stil',
+    coreTokens: ['bravo', 'stil'],
+  },
+  {
+    imdbIds: [],
+    titleRe: /\bjocul\s+cuvintelor\b/i,
+    canonicalQuery: 'Jocul Cuvintelor',
+    coreTokens: ['jocul', 'cuvintelor'],
+  },
+];
+
+function detectRomanianShowDescriptor(imdb, rawTitle) {
+  const cleanImdb = String(imdb || '').trim().split(':')[0];
+  const asciiTitle = normalizeRoAscii(rawTitle)
+    .replace(/\(\s*s\d+[^)]*\)/gi, ' ')
+    .replace(/\bs\d{1,2}(?:\s*e\d{1,3})?\b/gi, ' ')
+    .replace(/\b(?:19|20)\d{2}\b/g, ' ')
+    .replace(/\b(?:1080[pi]|720p|2160p|antp|protv|voyo|web\s*dl|hdtv|playweb|playtv)\b.*$/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (/insula\s+iubirii\s+parodia/i.test(asciiTitle)) {
+    return {
+      canonicalQuery: 'Insula Iubirii Parodia',
+      coreTokens: ['insula', 'parodia'],
+      toPortalSeason: (s) => s,
+      knownCategories: [],
+    };
+  }
+  if (/chefi\s+la\s+cutite\s+viitorul\s+are\s+gust/i.test(asciiTitle)) {
+    return {
+      canonicalQuery: 'Chefi la cutite Viitorul are gust',
+      coreTokens: ['chefi', 'viitorul'],
+      toPortalSeason: (s) => s,
+      knownCategories: [],
+    };
+  }
+
+  for (const show of ROMANIAN_CLOUD_SHOWS) {
+    if (
+      (cleanImdb && show.imdbIds.includes(cleanImdb)) ||
+      (asciiTitle && show.titleRe.test(asciiTitle))
+    ) {
+      return {
+        ...show,
+        toPortalSeason: show.toPortalSeason || ((s) => s),
+        knownCategories: show.knownCategories || [],
+      };
+    }
+  }
+  return null;
+}
+
+async function fetchVeziaiciCategoryPosts(catId, ua) {
+  const cached = roCategoryPostsCache.get(catId);
+  if (cached && Date.now() - cached.ts < RO_CATEGORY_CACHE_TTL_MS) {
+    return cached.posts;
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 6500);
+  try {
+    const res = await fetch(
+      `https://veziaici.net/wp-json/wp/v2/posts?categories=${catId}&per_page=100&_fields=id,slug,title`,
+      {
+        headers: { 'User-Agent': ua },
+        signal: ctrl.signal,
+      }
+    );
+    if (!res.ok) return [];
+    const posts = await res.json();
+    if (Array.isArray(posts) && posts.length > 0) {
+      roCategoryPostsCache.set(catId, { ts: Date.now(), posts });
+      return posts;
+    }
+    return [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function extractVidmolyDirectHls(vmId, ua) {
+  if (!vmId) return null;
+  for (const host of [
+    'https://vidmoly.net',
+    'https://vidmoly.org',
+    'https://vidmoly.biz',
+    'https://vidmoly.to',
+  ]) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5500);
+    try {
+      const res = await fetch(`${host}/embed-${vmId}.html`, {
+        headers: {
+          'User-Agent': ua,
+          Referer: 'https://veziaici.net/',
+        },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const m3u8Url = html.match(/https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i)?.[0];
+      if (m3u8Url) {
+        return wrapTvProxyUrl(
+          m3u8Url,
+          `${host}/`,
+          ua,
+          `&vm=${encodeURIComponent(vmId)}`
+        );
+      }
+    } catch {
+      // try next mirror
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  return null;
+}
+
+async function extractRumbleDirectHls(rumbleId, ua) {
+  if (!rumbleId) return null;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 5500);
+  try {
+    const res = await fetch(`https://rumble.com/embed/${rumbleId}/`, {
+      headers: {
+        'User-Agent': ua,
+        Referer: 'https://veziaici.net/',
+      },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const allUrls = [
+      ...html.matchAll(/https?:\\?\/\\?\/[^"'\s<>]+\.(?:m3u8|mp4)[^"'\s<>]*/gi),
+    ].map((m) => m[0].replace(/\\\//g, '/'));
+    const hlsVod = allUrls.find((u) => /rumble\.com\/hls-vod\/[^?]+\.m3u8/i.test(u));
+    if (hlsVod) return hlsVod;
+    const mp4Url = allUrls.find((u) => /\.mp4(\?|$)/i.test(u));
+    return mp4Url || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function matchesRomanianEpisodePost(post, descriptor, portalSeason, episode, allowAllStars = false) {
+  const hay = normalizeRoAscii(`${post?.title?.rendered || ''} ${post?.slug || ''}`).toLowerCase();
+  if (!hay) return false;
+  for (const tok of descriptor.coreTokens) {
+    if (!hay.includes(tok.toLowerCase())) return false;
+  }
+  const epRe = new RegExp(`\\bepisodul\\s*0*${Number(episode)}\\b`, 'i');
+  if (!epRe.test(hay)) return false;
+
+  const seasonMatches = [...hay.matchAll(/\bsezonul\s*0*(\d+)\b/gi)].map((m) => Number(m[1]));
+  if (seasonMatches.length > 0) {
+    return seasonMatches.includes(Number(portalSeason));
+  }
+  if (allowAllStars && /\ball\s*stars\b/i.test(hay)) {
+    return true;
+  }
+  return Number(portalSeason) === 1;
+}
+
+async function resolveFromRomanianCloudVod({
+  imdb,
+  title,
+  season = 1,
+  episode = 1,
+  effectiveUa,
+}) {
+  const descriptor = detectRomanianShowDescriptor(imdb, title);
+  if (!descriptor) return null;
+
+  const appSeason = Math.max(1, Number(season) || 1);
+  const targetEp = Math.max(1, Number(episode) || 1);
+  const portalSeason = descriptor.toPortalSeason(appSeason);
+  const matchedCat = descriptor.knownCategories.find(
+    (c) => c.appSeason === appSeason
+  );
+
+  let builtSeasonsCatalog = undefined;
+  let targetPost = null;
+
+  const searchQueries = [
+    `${descriptor.canonicalQuery} Sezonul ${portalSeason} Episodul ${targetEp}`,
+  ];
+  if (matchedCat?.allowAllStars) {
+    searchQueries.push(
+      `${descriptor.canonicalQuery} All Stars Episodul ${targetEp}`
+    );
+  }
+  if (portalSeason === 1) {
+    searchQueries.push(`${descriptor.canonicalQuery} Episodul ${targetEp}`);
+  }
+
+  const searchPromise = (async () => {
+    for (const q of searchQueries) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6500);
+      try {
+        const res = await fetch(
+          `https://veziaici.net/wp-json/wp/v2/posts?search=${encodeURIComponent(
+            q
+          )}&orderby=relevance&per_page=15&_fields=id,slug,title,content`,
+          {
+            headers: { 'User-Agent': effectiveUa },
+            signal: ctrl.signal,
+          }
+        );
+        if (!res.ok) continue;
+        const posts = await res.json();
+        if (!Array.isArray(posts)) continue;
+        const hit = posts.find((p) =>
+          matchesRomanianEpisodePost(
+            p,
+            descriptor,
+            portalSeason,
+            targetEp,
+            Boolean(matchedCat?.allowAllStars)
+          )
+        );
+        if (hit) return hit;
+      } catch {
+        // try next query
+      } finally {
+        clearTimeout(t);
+      }
+    }
+    return null;
+  })();
+
+  const categoryPromise =
+    descriptor.knownCategories.length > 0
+      ? Promise.all(
+          descriptor.knownCategories.map(async (catMeta) => {
+            const posts = await fetchVeziaiciCategoryPosts(
+              catMeta.catId,
+              effectiveUa
+            );
+            const epMap = new Map();
+            for (const p of posts) {
+              const hay = normalizeRoAscii(
+                `${p?.title?.rendered || ''} ${p?.slug || ''}`
+              );
+              const epM = hay.match(/\bepisodul\s*0*(\d+)\b/i);
+              if (!epM) continue;
+              const epNum = Number(epM[1]);
+              if (!epNum || epMap.has(epNum)) continue;
+              epMap.set(epNum, {
+                postId: p.id,
+                episode: epNum,
+                title: normalizeRoAscii(p?.title?.rendered || `Episodul ${epNum}`),
+                duration: 10800,
+                audioNames: ['Română (Original)'],
+              });
+            }
+            return {
+              appSeason: catMeta.appSeason,
+              episodes: [...epMap.values()].sort((a, b) => a.episode - b.episode),
+            };
+          })
+        )
+      : Promise.resolve([]);
+
+  // Await searchPromise immediately so VK/Vidmoly extraction starts in ~250ms while categoryPromise finishes in parallel!
+  targetPost = await searchPromise;
+
+  const buildCatalogFromRaw = (catSeasonsRaw) => {
+    if (!Array.isArray(catSeasonsRaw) || catSeasonsRaw.length === 0) return undefined;
+    const validSeasons = catSeasonsRaw
+      .filter((s) => s.episodes.length > 0)
+      .sort((a, b) => a.appSeason - b.appSeason)
+      .map((s) => ({
+        season: s.appSeason,
+        episodes: s.episodes.map(({ episode: epN, title: epT, duration, audioNames }) => ({
+          episode: epN,
+          title: epT,
+          duration,
+          audioNames,
+        })),
+      }));
+    return validSeasons.length > 0 ? validSeasons : undefined;
+  };
+
+  if (!targetPost) {
+    const catSeasonsRaw = await categoryPromise;
+    builtSeasonsCatalog = buildCatalogFromRaw(catSeasonsRaw);
+    if (Array.isArray(catSeasonsRaw)) {
+      const seasonObj = catSeasonsRaw.find((s) => s.appSeason === appSeason);
+      const epEntry = seasonObj?.episodes.find((e) => e.episode === targetEp);
+      if (epEntry?.postId) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5500);
+        try {
+          const pRes = await fetch(
+            `https://veziaici.net/wp-json/wp/v2/posts/${epEntry.postId}?_fields=id,slug,title,content`,
+            { headers: { 'User-Agent': effectiveUa }, signal: ctrl.signal }
+          );
+          if (pRes.ok) {
+            targetPost = await pRes.json();
+          }
+        } catch {
+          // ignore
+        } finally {
+          clearTimeout(t);
+        }
+      }
+    }
+  }
+
+  if (!targetPost?.content?.rendered) {
+    return builtSeasonsCatalog
+      ? {
+          ok: false,
+          type: 'series',
+          seasons: builtSeasonsCatalog,
+          error: 'Requested Romanian episode not yet published on cloud portal',
+        }
+      : null;
+  }
+
+  let postHtml = String(targetPost.content.rendered || '').replace(
+    /&#038;|&amp;/gi,
+    '&'
+  );
+  for (const secMatch of postHtml.matchAll(/data-secure="([^"]+)"/gi)) {
+    try {
+      postHtml +=
+        '\n' +
+        Buffer.from(secMatch[1], 'base64')
+          .toString('utf8')
+          .replace(/&#038;|&amp;/gi, '&');
+    } catch {
+      // ignore invalid base64
+    }
+  }
+
+  const vkCandidates = [];
+  const seenVk = new Set();
+  for (const m of postHtml.matchAll(
+    /https?:\/\/(?:www\.)?(?:vkvideo\.ru|vk\.ru|vk\.com)\/video_ext\.php\?[^"'\s<>]+/gi
+  )) {
+    try {
+      const u = new URL(m[0]);
+      const oid = (u.searchParams.get('oid') || '').trim();
+      const vid = (u.searchParams.get('id') || '').trim();
+      const hash = (u.searchParams.get('hash') || '').trim();
+      if (!oid || !vid) continue;
+      const key = `${oid}_${vid}`;
+      if (seenVk.has(key)) continue;
+      seenVk.add(key);
+      vkCandidates.push({ oid, vid, hash });
+    } catch {
+      // ignore malformed URL
+    }
+  }
+
+  const vmIds = [
+    ...new Set(
+      [
+        ...postHtml.matchAll(/vidmoly\.[a-z]+\/embed-([a-zA-Z0-9_-]+)\.html/gi),
+      ].map((m) => m[1])
+    ),
+  ];
+  const rumbleIds = [
+    ...new Set(
+      [...postHtml.matchAll(/rumble\.com\/embed\/([a-zA-Z0-9_-]+)/gi)].map(
+        (m) => m[1]
+      )
+    ),
+  ];
+
+  const [vkStreamsRaw, vmHlsUrl, rumbleHlsUrl, catSeasonsFinal] = await Promise.all([
+    Promise.all(
+      vkCandidates
+        .slice(0, 3)
+        .map((c) => extractVkVideoStreams(c.oid, c.vid, c.hash))
+    ),
+    vmIds[0]
+      ? Promise.race([
+          extractVidmolyDirectHls(vmIds[0], effectiveUa),
+          new Promise((r) => setTimeout(() => r(null), vkCandidates.length > 0 ? 4000 : 5500)),
+        ])
+      : Promise.resolve(null),
+    rumbleIds[0]
+      ? Promise.race([
+          extractRumbleDirectHls(rumbleIds[0], effectiveUa),
+          new Promise((r) => setTimeout(() => r(null), vkCandidates.length > 0 ? 2200 : 5500)),
+        ])
+      : Promise.resolve(null),
+    builtSeasonsCatalog
+      ? Promise.resolve(null)
+      : Promise.race([
+          categoryPromise,
+          new Promise((r) => setTimeout(() => r(null), 1800)),
+        ]),
+  ]);
+  if (!builtSeasonsCatalog && catSeasonsFinal) {
+    builtSeasonsCatalog = buildCatalogFromRaw(catSeasonsFinal);
+  }
+
+  const validVkStreams = vkStreamsRaw
+    .filter((s) => s && s.bestUrl)
+    .sort((a, b) => {
+      // Always prefer full integral episodes (>= 85 min) over split parts
+      const aFull = (a.duration || 0) >= 5100 ? 1 : 0;
+      const bFull = (b.duration || 0) >= 5100 ? 1 : 0;
+      if (aFull !== bFull) return bFull - aFull;
+      if ((b.maxHeight || 0) !== (a.maxHeight || 0)) {
+        return (b.maxHeight || 0) - (a.maxHeight || 0);
+      }
+      return (b.duration || 0) - (a.duration || 0);
+    });
+
+  const bestVk = validVkStreams[0] || null;
+  const orderedStreams = [];
+  if (bestVk?.bestUrl) {
+    const vkMaxH = Number(bestVk.maxHeight) || 720;
+    orderedStreams.push({
+      url: bestVk.bestUrl,
+      rawUrl: bestVk.rawHlsUrl || bestVk.bestUrl,
+      sourcePath: `România Cloud HD (${vkMaxH >= 1080 ? '1080p Full HD' : vkMaxH >= 720 ? '720p HD' : '480p SD'})`,
+      duration: bestVk.duration || 0,
+      maxHeight: vkMaxH,
+      priorityRank: 1,
+      vkQualities: bestVk.qualities,
+    });
+  }
+  if (vmHlsUrl) {
+    const decVm = decodeURIComponent(vmHlsUrl);
+    const vmMaxH = /_[a-z,]*x[a-z,]*\.urlset/i.test(decVm)
+      ? 2160
+      : /_[a-z,]*h[a-z,]*\.urlset/i.test(decVm)
+        ? 1080
+        : /_[a-z,]*n[a-z,]*\.urlset/i.test(decVm)
+          ? 720
+          : /_[a-z,]*l[a-z,]*\.urlset/i.test(decVm)
+            ? 480
+            : 720;
+    orderedStreams.push({
+      url: vmHlsUrl,
+      rawUrl: vmHlsUrl,
+      sourcePath: `România Cloud HD (Vidmoly ${vmMaxH >= 1080 ? '1080p Full HD' : '720p HD'})`,
+      duration: bestVk?.duration || 0,
+      maxHeight: vmMaxH,
+      priorityRank: 2,
+    });
+  }
+  if (rumbleHlsUrl) {
+    orderedStreams.push({
+      url: rumbleHlsUrl,
+      rawUrl: rumbleHlsUrl,
+      sourcePath: 'România Cloud HD (Rumble Direct)',
+      duration: bestVk?.duration || 0,
+      maxHeight: 480,
+      priorityRank: 3,
+    });
+  }
+  // Always prioritize HD (>= 720p) over SD (< 720p), and higher resolution first (with VK preferred on equal HD height)
+  orderedStreams.sort((a, b) => {
+    const aHd = (a.maxHeight || 0) >= 720 ? 1 : 0;
+    const bHd = (b.maxHeight || 0) >= 720 ? 1 : 0;
+    if (aHd !== bHd) return bHd - aHd;
+    if ((b.maxHeight || 0) !== (a.maxHeight || 0)) {
+      return (b.maxHeight || 0) - (a.maxHeight || 0);
+    }
+    return (a.priorityRank || 9) - (b.priorityRank || 9);
+  });
+
+  if (orderedStreams.length === 0) {
+    return builtSeasonsCatalog
+      ? {
+          ok: false,
+          type: 'series',
+          seasons: builtSeasonsCatalog,
+          error: 'No direct HLS stream extracted from Romanian episode page',
+        }
+      : null;
+  }
+
+  const primary = orderedStreams[0];
+  const backupHlsUrls = orderedStreams
+    .slice(1)
+    .map((s) => s.url)
+    .filter(Boolean);
+  const cleanEpTitle = normalizeRoAscii(
+    targetPost.title?.rendered || `${descriptor.canonicalQuery} • S${appSeason}:E${targetEp}`
+  );
+
+  return {
+    ok: true,
+    type: 'series',
+    sourcePath: primary.sourcePath,
+    season: appSeason,
+    episode: targetEp,
+    title: cleanEpTitle,
+    duration: primary.duration || 0,
+    audioNames: ['Română (Original)'],
+    hlsUrl: primary.url,
+    proxyHlsUrl: primary.url,
+    rawHlsUrl: primary.rawUrl,
+    backupHlsUrls: backupHlsUrls.length > 0 ? backupHlsUrls : undefined,
+    vkQualities: primary.vkQualities,
+    userAgent: effectiveUa,
+    ...(builtSeasonsCatalog ? { seasons: builtSeasonsCatalog } : {}),
+  };
+}
+
 export async function resolveVodStreamData({
   kp,
   imdb,
@@ -2059,10 +2707,35 @@ export async function resolveVodStreamData({
   const cleanTitle = String(title || '').trim();
   let fallbackSeasonsCatalog = undefined;
 
+  // 0. Check Romanian Cloud TV Shows & Series first (Asia Express, Insula Iubirii, Power Couple, Las Fierbinti, Chefi la Cutite, Clanul, Tatutu, etc.)
+  if (mediaType !== 'movie' && detectRomanianShowDescriptor(imdb, cleanTitle)) {
+    const roRes = await resolveFromRomanianCloudVod({
+      imdb,
+      title: cleanTitle,
+      season,
+      episode,
+      effectiveUa,
+    });
+    if (roRes?.seasons?.length) {
+      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+        fallbackSeasonsCatalog,
+        roRes.seasons
+      );
+    }
+    if (roRes && roRes.ok) {
+      return {
+        ...roRes,
+        ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+      };
+    }
+  }
+
   // 1. Check Official VK Video Curated Playlists & Verified Communities first
+  const cleanImdb = String(imdb || '').trim();
   const matchedVkShow = VK_CURATED_SHOWS.find(
     (s) =>
       (cleanKp && s.kpIds.includes(cleanKp)) ||
+      (cleanImdb && Array.isArray(s.imdbIds) && s.imdbIds.includes(cleanImdb)) ||
       (cleanTitle && s.titleRe.test(cleanTitle))
   );
   if (matchedVkShow) {

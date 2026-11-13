@@ -134,7 +134,14 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
         : t.settings.themeSystem;
 
   return (
-    <header className="lg:sticky lg:top-0 z-20 bg-slate-50/95 dark:bg-zinc-950/95 backdrop-blur-md border-b border-slate-200/80 dark:border-zinc-800/80 px-3 sm:px-6 lg:px-8">
+    <header
+      style={{
+        paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+        paddingLeft: 'max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+        paddingRight: 'max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+      }}
+      className="lg:sticky lg:top-0 z-20 bg-slate-50/95 dark:bg-zinc-950/95 backdrop-blur-md border-b border-slate-200/80 dark:border-zinc-800/80 px-3 sm:px-6 lg:px-8"
+    >
       <div className="h-11 sm:h-16 flex items-center justify-between gap-2 sm:gap-3">
         {/* Left: Mobile Logo + Country Trigger */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">

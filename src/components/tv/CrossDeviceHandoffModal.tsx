@@ -727,6 +727,12 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     <div
       ref={modalRootRef}
       data-handoff-modal="true"
+      style={{
+        paddingTop: 'max(1rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+        paddingBottom: 'max(1rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.5rem))',
+        paddingLeft: 'max(1rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
+        paddingRight: 'max(1rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
+      }}
       className="fixed inset-0 z-[250] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(12,12,12,0.98)_55%,_#060606_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
       onClick={() => {
         if (!isPinLockRequired && viewMode === 'list') onClose();
@@ -744,6 +750,10 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               type="button"
               data-handoff-close-btn="true"
               onClick={onClose}
+              style={{
+                top: 'max(1.25rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+                right: 'max(1.25rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
+              }}
               className="fixed top-5 right-5 sm:top-7 sm:right-8 h-11 px-5 rounded-full bg-white/15 hover:bg-white hover:text-zinc-950 focus:bg-white focus:text-zinc-950 focus:ring-4 focus:ring-white/60 focus:outline-none text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 transition-all cursor-pointer shadow-lg"
             >
               <X className="w-4 h-4" />

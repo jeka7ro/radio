@@ -98,6 +98,16 @@
         if (isTvRoute) {
           document.documentElement.classList.add('smart-tv-mode');
         }
+        var uaStr = navigator.userAgent || '';
+        var isIosPhone = /iPhone|iPod/i.test(uaStr);
+        var isPwaStandalone = !!(window.navigator && window.navigator.standalone) || !!(window.matchMedia && (window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches));
+        if (isIosPhone && isPwaStandalone) {
+          document.documentElement.classList.add('ios-pwa-standalone');
+          var screenMax = Math.max(window.screen ? window.screen.height : 0, window.screen ? window.screen.width : 0, window.innerHeight || 0, window.innerWidth || 0);
+          document.documentElement.style.setProperty('--ios-pwa-top-floor', screenMax >= 874 ? '62px' : screenMax >= 852 ? '59px' : screenMax >= 812 ? '48px' : '20px');
+          document.documentElement.style.setProperty('--ios-pwa-bottom-floor', screenMax >= 812 ? '24px' : '0px');
+          document.documentElement.style.setProperty('--ios-pwa-side-floor', screenMax >= 874 ? '62px' : screenMax >= 852 ? '59px' : screenMax >= 812 ? '47px' : '0px');
+        }
       } catch (e) {
         document.documentElement.classList.add('dark');
       }

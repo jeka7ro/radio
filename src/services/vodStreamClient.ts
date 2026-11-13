@@ -10,6 +10,7 @@ export interface ResolvedDirectVodStream {
   hlsUrl?: string;
   proxyHlsUrl?: string;
   rawHlsUrl?: string;
+  backupHlsUrls?: string[];
   embedUrl?: string;
   title?: string;
   duration?: number;
@@ -95,6 +96,11 @@ export async function resolveDirectVodStreamClient(params: {
               proxyHlsUrl: toBridgeOrigin(rawData.proxyHlsUrl),
               dashUrl: toBridgeOrigin(rawData.dashUrl),
               dashaUrl: toBridgeOrigin(rawData.dashaUrl),
+              backupHlsUrls: Array.isArray(rawData.backupHlsUrls)
+                ? rawData.backupHlsUrls
+                    .map((u) => toBridgeOrigin(u) || u)
+                    .filter(Boolean)
+                : rawData.backupHlsUrls,
               vkQualities: Array.isArray(rawData.vkQualities)
                 ? rawData.vkQualities.map((q) => ({
                     ...q,

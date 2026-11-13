@@ -147,6 +147,12 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
 {/* APPLE macOS TAHOE FLOATING ROUNDED LIQUID GLASS "Фильтр / Filtru" SHEET */}
       {isFilterDrawerOpen && (
         <div
+          style={{
+            paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+            paddingBottom: 'var(--safe-bottom, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
+            paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
+          }}
           className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-md"
           onClick={() => {
             if (filterSubMenu) {
@@ -531,6 +537,12 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {/* APPLE macOS TAHOE FLOATING ROUNDED LIQUID GLASS "Каталог / Catalog" SHEET */}
       {isCatalogDrawerOpen && (
         <div
+          style={{
+            paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+            paddingBottom: 'var(--safe-bottom, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
+            paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
+          }}
           className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-md"
           onClick={() => setIsCatalogDrawerOpen(false)}
         >
@@ -587,6 +599,12 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {/* APPLE macOS TAHOE FLOATING ROUNDED LIQUID GLASS "Настройки / Setări Smart TV" SHEET */}
       {isSettingsDrawerOpen && (
         <div
+          style={{
+            paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+            paddingBottom: 'var(--safe-bottom, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
+            paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
+          }}
           className="fixed inset-0 z-[150] flex justify-end bg-black/55 backdrop-blur-md"
           onClick={() => {
             if (settingsSubMenu) {
@@ -1627,6 +1645,12 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {/* DEDICATED FULLSCREEN SMART TV RADIO PLAYER MODAL ("Плеер Радио — Cu Poză & Info Piesă") */}
       {isTvRadioPlayerOpen && currentStation && (
         <div
+          style={{
+            paddingTop: 'max(1.25rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+            paddingBottom: 'max(1.25rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.5rem))',
+            paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+            paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+          }}
           className="fixed inset-0 z-[125] bg-[#101010]/95 backdrop-blur-2xl flex flex-col justify-between p-5 sm:p-10 overflow-y-auto"
           onClick={() => setIsTvRadioPlayerOpen(false)}
         >
@@ -2069,6 +2093,11 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
         >
           {/* Top Header Bar with Back/Close & Trailer Switcher */}
           <div
+            style={{
+              paddingTop: 'max(1rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+              paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+              paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+            }}
             className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 bg-gradient-to-b from-black via-black/85 to-transparent z-10"
             onClick={(e) => e.stopPropagation()}
           >
