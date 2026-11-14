@@ -701,9 +701,11 @@ export function isDirectLocalHost(): boolean {
 }
 
 const LOCAL_CANDIDATE_BRIDGE_ORIGINS = [
-  'http://localhost:8769',
   'http://192.168.101.87:8769',
+  'http://192.168.2.57:8769',
+  'http://localhost:8769',
   'http://127.0.0.1:8769',
+  'http://100.79.113.57:8769',
 ];
 const LOCAL_BRIDGE_ORIGIN = LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
 let activeBridgeOrigin = '';
@@ -823,6 +825,17 @@ if (typeof window !== 'undefined') {
 export function isLocalHomeServer(): boolean {
   if (typeof window === 'undefined') return false;
   if (isDirectLocalHost()) return true;
+  if (activeBridgeOrigin) return true;
+  try {
+    if (
+      sessionStorage.getItem('filmio_local_bridge_ok') === '1' ||
+      Boolean(localStorage.getItem('filmio_local_bridge_origin'))
+    ) {
+      return true;
+    }
+  } catch {
+    // ignore
+  }
   if (localBridgeAvailable === null) void probeLocalBridge();
   return Boolean(localBridgeAvailable);
 }
@@ -890,7 +903,16 @@ export function isFileListExclusiveRomanianTitle(
 
 export function getFileListServerBase(): string {
   if (typeof window === 'undefined' || isDirectLocalHost()) return '';
-  return activeBridgeOrigin || LOCAL_BRIDGE_ORIGIN;
+  if (activeBridgeOrigin) return activeBridgeOrigin;
+  try {
+    const stored =
+      sessionStorage.getItem('filmio_local_bridge_origin') ||
+      localStorage.getItem('filmio_local_bridge_origin');
+    if (stored) return stored;
+  } catch {
+    // ignore
+  }
+  return LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
 }
 
 export function buildFileListApiUrl(path: string): string {

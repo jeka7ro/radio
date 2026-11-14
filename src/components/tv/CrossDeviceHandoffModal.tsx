@@ -14,6 +14,10 @@ import {
   Delete,
 } from 'lucide-react';
 import {
+  getWatchProgressKeyForProfile,
+  getSavedVodKeyForProfile,
+} from "../../views/smartTvLampaHelpers";
+import {
   SharedTvProfile,
   PHOTO_AVATAR_GALLERY,
   detectCurrentDeviceName,
@@ -636,6 +640,23 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         updatedAt: now,
       };
       unmarkProfileDeleted(newProf.id);
+      try {
+        localStorage.setItem(getWatchProgressKeyForProfile(newProf.id), '{}');
+        localStorage.setItem(getSavedVodKeyForProfile(newProf.id), '[]');
+        localStorage.setItem(`filmio_seed_progress_v3_${newProf.id}`, '1');
+      } catch {
+        // ignore
+      }
+      fetch(`/api/tv-progress?profileId=${encodeURIComponent(newProf.id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(() => {});
+      fetch(`/api/tv-saved?profileId=${encodeURIComponent(newProf.id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '[]',
+      }).catch(() => {});
       const nextList = [...profiles, newProf];
       applyUpdatedProfiles(nextList);
       setFocusedCardId(newProf.id);

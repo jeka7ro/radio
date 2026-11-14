@@ -1320,14 +1320,42 @@ export function buildVodEmbedUrl(
   const isSeries = item.type === 'series';
   const start = Math.max(0, Math.floor(startSeconds || 0));
 
-  // If no IMDb ID or TMDB ID is available and only kpId exists, fallback to Kinogram embed
+  const isRu = isRussianVodItem(item);
+
+  // If item is foreign, NEVER return api.namy.ws (Russian pirate embed with Russian dubbing)!
+  if (!isRu) {
+    if (!imdbId && !item.moviedb_id && !tmdbOrImdbId) return '';
+    const params = new URLSearchParams();
+    params.set('autoplay', 'true');
+    params.set('ds_lang', subLang);
+    if (start > 5) {
+      params.set('startAt', String(start));
+      params.set('t', String(start));
+    }
+    return isSeries
+      ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
+      : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
+  }
+
+  // If no IMDb ID or TMDB ID is available and only kpId exists, fallback to Kinogram embed for Russian titles
   if (!imdbId && !item.moviedb_id && kpId) {
     const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
     return `https://api.namy.ws/embed/kp/${kpId}${qs}`;
   }
 
   switch (server) {
-    case 'filelist_torrent':
+    case 'filelist_torrent': {
+      const params = new URLSearchParams();
+      params.set('autoplay', 'true');
+      params.set('ds_lang', subLang);
+      if (start > 5) {
+        params.set('startAt', String(start));
+        params.set('t', String(start));
+      }
+      return isSeries
+        ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
+        : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
+    }
     case 'kinogram_hls':
     case 'kinogram_embed': {
       const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;

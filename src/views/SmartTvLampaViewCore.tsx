@@ -813,6 +813,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [profileAvatarIdxDraft, setProfileAvatarIdxDraft] = useState<number>(0);
 
   const [unlockedPinProfileKey, setUnlockedPinProfileKey] = useState<string>('');
+  const handleSelectProfileRef = useRef<(id: string) => void>(() => {});
 
   const activeProfile = useMemo(
     () =>
@@ -848,15 +849,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         typeof custom.detail === 'string'
           ? custom.detail
           : custom.detail?.profileId || loadActiveProfileId();
-      setActiveProfileId(nextId);
-      setTvProfiles(loadTvProfiles());
+      handleSelectProfileRef.current(nextId);
     };
     const onStorage = (e: StorageEvent) => {
       if (!e.key || e.key === TV_PROFILES_STORAGE_KEY) {
         setTvProfiles(loadTvProfiles());
       }
       if (e.key === 'aether_smart_tv_active_profile_v1' && e.newValue) {
-        setActiveProfileId(e.newValue);
+        handleSelectProfileRef.current(e.newValue);
       }
     };
 
@@ -1245,10 +1245,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handleSelectProfile = useCallback(
     (profileId: string) => {
+      const cleanId = (profileId || 'p1').trim();
       const latestStored = loadTvProfiles();
       const targetProfile =
-        tvProfiles.find((p) => p.id === profileId) ||
-        latestStored.find((p) => p.id === profileId) ||
+        tvProfiles.find((p) => p.id === cleanId) ||
+        latestStored.find((p) => p.id === cleanId) ||
         DEFAULT_TV_PROFILES[0];
       if (!tvProfiles.some((p) => p.id === targetProfile.id) && latestStored.length > 0) {
         setTvProfiles(latestStored);
@@ -1270,34 +1271,41 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         setTvRegionId((prev) => (prev === 'IEDEM' ? 'FAV' : prev));
       }
       if (targetProfile.pin && targetProfile.pin.trim()) {
-        setUnlockedPinProfileKey(`${profileId}:${targetProfile.pin.trim()}`);
+        setUnlockedPinProfileKey(`${cleanId}:${targetProfile.pin.trim()}`);
       } else {
         setUnlockedPinProfileKey('');
       }
-      setActiveProfileId(profileId);
-      saveActiveProfileId(profileId);
+      setActiveProfileId(cleanId);
+      saveActiveProfileId(cleanId);
       try {
         sessionStorage.setItem('aether_tv_profile_picked_v1', '1');
       } catch {
         // ignore
       }
-      const nextSettings = loadSmartTvSettings(profileId);
-      if (targetProfile.uiLang && !localStorage.getItem(getSmartTvSettingsKeyForProfile(profileId))) {
+      const nextSettings = loadSmartTvSettings(cleanId);
+      if (targetProfile.uiLang && !localStorage.getItem(getSmartTvSettingsKeyForProfile(cleanId))) {
         nextSettings.uiLang = targetProfile.uiLang;
       }
-      if (targetProfile.tvTheme && !localStorage.getItem(`aether_tv_theme_${profileId}`)) {
+      if (targetProfile.tvTheme && !localStorage.getItem(`aether_tv_theme_${cleanId}`)) {
         nextSettings.tvTheme = targetProfile.tvTheme;
       }
       tvSettingsRef.current = nextSettings;
       setTvSettings(nextSettings);
-      setWatchProgressMap(loadWatchProgressMap(profileId));
-      setSavedVodItems(loadSavedVodItems(profileId));
-      switchRadioFavoritesProfile(profileId);
+
+      const nextProgress = loadWatchProgressMap(cleanId);
+      watchProgressMapRef.current = nextProgress;
+      setWatchProgressMap(nextProgress);
+
+      const nextSaved = loadSavedVodItems(cleanId);
+      setSavedVodItems(nextSaved);
+
+      switchRadioFavoritesProfile(cleanId);
       setEditingProfileId(null);
       setIsProfilePickerOpen(false);
     },
-    [tvProfiles, switchRadioFavoritesProfile]
+    [tvProfiles, switchRadioFavoritesProfile, currentTvChannel]
   );
+  handleSelectProfileRef.current = handleSelectProfile;
 
   const handleStartAddProfile = useCallback(() => {
     const newId = `p${Date.now().toString(36).slice(-4)}`;
@@ -1527,12 +1535,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [isYtKeyboardOpen, setIsYtKeyboardOpen] = useState<boolean>(false);
   const [activeYtDurationSec, setActiveYtDurationSec] = useState<number>(0);
   const [ytUseEmbedFallback, setYtUseEmbedFallback] = useState<boolean>(() => !isLocalHomeServer());
-  const [activeServer, setActiveServer] = useState<VodServerId>(() =>
-    tvSettings.defaultVodServer === 'auto_best' ||
-      (tvSettings.defaultVodServer === 'filelist_torrent' && !isLocalHomeServer())
-      ? 'kinogram_hls'
-      : tvSettings.defaultVodServer
-  );
+  const [activeServer, setActiveServer] = useState<VodServerId>(() => {
+    if (tvSettings.defaultVodServer === 'auto_best') return 'filelist_torrent';
+    return tvSettings.defaultVodServer;
+  });
   const [preferredSubLang, setPreferredSubLang] = useState<SubtitleLangId>(() =>
     tvSettings.defaultSubLang === 'off' ? 'ro' : tvSettings.defaultSubLang
   );
@@ -5595,19 +5601,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         !normalizedItem.flTorrentId
       );
       const isRuTvShow = isRussianTvShowItem(normalizedItem);
+      const isForeignItem = !isRussianVodItem(normalizedItem);
       const prefersTorrentFirst = !isAdultKlubOnly && !isRuTvShow;
       const savedSrv =
-        saved?.server === 'filelist_torrent' && canUseLocalFl
+        saved?.server === 'filelist_torrent' && (canUseLocalFl || isForeignItem)
           ? 'filelist_torrent'
-          : saved?.server === 'kinogram_hls' && (!prefersTorrentFirst || !canUseLocalFl)
+          : saved?.server === 'kinogram_hls' && (!prefersTorrentFirst || !canUseLocalFl) && !isForeignItem
             ? 'kinogram_hls'
             : undefined;
-      const defaultSrv =
+      const defaultSrv: VodServerId =
         tvSettings.defaultVodServer === 'auto_best'
-          ? prefersTorrentFirst && canUseLocalFl
+          ? (prefersTorrentFirst && canUseLocalFl) || isForeignItem
             ? 'filelist_torrent'
             : 'kinogram_hls'
-          : tvSettings.defaultVodServer === 'filelist_torrent' && !canUseLocalFl
+          : tvSettings.defaultVodServer === 'filelist_torrent' && !canUseLocalFl && !isForeignItem
             ? 'kinogram_hls'
             : tvSettings.defaultVodServer;
       setActiveServer(
@@ -5615,12 +5622,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ? 'kinogram_hls'
           : isRuTvShow
             ? 'kinogram_hls'
-            : (item.flTorrentId || item.id.startsWith('kinozal_') || prefersTorrentFirst) &&
-              canUseLocalFl &&
-              (tvSettings.defaultVodServer === 'auto_best' ||
-                tvSettings.defaultVodServer === 'filelist_torrent')
+            : isForeignItem
               ? 'filelist_torrent'
-              : savedSrv || defaultSrv
+              : (item.flTorrentId || item.id.startsWith('kinozal_') || prefersTorrentFirst) &&
+                canUseLocalFl &&
+                (tvSettings.defaultVodServer === 'auto_best' ||
+                  tvSettings.defaultVodServer === 'filelist_torrent')
+                ? 'filelist_torrent'
+                : savedSrv || defaultSrv
       );
       if (tvSettings.defaultSubLang !== 'off') {
         setPreferredSubLang(tvSettings.defaultSubLang);
@@ -6213,6 +6222,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         : 0);
 
     if (isIedemItem && iedemFid > 0) {
+      const isEarlyRuIedem = isRussianVodItem(activeVodItem);
       let isRuTvShowIedem = isRussianTvShowItem(activeVodItem);
       let iedemVkDirectOk = false;
       let iedemVkFinished = false;
@@ -6225,11 +6235,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         !userManuallySelectedServerRef.current &&
         userSelectedFlTorrentIdRef.current === null
       ) {
-        setActiveServer(
-          !isRuTvShowIedem && canUseLocalTorrent
-            ? 'filelist_torrent'
-            : 'kinogram_hls'
-        );
+        if (!isEarlyRuIedem) {
+          // Foreign series / movie: NEVER switch to kinogram_hls! Always prioritize filelist_torrent
+          setActiveServer('filelist_torrent');
+        } else {
+          setActiveServer(
+            !isRuTvShowIedem && canUseLocalTorrent
+              ? 'filelist_torrent'
+              : 'kinogram_hls'
+          );
+        }
       }
       const iedemQualityLabel = activeVodItem.qualityBadge?.includes('4K')
         ? '4K UHD'
@@ -6245,7 +6260,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         activeVodItem.type !== 'series' ||
         (selectedSeason || 1) === iedemCardSeason;
 
-      const isEarlyRuIedem = isRussianVodItem(activeVodItem);
       if (isEarlyRuIedem && activeVodItem.iedemStreamUrl && activeVodItem.type !== 'series') {
         setResolvedDirectStream({
           ok: true,
@@ -6425,7 +6439,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               ) {
                 return;
               }
-              if (!isRuTvShowIedem) {
+              if (!isEarlyRuIedem) {
+                // Foreign content: Keep filelist_torrent!
+                setActiveServer('filelist_torrent');
+              } else if (!isRuTvShowIedem) {
                 if (iedemFlOk && canUseLocalTorrent) {
                   setActiveServer('filelist_torrent');
                 } else {
@@ -6445,7 +6462,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 !userManuallySelectedServerRef.current &&
                 userSelectedFlTorrentIdRef.current === null
               ) {
-                setActiveServer('kinogram_hls');
+                if (isEarlyRuIedem) {
+                  setActiveServer('kinogram_hls');
+                } else {
+                  setActiveServer('filelist_torrent');
+                }
               }
             })
             .finally(() => {
@@ -7834,9 +7855,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       userSelectedFlTorrentIdRef.current = null;
       setIsFileListStreamLoading(false);
       setResolvedFileListStream(null);
-      setActiveServer((prev) =>
-        prev === 'filelist_torrent' ? 'kinogram_hls' : prev
-      );
+      if (!isForeignVod && isRussianVodItem(activeVodItem)) {
+        setActiveServer((prev) =>
+          prev === 'filelist_torrent' ? 'kinogram_hls' : prev
+        );
+      }
     }
 
     return () => {
@@ -8982,11 +9005,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   // Sync watch progress & saved favorites across devices (local + cloud filmio.my real-time continuity)
   useEffect(() => {
     const applyRemoteProgress = (
-      remote: Record<string, VodWatchProgressEntry> | null
+      remote: Record<string, VodWatchProgressEntry> | null,
+      targetProfileId = activeProfileId
     ) => {
       if (!remote || typeof remote !== 'object') return;
-      setWatchProgressMap((prev) => {
-        const merged = { ...prev };
+      if (activeProfileId !== targetProfileId) return;
+      setWatchProgressMap(() => {
+        const currentLocal = loadWatchProgressMap(targetProfileId);
+        const merged = { ...currentLocal };
         let changed = false;
         const localFl = isLocalHomeServer();
         for (const [k, v] of Object.entries(remote)) {
@@ -9046,22 +9072,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (changed) {
           try {
             localStorage.setItem(
-              getWatchProgressKeyForProfile(activeProfileId),
+              getWatchProgressKeyForProfile(targetProfileId),
               JSON.stringify(merged)
             );
           } catch {
             // ignore
           }
-          return merged;
         }
-        return prev;
+        watchProgressMapRef.current = merged;
+        return merged;
       });
     };
 
     const syncProgressAndSaved = () => {
       if (isPlayingVodRef.current) return;
-      const cleanProf = encodeURIComponent(activeProfileId);
-      const local = loadWatchProgressMap(activeProfileId);
+      const currentProf = activeProfileId;
+      const cleanProf = encodeURIComponent(currentProf);
+      const local = loadWatchProgressMap(currentProf);
       const bodyStr = JSON.stringify(local);
       const servedByLocalNode =
         typeof window !== 'undefined' && window.location.port === '8769';
@@ -9072,7 +9099,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((remote: Record<string, VodWatchProgressEntry> | null) => {
-          applyRemoteProgress(remote);
+          if (activeProfileId !== currentProf) return;
+          applyRemoteProgress(remote, currentProf);
           if (isLocalHomeServer() && !servedByLocalNode) {
             const payloadToCloud = JSON.stringify(
               remote && typeof remote === 'object' ? remote : local
@@ -9083,13 +9111,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               body: payloadToCloud,
             })
               .then((cr) => (cr.ok ? cr.json() : null))
-              .then((cloudRemote) => applyRemoteProgress(cloudRemote))
+              .then((cloudRemote) => {
+                if (activeProfileId !== currentProf) return;
+                applyRemoteProgress(cloudRemote, currentProf);
+              })
               .catch(() => { });
           }
         })
         .catch(() => { });
 
-      const localSaved = loadSavedVodItems(activeProfileId);
+      const localSaved = loadSavedVodItems(currentProf);
       fetch(`/api/tv-saved?profileId=${cleanProf}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -9097,10 +9128,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((remoteSaved: CinemetaItem[] | null) => {
+          if (activeProfileId !== currentProf) return;
           if (Array.isArray(remoteSaved) && remoteSaved.length > 0) {
-            setSavedVodItems((prev) => {
-              const seen = new Set(prev.map((x) => x.id));
-              const merged = [...prev];
+            setSavedVodItems(() => {
+              const currentLocalSaved = loadSavedVodItems(currentProf);
+              const seen = new Set(currentLocalSaved.map((x) => x.id));
+              const merged = [...currentLocalSaved];
               let changed = false;
               for (const item of remoteSaved) {
                 if (item && item.id && !seen.has(item.id)) {
@@ -9112,7 +9145,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               if (changed) {
                 try {
                   localStorage.setItem(
-                    getSavedVodKeyForProfile(activeProfileId),
+                    getSavedVodKeyForProfile(currentProf),
                     JSON.stringify(merged)
                   );
                 } catch {
@@ -9120,13 +9153,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 }
                 return merged;
               }
-              return prev;
+              return currentLocalSaved;
             });
           }
         })
         .catch(() => { });
 
-      void syncRadioFavoritesWithServer(activeProfileId);
+      void syncRadioFavoritesWithServer(currentProf);
     };
 
     switchRadioFavoritesProfile(activeProfileId);
@@ -11311,7 +11344,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         );
                       })()
                     ) : activeServer === 'filelist_torrent' &&
-                      isLocalHomeServer() &&
                       !matchedOfflineVodItem ? (
                       isFileListStreamLoading ? (
                         <FilmioStartupLoader />
@@ -11991,6 +12023,49 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </div>
                           </div>
                         </div>
+                      ) : isCurrentVodForeign && (isFileListStreamLoading || (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl)) ? (
+                        <FilmioStartupLoader />
+                      ) : isCurrentVodForeign && !activeVodItem.klubnichkaEmbedUrl ? (
+                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
+                          <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+                            <div className="text-lg sm:text-xl font-extrabold text-white">
+                              {activeVodItem.name}
+                              {activeVodItem.type === 'series'
+                                ? ` • S${selectedSeason}:E${selectedEpisode}`
+                                : ''}
+                            </div>
+                            <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                              {tr(
+                                'Pornire în Playerul Nativ Filmio cu Audio Original și Subtitrare Română (S1: FileList.io)...',
+                                'Starting Filmio Native Player with Original Audio and Romanian Subtitles (S1: FileList.io)...',
+                                'Запуск родного плеера Filmio с оригинальным звуком и румынскими субтитрами (S1: FileList.io)...'
+                              )}
+                            </p>
+                            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsFileListStreamLoading(true);
+                                  setActiveServer('filelist_torrent');
+                                  void retryProbeLocalBridge().then((ok) => {
+                                    if (ok) {
+                                      setLocalBridgeTick((t) => t + 1);
+                                    } else {
+                                      setIsFileListStreamLoading(false);
+                                    }
+                                  });
+                                }}
+                                className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer shadow-lg"
+                              >
+                                {tr(
+                                  'Pornește S1: FileList.io 1080p',
+                                  'Start S1: FileList.io 1080p',
+                                  'Запустить S1: FileList.io 1080p'
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       ) : (
                         <iframe
                           src={
@@ -12072,7 +12147,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           </div>
                         </div>
                       </div>
-                    ) : (
+                    ) : !isCurrentVodForeign ? (
                       <iframe
                         src={
                           resolvedDirectStream?.embedUrl ||
@@ -12094,6 +12169,47 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                         allowFullScreen
                       />
+                    ) : (
+                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
+                        <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+                          <div className="text-lg sm:text-xl font-extrabold text-white">
+                            {activeVodItem.name}
+                            {activeVodItem.type === 'series'
+                              ? ` • S${selectedSeason}:E${selectedEpisode}`
+                              : ''}
+                          </div>
+                          <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                            {tr(
+                              'Pornire în Playerul Nativ Filmio cu Audio Original și Subtitrare Română (S1: FileList.io)...',
+                              'Starting Filmio Native Player with Original Audio and Romanian Subtitles (S1: FileList.io)...',
+                              'Запуск родного плеера Filmio с оригинальным звуком и румынскими субтитрами (S1: FileList.io)...'
+                            )}
+                          </p>
+                          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsFileListStreamLoading(true);
+                                setActiveServer('filelist_torrent');
+                                void retryProbeLocalBridge().then((ok) => {
+                                  if (ok) {
+                                    setLocalBridgeTick((t) => t + 1);
+                                  } else {
+                                    setIsFileListStreamLoading(false);
+                                  }
+                                });
+                              }}
+                              className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer shadow-lg"
+                            >
+                              {tr(
+                                'Pornește S1: FileList.io 1080p',
+                                'Start S1: FileList.io 1080p',
+                                'Запустить S1: FileList.io 1080p'
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     )}
 
                     {/* FLOATING BOTTOM CONTROL BAR FOR IFRAME FALLBACK STREAMS (Time Seek + Next Episode + Source) */}

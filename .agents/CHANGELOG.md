@@ -6,6 +6,27 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-14 23:30 — Izolare 100% Multi-Profil (Zero scurgeri de istoric către profiluri noi), Forțare Player Nativ `<VodNativeHlsPlayer>`, Blocare Totală Iframe-uri Rusești (`api.namy.ws`) & Păstrare Nativă LG webOS OLED
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Izolare atomică și completă a progresului între profiluri (`src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/CrossDeviceHandoffModal.tsx`)**:
+     - Creat ref atomic `handleSelectProfileRef` conectat direct la evenimentele `aether:active-profile-changed` și `storage` (`aether_smart_tv_active_profile_v1`). La orice schimbare de profil, se reîncarcă instant `loadWatchProgressMap(nextId)`, `loadSavedVodItems(nextId)`, `loadSmartTvSettings(nextId)` și se actualizează atât state-ul React cât și `watchProgressMapRef.current` și `tvSettingsRef.current`.
+     - În `CrossDeviceHandoffModal.tsx`, la crearea unui profil nou (`editingProfileId === 'NEW'`), se inițializează obligatoriu chei goale `{}` și `[]` în `localStorage` și se trimite POST cu `{}` și `[]` către `/api/tv-progress` și `/api/tv-saved`, garantând că profilul nou pornește 100% curat fără a moșteni istoricul de 45 de filme/seriale al lui JEKA (`p1`).
+     - În `applyRemoteProgress` și `syncProgressAndSaved`, s-a eliminat fuziunea oarbă din `prev` (care reținea istoricul profilului anterior) și s-au adăugat gărzi stricte `if (activeProfileId !== targetProfileId) return;`, fuzionând exclusiv în `loadWatchProgressMap(targetProfileId)` pentru a preveni orice contaminare asincronă.
+  2. **Forțare exclusivă a Playerului Nativ `<VodNativeHlsPlayer>` și eliminare totală a iframe-urilor rusești (`src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`)**:
+     - `activeServer` se inițializează acum direct cu `filelist_torrent` când `defaultVodServer === 'auto_best'`, eliminând forțarea pe `kinogram_hls`.
+     - În `handleSelectVodItem` și rezolvarea stream-urilor, pentru orice titlu străin (`!isRussianVodItem`), `activeServer` rămâne fixat pe `filelist_torrent` și nu mai este retrogradat la `kinogram_hls` în caz de eroare sau căutare întârziată.
+     - În `smartTvLampaHelpers.ts` (`buildVodEmbedUrl`), este complet interzisă returnarea `https://api.namy.ws/embed/` pentru orice titlu străin sau server `filelist_torrent`.
+     - În arborele de render TV, eliminat complet fallback-ul la `<iframe>` pentru filme și seriale străine (`isCurrentVodForeign`): stream-ul pornește exclusiv în `<VodNativeHlsPlayer>` (cu audio original în engleză, controale OSD proprii și căutare/atașare automată de subtitrări românești prin `autoResolveAndFetchBestRoRuSubtitle`), iar dacă serverul local este în curs de conectare, se afișează loader-ul nativ sau cardul de reîncercare S1/S2/S3, NICIODATĂ un player web extern străin.
+  3. **Auto-conectare LAN prioritară către serverul Mac (`src/services/deviceContinuityService.ts`)**:
+     - Reordonată lista `LOCAL_CANDIDATE_BRIDGE_ORIGINS` punând pe prima poziție IP-ul LAN direct (`http://192.168.101.87:8769` și `http://192.168.2.57:8769`) înaintea `localhost` (care pe televizoarele Sony / LG nu găsește serverul).
+     - `getFileListServerBase()` și `isLocalHomeServer()` detectează imediat originea LAN stocată sau prima opțiune din listă, permițând televizoarelor să acceseze direct motorul P2P FileList chiar și la accesarea `https://filmio.my`.
+  4. **Protecție 100% pentru LG webOS OLED TV**:
+     - Toate modificările respectă scalarea nativă 1080p, raportul de zoom hardware 21:9 Cinema și setările MSE/HLS pentru ecranele LG OLED.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/CrossDeviceHandoffModal.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/services/deviceContinuityService.ts`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-14 23:10 — Rezolvare definitivă Sony Bravia KD-85X80L: carduri redimensionate proporțional la 8-10 pe rând, auto-descoperire punte LAN Home Server (`192.168.101.87:8769`), blocare totală iEdem rusesc pe seriale străine & garantare radio RMC Hits pe profilul JEKA
 - **Autor:** Antigravity
 - **Ce s-a făcut:**
