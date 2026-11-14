@@ -899,6 +899,59 @@ html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
 }
 
 /* ============================================================================
+   SMART TV HERO BILLBOARD SCALING (Sony Bravia KD-85X80L 960x540 Viewport)
+   Prevents the Hero Banner from occupying 85% of the screen height,
+   leaving comfortable vertical space so movie shelves are visible immediately.
+   LG webOS 77" OLED (1920x1080) retains its original full 1080p dimensions.
+   ============================================================================ */
+html.smart-tv-sub1080 [data-top-hero-card="true"] {
+  min-height: 180px !important;
+  max-height: 205px !important;
+  height: 195px !important;
+  padding: 10px 18px !important;
+  border-radius: 18px !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] img[key*="hero_logo"],
+html.smart-tv-sub1080 [data-top-hero-card="true"] img[src*="logo/medium"] {
+  max-height: 28px !important;
+  max-width: 190px !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] h2 {
+  font-size: 1.35rem !important;
+  line-height: 1.15 !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] .gap-3,
+html.smart-tv-sub1080 [data-top-hero-card="true"] .gap-4,
+html.smart-tv-sub1080 [data-top-hero-card="true"] .sm\:gap-4 {
+  gap: 0.35rem !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] .mt-5,
+html.smart-tv-sub1080 [data-top-hero-card="true"] .sm\:mt-12 {
+  margin-top: 0.35rem !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] p {
+  font-size: 0.95rem !important;
+  line-height: 1.25 !important;
+  max-width: 440px !important;
+  -webkit-line-clamp: 2 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  overflow: hidden !important;
+}
+
+html.smart-tv-sub1080 [data-top-hero-card="true"] button {
+  height: 28px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  font-size: 10.5px !important;
+}
+
+/* ============================================================================
    SMART TV CARD & GRID PROPORTIONAL DENSITY (Sony Bravia KD-85X80L / Android TV 960x540 & 1280x720)
    Tailwind's fixed-px minmax(175px/185px/240px) clamps grids to only 3-4 cards across 85" screens.
    By converting them to rem units that scale with root font-size (smart-tv-sub1080),
@@ -928,17 +981,23 @@ html.smart-tv-sub1080 [data-vod-card="true"] {
 
 @media (max-width: 1400px) and (min-aspect-ratio: 16/10) {
   html.smart-tv-mode [class*="minmax(175px"],
-  html.smart-tv-mode [class*="minmax(185px"] {
-    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)) !important;
+  html.smart-tv-mode [class*="minmax(185px"],
+  html.smart-tv-sub1080 [class*="minmax(175px"],
+  html.smart-tv-sub1080 [class*="minmax(185px"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
   html.smart-tv-mode [class*="minmax(240px"],
-  html.smart-tv-mode [class*="minmax(260px"] {
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  html.smart-tv-mode [class*="minmax(260px"],
+  html.smart-tv-sub1080 [class*="minmax(240px"],
+  html.smart-tv-sub1080 [class*="minmax(260px"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
-  html.smart-tv-mode [data-vod-card="true"] {
-    max-width: 110px !important;
+  html.smart-tv-mode [data-vod-card="true"],
+  html.smart-tv-sub1080 [data-vod-card="true"] {
+    max-width: 100% !important;
+    width: 100% !important;
   }
 }
 

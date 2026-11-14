@@ -420,19 +420,20 @@ export function formatSeriesCardBadgeText(
   }
   if (eff.seasonsCount > 1) {
     return tr(
-      `SERIAL • ${eff.seasonsCount}S ${eff.episodesCount}E`,
-      `SERIES • ${eff.seasonsCount}S ${eff.episodesCount}E`,
-      `СЕРИАЛ • ${eff.seasonsCount}С ${eff.episodesCount}СЕР`
+      `${eff.seasonsCount}S • ${eff.episodesCount}E`,
+      `${eff.seasonsCount}S • ${eff.episodesCount}E`,
+      `${eff.seasonsCount}С • ${eff.episodesCount}СЕР`
     );
   }
   return tr(
-    `SERIAL • ${eff.episodesCount} EP.`,
-    `SERIES • ${eff.episodesCount} EP.`,
-    `СЕРИАЛ • ${eff.episodesCount} СЕР.`
+    `${eff.episodesCount} EP`,
+    `${eff.episodesCount} EP`,
+    `${eff.episodesCount} СЕР`
   );
 }
 
 const CURATED_RU_TV_SHOW_KP_IDS = new Set<number>([
+  471505, 471506, 492831, 521003, 772655, 4783526, 5277152, 14379974, 14369257,
   5508530, 5318639, 5423568, 4761950, 1178436, 5367740, 5189043, 5459661,
   5320563, 5326185, 911219, 5267860, 5255425, 5463968, 14171220, 5463970,
   5617914, 5582628, 5331422, 7429055, 5500883, 842497, 5509905, 5354824,
@@ -468,6 +469,16 @@ export function isRussianVodItem(
   if (
     (rawKpIdNum >= 9001000 && rawKpIdNum <= 9001999) ||
     CURATED_RU_TV_SHOW_KP_IDS.has(rawKpIdNum)
+  ) {
+    return true;
+  }
+
+  // 2b. Russian Comedy / Standup / TNT Shows that have English names (e.g. "Comedy Club", "Stand Up", "Comedy Woman")
+  const rawTitle = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`;
+  if (
+    /(?:^|[^\p{L}])(comedy\s*club|камеди\s*клаб|comedy\s*woman|comedy\s*баттл|stand\s*up|стендап|женский\s*стендап|открытый\s*микрофон|чбд|что\s+было\s+дальше|тейбл\s*тайм|импровизаци|однажды\s+в\s+россии|битва\s+экстрасенсов|пацанки|на\s+ножах|адская\s+кухня|выжить\s+в)(?:[^\p{L}]|$)/iu.test(
+      rawTitle
+    )
   ) {
     return true;
   }

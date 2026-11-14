@@ -695,7 +695,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
         return (
           <div
             data-top-hero-card="true"
-            className="relative w-full min-h-[245px] sm:min-h-[395px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-4 sm:p-9"
+            className="relative w-full min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-3 sm:p-5 lg:p-8"
           >
             {/* Full-Bleed Widescreen Backdrop */}
             {heroBackdrop && (

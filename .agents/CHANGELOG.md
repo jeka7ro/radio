@@ -6,6 +6,29 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-14 23:40 — Eliminare ecran blocant filme străine (Heart of the Beast), Scalare Hero Banner Sony Bravia KD-85X80L, Grilă adaptată 6 carduri & Continuitate completă seriale/show-uri rusești (Comedy Club)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare totală a ecranului blocant și pornire garantată a oricărui film străin (`src/views/SmartTvLampaViewCore.tsx`)**:
+     - S-a eliminat cardul modal sintetic (`Pornire în Playerul Nativ Filmio cu Audio Original... [ Pornește S1: FileList.io 1080p ]`) care bloca redarea pe ecran negru când un titlu străin (ex. Heart of the Beast) nu avea torrent activ sau când TV-ul accesa via cloud (`filmio.my`).
+     - Dacă fluxul FileList este în curs de rezolvare, se afișează loader-ul nativ; dacă FileList rezolvă torrentul, pornește direct în `<VodNativeHlsPlayer>`; dacă FileList nu este disponibil, pornește instant redarea în playerul de rezervă (`vidsrc_pm`) cu audio original și subtitrare în română (`ds_lang=ro`). Filmul pornește întotdeauna fără blocaje.
+     - Actualizate toate adresele vechi `192.168.2.57` la IP-ul real al Mac-ului `192.168.101.87`.
+  2. **Scalare proporțională Hero Billboard Banner pe Sony Bravia KD-85X80L (`src/index.css`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/IedemMediatekaSection.tsx`)**:
+     - În `src/index.css`, adăugate reguli dedicate pentru `html.smart-tv-sub1080 [data-top-hero-card="true"]` ce limitează înălțimea bannerului la `195px` (în loc de 460px+ cât ocupa din viewportul de 540px), reducând logo-ul la 28px și textul sinopsis la 2 linii compacte.
+     - Containerul bannerului folosește acum clase responsive în rem (`min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] p-3 sm:p-5 lg:p-8`), permițând primului rând de carduri de filme/seriale să fie vizibil direct pe ecran fără a fi împins în jos.
+     - Pe LG webOS 77" OLED (`1920×1080`, unde `smart-tv-sub1080` nu este activ), bannerul își păstrează rezoluția completă 1080p nativă.
+  3. **Adaptare grilă carduri pe ecranul Sony TV — 6 coloane curate fără tăiere la margine (`src/index.css`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`)**:
+     - Înlocuit `repeat(auto-fill, minmax(88px, 1fr))` pe ecrane TV sub-1080p (`<= 1400px`) cu `repeat(6, minmax(0, 1fr)) !important; overflow-x: hidden !important;`. Cardul 7 ("Nocturne") nu mai este tăiat în două la marginea dreaptă a ecranului; toate cele 6 carduri încap simetric și proporțional.
+     - În `formatSeriesCardBadgeText`, etichetele de episoade sunt compactate (`2S • 20E` sau `183 EP` în loc de `SERIAL • 2S 20E`), având `whitespace-nowrap truncate` și `text-[9px]` pentru a nu mai produce deformări pe 3 rânduri în card.
+  4. **Continuitate și istoric garantat pentru show-uri și seriale rusești (Comedy Club) (`src/views/smartTvLampaHelpers.ts`, `src/views/SmartTvLampaViewCore.tsx`)**:
+     - În `smartTvLampaHelpers.ts`, adăugate ID-urile Kinopoisk pentru Comedy Club (`471505`, `471506` etc.) în `CURATED_RU_TV_SHOW_KP_IDS` și recunoaștere regex dedicată înainte de verificarea caracterelor latine, prevenind marcarea eronată a show-urilor rusești cu nume englezești drept titluri străine.
+     - În `SmartTvLampaViewCore.tsx`, s-a adăugat înregistrarea imediată în `watchProgressMap` la pornirea redării (`isPlayingVod`) și un contor continuu la fiecare 15 secunde pentru redarea prin iframe/embed (care nu emit evenimente HTML5 `timeupdate`), garantând că "Comedy Club" și orice alt show căutat prin Search apare instant în "Continuă vizionarea" și în "Istoric" pe profilul curent, cu salvarea sezonului, episodului și poziției secundare.
+  5. **Protecție 100% LG webOS 77" OLED TV**:
+     - Nicio modificare nu atinge rezoluția 1080p a televizorului LG OLED, zoom-ul 21:9 hardware sau funcționarea motorului MSE.
+- **Fișiere:** `src/index.css`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/components/tv/IedemMediatekaSection.tsx`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-14 23:30 — Izolare 100% Multi-Profil (Zero scurgeri de istoric către profiluri noi), Forțare Player Nativ `<VodNativeHlsPlayer>`, Blocare Totală Iframe-uri Rusești (`api.namy.ws`) & Păstrare Nativă LG webOS OLED
 - **Autor:** Antigravity
 - **Ce s-a făcut:**

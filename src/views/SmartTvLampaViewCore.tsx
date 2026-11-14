@@ -8940,23 +8940,47 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ]
   );
 
-  // Real-time Cross-Device Playback Heartbeat while a video is playing on this device
+  // Real-time Cross-Device Playback Heartbeat & Watch Progress Tracking while a video is playing on this device
   useEffect(() => {
     if (!isPlayingVod || !activeVodItem) return;
+    if (activeVodItem.isAdultKlubnichka || activeVodItem.id.startsWith('klub_')) return;
     const activeId = activeVodItem.id;
     const curDevName = detectCurrentDeviceName();
     const curDevId = getOrCreateCurrentDeviceId();
 
+    // Ensure watch progress entry exists immediately when playback starts (e.g. searched shows like Comedy Club or any VOD)
+    const initialSec = Math.max(5, Math.floor(resumeStartSeconds || 0));
+    const estimatedDur = activeVodItem.type === 'series' ? 2700 : 5400;
+    if (!watchProgressMapRef.current[activeId]) {
+      updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, initialSec, estimatedDur);
+    }
+
+    const isNativeHls = (activeServer === 'filelist_torrent' && resolvedFileListStream?.ok && resolvedFileListStream.streamUrl) ||
+      Boolean(matchedOfflineVodItem) ||
+      Boolean(resolvedDirectStream?.ok && (resolvedDirectStream.dashUrl || resolvedDirectStream.hlsUrl));
+
+    let iframeElapsed = initialSec;
+
     const markPlayingState = (playing: boolean, fromHeartbeat = false) => {
       const latestMap = watchProgressMapRef.current;
       const cur = latestMap[activeId];
-      if (!cur) return;
+      if (!cur) {
+        if (playing) {
+          updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, iframeElapsed, estimatedDur);
+        }
+        return;
+      }
       if (
         playing &&
         fromHeartbeat &&
         cur.isPlayingNow &&
         Date.now() - (cur.updatedAt || 0) < 12000
       ) {
+        return;
+      }
+      if (!isNativeHls && playing && fromHeartbeat) {
+        iframeElapsed += 15;
+        updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, iframeElapsed, cur.duration || estimatedDur);
         return;
       }
       const next: Record<string, VodWatchProgressEntry> = {
@@ -11985,7 +12009,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 </button>
                               )}
                               <a
-                                href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                                href={`http://192.168.101.87:8769/?playVod=${encodeURIComponent(
                                   activeVodItem.id
                                 )}&name=${encodeURIComponent(
                                   activeVodItem.name
@@ -11997,9 +12021,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
                               >
                                 {tr(
-                                  'Deschide pe Wi-Fi Local (192.168.2.57)',
-                                  'Open on Home Wi-Fi (192.168.2.57)',
-                                  'Открыть в домашней Wi-Fi (192.168.2.57)'
+                                  'Deschide pe Wi-Fi Local (192.168.101.87)',
+                                  'Open on Home Wi-Fi (192.168.101.87)',
+                                  'Открыть в домашней Wi-Fi (192.168.101.87)'
                                 )}
                               </a>
                               <a
@@ -12025,47 +12049,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </div>
                       ) : isCurrentVodForeign && (isFileListStreamLoading || (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl)) ? (
                         <FilmioStartupLoader />
-                      ) : isCurrentVodForeign && !activeVodItem.klubnichkaEmbedUrl ? (
-                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
-                          <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
-                            <div className="text-lg sm:text-xl font-extrabold text-white">
-                              {activeVodItem.name}
-                              {activeVodItem.type === 'series'
-                                ? ` • S${selectedSeason}:E${selectedEpisode}`
-                                : ''}
-                            </div>
-                            <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                              {tr(
-                                'Pornire în Playerul Nativ Filmio cu Audio Original și Subtitrare Română (S1: FileList.io)...',
-                                'Starting Filmio Native Player with Original Audio and Romanian Subtitles (S1: FileList.io)...',
-                                'Запуск родного плеера Filmio с оригинальным звуком и румынскими субтитрами (S1: FileList.io)...'
-                              )}
-                            </p>
-                            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsFileListStreamLoading(true);
-                                  setActiveServer('filelist_torrent');
-                                  void retryProbeLocalBridge().then((ok) => {
-                                    if (ok) {
-                                      setLocalBridgeTick((t) => t + 1);
-                                    } else {
-                                      setIsFileListStreamLoading(false);
-                                    }
-                                  });
-                                }}
-                                className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer shadow-lg"
-                              >
-                                {tr(
-                                  'Pornește S1: FileList.io 1080p',
-                                  'Start S1: FileList.io 1080p',
-                                  'Запустить S1: FileList.io 1080p'
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
                       ) : (
                         <iframe
                           src={
@@ -12131,7 +12114,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               )}
                             </button>
                             <a
-                              href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                              href={`http://192.168.101.87:8769/?playVod=${encodeURIComponent(
                                 activeVodItem.id
                               )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
                                 resumeStartSeconds || 0
@@ -12139,20 +12122,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
                             >
                               {tr(
-                                'Deschide pe Wi-Fi Local (192.168.2.57)',
-                                'Open on Home Wi-Fi (192.168.2.57)',
-                                'Открыть в домашней Wi-Fi (192.168.2.57)'
+                                'Deschide pe Wi-Fi Local (192.168.101.87)',
+                                'Open on Home Wi-Fi (192.168.101.87)',
+                                'Открыть в домашней Wi-Fi (192.168.101.87)'
                               )}
                             </a>
                           </div>
                         </div>
                       </div>
-                    ) : !isCurrentVodForeign ? (
+                    ) : (
                       <iframe
                         src={
                           resolvedDirectStream?.embedUrl ||
                           buildVodEmbedUrl(
-                            activeServer,
+                            isCurrentVodForeign ? 'vidsrc_pm' : activeServer,
                             detailedMeta || activeVodItem,
                             selectedSeason,
                             selectedEpisode,
@@ -12169,47 +12152,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                         allowFullScreen
                       />
-                    ) : (
-                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
-                        <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
-                          <div className="text-lg sm:text-xl font-extrabold text-white">
-                            {activeVodItem.name}
-                            {activeVodItem.type === 'series'
-                              ? ` • S${selectedSeason}:E${selectedEpisode}`
-                              : ''}
-                          </div>
-                          <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                            {tr(
-                              'Pornire în Playerul Nativ Filmio cu Audio Original și Subtitrare Română (S1: FileList.io)...',
-                              'Starting Filmio Native Player with Original Audio and Romanian Subtitles (S1: FileList.io)...',
-                              'Запуск родного плеера Filmio с оригинальным звуком и румынскими субтитрами (S1: FileList.io)...'
-                            )}
-                          </p>
-                          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsFileListStreamLoading(true);
-                                setActiveServer('filelist_torrent');
-                                void retryProbeLocalBridge().then((ok) => {
-                                  if (ok) {
-                                    setLocalBridgeTick((t) => t + 1);
-                                  } else {
-                                    setIsFileListStreamLoading(false);
-                                  }
-                                });
-                              }}
-                              className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer shadow-lg"
-                            >
-                              {tr(
-                                'Pornește S1: FileList.io 1080p',
-                                'Start S1: FileList.io 1080p',
-                                'Запустить S1: FileList.io 1080p'
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
                     )}
 
                     {/* FLOATING BOTTOM CONTROL BAR FOR IFRAME FALLBACK STREAMS (Time Seek + Next Episode + Source) */}
@@ -14721,8 +14663,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 data-top-hero-card="true"
                                 className={`relative w-full ${
                                   isCarMode
-                                    ? 'min-h-[200px] sm:min-h-[228px] max-h-[245px] p-4 sm:px-7 sm:py-4'
-                                    : 'min-h-[245px] sm:min-h-[395px] p-4 sm:p-9'
+                                    ? 'min-h-[160px] sm:min-h-[190px] max-h-[220px] p-3 sm:px-6 sm:py-3'
+                                    : 'min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] p-3 sm:p-5 lg:p-8'
                                 } rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between`}
                               >
                                 {/* Full-Bleed Widescreen Backdrop */}
@@ -15056,7 +14998,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                                 <span>{rInfo.value}</span>
                                               </span>
                                               <span
-                                                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                                className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate ${item.type === 'series'
                                                   ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
                                                   : 'bg-amber-500/90 text-zinc-950'
                                                   }`}
@@ -15149,7 +15091,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               <span>{rInfo.value}</span>
                                             </span>
                                             <span
-                                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                              className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate ${item.type === 'series'
                                                 ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
                                                 : 'bg-amber-500/90 text-zinc-950'
                                                 }`}
@@ -15216,7 +15158,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         loading="lazy"
                                         className="w-full h-full object-cover"
                                       />
-                                      <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-[#1e3a8a] text-white text-[10px] font-extrabold uppercase tracking-wider shadow">
+                                      <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-[#1e3a8a] text-white text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate">
                                         NEW
                                       </span>
                                       {(() => {
@@ -15230,7 +15172,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               <span>{rInfo.value}</span>
                                             </span>
                                             <span
-                                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                              className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate ${item.type === 'series'
                                                 ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
                                                 : 'bg-amber-500/90 text-zinc-950'
                                                 }`}
@@ -15320,7 +15262,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               </span>
                                               <span>{rInfo.value}</span>
                                             </span>
-                                            <span className="px-2 py-0.5 rounded-md bg-[#172554]/95 text-white border border-[#2563eb]/50 text-[10px] font-extrabold uppercase tracking-wider shadow">
+                                            <span className="px-2 py-0.5 rounded-md bg-[#172554]/95 text-white border border-[#2563eb]/50 text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate">
                                               {formatSeriesCardBadgeText(item, seriesEpStatsMap[item.id], tr)}
                                             </span>
                                           </div>
@@ -15404,7 +15346,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               </span>
                                               <span>{rInfo.value}</span>
                                             </span>
-                                            <span className="px-2 py-0.5 rounded-md bg-amber-500/90 text-zinc-950 text-[10px] font-extrabold uppercase tracking-wider shadow">
+                                            <span className="px-2 py-0.5 rounded-md bg-amber-500/90 text-zinc-950 text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate">
                                               {tr('FILM', 'MOVIE', 'ФИЛЬМ')}
                                             </span>
                                           </div>
@@ -15488,7 +15430,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               </span>
                                               <span>{rInfo.value}</span>
                                             </span>
-                                            <span className="px-2 py-0.5 rounded-md bg-sky-500/90 text-zinc-950 text-[10px] font-extrabold uppercase tracking-wider shadow">
+                                            <span className="px-2 py-0.5 rounded-md bg-sky-500/90 text-zinc-950 text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate">
                                               {tr('ANIMAȚIE', 'CARTOON', 'МУЛЬТ')}
                                             </span>
                                           </div>
@@ -15561,7 +15503,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                               <span>{rInfo.value}</span>
                                             </span>
                                             <span
-                                              className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${item.type === 'series'
+                                              className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap truncate ${item.type === 'series'
                                                 ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
                                                 : 'bg-amber-500/90 text-zinc-950'
                                                 }`}
