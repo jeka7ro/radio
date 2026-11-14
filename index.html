@@ -85,7 +85,14 @@
         var storedScheme = null;
         try { storedScheme = localStorage.getItem('color-scheme'); } catch (e) {}
         var meta = document.querySelector('meta[name="color-scheme"]');
-        var isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top) || /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(navigator.userAgent || '');
+        var uaRaw = navigator.userAgent || '';
+        var sw = window.screen ? (window.screen.width || 0) : 0;
+        var sh = window.screen ? (window.screen.height || 0) : 0;
+        var sMax = Math.max(sw, sh);
+        var sMin = Math.max(1, Math.min(sw, sh));
+        var isExplicitTvUa = /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL/i.test(uaRaw);
+        var isAndroidLandscapeTv = /Android/i.test(uaRaw) && !/Mobile/i.test(uaRaw) && (sMax / sMin) >= 1.65 && (!navigator.maxTouchPoints || navigator.maxTouchPoints <= 1 || isExplicitTvUa);
+        var isTvRoute = window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top) || isExplicitTvUa || isAndroidLandscapeTv;
         var isDark = storedScheme !== 'light';
         if (meta) {
           meta.content = isDark ? 'dark' : 'light';
@@ -96,7 +103,43 @@
           document.documentElement.classList.remove('dark');
         }
         if (isTvRoute) {
+          window.__IS_SMART_TV_DEVICE__ = true;
           document.documentElement.classList.add('smart-tv-mode');
+        }
+        var lowerPath = window.location.pathname.toLowerCase();
+        var storedCarMode = null;
+        try { storedCarMode = localStorage.getItem('aether_car_widescreen_mode_v1'); } catch (e) {}
+        var vw = window.innerWidth || 0;
+        var vh = window.innerHeight || 0;
+        var isMbuxUltraWide = !isExplicitTvUa && !isAndroidLandscapeTv && vw >= 1200 && vh >= 420 && vh <= 760 && (vw / vh) >= 2.35 && storedCarMode !== '0' && window.location.search.indexOf('car=0') === -1;
+        var isCarRoute = lowerPath === '/car' || lowerPath.indexOf('/car/') === 0 || window.location.search.indexOf('car=1') !== -1 || window.location.search.indexOf('gle=1') !== -1 || storedCarMode === '1' || isMbuxUltraWide;
+        if (isCarRoute) {
+          document.documentElement.classList.add('car-widescreen-mode');
+        } else if ((isExplicitTvUa || isAndroidLandscapeTv || window.location.pathname.toLowerCase().indexOf('/tv') === 0) && !/iPhone|iPod|iPad|Android.*Mobile/i.test(uaRaw)) {
+          // Sony Bravia / Android TV / Google TV / Vewd browsers default to 960x540 (dpr=2/4) or 1280x720 (dpr=1.5/3),
+          // making every rem/px icon 2x oversized on 75"-85" screens. Request a true 1920x1080 TV viewport first,
+          // and apply exact proportional root font-size scaling if the TV WebView locks innerWidth below 1600px.
+          var vpMeta = document.querySelector('meta[name="viewport"]');
+          if (vpMeta && vw > 0 && vw < 1600 && vh > 0 && (vw / vh) >= 1.55) {
+            var tvInitScale = Math.max(0.25, Math.min(1, Math.round((vw / 1920) * 10000) / 10000));
+            vpMeta.setAttribute('content', 'width=1920, initial-scale=' + tvInitScale + ', minimum-scale=0.25, maximum-scale=2.0, user-scalable=no, viewport-fit=cover');
+          }
+          var syncTvRootScale = function () {
+            var curW = window.innerWidth || 0;
+            var curH = window.innerHeight || 0;
+            if (curW > 0 && curW < 1680 && curH > 0 && (curW / curH) >= 1.5) {
+              var scaledPx = Math.max(8, Math.min(16, Math.round((curW / 1920) * 16 * 100) / 100));
+              document.documentElement.classList.add('smart-tv-sub1080');
+              document.documentElement.style.fontSize = scaledPx + 'px';
+            } else {
+              document.documentElement.classList.remove('smart-tv-sub1080');
+              document.documentElement.style.fontSize = '';
+            }
+          };
+          syncTvRootScale();
+          window.addEventListener('resize', syncTvRootScale, { passive: true });
+          setTimeout(syncTvRootScale, 60);
+          setTimeout(syncTvRootScale, 350);
         }
         var uaStr = navigator.userAgent || '';
         var isIosPhone = /iPhone|iPod/i.test(uaStr);

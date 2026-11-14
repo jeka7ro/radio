@@ -362,21 +362,23 @@ export type AudioTrackPreference = 'original' | 'ro' | 'ru' | 'uk' | 'first';
 export function inferAudioPrefFromTrackName(nameOrLang: string): AudioTrackPreference {
   const s = String(nameOrLang || '').trim().toLowerCase();
   if (!s) return 'original';
-  if (/\b(ro|ron|rum|română|romana|romanian)\b/i.test(s)) {
+  if (/\b(ro|ron|rum|română|romana|romanian)\b|румынск/i.test(s)) {
     return 'ro';
   }
-  if (/укр|ukr|\bua\b|ukrainian|postmodern|dnipro|так треба/i.test(s)) {
+  if (/укр|ukr|\bua\b|ukrainian|postmodern|dnipro|так треба|дубльован/i.test(s)) {
     return 'uk';
   }
   if (
-    /orig|ориг|eng\.?\s*orig|\b(en|eng|english)\b|английск|англ|v\.?o\.?\b|субт|subt/i.test(
+    (/\b(orig|original|v\.?o\.?)\b|ориг|eng\.?\s*orig/i.test(s) &&
+      !/\boriginal\s*•\s*(ru|rus|uk|ukr)\b|iEdem\s+VIP/i.test(s)) ||
+    /\b(en|eng|english|fr|fra|fre|french|es|spa|esp|spanish|de|deu|ger|german|it|ita|italian|pt|por|portuguese|ko|kor|korean|ja|jpn|jap|japanese|tr|tur|turkish|zh|chi|zho|chinese|pl|pol|polish|sv|swe|swedish|da|dan|danish|no|nor|norwegian|fi|fin|finnish|nl|nld|dut|dutch|cs|ces|cze|czech|hu|hun|hungarian|el|ell|gre|greek|hi|hin|hindi|ar|ara|arabic|th|tha|thai)\b|английск|англ|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|китайск|польск|шведск|датск|норвеж|хинди|арабск|субт|subt/i.test(
       s
     )
   ) {
     return 'original';
   }
   if (
-    /\b(ru|rus|russian)\b|рус|дубл|hdrezka|lostfilm|red head|jaskier|кубик|winmedia|moviedalen|tvshows|[а-яё]{3,}/i.test(
+    /\b(ru|rus|russian)\b|рус|дубл|hdrezka|lostfilm|red head|jaskier|кубик|winmedia|moviedalen|tvshows|newcomers|viruseproject|[а-яё]{3,}/i.test(
       s
     )
   ) {
@@ -386,27 +388,64 @@ export function inferAudioPrefFromTrackName(nameOrLang: string): AudioTrackPrefe
 }
 
 /**
- * Find the index of the Original Language audio track (e.g. "Eng.Original", "Оригинал", "English", "Original")
- * from an array of audio track names. Defaults to 0 if no original track is detected.
+ * Find the explicit index of an Original / non-Russian foreign audio track
+ * (English, French, Spanish, Korean, Japanese, German, Italian, Romanian, etc.).
+ * Returns -1 if NO original or non-Russian foreign track exists in `labels`.
  */
-export function findPreferredOriginalAudioTrackIndex(labels: string[]): number {
-  if (!Array.isArray(labels) || labels.length === 0) return 0;
+export function findExplicitOriginalAudioTrackIndex(labels: string[]): number {
+  if (!Array.isArray(labels) || labels.length === 0) return -1;
 
-  // Priority 1: Explicit Original / English / Оригинал track
-  const origIdx = labels.findIndex((name) =>
-    /orig|ориг|eng\.?\s*orig|english|\beng\b|английск|англ|v\.?o\.?\b/i.test(
-      String(name || '')
-    )
+  // Priority 1: Explicit Original / Оригинал / V.O. marker (excluding Russian-only iEdem or mislabeled RUS dub)
+  const explicitOrigIdx = labels.findIndex((raw) => {
+    const s = String(raw || '');
+    return (
+      /\borig(?:inal)?\b|ориг(?:инал)?|eng\.?\s*orig|\bv\.?o\.?\b/i.test(s) &&
+      !/\boriginal\s*•\s*(?:ru|rus|uk|ukr)\b/i.test(s) &&
+      !/русский\s*\/\s*original/i.test(s) &&
+      !/iEdem\s*VIP/i.test(s) &&
+      !(
+        labels.length > 1 &&
+        /русский.*оригинал/i.test(s)
+      )
+    );
+  });
+  if (explicitOrigIdx >= 0) return explicitOrigIdx;
+
+  // Priority 2: Explicit English audio track
+  const engIdx = labels.findIndex((raw) =>
+    /\b(en|eng|english)\b|eng\d*\b|английск|англ/i.test(String(raw || ''))
   );
-  if (origIdx >= 0) return origIdx;
+  if (engIdx >= 0) return engIdx;
 
-  // Priority 2: "Субтитры" / "Subtitles" audio track (in Kinogram/Alloha this is Original Audio)
-  const subTrackIdx = labels.findIndex((name) =>
-    /субт|subt/i.test(String(name || ''))
+  // Priority 3: Any other non-Russian / non-Ukrainian original world language (FR, ES, DE, IT, KO, JA, RO, TR, PT, ZH, PL, SV, DA, NO, NL, CS, HU, EL, HI, AR, TH...)
+  const worldOrigIdx = labels.findIndex((raw) => {
+    const s = String(raw || '');
+    if (/дубл|hdrezka|lostfilm|red\s*head|jaskier|кубик|tvshows|укр|ukr|так\s*треба/i.test(s)) {
+      return false;
+    }
+    return /\b(ro|ron|rum|română|romana|romanian|fr|fra|fre|french|es|spa|esp|spanish|de|deu|ger|german|it|ita|italian|pt|por|portuguese|ko|kor|korean|ja|jpn|jap|japanese|tr|tur|turkish|zh|chi|zho|cmn|chinese|pl|pol|polish|sv|swe|swedish|da|dan|danish|no|nor|norwegian|fi|fin|finnish|nl|nld|dut|dutch|cs|ces|cze|czech|hu|hun|hungarian|el|ell|gre|greek|hi|hin|hindi|ar|ara|arabic|th|tha|thai|vi|vie|id|ind)\b|(?:fra|fre|spa|deu|ger|ita|por|kor|jpn|tur|ron|rum)\d*\b|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|румынск|китайск|польск|шведск|датск|норвеж|хинди|арабск/i.test(
+      s
+    );
+  });
+  if (worldOrigIdx >= 0) return worldOrigIdx;
+
+  // Priority 4: "Субтитры" / "Subtitles" audio track (in Kinogram/Alloha/HDRezka this is Original Audio)
+  const subTrackIdx = labels.findIndex((raw) =>
+    /субт|subt/i.test(String(raw || ''))
   );
   if (subTrackIdx >= 0) return subTrackIdx;
 
-  return 0;
+  return -1;
+}
+
+/**
+ * Find the index of the Original Language audio track (e.g. "Eng.Original", "Fra.Original", "English", "KOR", "Original")
+ * from an array of audio track names. Defaults to 0 if no explicit original track is detected.
+ */
+export function findPreferredOriginalAudioTrackIndex(labels: string[]): number {
+  if (!Array.isArray(labels) || labels.length === 0) return 0;
+  const explicitIdx = findExplicitOriginalAudioTrackIndex(labels);
+  return explicitIdx >= 0 ? explicitIdx : 0;
 }
 
 /**

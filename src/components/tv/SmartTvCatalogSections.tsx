@@ -26,9 +26,20 @@ import { resolveChannelEpg, getEpgTimingStats } from "../../services/epgService"
 import { setActiveTvPlaylistContext } from "./TvOsdChannelList";
 import { TvPlayerModal } from "./TvPlayerModal";
 import { StationAvatar } from "../common/StationAvatar";
+import { FilmioStartupLoader } from "../common/FilmioStartupLoader";
 import { toggleRadioPip } from "../player/RadioPipPlayer";
 import { StreamingPlatformLogo } from "../common/StreamingPlatformLogo";
-import { getCountryFlagEmoji } from "../../services/geoLanguageService";
+import {
+  getCountryFlagEmoji,
+  getLocalizedCountryName,
+} from "../../services/geoLanguageService";
+import {
+  searchStationsGlobal,
+  rankStationsByRelevanceAndRating,
+  getStationPopularityScore,
+  getStationSearchMatchTier,
+} from "../../services/radioBrowserApi";
+import { isSameRadioStation } from "../../store/useRadioStore";
 import { SmartTvKlubnichkaSection } from "./SmartTvKlubnichkaSection";
 import {
   CinemetaItem,
@@ -204,6 +215,52 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   const [searchCatFilter, setSearchCatFilter] = React.useState<
     'all' | 'movies' | 'series' | 'docs' | 'kinozal' | 'tv'
   >('all');
+  const [globalRadioSearchResults, setGlobalRadioSearchResults] =
+    React.useState<any[]>([]);
+  const [isGlobalRadioSearching, setIsGlobalRadioSearching] =
+    React.useState<boolean>(false);
+  const [radioSearchExplicitCountry, setRadioSearchExplicitCountry] =
+    React.useState<string>('ALL');
+
+  React.useEffect(() => {
+    if (section !== 'radio' || !radioSearchQuery.trim()) {
+      setRadioSearchExplicitCountry('ALL');
+    }
+  }, [section, radioSearchQuery]);
+
+  React.useEffect(() => {
+    if (section !== 'radio') return;
+    const trimmed = radioSearchQuery.trim();
+    if (trimmed.length < 2) {
+      setGlobalRadioSearchResults([]);
+      setIsGlobalRadioSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setIsGlobalRadioSearching(true);
+    const timer = window.setTimeout(() => {
+      searchStationsGlobal(trimmed)
+        .then((res) => {
+          if (!cancelled) {
+            setGlobalRadioSearchResults(Array.isArray(res) ? res : []);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setGlobalRadioSearchResults([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsGlobalRadioSearching(false);
+          }
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [section, radioSearchQuery]);
 
   React.useEffect(() => {
     if (section !== 'torrents' || !isAdminJekaProfile(activeProfile)) {
@@ -1550,8 +1607,8 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                         currentStation?.stationuuid ===
                         activeStation.stationuuid &&
                         playerStatus === 'loading';
-                      const isFavActive = favorites.some(
-                        (f) => f.stationuuid === activeStation.stationuuid
+                      const isFavActive = favorites.some((f) =>
+                        isSameRadioStation(f, activeStation)
                       );
                       const trackInfo =
                         currentStation?.stationuuid === activeStation.stationuuid
@@ -2133,182 +2190,483 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                      {RADIO_COUNTRIES.map((rc) => {
-                        const active = radioCountry === rc.code;
+                    {(() => {
+                      const qTrimmed = radioSearchQuery.trim();
+                      const isSearchingRadio = qTrimmed.length > 0;
+                      const activeLangCode: 'ro' | 'en' | 'ru' =
+                        tr('ro', 'en', 'ru') === 'ru'
+                          ? 'ru'
+                          : tr('ro', 'en', 'ru') === 'en'
+                            ? 'en'
+                            : 'ro';
+
+                      const formatVotesCompact = (votes?: number): string => {
+                        const v = Number(votes) || 0;
+                        if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+                        return v > 0 ? String(v) : '';
+                      };
+
+                      const resolveCountryDisplay = (
+                        codeRaw?: string,
+                        fallbackCountry?: string
+                      ): string => {
+                        const cc = String(codeRaw || '')
+                          .trim()
+                          .toUpperCase();
+                        const preset = RADIO_COUNTRIES.find(
+                          (rc) => rc.code === cc && cc !== 'FAV' && cc !== 'ALL'
+                        );
+                        if (preset) {
+                          return tr(preset.label, preset.labelEn, preset.labelRu);
+                        }
+                        if (cc && cc.length === 2) {
+                          let locName = '';
+                          if (activeLangCode === 'ru') {
+                            try {
+                              locName =
+                                new Intl.DisplayNames(['ru'], {
+                                  type: 'region',
+                                }).of(cc) || '';
+                            } catch {
+                              locName = '';
+                            }
+                          }
+                          if (!locName) {
+                            locName = getLocalizedCountryName(
+                              cc,
+                              fallbackCountry || cc,
+                              activeLangCode === 'en' ? 'en' : 'ro'
+                            );
+                          }
+                          return `${getCountryFlagEmoji(cc)} • ${locName}`;
+                        }
                         return (
-                          <button
-                            key={rc.code}
-                            type="button"
-                            onClick={() => setRadioCountry(rc.code)}
-                            className={`min-h-[38px] px-4 py-1.5 rounded-xl text-xs sm:text-sm whitespace-nowrap shrink-0 transition-all focus:outline-none cursor-pointer ${active
-                                ? 'bg-gradient-to-r from-[#d4d4d4] via-[#ffffff] to-[#c8c8c8] text-[#141414] font-semibold shadow-md'
-                                : 'bg-[#222222] hover:bg-[#2c2c2c] focus:bg-gradient-to-r focus:from-[#d4d4d4] focus:via-[#ffffff] focus:to-[#c8c8c8] focus:text-[#141414] text-zinc-300 border border-white/5'
-                              }`}
+                          fallbackCountry ||
+                          tr('Internațional', 'International', 'Международные')
+                        );
+                      };
+
+                      // Build deduplicated pool for global search vs normal country/favorites browsing
+                      const deduplicateStations = (list: any[]) => {
+                        const out: any[] = [];
+                        for (const item of list) {
+                          if (!item || !item.stationuuid) continue;
+                          if (!out.some((existing) => isSameRadioStation(existing, item))) {
+                            out.push(item);
+                          }
+                        }
+                        return out;
+                      };
+
+                      const allGlobalMatched = isSearchingRadio
+                        ? rankStationsByRelevanceAndRating(
+                            deduplicateStations([
+                              ...globalRadioSearchResults,
+                              ...favorites,
+                              ...radioStations,
+                            ]),
+                            qTrimmed
+                          )
+                        : radioCountry === 'FAV'
+                          ? favorites
+                          : rankStationsByRelevanceAndRating(
+                              deduplicateStations(radioStations),
+                              ''
+                            );
+
+                      // Group matched stations by country ordered by best station match + top rating
+                      const countryGroups = (() => {
+                        const map = new Map<
+                          string,
+                          {
+                            code: string;
+                            label: string;
+                            topTier: number;
+                            topPop: number;
+                            stations: any[];
+                          }
+                        >();
+                        for (const st of allGlobalMatched) {
+                          const cc =
+                            String(st.countrycode || '')
+                              .trim()
+                              .toUpperCase() || 'INT';
+                          const tier = isSearchingRadio
+                            ? getStationSearchMatchTier(st, qTrimmed)
+                            : 1;
+                          const pop = getStationPopularityScore(st);
+                          let grp = map.get(cc);
+                          if (!grp) {
+                            grp = {
+                              code: cc,
+                              label: resolveCountryDisplay(cc, st.country),
+                              topTier: tier,
+                              topPop: pop,
+                              stations: [],
+                            };
+                            map.set(cc, grp);
+                          } else {
+                            if (tier > grp.topTier) grp.topTier = tier;
+                            if (pop > grp.topPop) grp.topPop = pop;
+                          }
+                          grp.stations.push(st);
+                        }
+                        const arr = Array.from(map.values());
+                        for (const g of arr) {
+                          g.stations.sort((a, b) => {
+                            if (isSearchingRadio) {
+                              const ta = getStationSearchMatchTier(a, qTrimmed);
+                              const tb = getStationSearchMatchTier(b, qTrimmed);
+                              if (tb !== ta) return tb - ta;
+                            }
+                            return (
+                              getStationPopularityScore(b) -
+                              getStationPopularityScore(a)
+                            );
+                          });
+                        }
+                        arr.sort((a, b) => {
+                          if (b.topTier !== a.topTier) {
+                            return b.topTier - a.topTier;
+                          }
+                          return b.topPop - a.topPop;
+                        });
+                        return arr;
+                      })();
+
+                      const effectiveCountryFilter = isSearchingRadio
+                        ? radioSearchExplicitCountry !== 'ALL' &&
+                          countryGroups.some(
+                            (g) => g.code === radioSearchExplicitCountry
+                          )
+                          ? radioSearchExplicitCountry
+                          : 'ALL'
+                        : radioCountry;
+
+                      const filteredRadio =
+                        isSearchingRadio && effectiveCountryFilter !== 'ALL'
+                          ? countryGroups.find(
+                              (g) => g.code === effectiveCountryFilter
+                            )?.stations || allGlobalMatched
+                          : allGlobalMatched;
+
+                      const renderStationCard = (
+                        st: any,
+                        queueList: any[],
+                        keyPrefix = 'st'
+                      ) => {
+                        const isPlayingThis =
+                          isSameRadioStation(currentStation, st) &&
+                          playerStatus === 'playing';
+                        const isFavRadio = favorites.some((f) =>
+                          isSameRadioStation(f, st)
+                        );
+                        const stTrack =
+                          isPlayingThis && activeRadioTrack
+                            ? activeRadioTrack
+                            : stationLiveTracks[st.stationuuid];
+                        const ccBadge = String(st.countrycode || '')
+                          .trim()
+                          .toUpperCase();
+                        const votesBadge = formatVotesCompact(st.votes);
+                        return (
+                          <div
+                            key={`${keyPrefix}_${st.stationuuid}`}
+                            className={`relative rounded-2xl border-2 transition-all flex items-center shadow-md overflow-hidden ${
+                              isPlayingThis
+                                ? 'bg-white/15 border-white'
+                                : 'bg-[#222222] border-white/10 hover:border-white/50'
+                            }`}
                           >
-                            {tr(rc.label, rc.labelEn, rc.labelRu)}
-                            {rc.code === 'FAV' ? ` (${favorites.length})` : ''}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {isRadioLoading ? (
-                      <div className="py-20 flex flex-col items-center justify-center gap-3 text-zinc-400">
-                        <Loader2 className="w-10 h-10 text-white animate-spin" />
-                        <span className="text-sm font-bold">
-                          Se încarcă posturile radio...
-                        </span>
-                      </div>
-                    ) : (() => {
-                      const qRadio = radioSearchQuery.trim().toLowerCase();
-                      const filteredRadio = (
-                        qRadio
-                          ? (() => {
-                            const combined = [...radioStations, ...favorites];
-                            const seen = new Set<string>();
-                            return combined.filter((s) => {
-                              if (seen.has(s.stationuuid)) return false;
-                              seen.add(s.stationuuid);
-                              return true;
-                            });
-                          })()
-                          : radioStations
-                      ).filter((s) => {
-                        if (!qRadio) return true;
-                        return (
-                          s.name.toLowerCase().includes(qRadio) ||
-                          (s.tags || '').toLowerCase().includes(qRadio) ||
-                          (s.country || '').toLowerCase().includes(qRadio)
-                        );
-                      });
-
-                      if (filteredRadio.length === 0) {
-                        return (
-                          <div className="py-16 px-6 rounded-2xl bg-[#202020] border border-white/10 text-center space-y-2">
-                            <div className="text-base font-extrabold text-white">
-                              {qRadio
-                                ? `Niciun post radio găsit pentru «${radioSearchQuery.trim()}»`
-                                : radioCountry === 'FAV'
-                                  ? 'Nu ai niciun post Radio adăugat la Favorite încă'
-                                  : 'Niciun post radio găsit pentru această țară'}
-                            </div>
-                            <p className="text-xs text-zinc-400">
-                              Apasă pe inima din dreptul oricărui post radio pentru a-l salva la Favorite.
-                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsTvRadioPlayerOpen(false);
+                                playStation(st, queueList);
+                              }}
+                              className="flex-1 min-w-0 p-3.5 flex items-center gap-3 text-left focus:outline-none focus:bg-white/15 focus:ring-4 focus:ring-inset focus:ring-white cursor-pointer"
+                            >
+                              <StationAvatar
+                                name={st.name}
+                                favicon={st.favicon}
+                                homepage={st.homepage}
+                                size="sm"
+                                isPlaying={false}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs sm:text-sm font-extrabold text-white truncate">
+                                    {st.name}
+                                  </span>
+                                  {isPlayingThis && (
+                                    <span className="inline-flex items-end gap-0.5 h-3.5 shrink-0">
+                                      <span className="w-0.5 h-full bg-amber-400 eq-bar rounded-full" />
+                                      <span className="w-0.5 h-2.5 bg-amber-400 eq-bar eq-bar-2 rounded-full" />
+                                      <span className="w-0.5 h-3.5 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
+                                      <span className="w-0.5 h-2 bg-amber-400 eq-bar rounded-full" />
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-zinc-400 truncate mt-0.5 flex items-center gap-1.5">
+                                  {stTrack ? (
+                                    <>
+                                      {stTrack.coverUrl ? (
+                                        <img
+                                          src={stTrack.coverUrl}
+                                          alt=""
+                                          className="w-7 h-7 rounded-md object-cover shrink-0 border border-white/20 shadow-sm"
+                                        />
+                                      ) : (
+                                        <span className="shrink-0"></span>
+                                      )}
+                                      <span className="text-blue-300 font-semibold truncate">
+                                        {stTrack.artist
+                                          ? `${stTrack.artist} - ${stTrack.title}`
+                                          : stTrack.title}
+                                      </span>
+                                    </>
+                                  ) : isPlayingThis ? (
+                                    <span className="text-blue-300 font-semibold truncate">
+                                      ▶ {tr('Se redă acum', 'Playing now', 'Сейчас играет')}
+                                    </span>
+                                  ) : (
+                                    <span className="truncate">
+                                      {ccBadge ? `${ccBadge} • ` : ''}
+                                      {votesBadge ? `★ ${votesBadge} • ` : ''}
+                                      {st.tags || st.country || 'Live Radio'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              data-radio-fav-btn="true"
+                              title={
+                                isFavRadio
+                                  ? tr(
+                                      'Elimină de la Favorite',
+                                      'Remove from Favorites',
+                                      'Удалить из избранного'
+                                    )
+                                  : tr(
+                                      'Adaugă la Favorite',
+                                      'Add to Favorites',
+                                      'В избранное'
+                                    )
+                              }
+                              onClick={() => toggleFavorite(st)}
+                              className={`h-full px-3 py-3.5 flex items-center justify-center border-l border-white/10 transition-colors focus:outline-none focus:ring-4 focus:ring-inset focus:ring-white cursor-pointer ${
+                                isFavRadio
+                                  ? 'text-rose-500 bg-rose-500/10 hover:bg-rose-500/20'
+                                  : 'text-zinc-500 hover:text-white hover:bg-white/10'
+                              }`}
+                            >
+                              <Heart
+                                className={`w-4 h-4 ${
+                                  isFavRadio ? 'fill-rose-500' : ''
+                                }`}
+                              />
+                            </button>
+                            {stTrack && (
+                              <div className="absolute inset-x-0 bottom-0 h-0.5 bg-blue-500/30">
+                                <div
+                                  className={`h-full bg-gradient-to-r from-[#1e3a8a] to-[#2563eb] ${
+                                    isPlayingThis ? 'w-full' : 'w-2/3'
+                                  }`}
+                                />
+                              </div>
+                            )}
                           </div>
                         );
-                      }
+                      };
 
                       return (
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
-                          {filteredRadio.map((st) => {
-                            const isPlayingThis =
-                              currentStation?.stationuuid === st.stationuuid &&
-                              playerStatus === 'playing';
-                            const isFavRadio = favorites.some(
-                              (f) => f.stationuuid === st.stationuuid
-                            );
-                            const stTrack =
-                              isPlayingThis && activeRadioTrack
-                                ? activeRadioTrack
-                                : stationLiveTracks[st.stationuuid];
-                            return (
-                              <div
-                                key={st.stationuuid}
-                                className={`relative rounded-2xl border-2 transition-all flex items-center shadow-md overflow-hidden ${isPlayingThis
-                                    ? 'bg-white/15 border-white'
-                                    : 'bg-[#222222] border-white/10 hover:border-white/50'
-                                  }`}
-                              >
+                        <>
+                          {/* Country Selector Pills: Dynamic Global Country Filter when searching, Standard Country Tabs when browsing */}
+                          <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                            {isSearchingRadio ? (
+                              <>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setIsTvRadioPlayerOpen(false);
-                                    playStation(st, filteredRadio);
-                                  }}
-                                  className="flex-1 min-w-0 p-3.5 flex items-center gap-3 text-left focus:outline-none focus:bg-white/15 focus:ring-4 focus:ring-inset focus:ring-white cursor-pointer"
-                                >
-                                  <StationAvatar
-                                    name={st.name}
-                                    favicon={st.favicon}
-                                    homepage={st.homepage}
-                                    size="sm"
-                                    isPlaying={false}
-                                  />
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs sm:text-sm font-extrabold text-white truncate">
-                                        {st.name}
-                                      </span>
-                                      {isPlayingThis && (
-                                        <span className="inline-flex items-end gap-0.5 h-3.5 shrink-0">
-                                          <span className="w-0.5 h-full bg-amber-400 eq-bar rounded-full" />
-                                          <span className="w-0.5 h-2.5 bg-amber-400 eq-bar eq-bar-2 rounded-full" />
-                                          <span className="w-0.5 h-3.5 bg-amber-400 eq-bar eq-bar-3 rounded-full" />
-                                          <span className="w-0.5 h-2 bg-amber-400 eq-bar rounded-full" />
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="text-[11px] text-zinc-400 truncate mt-0.5 flex items-center gap-1.5">
-                                      {stTrack ? (
-                                        <>
-                                          {stTrack.coverUrl ? (
-                                            <img
-                                              src={stTrack.coverUrl}
-                                              alt=""
-                                              className="w-7 h-7 rounded-md object-cover shrink-0 border border-white/20 shadow-sm"
-                                            />
-                                          ) : (
-                                            <span className="shrink-0"></span>
-                                          )}
-                                          <span className="text-blue-300 font-semibold truncate">
-                                            {stTrack.artist
-                                              ? `${stTrack.artist} - ${stTrack.title}`
-                                              : stTrack.title}
-                                          </span>
-                                        </>
-                                      ) : isPlayingThis ? (
-                                        <span className="text-blue-300 font-semibold truncate">
-                                          ▶ {tr('Se redă acum', 'Playing now', 'Сейчас играет')}
-                                        </span>
-                                      ) : (
-                                        <span className="truncate">{st.tags || 'Live Radio'}</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </button>
-                                <button
-                                  type="button"
-                                  title={
-                                    isFavRadio
-                                      ? 'Elimină de la Favorite'
-                                      : 'Adaugă la Favorite'
+                                  onClick={() =>
+                                    setRadioSearchExplicitCountry('ALL')
                                   }
-                                  onClick={() => toggleFavorite(st)}
-                                  className={`h-full px-3 py-3.5 flex items-center justify-center border-l border-white/10 transition-colors focus:outline-none focus:ring-4 focus:ring-inset focus:ring-white cursor-pointer ${isFavRadio
-                                      ? 'text-rose-500 bg-rose-500/10 hover:bg-rose-500/20'
-                                      : 'text-zinc-500 hover:text-white hover:bg-white/10'
-                                    }`}
+                                  className={`min-h-[38px] px-4 py-1.5 rounded-xl text-xs sm:text-sm whitespace-nowrap shrink-0 transition-all focus:outline-none cursor-pointer ${
+                                    effectiveCountryFilter === 'ALL'
+                                      ? 'bg-gradient-to-r from-[#d4d4d4] via-[#ffffff] to-[#c8c8c8] text-[#141414] font-semibold shadow-md'
+                                      : 'bg-[#222222] hover:bg-[#2c2c2c] focus:bg-gradient-to-r focus:from-[#d4d4d4] focus:via-[#ffffff] focus:to-[#c8c8c8] focus:text-[#141414] text-zinc-300 border border-white/5'
+                                  }`}
                                 >
-                                  <Heart
-                                    className={`w-4 h-4 ${isFavRadio ? 'fill-rose-500' : ''
-                                      }`}
-                                  />
+                                  {tr(
+                                    '🌍 Toate Țările',
+                                    '🌍 All Countries',
+                                    '🌍 Все страны'
+                                  )}{' '}
+                                  ({allGlobalMatched.length})
                                 </button>
-                                {stTrack && (
-                                  <div className="absolute inset-x-0 bottom-0 h-0.5 bg-blue-500/30">
-                                    <div
-                                      className={`h-full bg-gradient-to-r from-[#1e3a8a] to-[#2563eb] ${
-                                        isPlayingThis ? 'w-full' : 'w-2/3'
+                                {countryGroups.map((grp) => {
+                                  const active =
+                                    effectiveCountryFilter === grp.code;
+                                  return (
+                                    <button
+                                      key={`search_cc_${grp.code}`}
+                                      type="button"
+                                      onClick={() =>
+                                        setRadioSearchExplicitCountry(grp.code)
+                                      }
+                                      className={`min-h-[38px] px-4 py-1.5 rounded-xl text-xs sm:text-sm whitespace-nowrap shrink-0 transition-all focus:outline-none cursor-pointer ${
+                                        active
+                                          ? 'bg-gradient-to-r from-[#d4d4d4] via-[#ffffff] to-[#c8c8c8] text-[#141414] font-semibold shadow-md'
+                                          : 'bg-[#222222] hover:bg-[#2c2c2c] focus:bg-gradient-to-r focus:from-[#d4d4d4] focus:via-[#ffffff] focus:to-[#c8c8c8] focus:text-[#141414] text-zinc-300 border border-white/5'
                                       }`}
-                                    />
-                                  </div>
-                                )}
+                                    >
+                                      {grp.label} ({grp.stations.length})
+                                    </button>
+                                  );
+                                })}
+                              </>
+                            ) : (
+                              RADIO_COUNTRIES.map((rc) => {
+                                const active = radioCountry === rc.code;
+                                return (
+                                  <button
+                                    key={rc.code}
+                                    type="button"
+                                    onClick={() => setRadioCountry(rc.code)}
+                                    className={`min-h-[38px] px-4 py-1.5 rounded-xl text-xs sm:text-sm whitespace-nowrap shrink-0 transition-all focus:outline-none cursor-pointer ${
+                                      active
+                                        ? 'bg-gradient-to-r from-[#d4d4d4] via-[#ffffff] to-[#c8c8c8] text-[#141414] font-semibold shadow-md'
+                                        : 'bg-[#222222] hover:bg-[#2c2c2c] focus:bg-gradient-to-r focus:from-[#d4d4d4] focus:via-[#ffffff] focus:to-[#c8c8c8] focus:text-[#141414] text-zinc-300 border border-white/5'
+                                    }`}
+                                  >
+                                    {tr(rc.label, rc.labelEn, rc.labelRu)}
+                                    {rc.code === 'FAV'
+                                      ? ` (${favorites.length})`
+                                      : ''}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {(isRadioLoading && !isSearchingRadio) ||
+                          (isGlobalRadioSearching &&
+                            allGlobalMatched.length === 0) ? (
+                            <div className="py-20 flex flex-col items-center justify-center gap-3 text-zinc-400">
+                              <Loader2 className="w-10 h-10 text-white animate-spin" />
+                              <span className="text-sm font-bold">
+                                {isSearchingRadio
+                                  ? tr(
+                                      'Se caută în toate țările...',
+                                      'Searching across all countries...',
+                                      'Поиск по всем странам...'
+                                    )
+                                  : tr(
+                                      'Se încarcă posturile radio...',
+                                      'Loading radio stations...',
+                                      'Загрузка радиостанций...'
+                                    )}
+                              </span>
+                            </div>
+                          ) : filteredRadio.length === 0 ? (
+                            <div className="py-16 px-6 rounded-2xl bg-[#202020] border border-white/10 text-center space-y-2">
+                              <div className="text-base font-extrabold text-white">
+                                {isSearchingRadio
+                                  ? `Niciun post radio găsit pentru «${qTrimmed}»`
+                                  : radioCountry === 'FAV'
+                                    ? 'Nu ai niciun post Radio adăugat la Favorite încă'
+                                    : 'Niciun post radio găsit pentru această țară'}
                               </div>
-                            );
-                          })}
-                        </div>
+                              <p className="text-xs text-zinc-400">
+                                Apasă pe inima din dreptul oricărui post radio pentru a-l salva la Favorite.
+                              </p>
+                            </div>
+                          ) : (isSearchingRadio &&
+                              effectiveCountryFilter === 'ALL') ||
+                            (!isSearchingRadio && radioCountry === 'ALL') ? (
+                            <div className="space-y-6">
+                              {/* Top Rated Worldwide Shelf */}
+                              {allGlobalMatched.length > 0 && (
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <h3 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                                      <span className="text-amber-400">★</span>
+                                      <span>
+                                        {isSearchingRadio
+                                          ? tr(
+                                              `Top Rating Global pentru „${qTrimmed}”`,
+                                              `Top Global Rating for "${qTrimmed}"`,
+                                              `Топ мирового рейтинга по «${qTrimmed}»`
+                                            )
+                                          : tr(
+                                              'Top Rating Global — Cele mai ascultate posturi',
+                                              'Top Global Rating — Most Popular Stations',
+                                              'Топ мирового рейтинга — Самые популярные станции'
+                                            )}
+                                      </span>
+                                    </h3>
+                                    {isGlobalRadioSearching && (
+                                      <span className="text-xs text-blue-300 inline-flex items-center gap-1.5 font-semibold">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        {tr(
+                                          'Actualizare globală...',
+                                          'Updating globally...',
+                                          'Обновление...'
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
+                                    {allGlobalMatched
+                                      .slice(0, 8)
+                                      .map((st) =>
+                                        renderStationCard(
+                                          st,
+                                          allGlobalMatched,
+                                          'top_global'
+                                        )
+                                      )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Country-by-Country Sections Ordered by Top Rating */}
+                              {countryGroups.map((grp) => (
+                                <div
+                                  key={`grp_${grp.code}`}
+                                  className="space-y-2.5 pt-1"
+                                >
+                                  <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+                                    <h4 className="text-xs sm:text-sm font-extrabold text-zinc-200 tracking-wide">
+                                      {grp.label}{' '}
+                                      <span className="text-zinc-400 font-semibold">
+                                        ({grp.stations.length})
+                                      </span>
+                                    </h4>
+                                  </div>
+                                  <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
+                                    {grp.stations
+                                      .slice(0, isSearchingRadio ? 24 : 12)
+                                      .map((st) =>
+                                        renderStationCard(
+                                          st,
+                                          grp.stations,
+                                          `cc_${grp.code}`
+                                        )
+                                      )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3.5">
+                              {filteredRadio.map((st) =>
+                                renderStationCard(st, filteredRadio, 'flat')
+                              )}
+                            </div>
+                          )}
+                        </>
                       );
                     })()}
                   </div>
@@ -3242,7 +3600,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
                         <span className="px-3.5 py-1.5 rounded-full bg-[#60a5fa]/15 border border-[#60a5fa]/35 text-[#60a5fa] text-xs font-extrabold inline-flex items-center gap-1.5 shrink-0">
                           <span className="w-2 h-2 rounded-full bg-[#60a5fa] animate-pulse" />
-                          <span>FileList.io • jeka7ro</span>
+                          <span>4K UHD • Full HD</span>
                         </span>
                       </div>
                     </div>
@@ -3339,16 +3697,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
                     {/* FileList Torrent Cards Grid */}
                     {isFlLoading ? (
-                      <div className="py-16 flex flex-col items-center justify-center gap-3 text-zinc-300">
-                        <Loader2 className="w-10 h-10 text-[#60a5fa] animate-spin" />
-                        <p className="text-sm font-bold">
-                          {tr(
-                            'Se încarcă torrentele de pe FileList.io (jeka7ro)...',
-                            'Loading torrents from FileList.io (jeka7ro)...',
-                            'Загрузка торрентов с FileList.io (jeka7ro)...'
-                          )}
-                        </p>
-                      </div>
+                      <FilmioStartupLoader compact />
                     ) : flItems.length === 0 ? (
                       <div className="p-8 rounded-2xl bg-[#202020] border border-white/10 text-center text-sm text-zinc-400">
                         {tr(

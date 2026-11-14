@@ -463,9 +463,9 @@ export function isRussianVodItem(
   }
   const rawKpIdNum = Number(
     item.kpId ||
-      (String(item.id || '').startsWith('kp_')
-        ? String(item.id || '').replace(/^kp_/, '')
-        : 0)
+    (String(item.id || '').startsWith('kp_')
+      ? String(item.id || '').replace(/^kp_/, '')
+      : 0)
   );
   if (
     (rawKpIdNum >= 9001000 && rawKpIdNum <= 9001999) ||
@@ -490,9 +490,9 @@ export function isRussianTvShowItem(
   if (!item) return false;
   const rawKpIdNum = Number(
     item.kpId ||
-      (String(item.id || '').startsWith('kp_')
-        ? String(item.id || '').replace(/^kp_/, '')
-        : 0)
+    (String(item.id || '').startsWith('kp_')
+      ? String(item.id || '').replace(/^kp_/, '')
+      : 0)
   );
   if (
     (rawKpIdNum >= 9001000 && rawKpIdNum <= 9001999) ||
@@ -522,7 +522,7 @@ export function isRussianTvShowItem(
 export function isVkDirectSourcePath(sourcePath?: string | null): boolean {
   return Boolean(
     sourcePath &&
-      /(?:VK\s*Видео|VK\s*\/\s*RUTUBE|RUTUBE\s+Official)/i.test(sourcePath)
+    /(?:VK\s*Видео|VK\s*\/\s*RUTUBE|RUTUBE\s+Official)/i.test(sourcePath)
   );
 }
 
@@ -938,6 +938,7 @@ export const RADIO_COUNTRIES: Array<{
   labelRu: string;
 }> = [
     { code: 'FAV', label: 'Favorite Radio', labelEn: 'Favorite Radio', labelRu: 'Избранное Радио' },
+    { code: 'ALL', label: '🌍 Toate Țările', labelEn: '🌍 All Countries', labelRu: '🌍 Все страны' },
     { code: 'RO', label: 'RO • România', labelEn: 'RO • Romania', labelRu: 'RO • Румыния' },
     { code: 'MD', label: 'MD • Moldova', labelEn: 'MD • Moldova', labelRu: 'MD • Молдова' },
     { code: 'RU', label: 'RU • Rusia', labelEn: 'RU • Russia', labelRu: 'RU • Россия' },
@@ -1184,7 +1185,7 @@ export function saveWatchProgressMap(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
-    }).catch(() => {});
+    }).catch(() => { });
   } catch {
     // ignore
   }
@@ -1196,7 +1197,7 @@ export function saveWatchProgressMap(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
-      }).catch(() => {});
+      }).catch(() => { });
     } catch {
       // ignore
     }
@@ -1260,7 +1261,7 @@ export function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
-    }).catch(() => {});
+    }).catch(() => { });
   } catch {
     // ignore
   }
@@ -1270,7 +1271,7 @@ export function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
-      }).catch(() => {});
+      }).catch(() => { });
     } catch {
       // ignore
     }
@@ -1288,8 +1289,8 @@ export function buildVodEmbedUrl(
 ): string {
   const rawItemImdb = String(
     (item as { imdbId?: string; imdb_id?: string }).imdbId ||
-      (item as { imdbId?: string; imdb_id?: string }).imdb_id ||
-      ''
+    (item as { imdbId?: string; imdb_id?: string }).imdb_id ||
+    ''
   ).trim();
   const imdbId = item.id.startsWith('tt')
     ? item.id.split(':')[0]
@@ -1493,8 +1494,8 @@ export const SMART_TV_SERVER_OPTIONS: Array<{
     },
     {
       id: 'filelist_torrent',
-      label: 'S1: FileList.io & Kinozal VIP (4K UHD / 1080p BluRay)',
-      desc: 'Streaming direct din conturile VIP FileList.io (jeka7ro) și Kinozal (popescu20210)',
+      label: 'S1: 4K UHD & 1080p BluRay Direct',
+      desc: 'Streaming direct la calitate maximă 4K UHD și 1080p BluRay fără reclame',
     },
     {
       id: 'kinogram_hls',
@@ -1871,8 +1872,8 @@ export function deduplicateVodItems(
 
     const rawImdb = String(
       rawItem.imdbId ||
-        (rawItem as { imdb_id?: string }).imdb_id ||
-        (rawItem.id.startsWith('tt') ? rawItem.id : '')
+      (rawItem as { imdb_id?: string }).imdb_id ||
+      (rawItem.id.startsWith('tt') ? rawItem.id : '')
     )
       .split(':')[0]
       .trim();

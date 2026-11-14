@@ -3,6 +3,7 @@ import { Station, SortOption } from '../types/radio';
 import {
   fetchStationsByCountry,
   searchStationsGlobal,
+  rankStationsByRelevanceAndRating,
 } from '../services/radioBrowserApi';
 import { useRadioStore } from '../store/useRadioStore';
 
@@ -21,9 +22,7 @@ export function useStations(countryCode: string) {
 
   const searchQuery = useRadioStore((state) => state.radioSearchQuery);
   const setSearchQuery = useRadioStore((state) => state.setRadioSearchQuery);
-  const [searchScope, setSearchScope] = useState<SearchScope>(
-    countryCode.toUpperCase() === 'ALL' ? 'all' : 'country'
-  );
+  const [searchScope, setSearchScope] = useState<SearchScope>('all');
   const [selectedTag, setSelectedTag] = useState<string>('');
   const [sortBy, setSortBy] = useState<SortOption>('votes');
   const [visibleCount, setVisibleCount] = useState<number>(PAGE_SIZE);
@@ -53,7 +52,7 @@ export function useStations(countryCode: string) {
   useEffect(() => {
     setSelectedTag('');
     setGlobalSearchResults(null);
-    setSearchScope(countryCode.toUpperCase() === 'ALL' ? 'all' : 'country');
+    setSearchScope('all');
     setVisibleCount(PAGE_SIZE);
     loadStations(false);
   }, [countryCode, loadStations]);
@@ -169,6 +168,10 @@ export function useStations(countryCode: string) {
       }
       return true;
     });
+
+    if (sortBy === 'votes' && q) {
+      return rankStationsByRelevanceAndRating(filtered, searchQuery);
+    }
 
     return [...filtered].sort((a, b) => {
       switch (sortBy) {

@@ -539,10 +539,10 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
                     ? 'Кстати, Звёзды, Сокровища императора, Звёзды в Африке, Выживалити, Титаны, Пятница! & Comedy Club'
                     : 'Кстати, Звёзды, Сокровища императора, Звёзды в Африке, Выживалити, Титаны, Пятница! и Comedy Club'
                 : uiLang === 'ro'
-                  ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Filme, Seriale, Documentare & TV Rusești'
+                  ? 'Filme, Seriale, Documentare & Emisiuni TV în 4K & Full HD'
                   : uiLang === 'en'
-                    ? 'Kinozal VIP (popescu20210) + iEdem MediaLibrary — Russian Movies, Series, Documentaries & TV'
-                    : 'Kinozal VIP (popescu20210) + iEdem Медиатека — Русские сериалы, фильмы, документальные и ТВ'}
+                    ? 'Movies, Series, Documentaries & TV Shows in 4K & Full HD'
+                    : 'Сериалы, фильмы, документальные и ТВ-шоу в 4K и Full HD'}
             </p>
           </div>
         </div>

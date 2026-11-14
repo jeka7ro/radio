@@ -23,6 +23,8 @@ import {
   RotateCw,
   ArrowLeft,
   Maximize2,
+  Minimize2,
+  ExternalLink,
   Monitor,
   Loader2,
   Sparkles,
@@ -49,6 +51,7 @@ import {
   CheckCircle2,
   HardDriveDownload,
   Airplay,
+  Car,
 } from 'lucide-react';
 import {
   downloadHlsToOfflineDb,
@@ -72,6 +75,20 @@ import {
   SfTrashIcon,
 } from '../components/common/AppleSfIcons';
 import { useRadioStore } from '../store/useRadioStore';
+import {
+  claimMediaSession,
+  releaseMediaSession,
+  updateMediaSessionPlaybackState,
+  updateMediaSessionPosition,
+  isAutomotiveWidescreenMode,
+  setAutomotiveWidescreenMode,
+  acquirePlaybackWakeLock,
+  releasePlaybackWakeLock,
+  ensureNativeDocumentFullscreen,
+  exitNativeDocumentFullscreen,
+  isNativeDocumentFullscreen,
+  isMobilePhoneDevice,
+} from '../utils/mediaSessionManager';
 import {
   StreamingPlatformLogo,
   ProducerStudioLogoBadge,
@@ -106,7 +123,7 @@ import {
   AudioTrackPreference,
   fetchOnlineSubtitlesByImdb,
   downloadSubtitleAsVttBlobUrl,
-  findPreferredOriginalAudioTrackIndex,
+  findExplicitOriginalAudioTrackIndex,
   resolveAudioTrackIndexByPreference,
   autoResolveAndFetchBestRoRuSubtitle,
 } from '../services/subtitleSearchService';
@@ -149,6 +166,7 @@ import {
 } from '../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
 import { TvPlayerModal } from '../components/tv/TvPlayerModal';
+import { FilmioStartupLoader } from '../components/common/FilmioStartupLoader';
 import { setActiveTvPlaylistContext } from '../components/tv/TvOsdChannelList';
 import { RadioPipPlayer } from '../components/player/RadioPipPlayer';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -293,6 +311,118 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   );
   const favorites = useRadioStore((state) => state.favorites);
   const toggleFavorite = useRadioStore((state) => state.toggleFavorite);
+  const switchRadioFavoritesProfile = useRadioStore(
+    (state) => state.switchRadioFavoritesProfile
+  );
+  const syncRadioFavoritesWithServer = useRadioStore(
+    (state) => state.syncRadioFavoritesWithServer
+  );
+
+  const [isAppFullscreen, setIsAppFullscreen] = useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+  });
+
+  const [isStandaloneAppWindow, setIsStandaloneAppWindow] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const mq = window.matchMedia?.(
+        '(display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui)'
+      );
+      const winBar = (window as Window & { menubar?: { visible?: boolean } }).menubar;
+      return Boolean(
+        mq?.matches ||
+        (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+        (winBar && winBar.visible === false) ||
+        new URLSearchParams(window.location.search).get('appwin') === '1'
+      );
+    } catch {
+      return false;
+    }
+  });
+
+  const deferredPwaPromptRef = useRef<{
+    prompt: () => Promise<void>;
+    userChoice?: Promise<{ outcome: string }>;
+  } | null>(null);
+
+  useEffect(() => {
+    const syncFs = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsAppFullscreen(Boolean(doc.fullscreenElement || doc.webkitFullscreenElement));
+    };
+    const onBeforeInstall = (ev: Event) => {
+      const pEv = ev as Event & {
+        prompt?: () => Promise<void>;
+        userChoice?: Promise<{ outcome: string }>;
+      };
+      if (typeof pEv.prompt === 'function') {
+        ev.preventDefault();
+        deferredPwaPromptRef.current = {
+          prompt: pEv.prompt.bind(pEv),
+          userChoice: pEv.userChoice,
+        };
+      }
+    };
+    const mq = window.matchMedia?.(
+      '(display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui)'
+    );
+    const onDisplayMode = () => {
+      if (mq?.matches) setIsStandaloneAppWindow(true);
+    };
+    document.addEventListener('fullscreenchange', syncFs);
+    document.addEventListener('webkitfullscreenchange', syncFs);
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    mq?.addEventListener?.('change', onDisplayMode);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFs);
+      document.removeEventListener('webkitfullscreenchange', syncFs);
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      mq?.removeEventListener?.('change', onDisplayMode);
+    };
+  }, []);
+
+  const handleToggleBrowserFullscreen = useCallback(() => {
+    if (typeof document === 'undefined') return;
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const rootEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+      if (typeof doc.exitFullscreen === 'function') {
+        doc.exitFullscreen().catch(() => { });
+      } else if (typeof doc.webkitExitFullscreen === 'function') {
+        Promise.resolve(doc.webkitExitFullscreen()).catch(() => { });
+      }
+    } else if (typeof rootEl.requestFullscreen === 'function') {
+      rootEl.requestFullscreen().catch(() => { });
+    } else if (typeof rootEl.webkitRequestFullscreen === 'function') {
+      Promise.resolve(rootEl.webkitRequestFullscreen()).catch(() => { });
+    }
+  }, []);
+
+  const handleOpenInFullAppWindow = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const targetUrl = new URL(window.location.href);
+    targetUrl.searchParams.set('appwin', '1');
+    const availW = window.screen?.availWidth || 1920;
+    const availH = window.screen?.availHeight || 1080;
+    const features = `popup=yes,width=${availW},height=${availH},left=0,top=0,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`;
+    const opened = window.open(targetUrl.toString(), 'FilmioFullWindow', features);
+    if (!opened) {
+      if (deferredPwaPromptRef.current) {
+        const promptObj = deferredPwaPromptRef.current;
+        deferredPwaPromptRef.current = null;
+        promptObj.prompt().catch(() => { });
+      } else {
+        handleToggleBrowserFullscreen();
+      }
+    }
+  }, [handleToggleBrowserFullscreen]);
 
   const [isTvRadioPlayerOpen, setIsTvRadioPlayerOpen] =
     useState<boolean>(false);
@@ -498,7 +628,79 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     setIsMusicPlaying(false);
     setCurrentMusicTrack(null);
     setMusicElapsedSec(0);
+    releaseMediaSession('music');
   }, []);
+
+  const lastMusicPosSyncMsRef = useRef<number>(0);
+
+  // Apple CarPlay Now Playing + Mercedes GLE Steering-Wheel & Cluster MediaSession for Music
+  useEffect(() => {
+    if (
+      !currentMusicTrack ||
+      currentStation ||
+      currentTvChannel ||
+      isPlayingVodRef.current
+    ) {
+      releaseMediaSession('music');
+      return;
+    }
+    claimMediaSession(
+      'music',
+      {
+        title: currentMusicTrack.title,
+        artist: currentMusicTrack.artist || 'Filmio Music',
+        album: currentMusicTrack.album || 'Filmio Music',
+        artworkUrl:
+          currentMusicTrack.cover ||
+          currentMusicTrack.coverSmall ||
+          '/apple-touch-icon.png',
+      },
+      {
+        onPlay: () => {
+          const el = musicAudioRef.current;
+          if (el) {
+            stopRadio();
+            setIsTvRadioPlayerOpen(false);
+            if (currentTvChannel) closeTvPlayer();
+            el.play().catch(() => { });
+            setIsMusicPlaying(true);
+          }
+        },
+        onPause: () => {
+          musicAudioRef.current?.pause();
+          setIsMusicPlaying(false);
+        },
+        onStop: () => {
+          handleStopAndCloseMusic();
+        },
+        onPrev: () => {
+          handlePrevMusicTrack();
+        },
+        onNext: () => {
+          handleNextMusicTrack();
+        },
+        onSeekBackward: null,
+        onSeekForward: null,
+        onSeekTo: (sec) => {
+          handleSeekMusic(sec);
+        },
+      }
+    );
+    updateMediaSessionPlaybackState(
+      'music',
+      isMusicPlaying ? 'playing' : 'paused'
+    );
+  }, [
+    currentMusicTrack,
+    isMusicPlaying,
+    stopRadio,
+    currentTvChannel,
+    closeTvPlayer,
+    handleStopAndCloseMusic,
+    handlePrevMusicTrack,
+    handleNextMusicTrack,
+    handleSeekMusic,
+  ]);
 
   const activeRadioTrack = useMemo(
     () =>
@@ -523,7 +725,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const next = new Date();
       setClockNow((prev) =>
         prev.getMinutes() === next.getMinutes() &&
-        prev.getHours() === next.getHours()
+          prev.getHours() === next.getHours()
           ? prev
           : next
       );
@@ -533,9 +735,70 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   // Main TV Navigation Section (Defaults to Lampa 'home' / Главная)
   const [section, setSection] = useState<TvSectionId>('home');
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  const [isCarMode, setIsCarMode] = useState<boolean>(() =>
+    isAutomotiveWidescreenMode()
   );
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    if (isAutomotiveWidescreenMode()) return false;
+    return window.innerWidth >= 768;
+  });
+
+  useEffect(() => {
+    if (isCarMode) {
+      document.documentElement.classList.add('car-widescreen-mode');
+    } else {
+      document.documentElement.classList.remove('car-widescreen-mode');
+    }
+  }, [isCarMode]);
+
+  useEffect(() => {
+    const onCarModeEvent = (ev: Event) => {
+      const enabled = Boolean(
+        (ev as CustomEvent<{ enabled?: boolean }>).detail?.enabled
+      );
+      setIsCarMode(enabled);
+      if (enabled) {
+        setIsSidebarOpen(false);
+      } else if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+        setIsSidebarOpen(true);
+      }
+    };
+    const onResizeAutoCar = () => {
+      const autoDetected = isAutomotiveWidescreenMode();
+      setIsCarMode((prev) => {
+        if (autoDetected && !prev) {
+          setIsSidebarOpen(false);
+          return true;
+        }
+        return prev;
+      });
+    };
+    window.addEventListener('aether:car-mode-change', onCarModeEvent);
+    window.addEventListener('resize', onResizeAutoCar);
+    return () => {
+      window.removeEventListener('aether:car-mode-change', onCarModeEvent);
+      window.removeEventListener('resize', onResizeAutoCar);
+    };
+  }, []);
+
+  const handleToggleCarMode = useCallback(() => {
+    const next = !isCarMode;
+    setIsCarMode(next);
+    setAutomotiveWidescreenMode(next);
+    if (next) {
+      setIsSidebarOpen(false);
+      if (
+        typeof document !== 'undefined' &&
+        !document.fullscreenElement &&
+        document.documentElement.requestFullscreen
+      ) {
+        document.documentElement.requestFullscreen().catch(() => { });
+      }
+    } else if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+      setIsSidebarOpen(true);
+    }
+  }, [isCarMode]);
 
   // Netflix-Style Multi-User Profiles ("Who's watching? / Cine vizionează? / Кто смотрит?")
   const [tvProfiles, setTvProfiles] = useState<SmartTvProfile[]>(() =>
@@ -1029,10 +1292,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setTvSettings(nextSettings);
       setWatchProgressMap(loadWatchProgressMap(profileId));
       setSavedVodItems(loadSavedVodItems(profileId));
+      switchRadioFavoritesProfile(profileId);
       setEditingProfileId(null);
       setIsProfilePickerOpen(false);
     },
-    [tvProfiles]
+    [tvProfiles, switchRadioFavoritesProfile]
   );
 
   const handleStartAddProfile = useCallback(() => {
@@ -1380,19 +1644,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     []
   );
 
+  const isCurrentVodForeign = useMemo(() => {
+    if (!activeVodItem) return false;
+    return !isRussianVodItem({
+      ...activeVodItem,
+      ...(detailedMeta || {}),
+      country: detailedMeta?.country || activeVodItem.country,
+      nameOriginal: detailedMeta?.nameOriginal || activeVodItem.nameOriginal,
+    });
+  }, [activeVodItem, detailedMeta]);
+
+  // For ALL non-Russian movies & series (English, French, Spanish, Korean, Japanese, Romanian, etc.),
+  // ALWAYS prioritize Original Audio (or Romanian if user chose 'ro', which falls back to 'original'),
+  // never defaulting to Russian dubbing unless the user manually selects a Russian track in the current session.
+  const effectiveVodAudioPref: AudioTrackPreference = useMemo(() => {
+    if (isCurrentVodForeign) {
+      return tvSettings.defaultAudioPref === 'ro' ? 'ro' : 'original';
+    }
+    return tvSettings.defaultAudioPref;
+  }, [isCurrentVodForeign, tvSettings.defaultAudioPref]);
+
   const effectiveAudioTrackIdx = useMemo(() => {
     const names = resolvedDirectStream?.audioNames || [];
     if (selectedAudioTrackIdx >= 0 && selectedAudioTrackIdx < names.length) {
       return selectedAudioTrackIdx;
     }
-    return resolveAudioTrackIndexByPreference(
-      names,
-      tvSettings.defaultAudioPref
-    );
+    return resolveAudioTrackIndexByPreference(names, effectiveVodAudioPref);
   }, [
     resolvedDirectStream?.audioNames,
     selectedAudioTrackIdx,
-    tvSettings.defaultAudioPref,
+    effectiveVodAudioPref,
   ]);
 
   const handleRequestOriginalAudio = useCallback(
@@ -1400,8 +1681,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       userRequestedOriginalAudioRef.current = true;
       userManuallySelectedServerRef.current = true;
 
-      // 1) Check if current resolvedDirectStream already has an Original/English track
-      const curOrigIdx = findPreferredOriginalAudioTrackIndex(
+      // 1) Check if current resolvedDirectStream already has an Original/Foreign track
+      const curOrigIdx = findExplicitOriginalAudioTrackIndex(
         resolvedDirectStream?.audioNames || []
       );
       if (curOrigIdx >= 0) {
@@ -1411,9 +1692,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
 
-      // 2) Check if iedemAltDirectStreamRef has a multi-audio stream with Original/English
+      // 2) Check if iedemAltDirectStreamRef has a multi-audio stream with Original/Foreign
       const altStream = iedemAltDirectStreamRef.current;
-      const altOrigIdx = findPreferredOriginalAudioTrackIndex(
+      const altOrigIdx = findExplicitOriginalAudioTrackIndex(
         altStream?.audioNames || []
       );
       if (
@@ -1435,7 +1716,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           isFileListStreamLoading)
       ) {
         setActiveServer('filelist_torrent');
-        const flOrigIdx = findPreferredOriginalAudioTrackIndex(
+        const flOrigIdx = findExplicitOriginalAudioTrackIndex(
           resolvedFileListStream?.audioNames || []
         );
         if (flOrigIdx >= 0) {
@@ -1466,7 +1747,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   // Stop Radio Live and Spotify Music automatically whenever VOD video, Trailer, or Live TV starts playing
   useEffect(() => {
     if (isPlayingVod || isTrailerModalOpen || currentTvChannel) {
-      if (currentStation && (playerStatus === 'playing' || playerStatus === 'loading')) {
+      if (currentStation) {
         stopRadio();
         setIsTvRadioPlayerOpen(false);
       }
@@ -1476,15 +1757,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (isMusicPlaying) {
         setIsMusicPlaying(false);
       }
+      if (currentMusicTrack) {
+        setCurrentMusicTrack(null);
+        setMusicElapsedSec(0);
+      }
     }
   }, [
     isPlayingVod,
     isTrailerModalOpen,
     currentTvChannel,
     currentStation,
-    playerStatus,
     stopRadio,
     isMusicPlaying,
+    currentMusicTrack,
   ]);
 
   // Listen for direct jumps from Radio Song/Artist/Album clicks to the Music section
@@ -1577,13 +1862,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const timeoutMs = isMobileTouch
       ? 3000
       : Math.max(8, tvSettings.osdAutoHideSec) * 1000;
-    osdTimerRef.current = window.setTimeout(() => {
+    const runAutoHideCheck = () => {
       const hasOpenOverlay = Boolean(
         playerBoxRef.current?.querySelector(
           '[data-vod-menu-popover="true"], [data-vod-sheet-open="true"], [data-episodes-drawer="true"]'
         )
       );
       if (hasOpenOverlay) {
+        // Re-arm instead of dying so OSD always hides cleanly once the subtitle/audio/episode menu closes
+        osdTimerRef.current = window.setTimeout(runAutoHideCheck, 3000);
         return;
       }
       setIsVodOsdVisible(false);
@@ -1603,7 +1890,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (activeEl && playerBoxRef.current?.contains(activeEl)) {
         activeEl.blur();
       }
-    }, timeoutMs);
+    };
+    osdTimerRef.current = window.setTimeout(runAutoHideCheck, timeoutMs);
   }, [tvSettings.osdAutoHideSec]);
 
   // Offline / Local Device Downloads (IndexedDB + Device Export)
@@ -1813,7 +2101,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             ? `Sezonul ${targetSeason} • Episodul ${epNum}`
             : detailedMeta?.releaseInfo || activeVodItem.releaseInfo || 'Film';
 
-          const audioIdx = Math.max(0, selectedAudioTrackIdx);
+          const audioIdx =
+            selectedAudioTrackIdx >= 0
+              ? selectedAudioTrackIdx
+              : epAudioNames?.length
+                ? resolveAudioTrackIndexByPreference(
+                    epAudioNames,
+                    effectiveVodAudioPref
+                  )
+                : Math.max(0, effectiveAudioTrackIdx);
           await downloadHlsToOfflineDb({
             id: offlineId,
             title: detailedMeta?.name || activeVodItem.name,
@@ -1886,6 +2182,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       selectedEpisode,
       detailedMeta,
       selectedAudioTrackIdx,
+      effectiveAudioTrackIdx,
+      effectiveVodAudioPref,
       activeSubCues,
       activeSubLabel,
       tvSettings.defaultSubLang,
@@ -1911,28 +2209,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [isPortraitViewport, setIsPortraitViewport] = useState(() =>
     typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false
   );
-  const [isMobilePhone, setIsMobilePhone] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    if (
-      /Web0S|WebOS|Tizen|SMART-TV|SmartTV|NetCast|VIDAA|HbbTV|AFTB|AFTT|AFTM|AFTS|BRAVIA|CrKey/i.test(
-        ua
-      )
-    ) {
-      return false;
-    }
-    if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
-    const isTouchDevice =
-      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-      'ontouchstart' in window ||
-      Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
-      Boolean(window.matchMedia?.('(hover: none)').matches);
-    if (isTouchDevice) return true;
-    return (
-      window.innerWidth < 768 ||
-      (window.innerHeight < 600 && window.innerWidth < 1024)
-    );
-  });
+  const [isMobilePhone, setIsMobilePhone] = useState(() => isMobilePhoneDevice());
 
   useEffect(() => {
     const syncViewportFlags = () => {
@@ -1943,39 +2220,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const left = vv ? vv.offsetLeft : 0;
       setVvRect((prev) =>
         Math.abs(prev.width - w) > 0.5 ||
-        Math.abs(prev.height - h) > 0.5 ||
-        Math.abs(prev.offsetTop - top) > 0.5 ||
-        Math.abs(prev.offsetLeft - left) > 0.5
+          Math.abs(prev.height - h) > 0.5 ||
+          Math.abs(prev.offsetTop - top) > 0.5 ||
+          Math.abs(prev.offsetLeft - left) > 0.5
           ? { width: w, height: h, offsetTop: top, offsetLeft: left }
           : prev
       );
       setIsPortraitViewport(h > w);
-      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-      if (
-        /Web0S|WebOS|Tizen|SMART-TV|SmartTV|NetCast|VIDAA|HbbTV|AFTB|AFTT|AFTM|AFTS|BRAVIA|CrKey/i.test(
-          ua
-        )
-      ) {
-        setIsMobilePhone(false);
-        return;
-      }
-      if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) {
-        setIsMobilePhone(true);
-        return;
-      }
-      const isTouchDevice =
-        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1) ||
-        'ontouchstart' in window ||
-        Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
-        Boolean(window.matchMedia?.('(hover: none)').matches);
-      if (isTouchDevice) {
-        setIsMobilePhone(true);
-        return;
-      }
-      setIsMobilePhone(
-        window.innerWidth < 768 ||
-          (window.innerHeight < 600 && window.innerWidth < 1024)
-      );
+      setIsMobilePhone(isMobilePhoneDevice());
     };
     const onOpenHandoff = () => setIsHandoffModalOpen(true);
     syncViewportFlags();
@@ -2018,36 +2270,50 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
   }, []);
 
+  // Hold continuous Screen Wake Lock across the entire active VOD viewing session
+  // (including brief episode-transition / FileList stream loading spinners where <VodNativeHlsPlayer> remounts)
+  useEffect(() => {
+    if (isPlayingVod && activeVodItem) {
+      acquirePlaybackWakeLock('vod-session');
+      return () => {
+        releasePlaybackWakeLock('vod-session');
+      };
+    }
+    releasePlaybackWakeLock('vod-session');
+  }, [isPlayingVod, activeVodItem]);
+
+  // Idempotent native fullscreen entry on `document.documentElement` (NEVER exits if already fullscreen!)
+  const ensureTvFullscreen = useCallback(() => {
+    try {
+      acquirePlaybackWakeLock('vod-session');
+      if (isNativeDocumentFullscreen()) {
+        return;
+      }
+      ensureNativeDocumentFullscreen(() => {
+        window.dispatchEvent(
+          new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+            detail: { force: true },
+          })
+        );
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const requestTvFullscreen = useCallback(() => {
     try {
       hideVodOsd();
-      const box = playerBoxRef.current as
-        | (HTMLDivElement & {
-            webkitRequestFullscreen?: () => Promise<void> | void;
-          })
-        | null;
+      const box = playerBoxRef.current;
       const vid = box?.querySelector('video') as
         | (HTMLVideoElement & {
-            webkitEnterFullscreen?: () => void;
-            webkitEnterFullScreen?: () => void;
-            webkitDisplayingFullscreen?: boolean;
-            webkitExitFullscreen?: () => void;
-          })
+          webkitDisplayingFullscreen?: boolean;
+          webkitExitFullscreen?: () => void;
+        })
         | null;
-      const doc = document as Document & {
-        webkitFullscreenElement?: Element | null;
-        webkitExitFullscreen?: () => Promise<void> | void;
-      };
 
-      if (
-        typeof document !== 'undefined' &&
-        (doc.fullscreenElement || doc.webkitFullscreenElement)
-      ) {
-        if (typeof doc.exitFullscreen === 'function') {
-          void doc.exitFullscreen().catch(() => {});
-        } else if (typeof doc.webkitExitFullscreen === 'function') {
-          void Promise.resolve(doc.webkitExitFullscreen()).catch(() => {});
-        }
+      if (isNativeDocumentFullscreen()) {
+        exitNativeDocumentFullscreen();
         window.dispatchEvent(
           new CustomEvent('aether:vod-custom-fullscreen-toggle', {
             detail: { force: false },
@@ -2071,34 +2337,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
 
       window.dispatchEvent(
-        new CustomEvent('aether:vod-custom-fullscreen-toggle')
+        new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+          detail: { force: true },
+        })
       );
-
-      const fsTarget = (box || document.documentElement) as HTMLElement & {
-        webkitRequestFullscreen?: () => Promise<void> | void;
-      };
-      const reqFn =
-        fsTarget?.requestFullscreen || fsTarget?.webkitRequestFullscreen;
-      if (typeof reqFn === 'function') {
-        Promise.resolve(reqFn.call(fsTarget))
-          .then(() => {
-            try {
-              (
-                screen.orientation as unknown as {
-                  lock?: (mode: string) => Promise<void>;
-                }
-              )
-                ?.lock?.('landscape')
-                ?.catch(() => {});
-            } catch {
-              // ignore
-            }
-          })
-          .catch(() => {});
-        return;
-      }
-
-
+      ensureNativeDocumentFullscreen();
     } catch {
       // ignore
     }
@@ -2908,10 +3151,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ) || null;
         const floatingBtns = floatingBarEl
           ? Array.from(
-              floatingBarEl.querySelectorAll<HTMLButtonElement>(
-                'button:not([disabled])'
-              )
+            floatingBarEl.querySelectorAll<HTMLButtonElement>(
+              'button:not([disabled])'
             )
+          )
           : [];
         const skipIntroBtn =
           playerBoxRef.current?.querySelector<HTMLButtonElement>(
@@ -3382,18 +3625,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       '[data-actor-profile-modal="true"]'
                     ) || rootContainerRef.current
 
-                      : isPlayingVod && !isSettingsDrawerOpen
-                        ? playerBoxRef.current?.querySelector<HTMLElement>(
-                          '[data-vod-menu-popover="true"]'
-                        ) ||
-                        playerBoxRef.current?.querySelector<HTMLElement>(
-                          '[data-vod-sheet-open="true"]'
-                        ) ||
-                        playerBoxRef.current?.querySelector<HTMLElement>(
-                          '[data-episodes-drawer="true"]'
-                        ) ||
-                        playerBoxRef.current
-                        : rootContainerRef.current;
+                    : isPlayingVod && !isSettingsDrawerOpen
+                      ? playerBoxRef.current?.querySelector<HTMLElement>(
+                        '[data-vod-menu-popover="true"]'
+                      ) ||
+                      playerBoxRef.current?.querySelector<HTMLElement>(
+                        '[data-vod-sheet-open="true"]'
+                      ) ||
+                      playerBoxRef.current?.querySelector<HTMLElement>(
+                        '[data-episodes-drawer="true"]'
+                      ) ||
+                      playerBoxRef.current
+                      : rootContainerRef.current;
         if (!root) return;
         // SMART TV SMOOTH PERFORMANCE OPTIMIZATION (REVERSIBLE):
         // Single-pass bounding box cache + smart viewport scroll check so rapid D-Pad navigation
@@ -4964,7 +5207,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     fetchStationsByCountry(radioCountry)
       .then((stations) => {
         if (cancelled) return;
-        const top = stations.slice(0, 150);
+        const top = stations.slice(0, 400);
         setRadioStations(top);
       })
       .catch(() => {
@@ -5202,7 +5445,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const handlePlayYouTubeVideo = useCallback(
     (ytVideo: YouTubeVideoCardItem) => {
       if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
-        requestTvFullscreen();
+        ensureTvFullscreen();
       }
       setYtUseEmbedFallback(!isLocalHomeServer());
       setActiveYtDurationSec(ytVideo.durationSec || 0);
@@ -5221,10 +5464,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         qualityBadge: 'YT PREMIUM • 1080p',
       });
       setIsSidebarOpen(false);
+      if (osdTimerRef.current) {
+        window.clearTimeout(osdTimerRef.current);
+        osdTimerRef.current = null;
+      }
+      setIsVodOsdVisible(false);
       setIsPlayingVod(true);
-      wakeVodOsd();
     },
-    [tvSettings.autoFullscreenOnPlay, isMobilePhone, requestTvFullscreen, wakeVodOsd]
+    [tvSettings.autoFullscreenOnPlay, isMobilePhone, ensureTvFullscreen]
   );
 
   // Open Movie/Series in Lampa Full Detail Card (Карточка фильма)
@@ -5240,7 +5487,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         tvSettings.autoFullscreenOnPlay &&
         !isMobilePhone
       ) {
-        requestTvFullscreen();
+        ensureTvFullscreen();
       }
       const saved = watchProgressMapRef.current[item.id] || watchProgressMap[item.id];
       const relMatch = String(item.releaseTitle || item.name || '').match(
@@ -5256,11 +5503,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           : useExplicitTorrentEp
             ? Number(relMatch![1])
             : saved?.season ||
-              (relMatch
-                ? Number(relMatch[1])
-                : seasonPackOnlyMatch
-                  ? Number(seasonPackOnlyMatch[1])
-                  : 1);
+            (relMatch
+              ? Number(relMatch[1])
+              : seasonPackOnlyMatch
+                ? Number(seasonPackOnlyMatch[1])
+                : 1);
       const targetEpisode =
         typeof explicitEpisode === 'number' && explicitEpisode > 0
           ? explicitEpisode
@@ -5291,8 +5538,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         isSeasonPackInit ||
         Boolean(
           relMatch &&
-            Number(relMatch[1]) === targetSeason &&
-            Number(relMatch[2]) === targetEpisode
+          Number(relMatch[1]) === targetSeason &&
+          Number(relMatch[2]) === targetEpisode
         );
       userSelectedFlTorrentIdRef.current =
         initialTorrentMatchesEp && item.flTorrentId && isLocalHomeServer()
@@ -5345,7 +5592,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         (normalizedItem.klubnichkaRawId ||
           normalizedItem.id.startsWith('klub_') ||
           normalizedItem.isAdultKlubnichka) &&
-          !normalizedItem.flTorrentId
+        !normalizedItem.flTorrentId
       );
       const isRuTvShow = isRussianTvShowItem(normalizedItem);
       const prefersTorrentFirst = !isAdultKlubOnly && !isRuTvShow;
@@ -5369,9 +5616,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           : isRuTvShow
             ? 'kinogram_hls'
             : (item.flTorrentId || item.id.startsWith('kinozal_') || prefersTorrentFirst) &&
-                canUseLocalFl &&
-                (tvSettings.defaultVodServer === 'auto_best' ||
-                  tvSettings.defaultVodServer === 'filelist_torrent')
+              canUseLocalFl &&
+              (tvSettings.defaultVodServer === 'auto_best' ||
+                tvSettings.defaultVodServer === 'filelist_torrent')
               ? 'filelist_torrent'
               : savedSrv || defaultSrv
       );
@@ -5383,7 +5630,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setActiveSubCues([]);
       setIsEpisodesDrawerOpen(false);
       setIsInfoSheetOpen(false);
-      wakeVodOsd();
+      if (autoPlayImmediately) {
+        if (osdTimerRef.current) {
+          window.clearTimeout(osdTimerRef.current);
+          osdTimerRef.current = null;
+        }
+        setIsVodOsdVisible(false);
+      } else {
+        wakeVodOsd();
+      }
 
       if (startSec > 5) {
         setPendingResumePromptSec(startSec);
@@ -5420,7 +5675,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       watchProgressMap,
       section,
       isMobilePhone,
-      requestTvFullscreen,
+      ensureTvFullscreen,
       wakeVodOsd,
       tvSettings.autoFullscreenOnPlay,
       tvSettings.defaultVodServer,
@@ -5442,14 +5697,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       savedEntry?.item ||
       (nameParam || cleanTt
         ? {
-            id: playVodId,
-            imdbId: cleanTt || undefined,
-            name: nameParam || playVodId,
-            type: typeParam,
-            poster: cleanTt
-              ? `https://images.metahub.space/poster/medium/${cleanTt}/img`
-              : '',
-          }
+          id: playVodId,
+          imdbId: cleanTt || undefined,
+          name: nameParam || playVodId,
+          type: typeParam,
+          poster: cleanTt
+            ? `https://images.metahub.space/poster/medium/${cleanTt}/img`
+            : '',
+        }
         : undefined);
     if (!targetItem) return;
     handledDeepLinkVodRef.current = true;
@@ -5481,7 +5736,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const handleStartVodPlayback = useCallback(
     (customStartSec?: number, openAudioSheet = false) => {
       if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
-        requestTvFullscreen();
+        ensureTvFullscreen();
       }
       if (typeof customStartSec === 'number') {
         setResumeStartSeconds(customStartSec);
@@ -5513,22 +5768,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsSidebarOpen(false);
       setIsPlayingVod(true);
       setIsInfoSheetOpen(openAudioSheet);
-      wakeVodOsd();
-      window.setTimeout(() => {
-        if (openAudioSheet) {
+      if (openAudioSheet) {
+        wakeVodOsd();
+        window.setTimeout(() => {
           const firstAudioBtn =
             playerBoxRef.current?.querySelector<HTMLButtonElement>(
               '[data-sheet-audio-btn="true"]'
             );
           (firstAudioBtn || vodAudioBtnRef.current)?.focus();
-        } else {
-          const playBtn =
-            playerBoxRef.current?.querySelector<HTMLButtonElement>(
-              '[data-vod-play-btn="true"]'
-            );
-          playBtn?.focus();
+        }, 90);
+      } else {
+        if (osdTimerRef.current) {
+          window.clearTimeout(osdTimerRef.current);
+          osdTimerRef.current = null;
         }
-      }, 90);
+        setIsVodOsdVisible(false);
+      }
     },
     [
       activeVodItem,
@@ -5536,7 +5791,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       selectedSeason,
       selectedEpisode,
       resumeStartSeconds,
-      requestTvFullscreen,
+      ensureTvFullscreen,
+      isMobilePhone,
       wakeVodOsd,
       tvSettings.autoFullscreenOnPlay,
     ]
@@ -5848,8 +6104,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         isSeasonPackCur ||
         Boolean(
           relMatch &&
-            Number(relMatch[1]) === selectedSeason &&
-            Number(relMatch[2]) === selectedEpisode
+          Number(relMatch[1]) === selectedSeason &&
+          Number(relMatch[2]) === selectedEpisode
         );
       userSelectedFlTorrentIdRef.current =
         matchesCurrentEp && activeVodItem.flTorrentId && isLocalHomeServer()
@@ -5894,19 +6150,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         activeVodItem.nameOriginal === "MAMA");
     const sanitizedVodItem = isPoisonedMamaMeta
       ? {
-          ...activeVodItem,
-          kpId: /жизнь\s+заново/i.test(activeVodItem.name) ? "7958160" : activeVodItem.kpId,
-          poster: /жизнь\s+заново/i.test(activeVodItem.name)
-            ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
-            : activeVodItem.iedemFid
-              ? `/api/iedem-vod?poster=${encodeURIComponent(`http://895890bd73a7.jmeekos.com/posters/h/p_${String(activeVodItem.iedemFid).padStart(8, "0")}.jpg`)}`
-              : undefined,
-          background: /жизнь\s+заново/i.test(activeVodItem.name)
-            ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
+        ...activeVodItem,
+        kpId: /жизнь\s+заново/i.test(activeVodItem.name) ? "7958160" : activeVodItem.kpId,
+        poster: /жизнь\s+заново/i.test(activeVodItem.name)
+          ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
+          : activeVodItem.iedemFid
+            ? `/api/iedem-vod?poster=${encodeURIComponent(`http://895890bd73a7.jmeekos.com/posters/h/p_${String(activeVodItem.iedemFid).padStart(8, "0")}.jpg`)}`
             : undefined,
-          imdbId: undefined,
-          nameOriginal: undefined,
-        }
+        background: /жизнь\s+заново/i.test(activeVodItem.name)
+          ? "https://kinopoiskapiunofficial.tech/images/posters/kp/7958160.jpg"
+          : undefined,
+        imdbId: undefined,
+        nameOriginal: undefined,
+      }
       : activeVodItem;
     setDetailedMeta((prev) =>
       !isNewVodItem && prev && prev.id === sanitizedVodItem.id
@@ -5916,7 +6172,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const isKlubnichkaStream = Boolean(
       activeVodItem.klubnichkaRawId ||
-        (activeVodItem.id.startsWith('klub_') && !activeVodItem.flTorrentId)
+      (activeVodItem.id.startsWith('klub_') && !activeVodItem.flTorrentId)
     );
     if (isKlubnichkaStream) {
       userManuallySelectedServerRef.current = true;
@@ -6026,15 +6282,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               const iedemSeasonEntry: NonNullable<
                 ResolvedDirectVodStream['seasons']
               > = [
-                {
-                  season: iedemCardSeason,
-                  episodes: epList.map((e) => ({
-                    episode: e.episode,
-                    title: e.title,
-                    duration: 0,
-                  })),
-                },
-              ];
+                  {
+                    season: iedemCardSeason,
+                    episodes: epList.map((e) => ({
+                      episode: e.episode,
+                      title: e.title,
+                      duration: 0,
+                    })),
+                  },
+                ];
               setResolvedDirectStream((prev) => {
                 const mergedSeasons = mergeSeasonsLists(
                   cachedSeriesSeasonsRef.current.itemKey === itemKey
@@ -6049,9 +6305,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   };
                 }
                 if (
-                  userRequestedOriginalAudioRef.current &&
                   prev?.audioNames &&
-                  findPreferredOriginalAudioTrackIndex(prev.audioNames) >= 0
+                  findExplicitOriginalAudioTrackIndex(prev.audioNames) >= 0
                 ) {
                   return { ...prev, seasons: mergedSeasons };
                 }
@@ -6081,9 +6336,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               if (directTarget) {
                 setResolvedDirectStream((prev) => {
                   if (
-                    userRequestedOriginalAudioRef.current &&
                     prev?.audioNames &&
-                    findPreferredOriginalAudioTrackIndex(prev.audioNames) >= 0
+                    findExplicitOriginalAudioTrackIndex(prev.audioNames) >= 0
                   ) {
                     return prev;
                   }
@@ -6191,6 +6445,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           let foundKpId = activeVodItem.kpId || '';
           let resolvedImdb = '';
           let origName = '';
+          let kpResolvedCountry = '';
           try {
             const kpSearchRes = await fetch(
               `https://kinopoiskapiunofficial.tech/api/v2.1/films/search-by-keyword?keyword=${encodeURIComponent(
@@ -6278,12 +6533,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       : matchedFilm.year && String(matchedFilm.year) !== 'null'
                         ? String(matchedFilm.year).slice(0, 4)
                         : undefined;
-                  const countriesStr = Array.isArray(kpData.countries)
+                                    const countriesStr = Array.isArray(kpData.countries)
                     ? kpData.countries
                       .map((c: { country: string }) => c.country)
                       .filter(Boolean)
                       .join(', ')
                     : undefined;
+                  if (countriesStr) {
+                    kpResolvedCountry = countriesStr;
+                  }
                   const genresArr = Array.isArray(kpData.genres)
                     ? kpData.genres
                       .map((g: { genre: string }) => g.genre)
@@ -6328,7 +6586,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       imdbRating: kpData.ratingImdb
                         ? String(kpData.ratingImdb)
                         : base.imdbRating,
-                      country: countriesStr || base.country || "Россия",
+                      country:
+                        countriesStr ||
+                        base.country ||
+                        (origName ? undefined : "Россия"),
                       genres: genresArr?.length ? genresArr : base.genres,
                       ageRating: ageStr || base.ageRating,
                       runtime: runtimeStr || base.runtime,
@@ -6348,7 +6609,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
           if (cancelled) return;
 
-          if (cancelled) return;
+          const isForeignIedemItem = !isRussianVodItem({
+            ...activeVodItem,
+            country: kpResolvedCountry || activeVodItem.country,
+            nameOriginal: origName || activeVodItem.nameOriginal,
+          });
+          const iedemAudioPref: AudioTrackPreference = isForeignIedemItem
+            ? tvSettings.defaultAudioPref === 'ro'
+              ? 'ro'
+              : 'original'
+            : tvSettings.defaultAudioPref;
 
           // 1) Resolve multi-audio Kinogram / VK / iEdem multi-season stream (enriches all seasons + handles other seasons when user switches away from iedemCardSeason)
           if (foundKpId || resolvedImdb || origName || searchCleanTitle) {
@@ -6360,6 +6630,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               year: targetYear,
               season: selectedSeason,
               episode: selectedEpisode,
+              ru: isForeignIedemItem ? '0' : '1',
             })
               .then((altDirect) => {
                 if (
@@ -6381,9 +6652,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       setResolvedDirectStream((prev) =>
                         prev
                           ? {
-                              ...prev,
-                              seasons: mergeSeasonsLists(prev.seasons, earlyMerged),
-                            }
+                            ...prev,
+                            seasons: mergeSeasonsLists(prev.seasons, earlyMerged),
+                          }
                           : { ok: false, type: "series", seasons: earlyMerged }
                       );
                     }
@@ -6437,18 +6708,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 ) {
                   setActiveServer('filelist_torrent');
                 }
-                const origIdx = findPreferredOriginalAudioTrackIndex(
+                                const origIdx = findExplicitOriginalAudioTrackIndex(
                   enrichedAlt.audioNames || []
                 );
                 if (!isMatchingIedemCardSeason) {
                   setResolvedDirectStream(enrichedAlt);
                   if (hasPlayableAlt) {
                     const prefIdx =
-                      userRequestedOriginalAudioRef.current && origIdx >= 0
+                      (isForeignIedemItem ||
+                        userRequestedOriginalAudioRef.current) &&
+                      origIdx >= 0
                         ? origIdx
                         : resolveAudioTrackIndexByPreference(
                             enrichedAlt.audioNames || [],
-                            tvSettings.defaultAudioPref
+                            iedemAudioPref
                           );
                     setSelectedAudioTrackIdx(prefIdx);
                     if (
@@ -6461,12 +6734,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   setIsDirectStreamLoading(false);
                 } else if (
                   hasPlayableAlt &&
-                  userRequestedOriginalAudioRef.current &&
+                  (isForeignIedemItem ||
+                    userRequestedOriginalAudioRef.current) &&
                   origIdx >= 0
                 ) {
                   setResolvedDirectStream(enrichedAlt);
                   setSelectedAudioTrackIdx(origIdx);
-                  setActiveServer('kinogram_hls');
+                  if (
+                    userRequestedOriginalAudioRef.current ||
+                    (!(!isRuTvShowIedem && iedemFlOk && canUseLocalTorrent) &&
+                      !userManuallySelectedServerRef.current)
+                  ) {
+                    setActiveServer('kinogram_hls');
+                  }
                 } else if (mergedSeasons.length > 0) {
                   setResolvedDirectStream((prev) =>
                     prev
@@ -6508,8 +6788,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
           }
 
-          // 2) If Kinopoisk unlocked a foreign/IMDB ID and early Kinozal search didn't match yet, enrich with FileList.io by IMDb ID
-          if (isLocalHomeServer() && resolvedImdb && !iedemFlOk) {
+          // 2) If Kinopoisk unlocked a foreign/IMDB ID and early Kinozal search didn't match yet (or foreign item needs FileList.io original stream), enrich with FileList.io by IMDb ID
+          if (
+            isLocalHomeServer() &&
+            resolvedImdb &&
+            (!iedemFlOk || isForeignIedemItem)
+          ) {
             setIsFileListStreamLoading(true);
             const flParams = new URLSearchParams({
               imdb: resolvedImdb,
@@ -6518,7 +6802,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               type: activeVodItem.type,
               s: String(selectedSeason),
               e: String(selectedEpisode),
-              ru: '1',
+              ru: isForeignIedemItem ? '0' : '1',
             });
             fetch(buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`))
               .then((r) => (r.ok ? r.json() : null))
@@ -6554,7 +6838,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     flData.streamUrl &&
                     !(
                       iedemAltDirectStreamRef.current?.ok &&
-                      findPreferredOriginalAudioTrackIndex(
+                      findExplicitOriginalAudioTrackIndex(
                         iedemAltDirectStreamRef.current.audioNames || []
                       ) >= 0
                     )
@@ -6563,7 +6847,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   }
                 }
               })
-              .catch(() => {})
+              .catch(() => { })
               .finally(() => {
                 if (!cancelled) setIsFileListStreamLoading(false);
               });
@@ -6589,7 +6873,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 setActiveSubLabel(subRes.track.langLabel);
                 setActiveSubCues(subRes.cues);
               })
-              .catch(() => {});
+              .catch(() => { });
           }
         })();
       }
@@ -6663,14 +6947,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               if (cancelled || !kpData) return;
               const countriesStr = Array.isArray(kpData.countries)
                 ? kpData.countries
-                    .map((c: { country: string }) => c.country)
-                    .filter(Boolean)
-                    .join(', ')
+                  .map((c: { country: string }) => c.country)
+                  .filter(Boolean)
+                  .join(', ')
                 : undefined;
               const genresArr = Array.isArray(kpData.genres)
                 ? kpData.genres
-                    .map((g: { genre: string }) => g.genre)
-                    .filter(Boolean)
+                  .map((g: { genre: string }) => g.genre)
+                  .filter(Boolean)
                 : undefined;
               setDetailedMeta((prev) => {
                 const base = prev || { ...sanitizedVodItem };
@@ -6694,11 +6978,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   description:
                     hasTechnicalTorrentDesc
                       ? kpData.description ||
-                        kpData.shortDescription ||
-                        base.description
+                      kpData.shortDescription ||
+                      base.description
                       : base.description ||
-                        kpData.description ||
-                        kpData.shortDescription,
+                      kpData.description ||
+                      kpData.shortDescription,
                   ratingKinopoisk: kpData.ratingKinopoisk
                     ? String(kpData.ratingKinopoisk)
                     : base.ratingKinopoisk,
@@ -6710,7 +6994,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 };
               });
             })
-            .catch(() => {});
+            .catch(() => { });
           if (activeVodItem.type === 'series') {
             fetch(`https://kinopoiskapiunofficial.tech/api/v2.2/films/${resolvedKpIdStr}/seasons`, {
               headers: {
@@ -6749,7 +7033,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   });
                 }
               })
-              .catch(() => {});
+              .catch(() => { });
           }
         }
       });
@@ -6958,16 +7242,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
             const kpCountriesStr = Array.isArray(kpData.countries)
               ? kpData.countries
-                  .map((c: { country: string }) => c.country)
-                  .filter(Boolean)
-                  .join(', ')
+                .map((c: { country: string }) => c.country)
+                .filter(Boolean)
+                .join(', ')
               : activeVodItem.country;
             const kpOrigName =
               kpData.nameOriginal || kpData.nameEn || activeVodItem.nameOriginal;
             const kpGenresArr = Array.isArray(kpData.genres)
               ? kpData.genres
-                  .map((g: { genre: string }) => g.genre)
-                  .filter(Boolean)
+                .map((g: { genre: string }) => g.genre)
+                .filter(Boolean)
               : activeVodItem.genres;
             isForeignVod = !isRussianVodItem({
               ...activeVodItem,
@@ -6982,15 +7266,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             });
             syncPreferredVodServer();
 
-            // If item was opened by Kinopoisk ID (no initial 'tt') and kpData has imdbId, enrich Cinemeta + FileList + Subtitles
-            if (
-              !imdb &&
-              typeof kpData.imdbId === 'string' &&
-              kpData.imdbId.startsWith('tt')
-            ) {
-              const resolvedTt = kpData.imdbId;
+            // If item was opened by Kinopoisk ID (no initial 'tt'), enrich Cinemeta + Direct Original Stream + FileList + Subtitles using resolved IMDb ID OR Latin original title
+            const resolvedTt =
+              typeof kpData.imdbId === 'string' && kpData.imdbId.startsWith('tt')
+                ? kpData.imdbId
+                : '';
+            const resolvedLatinTitle = (
+              kpData.nameOriginal ||
+              kpData.nameEn ||
+              ''
+            ).trim();
+            const kpYearStr = String(
+              kpData.year || activeVodItem.releaseInfo || ''
+            ).slice(0, 4);
+
+            const applyCinemetaEnrichment = (ttId: string) => {
               fetch(
-                `https://v3-cinemeta.strem.io/meta/${activeVodItem.type}/${resolvedTt}.json`
+                `https://v3-cinemeta.strem.io/meta/${activeVodItem.type}/${ttId}.json`
               )
                 .then((r) => (r.ok ? r.json() : null))
                 .then((d) => {
@@ -7005,11 +7297,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       poster:
                         !isForeignVod || uiLang === 'ru'
                           ? kpData.posterUrl ||
-                            kpData.posterUrlPreview ||
-                            prev?.poster ||
-                            d.meta.poster
+                          kpData.posterUrlPreview ||
+                          prev?.poster ||
+                          d.meta.poster
                           : d.meta.poster ||
-                            `https://images.metahub.space/poster/medium/${resolvedTt}/img`,
+                            `https://images.metahub.space/poster/medium/${ttId}/img`,
                       description:
                         uiLang !== 'ru'
                           ? d.meta.description || prev?.description
@@ -7025,12 +7317,105 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       videos: d.meta.videos || prev?.videos,
                       cast: d.meta.cast || prev?.cast,
                       director: d.meta.director || prev?.director,
-                      imdbId: resolvedTt,
+                      imdbId: ttId,
                       kpId: kp || prev?.kpId,
                     }));
                   }
                 })
-                .catch(() => { });
+                .catch(() => {});
+            };
+
+            if (!imdb && (resolvedTt || resolvedLatinTitle)) {
+              if (isForeignVod) {
+                resolveDirectVodStreamClient({
+                  imdb: resolvedTt || undefined,
+                  kp,
+                  title: resolvedLatinTitle || activeVodItem.name,
+                  type: activeVodItem.type,
+                  year: kpYearStr,
+                  season: selectedSeason,
+                  episode: selectedEpisode,
+                  ru: '0',
+                })
+                  .then((upgradedDirect) => {
+                    if (cancelled || !upgradedDirect?.ok) return;
+                    const upgradedOrigIdx = findExplicitOriginalAudioTrackIndex(
+                      upgradedDirect.audioNames || []
+                    );
+                    if (upgradedOrigIdx >= 0) {
+                      setResolvedDirectStream((prev) => {
+                        const prevOrigIdx = findExplicitOriginalAudioTrackIndex(
+                          prev?.audioNames || []
+                        );
+                        if (prev?.ok && prevOrigIdx >= 0) {
+                          return prev;
+                        }
+                        const merged = mergeSeasonsLists(
+                          prev?.seasons,
+                          upgradedDirect.seasons
+                        );
+                        return merged.length > 0
+                          ? { ...upgradedDirect, seasons: merged }
+                          : upgradedDirect;
+                      });
+                      setSelectedAudioTrackIdx((prevIdx) =>
+                        prevIdx >= 0 ? prevIdx : upgradedOrigIdx
+                      );
+                    }
+                  })
+                  .catch(() => {});
+              }
+
+              if (resolvedTt) {
+                applyCinemetaEnrichment(resolvedTt);
+              } else if (isForeignVod && resolvedLatinTitle) {
+                fetch(
+                  `https://v3-cinemeta.strem.io/catalog/${activeVodItem.type}/top/search=${encodeURIComponent(resolvedLatinTitle)}.json`
+                )
+                  .then((r) => (r.ok ? r.json() : null))
+                  .then(
+                    (searchData: {
+                      metas?: Array<{
+                        id?: string;
+                        name?: string;
+                        releaseInfo?: string;
+                        year?: string | number;
+                      }>;
+                    } | null) => {
+                      if (cancelled || !Array.isArray(searchData?.metas)) return;
+                      const normTarget = resolvedLatinTitle
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '');
+                      const targetYr = parseInt(kpYearStr, 10) || 0;
+                      const bestMeta =
+                        searchData.metas.find((m) => {
+                          if (!m?.id?.startsWith('tt')) return false;
+                          const normName = String(m.name || '')
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '');
+                          if (normName !== normTarget) return false;
+                          if (!targetYr) return true;
+                          const mYr =
+                            parseInt(
+                              String(m.year || m.releaseInfo || '').slice(0, 4),
+                              10
+                            ) || 0;
+                          return !mYr || Math.abs(mYr - targetYr) <= 1;
+                        }) ||
+                        searchData.metas.find((m) => {
+                          if (!m?.id?.startsWith('tt')) return false;
+                          const normName = String(m.name || '')
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '');
+                          return normName === normTarget;
+                        });
+                      if (bestMeta?.id) {
+                        applyCinemetaEnrichment(bestMeta.id);
+                      }
+                    }
+                  )
+                  .catch(() => {});
+              }
 
               if (isLocalHomeServer()) {
                 setIsFileListStreamLoading(true);
@@ -7038,13 +7423,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   type: activeVodItem.type,
                   s: String(selectedSeason),
                   e: String(selectedEpisode),
-                  imdb: resolvedTt,
-                  q:
-                    kpData.nameOriginal ||
-                    kpData.nameEn ||
-                    activeVodItem.name ||
-                    '',
+                  q: resolvedLatinTitle || activeVodItem.name || '',
                 });
+                if (resolvedTt) {
+                  extraFlParams.set('imdb', resolvedTt);
+                }
                 if (userSelectedFlTorrentIdRef.current) {
                   extraFlParams.set(
                     'id',
@@ -7087,7 +7470,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       syncPreferredVodServer();
                     }
                   })
-                  .catch(() => {})
+                  .catch(() => { })
                   .finally(() => {
                     if (!cancelled) setIsFileListStreamLoading(false);
                   });
@@ -7095,9 +7478,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
               if (tvSettings.defaultSubLang !== 'off') {
                 autoResolveAndFetchBestRoRuSubtitle({
-                  imdbId: resolvedTt,
-                  title: activeVodItem.name,
-                  nameOriginal: kpData.nameOriginal || kpData.nameEn,
+                  imdbId: resolvedTt || undefined,
+                  title: resolvedLatinTitle || activeVodItem.name,
+                  nameOriginal: resolvedLatinTitle || undefined,
                   type: activeVodItem.type,
                   season: selectedSeason,
                   episode: selectedEpisode,
@@ -7222,14 +7605,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         .catch(() => { });
     }
 
-    resolveDirectVodStreamClient({
+        resolveDirectVodStreamClient({
       imdb,
       kp,
-      title: activeVodItem.name,
+      title: activeVodItem.nameOriginal || activeVodItem.name,
       type: activeVodItem.type,
       year: (activeVodItem.releaseInfo || '').slice(0, 4),
       season: selectedSeason,
       episode: selectedEpisode,
+      ru: isForeignVod ? '0' : '1',
     })
       .then((data) => {
         if (
@@ -7285,12 +7669,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           directResolvedOk && isVkDirectSourcePath(mergedData.sourcePath)
         );
 
+        const audioPrefForItem: AudioTrackPreference = isForeignVod
+          ? tvSettings.defaultAudioPref === 'ro'
+            ? 'ro'
+            : 'original'
+          : tvSettings.defaultAudioPref;
         const prefTrackIdx = directResolvedOk
           ? resolveAudioTrackIndexByPreference(
               data.audioNames || [],
-              tvSettings.defaultAudioPref
+              audioPrefForItem
             )
           : undefined;
+        if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
+          setSelectedAudioTrackIdx((prevIdx) =>
+            prevIdx >= 0 ? prevIdx : prefTrackIdx
+          );
+        }
         syncPreferredVodServer(prefTrackIdx);
       })
       .catch(() => {
@@ -7299,7 +7693,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           directIsVk = false;
           const keptSeasons =
             cachedSeriesSeasonsRef.current.itemKey === itemKey &&
-            cachedSeriesSeasonsRef.current.seasons.length > 0
+              cachedSeriesSeasonsRef.current.seasons.length > 0
               ? cachedSeriesSeasonsRef.current.seasons
               : undefined;
           setResolvedDirectStream({
@@ -7318,15 +7712,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const isRuVod = !isForeignVod || isRussianVodItem(activeVodItem);
       const rawFlQuery = isRuVod
         ? activeVodItem.name ||
-          detailedMeta?.name ||
-          detailedMeta?.nameOriginal ||
-          activeVodItem.nameOriginal ||
-          ''
+        detailedMeta?.name ||
+        detailedMeta?.nameOriginal ||
+        activeVodItem.nameOriginal ||
+        ''
         : detailedMeta?.nameOriginal ||
-          activeVodItem.nameOriginal ||
-          detailedMeta?.name ||
-          activeVodItem.name ||
-          '';
+        activeVodItem.nameOriginal ||
+        detailedMeta?.name ||
+        activeVodItem.name ||
+        '';
       const isPureCyrillicQuery =
         /[а-яА-ЯёЁ]/.test(rawFlQuery) && !/[a-zA-Z]/.test(rawFlQuery);
       if (
@@ -7336,81 +7730,84 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         !activeVodItem.flTorrentId &&
         !userSelectedFlTorrentIdRef.current
       ) {
-        // Wait for useEffect #1 / detailedMeta to resolve the Latin title or IMDb ID for foreign VOD
-        return () => {
-          cancelled = true;
-        };
-      }
-      setIsFileListStreamLoading(true);
-      const cleanFlQuery =
-        activeVodItem.type === 'series'
-          ? rawFlQuery
-            .replace(/\s*\([^)]*\)\s*/gi, ' ')
-            .replace(/•.*$/g, ' ')
-            .replace(/\bS\d{1,2}[.\s_-]*E\d{1,2}\b/gi, ' ')
-            .replace(/[.\s-]*Сезон\s*\d+\.?/gi, ' ')
-            .replace(/\s{2,}/g, ' ')
-            .trim() || rawFlQuery
-          : rawFlQuery;
-      const flParams = new URLSearchParams({
-        type: activeVodItem.type,
-        s: String(selectedSeason),
-        e: String(selectedEpisode),
-        q: cleanFlQuery,
-        ru: isRuVod ? '1' : '0',
-      });
-      if (userSelectedFlTorrentIdRef.current) {
-        flParams.set('id', String(userSelectedFlTorrentIdRef.current));
-        flParams.set('strictId', '1');
-      } else if (
-        activeVodItem.flTorrentId &&
-        (activeVodItem.type !== 'series' || activeVodItem.flTorrentId < 0)
-      ) {
-        flParams.set('id', String(activeVodItem.flTorrentId));
-      }
-      if (imdb) {
-        flParams.set('imdb', imdb);
-      }
-
-      fetch(buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`))
-        .then((r) => (r.ok ? r.json() : { ok: false }))
-        .then((rawFlData: ResolvedFileListStream) => {
-          const flData = normalizeFileListResolveData(rawFlData);
-          if (cancelled) return;
+        // Wait for kpData / detailedMeta enrichment above to resolve the Latin title or IMDb ID for foreign VOD
+        if (!kp) {
           flFinished = true;
-          flResolvedOk = Boolean(flData?.ok);
-          setResolvedFileListStream((prev) => {
-            if (
-              userSelectedFlTorrentIdRef.current &&
-              prev?.ok &&
-              prev.torrentId === userSelectedFlTorrentIdRef.current &&
-              flData?.torrentId !== userSelectedFlTorrentIdRef.current
-            ) {
-              return prev;
-            }
-            return !flData?.ok && prev?.ok && prev.streamUrl ? prev : flData;
-          });
-          if (userSelectedFlTorrentIdRef.current !== null && flData?.ok) {
-            setActiveServer('filelist_torrent');
-          } else {
-            syncPreferredVodServer();
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
+          setIsFileListStreamLoading(false);
+          syncPreferredVodServer();
+        }
+      } else {
+        setIsFileListStreamLoading(true);
+        const cleanFlQuery =
+          activeVodItem.type === 'series'
+            ? rawFlQuery
+              .replace(/\s*\([^)]*\)\s*/gi, ' ')
+              .replace(/•.*$/g, ' ')
+              .replace(/\bS\d{1,2}[.\s_-]*E\d{1,2}\b/gi, ' ')
+              .replace(/[.\s-]*Сезон\s*\d+\.?/gi, ' ')
+              .replace(/\s{2,}/g, ' ')
+              .trim() || rawFlQuery
+            : rawFlQuery;
+        const flParams = new URLSearchParams({
+          type: activeVodItem.type,
+          s: String(selectedSeason),
+          e: String(selectedEpisode),
+          q: cleanFlQuery,
+          ru: isRuVod ? '1' : '0',
+        });
+        if (userSelectedFlTorrentIdRef.current) {
+          flParams.set('id', String(userSelectedFlTorrentIdRef.current));
+          flParams.set('strictId', '1');
+        } else if (
+          activeVodItem.flTorrentId &&
+          (activeVodItem.type !== 'series' || activeVodItem.flTorrentId < 0)
+        ) {
+          flParams.set('id', String(activeVodItem.flTorrentId));
+        }
+        if (imdb) {
+          flParams.set('imdb', imdb);
+        }
+
+        fetch(buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`))
+          .then((r) => (r.ok ? r.json() : { ok: false }))
+          .then((rawFlData: ResolvedFileListStream) => {
+            const flData = normalizeFileListResolveData(rawFlData);
+            if (cancelled) return;
             flFinished = true;
-            flResolvedOk = false;
-            if (!userSelectedFlTorrentIdRef.current) {
-              setResolvedFileListStream({ ok: false });
+            flResolvedOk = Boolean(flData?.ok);
+            setResolvedFileListStream((prev) => {
+              if (
+                userSelectedFlTorrentIdRef.current &&
+                prev?.ok &&
+                prev.torrentId === userSelectedFlTorrentIdRef.current &&
+                flData?.torrentId !== userSelectedFlTorrentIdRef.current
+              ) {
+                return prev;
+              }
+              return !flData?.ok && prev?.ok && prev.streamUrl ? prev : flData;
+            });
+            if (userSelectedFlTorrentIdRef.current !== null && flData?.ok) {
+              setActiveServer('filelist_torrent');
+            } else {
               syncPreferredVodServer();
             }
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setIsFileListStreamLoading(false);
-          }
-        });
+          })
+          .catch(() => {
+            if (!cancelled) {
+              flFinished = true;
+              flResolvedOk = false;
+              if (!userSelectedFlTorrentIdRef.current) {
+                setResolvedFileListStream({ ok: false });
+                syncPreferredVodServer();
+              }
+            }
+          })
+          .finally(() => {
+            if (!cancelled) {
+              setIsFileListStreamLoading(false);
+            }
+          });
+      }
     } else {
       userSelectedFlTorrentIdRef.current = null;
       setIsFileListStreamLoading(false);
@@ -7432,6 +7829,67 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     tvSettings.defaultVodServer,
     uiLang,
     localBridgeTick,
+  ]);
+
+  // Auto-clamp stale/polluted saved season or episode numbers on series (e.g. bogus S2:E6 on a 1-season series)
+  useEffect(() => {
+    if (!activeVodItem || activeVodItem.type !== 'series') return;
+    if (isRussianTvShowItem(activeVodItem)) return;
+    if (isFileListStreamLoading) return;
+    if (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl) return;
+
+    const metaVideos = Array.isArray(detailedMeta?.videos)
+      ? detailedMeta.videos.filter((v) => Number(v.season) > 0)
+      : [];
+    const directSeasons = Array.isArray(resolvedDirectStream?.seasons)
+      ? resolvedDirectStream.seasons.filter((s) => Number(s.season) > 0)
+      : [];
+
+    const validSeasons =
+      metaVideos.length > 0
+        ? Array.from(new Set(metaVideos.map((v) => Number(v.season)))).sort(
+            (a, b) => a - b
+          )
+        : directSeasons.length > 0
+          ? Array.from(
+              new Set(directSeasons.map((s) => Number(s.season)))
+            ).sort((a, b) => a - b)
+          : [];
+
+    if (validSeasons.length === 0) return;
+
+    if (!validSeasons.includes(selectedSeason)) {
+      setSelectedSeason(validSeasons[0]);
+      setSelectedEpisode(1);
+      return;
+    }
+
+    const validEpisodes =
+      metaVideos.length > 0
+        ? metaVideos
+            .filter((v) => Number(v.season) === selectedSeason && Number(v.episode) > 0)
+            .map((v) => Number(v.episode))
+            .sort((a, b) => a - b)
+        : (
+            directSeasons.find((s) => Number(s.season) === selectedSeason)
+              ?.episodes || []
+          )
+            .map((ep) => Number(ep.episode))
+            .filter((n) => n > 0)
+            .sort((a, b) => a - b);
+
+    if (validEpisodes.length > 0 && !validEpisodes.includes(selectedEpisode)) {
+      setSelectedEpisode(validEpisodes[0] || 1);
+    }
+  }, [
+    activeVodItem,
+    detailedMeta?.videos,
+    resolvedDirectStream?.seasons,
+    resolvedFileListStream?.ok,
+    resolvedFileListStream?.streamUrl,
+    isFileListStreamLoading,
+    selectedSeason,
+    selectedEpisode,
   ]);
 
   // Automatically translate movie/series description & country into the selected UI language (RO / EN / RU)
@@ -7538,15 +7996,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
       if (autoPlay) {
         if (tvSettings.autoFullscreenOnPlay && !isMobilePhone) {
-          requestTvFullscreen();
+          ensureTvFullscreen();
         }
+        if (osdTimerRef.current) {
+          window.clearTimeout(osdTimerRef.current);
+          osdTimerRef.current = null;
+        }
+        setIsVodOsdVisible(false);
         setIsPlayingVod(true);
       }
       const resolvedImdb = activeVodItem.id.startsWith('tt')
         ? activeVodItem.id
         : detailedMeta?.imdbId ||
-          resolvedFileListStream?.selectedTorrent?.imdbId ||
-          '';
+        resolvedFileListStream?.selectedTorrent?.imdbId ||
+        '';
       const p = new URLSearchParams({
         id: String(torrentId),
         strictId: '1',
@@ -7616,7 +8079,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       selectedSeason,
       selectedEpisode,
       tvSettings.autoFullscreenOnPlay,
-      requestTvFullscreen,
+      ensureTvFullscreen,
       isMobilePhone,
       section,
     ]
@@ -7634,10 +8097,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setResolvedDirectStream((prev) =>
             prev
               ? {
-                  ...prev,
-                  hlsUrl: q.url,
-                  sourcePath: `Klubnichka 18+ • ${q.label}`,
-                }
+                ...prev,
+                hlsUrl: q.url,
+                sourcePath: `Klubnichka 18+ • ${q.label}`,
+              }
               : prev
           );
         },
@@ -7683,10 +8146,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setResolvedDirectStream((prev) =>
             prev
               ? {
-                  ...prev,
-                  hlsUrl: q.url,
-                  sourcePath: `VK Видео Direct (${q.label})`,
-                }
+                ...prev,
+                hlsUrl: q.url,
+                sourcePath: `VK Видео Direct (${q.label})`,
+              }
               : prev
           );
         },
@@ -7796,17 +8259,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const rawKpNum = Number(
       activeVodItem?.kpId ||
-        detailedMeta?.kpId ||
-        (activeVodItem?.id.startsWith('kp_')
-          ? activeVodItem.id.replace(/^kp_/, '')
-          : 0)
+      detailedMeta?.kpId ||
+      (activeVodItem?.id.startsWith('kp_')
+        ? activeVodItem.id.replace(/^kp_/, '')
+        : 0)
     );
     const isSyntheticVkShow =
       (rawKpNum >= 9001000 && rawKpNum <= 9001999) ||
       Boolean(
         activeVodItem?.id.startsWith('iedem_') &&
-          resolvedDirectStream?.seasons &&
-          resolvedDirectStream.seasons.length > 0
+        resolvedDirectStream?.seasons &&
+        resolvedDirectStream.seasons.length > 0
       );
     const metaVideos = isSyntheticVkShow ? [] : detailedMeta?.videos || [];
     const metaVideoMap = new Map<string, SeriesEpisode>();
@@ -7838,13 +8301,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             const directCleanName = cleanEpisodeTitle(ep.title, ep.episode);
             const hasRichDirectRuTitle = Boolean(
               isRuSeriesForMeta &&
-                directCleanName &&
-                !/^(?:Episodul|Episode|Серия|Выпуск)\s*\d+$/i.test(
-                  directCleanName
-                ) &&
-                !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(
-                  String(ep.title || '')
-                )
+              directCleanName &&
+              !/^(?:Episodul|Episode|Серия|Выпуск)\s*\d+$/i.test(
+                directCleanName
+              ) &&
+              !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(
+                String(ep.title || '')
+              )
             );
             return {
               ...metaEp,
@@ -7871,10 +8334,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const metaCleanName = cleanEpisodeTitle(v.name, epNum);
       const keepPrevRuTitle = Boolean(
         isRuSeriesForMeta &&
-          directProvidedSeasons.has(sNum) &&
-          prevEp?.name &&
-          /[а-яёА-ЯЁ]/.test(prevEp.name) &&
-          !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(prevEp.name)
+        directProvidedSeasons.has(sNum) &&
+        prevEp?.name &&
+        /[а-яёА-ЯЁ]/.test(prevEp.name) &&
+        !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(prevEp.name)
       );
       const enriched: SeriesEpisode = {
         ...v,
@@ -8348,15 +8811,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const epKey = `S${season}E${episode}`;
       const detailMatch =
         detailedMeta &&
-        (detailedMeta.id === item.id || activeVodItem?.id === item.id)
+          (detailedMeta.id === item.id || activeVodItem?.id === item.id)
           ? {
-              name: detailedMeta.name || item.name,
-              nameOriginal: detailedMeta.nameOriginal || item.nameOriginal,
-              poster: detailedMeta.poster || item.poster,
-              background: detailedMeta.background || item.background,
-              imdbRating: detailedMeta.imdbRating || item.imdbRating,
-              imdbId: detailedMeta.imdbId || item.imdbId,
-            }
+            name: detailedMeta.name || item.name,
+            nameOriginal: detailedMeta.nameOriginal || item.nameOriginal,
+            poster: detailedMeta.poster || item.poster,
+            background: detailedMeta.background || item.background,
+            imdbRating: detailedMeta.imdbRating || item.imdbRating,
+            imdbId: detailedMeta.imdbId || item.imdbId,
+          }
           : {};
       const mergedItem: CinemetaItem = {
         ...existing?.item,
@@ -8514,9 +8977,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           const mergedEpMap = vCleared
             ? {}
             : {
-                ...(existing?.episodeProgressMap || {}),
-                ...(v.episodeProgressMap || {}),
-              };
+              ...(existing?.episodeProgressMap || {}),
+              ...(v.episodeProgressMap || {}),
+            };
           if (
             !vCleared &&
             existing?.episodeProgressMap &&
@@ -8539,7 +9002,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               : v.deviceName,
             server:
               !localFl &&
-              (v.server === 'filelist_torrent' || v.server === 'vidspark')
+                (v.server === 'filelist_torrent' || v.server === 'vidspark')
                 ? 'kinogram_hls'
                 : v.server,
             episodeProgressMap: mergedEpMap,
@@ -8548,7 +9011,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             !existing ||
             (cleanEntry.updatedAt || 0) > (existing.updatedAt || 0) ||
             Object.keys(mergedEpMap).length >
-              Object.keys(existing.episodeProgressMap || {}).length ||
+            Object.keys(existing.episodeProgressMap || {}).length ||
             existing.deviceName !== sanitizeDeviceName(existing.deviceName)
           ) {
             merged[k] =
@@ -8599,10 +9062,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             })
               .then((cr) => (cr.ok ? cr.json() : null))
               .then((cloudRemote) => applyRemoteProgress(cloudRemote))
-              .catch(() => {});
+              .catch(() => { });
           }
         })
-        .catch(() => {});
+        .catch(() => { });
 
       const localSaved = loadSavedVodItems(activeProfileId);
       fetch(`/api/tv-saved?profileId=${cleanProf}`, {
@@ -8639,9 +9102,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             });
           }
         })
-        .catch(() => {});
+        .catch(() => { });
+
+      void syncRadioFavoritesWithServer(activeProfileId);
     };
 
+    switchRadioFavoritesProfile(activeProfileId);
     syncProgressAndSaved();
     const intervalMs = isLocalHomeServer() ? 10000 : 20000;
     const timer = window.setInterval(syncProgressAndSaved, intervalMs);
@@ -8657,7 +9123,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [activeProfileId, section === 'history' || section === 'saved' || section === 'home']);
+  }, [
+    activeProfileId,
+    section === 'history' ||
+      section === 'saved' ||
+      section === 'home' ||
+      section === 'radio',
+    switchRadioFavoritesProfile,
+    syncRadioFavoritesWithServer,
+  ]);
 
   // Handle cross-device handoff URL parameters (?profile=...&resume=tt...&s=...&e=...&t=...)
   const handledUrlResumeRef = useRef<boolean>(false);
@@ -8760,15 +9234,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       historyList.length > 0
         ? historyList
         : Object.values(watchProgressMapRef.current)
-            .filter(
-              (e) =>
-                e &&
-                e.item &&
-                (e.currentTime > 0 ||
-                  (e.episodeProgressMap &&
-                    Object.keys(e.episodeProgressMap).length > 0))
-            )
-            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+          .filter(
+            (e) =>
+              e &&
+              e.item &&
+              (e.currentTime > 0 ||
+                (e.episodeProgressMap &&
+                  Object.keys(e.episodeProgressMap).length > 0))
+          )
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const latestEntry = fallbackHistory[0];
     if (!latestEntry?.item) {
       return false;
@@ -9077,7 +9551,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 });
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
 
       if (id.startsWith('tt')) {
@@ -9119,12 +9593,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   item:
                     uiLang !== 'ru' && meta.name
                       ? {
-                          ...cur.item,
-                          name: meta.name || cur.item.name,
-                          poster: meta.poster || cur.item.poster,
-                          background: meta.background || cur.item.background,
-                          imdbRating: meta.imdbRating || cur.item.imdbRating,
-                        }
+                        ...cur.item,
+                        name: meta.name || cur.item.name,
+                        poster: meta.poster || cur.item.poster,
+                        background: meta.background || cur.item.background,
+                        imdbRating: meta.imdbRating || cur.item.imdbRating,
+                      }
                       : cur.item,
                   totalEpisodesInSeason:
                     epCount > 0 ? epCount : cur.totalEpisodesInSeason,
@@ -9266,439 +9740,608 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }`}
         >
           <div className="h-14 sm:h-16 px-3 sm:px-7 w-full flex items-center justify-between gap-2 sm:gap-4">
-          {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
-          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
-            {activeVodItem && (
+            {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
+            <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
+              {activeVodItem && (
+                <button
+                  type="button"
+                  aria-label={tr(
+                    'Înapoi la catalog',
+                    'Back to catalog',
+                    'Назад к списку'
+                  )}
+                  title={tr(
+                    'Înapoi la catalog',
+                    'Back to catalog',
+                    'Назад к списку'
+                  )}
+                  onClick={() => {
+                    setIsPlayingVod(false);
+                    setIsInfoSheetOpen(false);
+                    setActiveVodItem(null);
+                    if (
+                      !isCarMode &&
+                      (typeof window === 'undefined' || window.innerWidth >= 768)
+                    ) {
+                      setIsSidebarOpen(true);
+                    }
+                  }}
+                  className="w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-zinc-100 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] transition-colors cursor-pointer shrink-0"
+                >
+                  <ChevronLeft className="w-6 h-6 sm:w-7 sm:h-7 stroke-[2.4]" aria-hidden="true" />
+                </button>
+              )}
               <button
                 type="button"
-                aria-label={tr(
-                  'Înapoi la catalog',
-                  'Back to catalog',
-                  'Назад к списку'
-                )}
-                title={tr(
-                  'Înapoi la catalog',
-                  'Back to catalog',
-                  'Назад к списку'
-                )}
+                data-header-sidebar-btn="true"
+                aria-label={tr('Meniu Lateral', 'Sidebar Menu', 'Боковое меню')}
+                aria-expanded={isSidebarOpen}
                 onClick={() => {
-                  setIsPlayingVod(false);
-                  setIsInfoSheetOpen(false);
-                  setActiveVodItem(null);
-                  if (typeof window === 'undefined' || window.innerWidth >= 768) {
-                    setIsSidebarOpen(true);
-                  }
+                  setIsSidebarOpen((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      window.setTimeout(() => {
+                        const firstNav =
+                          rootContainerRef.current?.querySelector<HTMLElement>(
+                            'aside [data-sidebar-active="true"]'
+                          ) ||
+                          rootContainerRef.current?.querySelector<HTMLElement>(
+                            'aside button'
+                          );
+                        firstNav?.focus();
+                      }, 50);
+                    }
+                    return next;
+                  });
                 }}
-                className="w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-zinc-100 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] transition-colors cursor-pointer shrink-0"
+                title={tr('Meniu Lateral ()', 'Sidebar Menu ()', 'Меню ()')}
+                className={`w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${isSidebarOpen && activeVodItem
+                  ? 'bg-white text-[#141414]'
+                  : 'text-zinc-200 hover:bg-white/10 focus:bg-white focus:text-zinc-950'
+                  }`}
               >
-                <ChevronLeft className="w-6 h-6 sm:w-7 sm:h-7 stroke-[2.4]" aria-hidden="true" />
+                <Menu className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" aria-hidden="true" />
               </button>
-            )}
-            <button
-              type="button"
-              data-header-sidebar-btn="true"
-              aria-label={tr('Meniu Lateral', 'Sidebar Menu', 'Боковое меню')}
-              aria-expanded={isSidebarOpen}
-              onClick={() => {
-                setIsSidebarOpen((prev) => {
-                  const next = !prev;
-                  if (next) {
-                    window.setTimeout(() => {
-                      const firstNav =
-                        rootContainerRef.current?.querySelector<HTMLElement>(
-                          'aside [data-sidebar-active="true"]'
-                        ) ||
-                        rootContainerRef.current?.querySelector<HTMLElement>(
-                          'aside button'
-                        );
-                      firstNav?.focus();
-                    }, 50);
-                  }
-                  return next;
-                });
-              }}
-              title={tr('Meniu Lateral ()', 'Sidebar Menu ()', 'Меню ()')}
-              className={`w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${isSidebarOpen && activeVodItem
-                ? 'bg-white text-[#141414]'
-                : 'text-zinc-200 hover:bg-white/10 focus:bg-white focus:text-zinc-950'
-                }`}
-            >
-              <Menu className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" aria-hidden="true" />
-            </button>
 
-            <SmartCinemaLogo size="md" className="ml-0.5 sm:ml-1 shrink-0" />
-          </div>
+              <SmartCinemaLogo size="md" className="ml-0.5 sm:ml-1 shrink-0" />
+              {isCarMode && (
+                <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/25 border border-blue-400/50 text-[10px] font-black tracking-wider uppercase text-blue-300 shrink-0">
+                  <Car className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  <span>GLE 8:3</span>
+                </span>
+              )}
+            </div>
 
-          {/* Right: Lampa Utility Icons + Clock + 2-Line Date */}
-          <div className="flex items-center gap-1.5 sm:gap-3.5 shrink-0">
-            {currentStation && (
-              <div className="inline-flex items-center rounded-full bg-blue-500/20 border border-blue-500/40 overflow-hidden shadow">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveVodItem(null);
-                    setIsTvRadioPlayerOpen(false);
-                    setSection('radio');
-                    rootContainerRef.current
-                      ?.querySelector('main')
-                      ?.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  title={tr(
-                    'Deschide Playerul Radio cu Poză & Info Piesă',
-                    'Open Radio Player with Artwork & Track Info',
-                    'Открыть радиоплеер с обложкой и треком'
-                  )}
-                  className="h-8 pl-2 pr-2 sm:pr-2.5 text-blue-300 hover:bg-blue-500/30 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-bold inline-flex items-center gap-1.5 sm:gap-2 transition-colors cursor-pointer"
-                >
-                  {activeRadioTrack?.coverUrl ? (
-                    <img
-                      src={activeRadioTrack.coverUrl}
-                      alt=""
-                      className="w-5 h-5 rounded-full object-cover shrink-0 border border-white/20"
-                    />
-                  ) : (
-                    <Volume2
-                      className={`w-3.5 h-3.5 shrink-0 ${playerStatus === 'playing' ? 'animate-pulse' : ''
+            {/* Mercedes-Benz GLE 2022 1920x720 (8:3) Driver-Safe Quick-Nav Cockpit Bar */}
+            {isCarMode && (
+              <nav
+                data-car-cockpit-nav="true"
+                aria-label={tr(
+                  'Navigare Rapidă Mod Auto',
+                  'Car Mode Quick Navigation',
+                  'Быстрая навигация Авто'
+                )}
+                className="hidden lg:flex items-center gap-1.5 overflow-x-auto no-scrollbar px-1"
+              >
+                {(
+                  [
+                    {
+                      id: 'home',
+                      label: tr('Acasă', 'Home', 'Главная'),
+                      Icon: Home,
+                    },
+                    {
+                      id: 'radio',
+                      label: tr('Radio', 'Radio', 'Радио'),
+                      Icon: Radio,
+                    },
+                    {
+                      id: 'music',
+                      label: tr('Muzică', 'Music', 'Музыка'),
+                      Icon: Music,
+                    },
+                    {
+                      id: 'tv',
+                      label: tr('TV Live', 'TV Live', 'ТВ'),
+                      Icon: Monitor,
+                    },
+                    {
+                      id: 'movies',
+                      label: tr('Filme', 'Movies', 'Фильмы'),
+                      Icon: Clapperboard,
+                    },
+                    {
+                      id: 'series',
+                      label: tr('Seriale', 'Series', 'Сериалы'),
+                      Icon: Tv,
+                    },
+                  ] as const
+                ).map(({ id, label, Icon }) => {
+                  const isActive = section === id && !activeVodItem;
+                  return (
+                    <button
+                      key={`car_nav_${id}`}
+                      type="button"
+                      data-car-nav-id={id}
+                      onClick={() => {
+                        setActiveVodItem(null);
+                        setIsSidebarOpen(false);
+                        setIsFilterDrawerOpen(false);
+                        setIsCatalogDrawerOpen(false);
+                        setSection(id);
+                        const mainEl =
+                          rootContainerRef.current?.querySelector<HTMLElement>(
+                            'main'
+                          );
+                        if (mainEl) {
+                          mainEl.scrollTop = 0;
+                        }
+                        if (id === 'tv') {
+                          setTvRegionId(
+                            favoriteTvChannels.length > 0 ? 'FAV' : 'RO'
+                          );
+                          setTvCategoryId('ALL');
+                        } else if (id === 'radio') {
+                          setRadioCountry(favorites.length > 0 ? 'FAV' : 'RO');
+                        }
+                      }}
+                      className={`min-h-[44px] px-3.5 rounded-full text-xs xl:text-sm font-extrabold inline-flex items-center gap-2 transition-all shrink-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-sky-400 ${isActive
+                        ? 'bg-white text-[#141414] shadow-lg'
+                        : 'bg-white/[0.08] text-zinc-200 hover:bg-white/15 hover:text-white border border-white/10'
                         }`}
-                    />
-                  )}
-                  <span className="hidden sm:inline max-w-[190px] truncate">
-                    {activeRadioTrack
-                      ? `${currentStation.name} • ${activeRadioTrack.artist
-                        ? `${activeRadioTrack.artist} - ${activeRadioTrack.title}`
-                        : activeRadioTrack.title
-                      }`
-                      : currentStation.name}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => playStation(currentStation)}
-                  title={
-                    playerStatus === 'playing' || playerStatus === 'loading'
-                      ? tr('Pauză Radio', 'Pause Radio', 'Пауза радио')
-                      : tr('Redă Radio', 'Play Radio', 'Включить радио')
-                  }
-                  className="h-8 px-2 sm:px-2.5 border-l border-blue-500/30 text-blue-300 hover:bg-blue-400 hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
-                >
-                  {playerStatus === 'loading' ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : playerStatus === 'playing' ? (
-                    <Pause className="w-3.5 h-3.5 fill-current" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopRadio();
-                    setIsTvRadioPlayerOpen(false);
-                  }}
-                  title={tr(
-                    'Oprește Radio și închide',
-                    'Stop Radio and close',
-                    'Остановить радио и закрыть'
-                  )}
-                  className="h-8 px-2 sm:px-2.5 border-l border-blue-500/30 text-rose-300 hover:bg-rose-500 hover:text-white focus:bg-rose-500 focus:text-white focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
+                    >
+                      <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </nav>
             )}
 
-            {!currentStation && currentMusicTrack && (
-              <div
-                className={`${section === 'music' && !activeVodItem
+            {/* Right: Lampa Utility Icons + Clock + 2-Line Date */}
+            <div className="flex items-center gap-1.5 sm:gap-3.5 shrink-0">
+              {currentStation && (
+                <div className="inline-flex items-center rounded-full bg-blue-500/20 border border-blue-500/40 overflow-hidden shadow">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVodItem(null);
+                      setIsTvRadioPlayerOpen(false);
+                      setSection('radio');
+                      rootContainerRef.current
+                        ?.querySelector('main')
+                        ?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    title={tr(
+                      'Deschide Playerul Radio cu Poză & Info Piesă',
+                      'Open Radio Player with Artwork & Track Info',
+                      'Открыть радиоплеер с обложкой и треком'
+                    )}
+                    className="h-8 pl-2 pr-2 sm:pr-2.5 text-blue-300 hover:bg-blue-500/30 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-bold inline-flex items-center gap-1.5 sm:gap-2 transition-colors cursor-pointer"
+                  >
+                    {activeRadioTrack?.coverUrl ? (
+                      <img
+                        src={activeRadioTrack.coverUrl}
+                        alt=""
+                        className="w-5 h-5 rounded-full object-cover shrink-0 border border-white/20"
+                      />
+                    ) : (
+                      <Volume2
+                        className={`w-3.5 h-3.5 shrink-0 ${playerStatus === 'playing' ? 'animate-pulse' : ''
+                          }`}
+                      />
+                    )}
+                    <span className="hidden sm:inline max-w-[190px] truncate">
+                      {activeRadioTrack
+                        ? `${currentStation.name} • ${activeRadioTrack.artist
+                          ? `${activeRadioTrack.artist} - ${activeRadioTrack.title}`
+                          : activeRadioTrack.title
+                        }`
+                        : currentStation.name}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => playStation(currentStation)}
+                    title={
+                      playerStatus === 'playing' || playerStatus === 'loading'
+                        ? tr('Pauză Radio', 'Pause Radio', 'Пауза радио')
+                        : tr('Redă Radio', 'Play Radio', 'Включить радио')
+                    }
+                    className="h-8 px-2 sm:px-2.5 border-l border-blue-500/30 text-blue-300 hover:bg-blue-400 hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    {playerStatus === 'loading' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : playerStatus === 'playing' ? (
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopRadio();
+                      setIsTvRadioPlayerOpen(false);
+                    }}
+                    title={tr(
+                      'Oprește Radio și închide',
+                      'Stop Radio and close',
+                      'Остановить радио и закрыть'
+                    )}
+                    className="h-8 px-2 sm:px-2.5 border-l border-blue-500/30 text-rose-300 hover:bg-rose-500 hover:text-white focus:bg-rose-500 focus:text-white focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {!currentStation && currentMusicTrack && (
+                <div
+                  className={`${section === 'music' && !activeVodItem
                     ? 'hidden sm:inline-flex'
                     : 'inline-flex'
-                  } items-center rounded-full bg-[#2563eb]/20 border border-[#60a5fa]/45 overflow-hidden shadow`}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveVodItem(null);
-                    setSection('music');
-                    rootContainerRef.current
-                      ?.querySelector('main')
-                      ?.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  title={tr(
-                    'Deschide Spotify Music Player',
-                    'Open Spotify Music Player',
-                    'Открыть Spotify Музыку'
-                  )}
-                  className="h-8 pl-2 pr-2 sm:pr-2.5 text-[#60a5fa] hover:bg-[#2563eb]/30 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-bold inline-flex items-center gap-1.5 sm:gap-2 transition-colors cursor-pointer"
+                    } items-center rounded-full bg-[#2563eb]/20 border border-[#60a5fa]/45 overflow-hidden shadow`}
                 >
-                  <img
-                    src={currentMusicTrack.coverSmall || currentMusicTrack.cover}
-                    alt=""
-                    className={`w-5 h-5 rounded-full object-cover shrink-0 border border-[#60a5fa]/40 ${isMusicPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
-                      }`}
-                  />
-                  <span className="hidden sm:inline max-w-[180px] truncate">
-                    {currentMusicTrack.artist} — {currentMusicTrack.title}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleToggleMusicPlayPause}
-                  title={
-                    isMusicPlaying
-                      ? tr('Pauză Muzică', 'Pause Music', 'Пауза')
-                      : tr('Redă Muzică', 'Play Music', 'Слушать')
-                  }
-                  className="h-8 px-2 sm:px-2.5 border-l border-[#60a5fa]/30 text-[#60a5fa] hover:bg-[#1e3a8a] hover:text-white focus:bg-white focus:text-[#141414] focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
-                >
-                  {isMusicPlaying ? (
-                    <Pause className="w-3.5 h-3.5 fill-current" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNextMusicTrack}
-                  title={tr('Piesa următoare', 'Next track', 'Следующий трек')}
-                  className="hidden sm:inline-flex h-8 px-2 border-l border-[#60a5fa]/30 text-[#60a5fa] hover:bg-[#1e3a8a] hover:text-white focus:bg-white focus:text-[#141414] focus:outline-none items-center justify-center transition-colors cursor-pointer"
-                >
-                  <SkipForward className="w-3.5 h-3.5 fill-current" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleStopAndCloseMusic}
-                  title={tr(
-                    'Oprește Muzica și închide',
-                    'Stop Music and close',
-                    'Остановить музыку и закрыть'
-                  )}
-                  className="h-8 px-2 sm:px-2.5 border-l border-[#60a5fa]/30 text-rose-300 hover:bg-rose-500 hover:text-white focus:bg-rose-500 focus:text-white focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVodItem(null);
+                      setSection('music');
+                      rootContainerRef.current
+                        ?.querySelector('main')
+                        ?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    title={tr(
+                      'Deschide Spotify Music Player',
+                      'Open Spotify Music Player',
+                      'Открыть Spotify Музыку'
+                    )}
+                    className="h-8 pl-2 pr-2 sm:pr-2.5 text-[#60a5fa] hover:bg-[#2563eb]/30 focus:bg-white focus:text-[#141414] focus:outline-none text-xs font-bold inline-flex items-center gap-1.5 sm:gap-2 transition-colors cursor-pointer"
+                  >
+                    <img
+                      src={currentMusicTrack.coverSmall || currentMusicTrack.cover}
+                      alt=""
+                      className={`w-5 h-5 rounded-full object-cover shrink-0 border border-[#60a5fa]/40 ${isMusicPlaying ? 'animate-[spin_6s_linear_infinite]' : ''
+                        }`}
+                    />
+                    <span className="hidden sm:inline max-w-[180px] truncate">
+                      {currentMusicTrack.artist} — {currentMusicTrack.title}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleToggleMusicPlayPause}
+                    title={
+                      isMusicPlaying
+                        ? tr('Pauză Muzică', 'Pause Music', 'Пауза')
+                        : tr('Redă Muzică', 'Play Music', 'Слушать')
+                    }
+                    className="h-8 px-2 sm:px-2.5 border-l border-[#60a5fa]/30 text-[#60a5fa] hover:bg-[#1e3a8a] hover:text-white focus:bg-white focus:text-[#141414] focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    {isMusicPlaying ? (
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNextMusicTrack}
+                    title={tr('Piesa următoare', 'Next track', 'Следующий трек')}
+                    className="hidden sm:inline-flex h-8 px-2 border-l border-[#60a5fa]/30 text-[#60a5fa] hover:bg-[#1e3a8a] hover:text-white focus:bg-white focus:text-[#141414] focus:outline-none items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <SkipForward className="w-3.5 h-3.5 fill-current" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStopAndCloseMusic}
+                    title={tr(
+                      'Oprește Muzica și închide',
+                      'Stop Music and close',
+                      'Остановить музыку и закрыть'
+                    )}
+                    className="h-8 px-2 sm:px-2.5 border-l border-[#60a5fa]/30 text-rose-300 hover:bg-rose-500 hover:text-white focus:bg-rose-500 focus:text-white focus:outline-none inline-flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
-            {/* Search Icon */}
-            <button
-              type="button"
-              data-header-search-btn="true"
-              onClick={() => {
-                if (section === 'uhd_4k' && !activeVodItem) {
-                  const uhdInput = document.querySelector<HTMLInputElement>(
-                    '[data-uhd-search-input="true"]'
-                  );
-                  if (uhdInput) {
-                    uhdInput.focus();
+              {/* Search Icon */}
+              <button
+                type="button"
+                data-header-search-btn="true"
+                onClick={() => {
+                  if (section === 'uhd_4k' && !activeVodItem) {
+                    const uhdInput = document.querySelector<HTMLInputElement>(
+                      '[data-uhd-search-input="true"]'
+                    );
+                    if (uhdInput) {
+                      uhdInput.focus();
+                      return;
+                    }
+                  }
+                  if (section === 'torrents' && !activeVodItem) {
+                    setIsFlKeyboardOpen((prev) => !prev);
                     return;
                   }
-                }
-                if (section === 'torrents' && !activeVodItem) {
-                  setIsFlKeyboardOpen((prev) => !prev);
-                  return;
-                }
-                if (section === 'tv' && !activeVodItem) {
-                  setIsTvKeyboardOpen((prev) => !prev);
-                  window.setTimeout(() => {
-                    tvSearchInputRef.current?.focus();
-                  }, 40);
-                  return;
-                }
-                if (section === 'radio' && !activeVodItem) {
-                  setIsRadioKeyboardOpen((prev) => !prev);
-                  window.setTimeout(() => {
-                    radioSearchInputRef.current?.focus();
-                  }, 40);
-                  return;
-                }
-                setActiveVodItem(null);
-                setSection('search');
-              }}
-              aria-label={tr('Căutare', 'Search', 'Поиск')}
-              title={tr('Căutare', 'Search', 'Поиск')}
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
-            >
-              <Search className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
-            </button>
+                  if (section === 'tv' && !activeVodItem) {
+                    setIsTvKeyboardOpen((prev) => !prev);
+                    window.setTimeout(() => {
+                      tvSearchInputRef.current?.focus();
+                    }, 40);
+                    return;
+                  }
+                  if (section === 'radio' && !activeVodItem) {
+                    setIsRadioKeyboardOpen((prev) => !prev);
+                    window.setTimeout(() => {
+                      radioSearchInputRef.current?.focus();
+                    }, 40);
+                    return;
+                  }
+                  setActiveVodItem(null);
+                  setSection('search');
+                }}
+                aria-label={tr('Căutare', 'Search', 'Поиск')}
+                title={tr('Căutare', 'Search', 'Поиск')}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
+              >
+                <Search className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
+              </button>
 
-            {/* Bell Icon with Red Dot -> Opens New Episodes Calendar */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveVodItem(null);
-                setSection('calendar');
-              }}
-              aria-label={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
-              title={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
-              className="hidden sm:flex relative w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
-            >
-              <Bell className="w-5 h-5" aria-hidden="true" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500" />
-            </button>
+              {/* Bell Icon with Red Dot -> Opens New Episodes Calendar */}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveVodItem(null);
+                  setSection('calendar');
+                }}
+                aria-label={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
+                title={tr('Calendar Episoade Noi (Seriale Favorite)', 'New Episodes Calendar (Favorite Series)', 'Календарь новых серий (Избранное)')}
+                className="hidden sm:flex relative w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
+              >
+                <Bell className="w-5 h-5" aria-hidden="true" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500" />
+              </button>
 
-            {/* 1-Click Cycle Interface Language Switcher (Shows only active language: RO / EN / RU) */}
-            <button
-              type="button"
-              data-header-lang-btn="true"
-              onClick={() => {
-                const order: Array<'ro' | 'en' | 'ru'> = ['ro', 'en', 'ru'];
-                const nextLang =
-                  order[(order.indexOf(uiLang) + 1) % order.length];
-                switchUiLang(nextLang);
-              }}
-              title={tr(
-                `Limbă interfață: ${uiLang.toUpperCase()} (Apasă pentru a schimba RO / EN / RU)`,
-                `Interface Language: ${uiLang.toUpperCase()} (Click to cycle RO / EN / RU)`,
-                `Язык интерфейса: ${uiLang.toUpperCase()} (Нажмите для смены RO / EN / RU)`
-              )}
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-[11px] sm:text-xs font-extrabold tracking-wider text-white transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0"
-            >
-              {uiLang.toUpperCase()}
-            </button>
+              {/* 1-Click Cycle Interface Language Switcher (Shows only active language: RO / EN / RU) */}
+              <button
+                type="button"
+                data-header-lang-btn="true"
+                onClick={() => {
+                  const order: Array<'ro' | 'en' | 'ru'> = ['ro', 'en', 'ru'];
+                  const nextLang =
+                    order[(order.indexOf(uiLang) + 1) % order.length];
+                  switchUiLang(nextLang);
+                }}
+                title={tr(
+                  `Limbă interfață: ${uiLang.toUpperCase()} (Apasă pentru a schimba RO / EN / RU)`,
+                  `Interface Language: ${uiLang.toUpperCase()} (Click to cycle RO / EN / RU)`,
+                  `Язык интерфейса: ${uiLang.toUpperCase()} (Нажмите для смены RO / EN / RU)`
+                )}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center text-[11px] sm:text-xs font-extrabold tracking-wider text-white transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0"
+              >
+                {uiLang.toUpperCase()}
+              </button>
 
-            {/* 1-Click Smart TV Theme Toggle (Icon-only): Cinema Dark vs Ambient Slate (Soft Light for TV) */}
-            <button
-              type="button"
-              data-header-theme-btn="true"
-              onClick={() =>
-                updateTvSetting(
-                  'tvTheme',
-                  tvSettings.tvTheme === 'ambient' ? 'dark' : 'ambient'
-                )
-              }
-              title={
-                tvSettings.tvTheme === 'ambient'
-                  ? tr(
-                    'Temă activă: Deschisă (Ambient Slate TV) — Click pentru Întunecat',
-                    'Active Theme: Ambient Slate TV — Click for Dark Mode',
-                    'Тема: Светлая (Ambient Slate TV) — Нажмите для Темной'
+              {/* 1-Click Smart TV Theme Toggle (Icon-only): Cinema Dark vs Ambient Slate (Soft Light for TV) */}
+              <button
+                type="button"
+                data-header-theme-btn="true"
+                onClick={() =>
+                  updateTvSetting(
+                    'tvTheme',
+                    tvSettings.tvTheme === 'ambient' ? 'dark' : 'ambient'
                   )
-                  : tr(
-                    'Temă activă: Întunecată (Cinema Dark) — Click pentru Deschisă (Ambient TV)',
-                    'Active Theme: Cinema Dark — Click for Ambient Light TV',
-                    'Тема: Темная (Cinema Dark) — Нажмите для Светлой (Ambient TV)'
-                  )
-              }
-              aria-label={tr('Schimbă tema', 'Toggle theme', 'Сменить тему')}
-              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer ${tvSettings.tvTheme === 'ambient'
+                }
+                title={
+                  tvSettings.tvTheme === 'ambient'
+                    ? tr(
+                      'Temă activă: Deschisă (Ambient Slate TV) — Click pentru Întunecat',
+                      'Active Theme: Ambient Slate TV — Click for Dark Mode',
+                      'Тема: Светлая (Ambient Slate TV) — Нажмите для Темной'
+                    )
+                    : tr(
+                      'Temă activă: Întunecată (Cinema Dark) — Click pentru Deschisă (Ambient TV)',
+                      'Active Theme: Cinema Dark — Click for Ambient Light TV',
+                      'Тема: Темная (Cinema Dark) — Нажмите для Светлой (Ambient TV)'
+                    )
+                }
+                aria-label={tr('Schimbă tema', 'Toggle theme', 'Сменить тему')}
+                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full border flex items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer ${tvSettings.tvTheme === 'ambient'
                   ? 'bg-amber-400/20 border-amber-300/50 text-amber-200 hover:bg-amber-400/30 shadow-sm'
                   : 'bg-white/10 border-white/15 text-zinc-300 hover:text-white hover:bg-white/15'
-                }`}
-            >
-              {tvSettings.tvTheme === 'ambient' ? (
-                <Sun className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" aria-hidden="true" />
-              ) : (
-                <Moon className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300 shrink-0" aria-hidden="true" />
-              )}
-            </button>
-
-            {/* Active Profile Avatar-Only Button ("Who's watching? / Conturi & PIN") */}
-            <button
-              type="button"
-              data-header-profile-btn="true"
-              aria-label={tr(
-                `Cont activ: ${activeProfile.name}`,
-                `Active Account: ${activeProfile.name}`,
-                `Аккаунт: ${activeProfile.name}`
-              )}
-              onClick={() => {
-                setIsHandoffModalOpen(true);
-              }}
-              title={tr(
-                `Cont activ: ${activeProfile.name} (Click pentru a schimba sau crea un cont cu Poză & PIN)`,
-                `Active Account: ${activeProfile.name} (Click to switch or create account with Photo & PIN)`,
-                `Аккаунт: ${activeProfile.name} (Нажмите для смены или создания профиля с фото и PIN)`
-              )}
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full p-0.5 bg-white/10 hover:bg-white/25 focus:ring-4 focus:ring-white focus:scale-110 focus:outline-none border border-white/20 flex items-center justify-center transition-all cursor-pointer shrink-0"
-            >
-              <span
-                className={`relative w-full h-full rounded-full bg-gradient-to-br ${activeProfile.avatarBg} flex items-center justify-center text-xs font-black text-white shadow overflow-hidden`}
+                  }`}
               >
-                {activeProfile.avatarUrl ? (
-                  <img
-                    src={activeProfile.avatarUrl}
-                    alt={activeProfile.name}
-                    className="w-full h-full rounded-full object-cover"
-                  />
+                {tvSettings.tvTheme === 'ambient' ? (
+                  <Sun className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 shrink-0" aria-hidden="true" />
                 ) : (
-                  activeProfile.name.slice(0, 1).toUpperCase() || 'E'
+                  <Moon className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300 shrink-0" aria-hidden="true" />
                 )}
-              </span>
-            </button>
+              </button>
 
-            {/* Smart TV Settings Icon (Настройки / Setări Smart TV) */}
-            <button
-              type="button"
-              data-header-settings-btn="true"
-              aria-label={tr('Setări', 'Settings', 'Настройки')}
-              onClick={() => {
-                setIsFilterDrawerOpen(false);
-                setIsCatalogDrawerOpen(false);
-                setSettingsSubMenu(null);
-                setIsSettingsDrawerOpen((prev) => !prev);
-              }}
-              title={tr(
-                'Setări Smart TV (Limbă, Audio, Subtitrări, Calitate)',
-                'Smart TV Settings (Language, Audio, Subtitles, Quality)',
-                'Настройки Smart TV'
+              {/* Active Profile Avatar-Only Button ("Who's watching? / Conturi & PIN") */}
+              <button
+                type="button"
+                data-header-profile-btn="true"
+                aria-label={tr(
+                  `Cont activ: ${activeProfile.name}`,
+                  `Active Account: ${activeProfile.name}`,
+                  `Аккаунт: ${activeProfile.name}`
+                )}
+                onClick={() => {
+                  setIsHandoffModalOpen(true);
+                }}
+                title={tr(
+                  `Cont activ: ${activeProfile.name} (Click pentru a schimba sau crea un cont cu Poză & PIN)`,
+                  `Active Account: ${activeProfile.name} (Click to switch or create account with Photo & PIN)`,
+                  `Аккаунт: ${activeProfile.name} (Нажмите для смены или создания профиля с фото и PIN)`
+                )}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full p-0.5 bg-white/10 hover:bg-white/25 focus:ring-4 focus:ring-white focus:scale-110 focus:outline-none border border-white/20 flex items-center justify-center transition-all cursor-pointer shrink-0"
+              >
+                <span
+                  className={`relative w-full h-full rounded-full bg-gradient-to-br ${activeProfile.avatarBg} flex items-center justify-center text-xs font-black text-white shadow overflow-hidden`}
+                >
+                  {activeProfile.avatarUrl ? (
+                    <img
+                      src={activeProfile.avatarUrl}
+                      alt={activeProfile.name}
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  ) : (
+                    activeProfile.name.slice(0, 1).toUpperCase() || 'E'
+                  )}
+                </span>
+              </button>
+
+              {/* Smart TV Settings Icon (Настройки / Setări Smart TV) */}
+              <button
+                type="button"
+                data-header-settings-btn="true"
+                aria-label={tr('Setări', 'Settings', 'Настройки')}
+                onClick={() => {
+                  setIsFilterDrawerOpen(false);
+                  setIsCatalogDrawerOpen(false);
+                  setSettingsSubMenu(null);
+                  setIsSettingsDrawerOpen((prev) => !prev);
+                }}
+                title={tr(
+                  'Setări Smart TV (Limbă, Audio, Subtitrări, Calitate)',
+                  'Smart TV Settings (Language, Audio, Subtitles, Quality)',
+                  'Настройки Smart TV'
+                )}
+                className={`flex w-8 h-8 sm:w-9 sm:h-9 rounded-full items-center justify-center transition-colors cursor-pointer ${isSettingsDrawerOpen
+                  ? 'bg-white text-[#141414] shadow'
+                  : 'text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none'
+                  }`}
+              >
+                <Settings className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
+              </button>
+
+              {/* Mercedes GLE 1920x720 / CarPlay Ultra-Wide Car Mode Toggle */}
+              <button
+                type="button"
+                data-header-car-mode-btn="true"
+                aria-pressed={isCarMode}
+                aria-label={tr(
+                  isCarMode
+                    ? 'Ieșire din Mod Auto Widescreen (GLE)'
+                    : 'Activează Mod Auto Widescreen (GLE / CarPlay)',
+                  isCarMode
+                    ? 'Exit Car Widescreen Mode'
+                    : 'Enable Car Widescreen Mode',
+                  isCarMode
+                    ? 'Выйти из Авто-режима'
+                    : 'Включить Авто-режим (GLE)'
+                )}
+                title={tr(
+                  isCarMode
+                    ? 'Mod Auto GLE 8:3 Activ (Click pentru mod normal)'
+                    : 'Mod Auto Widescreen GLE 1920×720 / CarPlay (Fără margini)',
+                  isCarMode
+                    ? 'GLE 8:3 Car Mode Active (Click for standard mode)'
+                    : 'GLE 1920×720 Widescreen Car Mode (Edge-to-edge)',
+                  isCarMode
+                    ? 'Авто-режим GLE активен'
+                    : 'Авто-режим GLE 1920×720'
+                )}
+                onClick={handleToggleCarMode}
+                className={`hidden sm:flex ${isCarMode ? 'h-11 px-3 gap-1.5' : 'w-9 h-9'
+                  } rounded-full border items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0 ${isCarMode
+                    ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(37,99,235,0.5)]'
+                    : 'bg-white/10 border-white/15 text-zinc-300 hover:text-white hover:bg-white/15'
+                  }`}
+              >
+                <Car className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" aria-hidden="true" />
+                {isCarMode && (
+                  <span className="text-xs font-extrabold tracking-wide uppercase">
+                    Auto
+                  </span>
+                )}
+              </button>
+
+              {/* Open in Dedicated Full App Window (No Chrome Tabs / Bookmarks Bar) */}
+              {!isStandaloneAppWindow && (
+                <button
+                  type="button"
+                  data-header-app-window-btn="true"
+                  aria-label={tr(
+                    'Deschide în Fereastră Full (fără tab-uri și bare browser)',
+                    'Open in Full App Window (without browser tabs)',
+                    'Открыть в отдельном полном окне'
+                  )}
+                  title={tr(
+                    'Deschide în Fereastră Full separată (fără tab-uri și bara de marcaje Chrome)',
+                    'Open in Separate Full Window (no Chrome tabs/bookmarks)',
+                    'Открыть в полном отдельном окне'
+                  )}
+                  onClick={handleOpenInFullAppWindow}
+                  className="hidden sm:flex w-9 h-9 rounded-full bg-white/10 border border-white/15 items-center justify-center text-sky-300 hover:text-white hover:bg-blue-600 hover:border-blue-400 focus:bg-white focus:text-zinc-950 focus:outline-none transition-all cursor-pointer shrink-0"
+                >
+                  <ExternalLink className="w-4 h-4 sm:w-[18px] sm:h-[18px]" aria-hidden="true" />
+                </button>
               )}
-              className={`flex w-8 h-8 sm:w-9 sm:h-9 rounded-full items-center justify-center transition-colors cursor-pointer ${isSettingsDrawerOpen
-                ? 'bg-white text-[#141414] shadow'
-                : 'text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none'
-                }`}
-            >
-              <Settings className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
-            </button>
 
-            {/* Fullscreen Icon */}
-            <button
-              type="button"
-              aria-label="Ecran Complet TV"
-              onClick={() => {
-                if (
-                  !document.fullscreenElement &&
-                  document.documentElement.requestFullscreen
-                ) {
-                  document.documentElement.requestFullscreen().catch(() => { });
-                } else if (document.exitFullscreen) {
-                  document.exitFullscreen().catch(() => { });
-                }
-              }}
-              title="Ecran Complet TV"
-              className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
-            >
-              <Maximize2 className="w-5 h-5" aria-hidden="true" />
-            </button>
+              {/* Fullscreen Icon (100% Borderless Full Screen) */}
+              <button
+                type="button"
+                data-header-fullscreen-btn="true"
+                aria-pressed={isAppFullscreen}
+                aria-label={tr(
+                  isAppFullscreen ? 'Ieșire din Ecran Complet' : 'Ecran Complet (Full Screen)',
+                  isAppFullscreen ? 'Exit Full Screen' : 'Full Screen',
+                  isAppFullscreen ? 'Выйти из полного экрана' : 'Полный экран'
+                )}
+                onClick={handleToggleBrowserFullscreen}
+                title={tr(
+                  isAppFullscreen
+                    ? 'Ieșire din Ecran Complet (Esc)'
+                    : 'Ecran Complet 100% pe tot monitorul (Full Screen)',
+                  isAppFullscreen ? 'Exit Full Screen (Esc)' : '100% Full Screen',
+                  isAppFullscreen ? 'Выйти из полного экрана' : 'Полный экран'
+                )}
+                className={`hidden sm:flex w-9 h-9 rounded-full border items-center justify-center transition-all focus:bg-white focus:text-zinc-950 focus:outline-none cursor-pointer shrink-0 ${isAppFullscreen
+                  ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_16px_rgba(37,99,235,0.5)]'
+                  : 'bg-white/10 border-white/15 text-zinc-200 hover:text-white hover:bg-blue-600 hover:border-blue-400'
+                  }`}
+              >
+                {isAppFullscreen ? (
+                  <Minimize2 className="w-4 h-4 sm:w-[18px] sm:h-[18px]" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="w-4 h-4 sm:w-[18px] sm:h-[18px]" aria-hidden="true" />
+                )}
+              </button>
 
-            {/* Reload Icon */}
-            <button
-              type="button"
-              aria-label="Reîncarcă Aplicația TV"
-              onClick={() => window.location.reload()}
-              title="Reîncarcă Aplicația TV"
-              className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
-            >
-              <RefreshCw className="w-5 h-5" aria-hidden="true" />
-            </button>
+              {/* Reload Icon */}
+              <button
+                type="button"
+                aria-label="Reîncarcă Aplicația TV"
+                onClick={() => window.location.reload()}
+                title="Reîncarcă Aplicația TV"
+                className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-5 h-5" aria-hidden="true" />
+              </button>
 
-            {/* Lampa 3-Dot Status Indicator */}
-            <div className="hidden md:flex flex-col items-center gap-1 px-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-              <span className="w-1 h-1 rounded-full bg-zinc-500" />
-              <span className="w-1 h-1 rounded-full bg-zinc-500" />
-            </div>
-
-            {/* Lampa Clock + 2-Line Date */}
-            <div className="hidden sm:flex items-center gap-2.5 pl-1">
-              <div className="text-xl sm:text-[26px] font-bold tracking-tight text-white tabular-nums leading-none">
-                {clockText}
+              {/* Lampa 3-Dot Status Indicator */}
+              <div className="hidden md:flex flex-col items-center gap-1 px-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                <span className="w-1 h-1 rounded-full bg-zinc-500" />
+                <span className="w-1 h-1 rounded-full bg-zinc-500" />
               </div>
-              <div className="hidden lg:flex flex-col text-[11px] leading-tight text-zinc-300 font-normal">
-                <span>{dateLine1}</span>
-                <span className="text-zinc-400">{dateLine2}</span>
+
+              {/* Lampa Clock + 2-Line Date */}
+              <div className="hidden sm:flex items-center gap-2.5 pl-1">
+                <div className="text-xl sm:text-[26px] font-bold tracking-tight text-white tabular-nums leading-none">
+                  {clockText}
+                </div>
+                <div className="hidden lg:flex flex-col text-[11px] leading-tight text-zinc-300 font-normal">
+                  <span>{dateLine1}</span>
+                  <span className="text-zinc-400">{dateLine2}</span>
+                </div>
               </div>
             </div>
-          </div>
           </div>
         </header>
       )}
@@ -9713,21 +10356,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }}
         className="relative flex-1 min-h-0 flex overflow-hidden"
       >
-        {/* Mobile Backdrop for Slide-Over Menu Drawer */}
+        {/* Backdrop for Slide-Over Menu Drawer (Mobile + GLE Car Mode) */}
         {!isAnyFullModePlayer && isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(false)}
-            className="md:hidden absolute inset-0 z-30 bg-black/70 backdrop-blur-xs"
+            className={`${isCarMode ? 'block' : 'md:hidden'
+              } absolute inset-0 z-30 bg-black/70 backdrop-blur-xs`}
           />
         )}
 
-        {/* LEFT LAMPA NAVIGATION SIDEBAR (Slide-over drawer on mobile with full labels; fixed sidebar on Desktop/TV) */}
+        {/* LEFT LAMPA NAVIGATION SIDEBAR (Slide-over drawer on mobile & Car Mode; fixed sidebar on Desktop/TV) */}
         {!isAnyFullModePlayer && isSidebarOpen && (
           <aside
             aria-label="Meniu Principal Smart TV Lampa"
-            className={`absolute md:static top-2 bottom-2 left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 md:w-56 md:my-2 md:ml-3 py-2.5 px-3 rounded-[28px] overflow-y-auto shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl md:shadow-none ${activeVodItem
-              ? 'z-40'
-              : ''
+            className={`absolute ${isCarMode ? '' : 'md:static md:my-2 md:ml-3 md:shadow-none'
+              } top-2 bottom-2 left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 md:w-56 py-2.5 px-3 rounded-[28px] overflow-y-auto shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl ${activeVodItem
+                ? 'z-40'
+                : ''
               }`}
           >
             <nav className="space-y-1 group/sidebar">
@@ -9830,75 +10475,78 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     (!isPinLockRequired && canProfileAccessIedem(activeProfile))
                 )
                 .map(({ id, label, Icon }) => {
-                const isActive = section === id && !activeVodItem;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-sidebar-active={isActive ? 'true' : undefined}
-                    onClick={() => {
-                      setActiveVodItem(null);
-                      if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                        setIsSidebarOpen(false);
-                      } else {
-                        setIsSidebarOpen(true);
-                      }
-                      if (id === 'filter') {
-                        setIsCatalogDrawerOpen(false);
-                        setFilterSubMenu(null);
-                        setIsFilterDrawerOpen(true);
-                        return;
-                      }
-                      if (id === 'catalog') {
+                  const isActive = section === id && !activeVodItem;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      data-sidebar-active={isActive ? 'true' : undefined}
+                      onClick={() => {
+                        setActiveVodItem(null);
+                        if (
+                          isCarMode ||
+                          (typeof window !== 'undefined' && window.innerWidth < 768)
+                        ) {
+                          setIsSidebarOpen(false);
+                        } else {
+                          setIsSidebarOpen(true);
+                        }
+                        if (id === 'filter') {
+                          setIsCatalogDrawerOpen(false);
+                          setFilterSubMenu(null);
+                          setIsFilterDrawerOpen(true);
+                          return;
+                        }
+                        if (id === 'catalog') {
+                          setIsFilterDrawerOpen(false);
+                          setIsCatalogDrawerOpen(true);
+                          return;
+                        }
                         setIsFilterDrawerOpen(false);
-                        setIsCatalogDrawerOpen(true);
-                        return;
-                      }
-                      setIsFilterDrawerOpen(false);
-                      setIsCatalogDrawerOpen(false);
-                      setSection(id);
-                      const mainEl =
-                        rootContainerRef.current?.querySelector<HTMLElement>('main');
-                      if (mainEl) {
-                        mainEl.scrollTop = 0;
-                        mainEl.scrollTo({ top: 0, behavior: 'smooth' });
-                      }
-                      if (id === 'tv') {
-                        setTvRegionId('FAV');
-                        setTvCategoryId('ALL');
-                        window.dispatchEvent(
-                          new CustomEvent('aether:tv-enter-full-mode')
-                        );
-                      } else if (id === 'radio') {
-                        setRadioCountry('FAV');
-                      }
-                    }}
-                    className={`w-full min-h-[42px] px-4 py-2 rounded-full overflow-hidden flex items-center justify-start text-[15px] transition-none focus:outline-none cursor-pointer ${isActive
-                      ? 'bg-white text-[#141414] font-semibold group-focus-within/sidebar:bg-transparent group-focus-within/sidebar:text-zinc-300 focus:!bg-white focus:!text-[#141414]'
-                      : 'text-zinc-300 hover:bg-white/10 hover:text-white focus:bg-white focus:text-[#141414] focus:font-semibold'
-                      }`}
-                  >
-                    {id === 'uhd_4k' ? (
-                      <span className="w-6 h-5 mr-3 shrink-0 rounded bg-gradient-to-r from-amber-400 to-yellow-300 text-zinc-950 font-black text-[10px] flex items-center justify-center tracking-tighter shadow-sm">
-                        4K
-                      </span>
-                    ) : (
-                      <Icon className="w-5 h-5 mr-3.5 shrink-0 stroke-[1.8]" />
-                    )}
-                    <span className="inline truncate flex-1 text-left">
-                      {label}
-                    </span>
-                    {id === 'downloads' &&
-                      (activeDownloadProgress ? (
-                        <Loader2 className="w-4 h-4 ml-1.5 text-blue-400 animate-spin shrink-0" />
-                      ) : offlineItems.length > 0 ? (
-                        <span className="ml-1.5 px-1.5 py-0.5 rounded-md bg-blue-500/25 border border-blue-400/40 text-blue-200 text-[10px] font-extrabold tabular-nums shrink-0">
-                          {offlineItems.length}
+                        setIsCatalogDrawerOpen(false);
+                        setSection(id);
+                        const mainEl =
+                          rootContainerRef.current?.querySelector<HTMLElement>('main');
+                        if (mainEl) {
+                          mainEl.scrollTop = 0;
+                          mainEl.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                        if (id === 'tv') {
+                          setTvRegionId('FAV');
+                          setTvCategoryId('ALL');
+                          window.dispatchEvent(
+                            new CustomEvent('aether:tv-enter-full-mode')
+                          );
+                        } else if (id === 'radio') {
+                          setRadioCountry('FAV');
+                        }
+                      }}
+                      className={`w-full min-h-[42px] px-4 py-2 rounded-full overflow-hidden flex items-center justify-start text-[15px] transition-none focus:outline-none cursor-pointer ${isActive
+                        ? 'bg-white text-[#141414] font-semibold group-focus-within/sidebar:bg-transparent group-focus-within/sidebar:text-zinc-300 focus:!bg-white focus:!text-[#141414]'
+                        : 'text-zinc-300 hover:bg-white/10 hover:text-white focus:bg-white focus:text-[#141414] focus:font-semibold'
+                        }`}
+                    >
+                      {id === 'uhd_4k' ? (
+                        <span className="w-6 h-5 mr-3 shrink-0 rounded bg-gradient-to-r from-amber-400 to-yellow-300 text-zinc-950 font-black text-[10px] flex items-center justify-center tracking-tighter shadow-sm">
+                          4K
                         </span>
-                      ) : null)}
-                  </button>
-                );
-              })}
+                      ) : (
+                        <Icon className="w-5 h-5 mr-3.5 shrink-0 stroke-[1.8]" />
+                      )}
+                      <span className="inline truncate flex-1 text-left">
+                        {label}
+                      </span>
+                      {id === 'downloads' &&
+                        (activeDownloadProgress ? (
+                          <Loader2 className="w-4 h-4 ml-1.5 text-blue-400 animate-spin shrink-0" />
+                        ) : offlineItems.length > 0 ? (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded-md bg-blue-500/25 border border-blue-400/40 text-blue-200 text-[10px] font-extrabold tabular-nums shrink-0">
+                            {offlineItems.length}
+                          </span>
+                        ) : null)}
+                    </button>
+                  );
+                })}
 
               {/* Compact Streaming Platforms Hub in Left Sidebar (1 single row + mini badge pills when active, instead of 7 stretched vertical rows) */}
               <div className="pt-1.5 pb-1.5 my-1 border-y border-white/10 space-y-1.5">
@@ -10076,6 +10724,24 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     {tr('Desene Animate', 'Cartoons', 'Мультфильмы')}
                   </span>
                 </button>
+
+                <button
+                  type="button"
+                  data-sidebar-car-mode-btn="true"
+                  aria-pressed={isCarMode}
+                  onClick={handleToggleCarMode}
+                  className={`w-full min-h-[44px] px-4 py-2 rounded-full overflow-hidden flex items-center justify-start gap-3.5 text-[15px] transition-none focus:outline-none cursor-pointer ${isCarMode
+                    ? 'bg-blue-600 text-white font-bold shadow'
+                    : 'text-sky-300 hover:bg-white/10 hover:text-white focus:bg-white focus:text-[#141414] focus:font-semibold'
+                    }`}
+                >
+                  <Car className="w-5 h-5 shrink-0 stroke-[1.9]" aria-hidden="true" />
+                  <span className="inline truncate">
+                    {isCarMode
+                      ? tr('Ieșire Mod Auto', 'Exit Car Mode', 'Выход Авто')
+                      : tr('Mod Auto (GLE)', 'Car Mode (GLE)', 'Авто-режим (GLE)')}
+                  </span>
+                </button>
               </div>
             </nav>
 
@@ -10240,10 +10906,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               isPlayingVod
                 ? 'flex-1 min-h-0 overflow-hidden p-0 m-0'
                 : section === 'tv' && !activeVodItem
-                  ? 'flex-1 min-h-0 overflow-y-auto px-2 sm:px-6 pt-1.5 pb-2 sm:pb-4 space-y-3'
+                  ? isCarMode
+                    ? 'flex-1 min-h-0 overflow-y-auto px-2 sm:px-3 pt-1 pb-2 space-y-2'
+                    : 'flex-1 min-h-0 overflow-y-auto px-2 sm:px-6 pt-1.5 pb-2 sm:pb-4 space-y-3'
                   : section === 'music' && !activeVodItem
                     ? 'flex-1 min-h-0 overflow-y-auto p-0 m-0 flex flex-col'
-                    : 'flex-1 min-h-0 overflow-y-auto px-3 sm:px-8 pt-2 pb-5 space-y-5 sm:space-y-6'
+                    : isCarMode
+                      ? 'flex-1 min-h-0 overflow-y-auto px-2.5 sm:px-4 pt-1.5 pb-3 space-y-3'
+                      : 'flex-1 min-h-0 overflow-y-auto px-3 sm:px-8 pt-2 pb-5 space-y-5 sm:space-y-6'
             }
           >
             {/* 1A. ACTIVE MOVIE / SERIES 100% FULL MODE CINEMA PLAYER (WHEN PLAYING) */}
@@ -10261,6 +10931,55 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       return;
                     }
                     wakeVodOsd();
+                  }}
+                  onKeyDownCapture={(e) => {
+                    if (
+                      e.key === 'Escape' ||
+                      e.key === 'GoBack' ||
+                      e.key === 'BrowserBack' ||
+                      e.key === 'Backspace' ||
+                      e.keyCode === 27 ||
+                      e.keyCode === 461 ||
+                      e.keyCode === 10009
+                    ) {
+                      return;
+                    }
+                    const targetEl = e.target as HTMLElement | null;
+                    if (
+                      targetEl?.closest(
+                        '[data-vod-fullscreen-btn="true"], [data-vod-top-back-btn="true"]'
+                      )
+                    ) {
+                      return;
+                    }
+                    if (
+                      !isMobilePhone &&
+                      tvSettings.autoFullscreenOnPlay &&
+                      typeof document !== 'undefined' &&
+                      document.documentElement.classList.contains('smart-tv-mode') &&
+                      !isNativeDocumentFullscreen()
+                    ) {
+                      ensureTvFullscreen();
+                    }
+                  }}
+                  onClickCapture={(e) => {
+                    const targetEl = e.target as HTMLElement | null;
+                    if (
+                      targetEl?.closest(
+                        '[data-vod-fullscreen-btn="true"], [data-vod-top-back-btn="true"]'
+                      )
+                    ) {
+                      return;
+                    }
+                    if (
+                      !isMobilePhone &&
+                      tvSettings.autoFullscreenOnPlay &&
+                      typeof document !== 'undefined' &&
+                      document.documentElement.classList.contains('smart-tv-mode') &&
+                      !isNativeDocumentFullscreen()
+                    ) {
+                      ensureTvFullscreen();
+                    }
                   }}
                   onKeyDown={(e) => {
                     if (
@@ -10285,32 +11004,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   style={
                     isMobilePhone && isMobileCustomFullscreen && isPortraitViewport
                       ? {
-                          position: 'fixed',
-                          top: `${vvRect.offsetTop + vvRect.height / 2}px`,
-                          left: `${vvRect.offsetLeft + vvRect.width / 2}px`,
-                          width: `${vvRect.height}px`,
-                          height: `${vvRect.width}px`,
-                          maxWidth: `${vvRect.height}px`,
-                          maxHeight: `${vvRect.width}px`,
-                          transform: 'translate(-50%, -50%) rotate(90deg)',
-                          transformOrigin: 'center center',
-                          zIndex: 9999,
-                        }
+                        position: 'fixed',
+                        top: `${vvRect.offsetTop + vvRect.height / 2}px`,
+                        left: `${vvRect.offsetLeft + vvRect.width / 2}px`,
+                        width: `${vvRect.height}px`,
+                        height: `${vvRect.width}px`,
+                        maxWidth: `${vvRect.height}px`,
+                        maxHeight: `${vvRect.width}px`,
+                        transform: 'translate(-50%, -50%) rotate(90deg)',
+                        transformOrigin: 'center center',
+                        zIndex: 9999,
+                      }
                       : isMobilePhone
                         ? {
-                            position: 'fixed',
-                            top: `${vvRect.offsetTop}px`,
-                            left: `${vvRect.offsetLeft}px`,
-                            width: `${vvRect.width}px`,
-                            height: `${vvRect.height}px`,
-                            maxWidth: `${vvRect.width}px`,
-                            maxHeight: `${vvRect.height}px`,
-                            zIndex: 9999,
-                          }
+                          position: 'fixed',
+                          top: `${vvRect.offsetTop}px`,
+                          left: `${vvRect.offsetLeft}px`,
+                          width: `${vvRect.width}px`,
+                          height: `${vvRect.height}px`,
+                          maxWidth: `${vvRect.width}px`,
+                          maxHeight: `${vvRect.height}px`,
+                          zIndex: 9999,
+                        }
                         : {
-                            height: '100dvh',
-                            maxHeight: '100dvh',
-                          }
+                          height: '100dvh',
+                          maxHeight: '100dvh',
+                        }
                   }
                   className="fixed inset-0 z-[200] w-full h-full bg-black flex flex-col overflow-hidden"
                 >
@@ -10325,264 +11044,259 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       isMobilePhone
                         ? isMobileCustomFullscreen && isPortraitViewport
                           ? {
-                              top: '10px',
-                              left: 'max(16px, env(safe-area-inset-top, 16px))',
-                              right: 'max(16px, env(safe-area-inset-bottom, 16px))',
-                            }
+                            top: '10px',
+                            left: 'max(16px, var(--safe-top, env(safe-area-inset-top, 16px)))',
+                            right:
+                              'max(16px, var(--safe-bottom, env(safe-area-inset-bottom, 16px)))',
+                          }
                           : {
-                              top: 'max(8px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px))',
-                              left: 'max(12px, var(--safe-left, env(safe-area-inset-left, 0px)))',
-                              right:
-                                'max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))',
-                            }
+                            top: 'max(8px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px))',
+                            left: 'max(10px, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                            right:
+                              'max(10px, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                          }
                         : undefined
                     }
                     data-vod-top-bar="true"
-                    className={`absolute ${
-                      isMobilePhone
-                        ? 'top-2 inset-x-3'
-                        : 'top-3 sm:top-5 inset-x-3 sm:inset-x-7'
-                    } z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible ||
-                    isEpisodesDrawerOpen ||
-                    isInfoSheetOpen ||
-                    (!activeVodItem.id.startsWith('yt_') &&
-                      activeServer !== 'kinogram_hls' &&
-                      activeServer !== 'filelist_torrent') ||
-                    (!activeVodItem.id.startsWith('yt_') &&
-                      activeServer === 'kinogram_hls' &&
-                      !isDirectStreamLoading &&
-                      !(
-                        resolvedDirectStream?.ok &&
-                        (resolvedDirectStream.dashUrl ||
-                          resolvedDirectStream.hlsUrl)
-                      )) ||
-                    (!activeVodItem.id.startsWith('yt_') &&
-                      activeServer === 'filelist_torrent' &&
-                      !isFileListStreamLoading &&
-                      !(
-                        resolvedFileListStream?.ok &&
-                        resolvedFileListStream.streamUrl
-                      ))
-                    ? 'opacity-100 translate-y-0 pointer-events-auto'
-                    : 'opacity-0 -translate-y-2 pointer-events-none invisible'
-                    }`}
-                >
-                  {/* Left: Clean Floating Back Button + Mobile Title */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <button
-                      type="button"
-                      data-vod-top-back-btn="true"
-                      onClick={() => {
-                        setIsMobileCustomFullscreen(false);
-                        setIsPlayingVod(false);
-                        if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                          setActiveVodItem(null);
-                          if (!activeVodItem.isAdultKlubnichka) {
-                            setIsSidebarOpen(true);
+                    className={`absolute ${isMobilePhone
+                      ? 'top-2 inset-x-3'
+                      : 'top-3 sm:top-5 inset-x-3 sm:inset-x-7'
+                      } z-30 flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible ||
+                        isEpisodesDrawerOpen ||
+                        isInfoSheetOpen ||
+                        (!activeVodItem.id.startsWith('yt_') &&
+                          activeServer !== 'kinogram_hls' &&
+                          activeServer !== 'filelist_torrent') ||
+                        (!activeVodItem.id.startsWith('yt_') &&
+                          activeServer === 'kinogram_hls' &&
+                          !isDirectStreamLoading &&
+                          !(
+                            resolvedDirectStream?.ok &&
+                            (resolvedDirectStream.dashUrl ||
+                              resolvedDirectStream.hlsUrl)
+                          )) ||
+                        (!activeVodItem.id.startsWith('yt_') &&
+                          activeServer === 'filelist_torrent' &&
+                          !isFileListStreamLoading &&
+                          !(
+                            resolvedFileListStream?.ok &&
+                            resolvedFileListStream.streamUrl
+                          ))
+                        ? 'opacity-100 translate-y-0 pointer-events-auto'
+                        : 'opacity-0 -translate-y-2 pointer-events-none invisible'
+                      }`}
+                  >
+                    {/* Left: Clean Floating Back Button + Mobile Title */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <button
+                        type="button"
+                        data-vod-top-back-btn="true"
+                        onClick={() => {
+                          setIsMobileCustomFullscreen(false);
+                          setIsPlayingVod(false);
+                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
+                            setActiveVodItem(null);
+                            if (!activeVodItem.isAdultKlubnichka) {
+                              setIsSidebarOpen(true);
+                            }
                           }
-                        }
-                      }}
-                      className={`${
-                        isMobilePhone
+                        }}
+                        className={`${isMobilePhone
                           ? 'h-8 px-3 text-xs gap-1'
                           : 'h-9 sm:h-11 px-3.5 sm:px-5 text-xs sm:text-sm gap-1.5 sm:gap-2'
-                      } rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold inline-flex items-center transition-all shrink-0 cursor-pointer group`}
-                    >
-                      <ArrowLeft className="w-4 h-4 text-[#60a5fa] group-focus:text-[#081220]" />
-                      <span>
-                        {tr('Înapoi', 'Back', 'Назад')}
-                      </span>
-                    </button>
-
-                    {/* Mobile-Only Title + Episode Badge in Top Bar */}
-                    <div className={`${isMobilePhone ? 'flex' : 'flex sm:hidden'} items-center gap-1.5 min-w-0 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10`}>
-                      <span className="text-xs font-extrabold text-white truncate max-w-[180px]">
-                        {detailedMeta?.name || activeVodItem.name}
-                      </span>
-                      {activeVodItem.type === 'series' && (
-                        <span className="px-1.5 py-0.5 rounded bg-[#2563eb]/35 text-[10px] font-black text-blue-200 shrink-0">
-                          S{selectedSeason}:E{selectedEpisode}
+                          } rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white focus:outline-none focus:ring-4 focus:ring-[#60a5fa] text-white font-extrabold inline-flex items-center transition-all shrink-0 cursor-pointer group`}
+                      >
+                        <ArrowLeft className="w-4 h-4 text-[#60a5fa] group-focus:text-[#081220]" />
+                        <span>
+                          {tr('Înapoi', 'Back', 'Назад')}
                         </span>
+                      </button>
+
+                      {/* Mobile-Only Title + Episode Badge in Top Bar */}
+                      <div className={`${isMobilePhone ? 'flex' : 'flex sm:hidden'} items-center gap-1.5 min-w-0 px-2.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/10`}>
+                        <span className="text-xs font-extrabold text-white truncate max-w-[125px] sm:max-w-[180px]">
+                          {detailedMeta?.name || activeVodItem.name}
+                        </span>
+                        {activeVodItem.type === 'series' && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#2563eb]/35 text-[10px] font-black text-blue-200 shrink-0">
+                            S{selectedSeason}:E{selectedEpisode}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right: Minimal Utility Pills */}
+                    <div className="flex items-center gap-2 shrink-0 pointer-events-auto">
+                      {pendingResumePromptSec !== null &&
+                        pendingResumePromptSec > 10 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResumeStartSeconds(0);
+                              setPendingResumePromptSec(null);
+                            }}
+                            className="h-9 sm:h-10 px-3 sm:px-4 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-white focus:text-[#081220] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>
+                              {tr(
+                                'De la 00:00',
+                                'From 00:00',
+                                'С 00:00'
+                              )}
+                            </span>
+                          </button>
+                        )}
+
+                      {/* Only show Audio & Source Sheet button in Top Bar when using an external iframe server */}
+                      {!activeVodItem.id.startsWith('yt_') &&
+                        activeServer !== 'kinogram_hls' &&
+                        activeServer !== 'filelist_torrent' && (
+                          <button
+                            ref={vodAudioBtnRef}
+                            type="button"
+                            onClick={() => {
+                              const nextOpen = !isInfoSheetOpen;
+                              setIsInfoSheetOpen(nextOpen);
+                              setIsEpisodesDrawerOpen(false);
+                              if (nextOpen) {
+                                window.setTimeout(() => {
+                                  const firstAudioOrSrvBtn =
+                                    playerBoxRef.current?.querySelector<HTMLButtonElement>(
+                                      '[data-sheet-quality-btn="true"], [data-sheet-audio-btn="true"], [data-sheet-server-btn="true"]'
+                                    );
+                                  firstAudioOrSrvBtn?.focus();
+                                }, 50);
+                              }
+                            }}
+                            className={`h-9 sm:h-10 px-3.5 sm:px-4 rounded-full text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-[#1e3a8a] focus:text-white cursor-pointer ${isInfoSheetOpen
+                              ? 'bg-[#1e3a8a] text-white border border-[#3b82f6]/50 border border-[#bfdbfe]'
+                              : 'tahoe-emerald-card hover:bg-[#193144] text-white'
+                              }`}
+                          >
+                            <Layers className="w-3.5 h-3.5 text-[#60a5fa]" />
+                            <span>
+                              {tr('Audio & Sursă', 'Audio & Source', 'Аудио и Сервер')}
+                            </span>
+                          </button>
+                        )}
+
+                      {!isMobilePhone && (
+                        <button
+                          type="button"
+                          onClick={requestTvFullscreen}
+                          title={tr('Ecran Complet', 'Fullscreen', 'Полный экран')}
+                          className="hidden sm:inline-flex h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer"
+                        >
+                          <Maximize2 className="w-4 h-4" />
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Right: Minimal Utility Pills */}
-                  <div className="flex items-center gap-2 shrink-0 pointer-events-auto">
-                    {pendingResumePromptSec !== null &&
-                      pendingResumePromptSec > 10 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setResumeStartSeconds(0);
-                            setPendingResumePromptSec(null);
-                          }}
-                          className="h-9 sm:h-10 px-3 sm:px-4 rounded-full bg-[#1e3a8a] hover:bg-[#1d4ed8] focus:bg-white focus:text-[#081220] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>
-                            {tr(
-                              'De la 00:00',
-                              'From 00:00',
-                              'С 00:00'
-                            )}
-                          </span>
-                        </button>
-                      )}
-
-                    {/* Only show Audio & Source Sheet button in Top Bar when using an external iframe server */}
-                    {!activeVodItem.id.startsWith('yt_') &&
-                      activeServer !== 'kinogram_hls' &&
-                      activeServer !== 'filelist_torrent' && (
-                        <button
-                          ref={vodAudioBtnRef}
-                          type="button"
-                          onClick={() => {
-                            const nextOpen = !isInfoSheetOpen;
-                            setIsInfoSheetOpen(nextOpen);
-                            setIsEpisodesDrawerOpen(false);
-                            if (nextOpen) {
-                              window.setTimeout(() => {
-                                const firstAudioOrSrvBtn =
-                                  playerBoxRef.current?.querySelector<HTMLButtonElement>(
-                                    '[data-sheet-quality-btn="true"], [data-sheet-audio-btn="true"], [data-sheet-server-btn="true"]'
-                                  );
-                                firstAudioOrSrvBtn?.focus();
-                              }, 50);
+                  {/* 100% Fullscreen Video Area */}
+                  <div className="relative flex-1 w-full h-full min-h-0 bg-black overflow-hidden">
+                    {/* Ambient Cinema Glow Backdrop for Iframe Fallbacks (hidden during startup loading & Smart TV playback to keep pure #000000 black) */}
+                    {!isFileListStreamLoading &&
+                      !isDirectStreamLoading &&
+                      (typeof document === 'undefined' ||
+                        !document.documentElement.classList.contains('smart-tv-mode')) &&
+                      (detailedMeta?.background ||
+                        activeVodItem.background ||
+                        detailedMeta?.poster ||
+                        activeVodItem.poster) && (
+                        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+                          <img
+                            src={
+                              detailedMeta?.background ||
+                              activeVodItem.background ||
+                              detailedMeta?.poster ||
+                              activeVodItem.poster
                             }
-                          }}
-                          className={`h-9 sm:h-10 px-3.5 sm:px-4 rounded-full text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-4 focus:ring-[#60a5fa] focus:bg-[#1e3a8a] focus:text-white cursor-pointer ${isInfoSheetOpen
-                            ? 'bg-[#1e3a8a] text-white border border-[#3b82f6]/50 border border-[#bfdbfe]'
-                            : 'tahoe-emerald-card hover:bg-[#193144] text-white'
-                            }`}
-                        >
-                          <Layers className="w-3.5 h-3.5 text-[#60a5fa]" />
-                          <span>
-                            {tr('Audio & Sursă', 'Audio & Source', 'Аудио и Сервер')}
-                          </span>
-                        </button>
+                            alt=""
+                            aria-hidden="true"
+                            className="w-full h-full object-cover blur-3xl opacity-45 scale-115 saturate-150"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/50 via-zinc-950/25 to-zinc-950/60" />
+                        </div>
                       )}
 
-                    {!isMobilePhone && (
-                      <button
-                        type="button"
-                        onClick={requestTvFullscreen}
-                        title={tr('Ecran Complet', 'Fullscreen', 'Полный экран')}
-                        className="hidden sm:inline-flex h-10 w-10 rounded-full tahoe-emerald-card hover:bg-[#193144] focus:bg-[#1e3a8a] focus:text-white text-[#60a5fa] items-center justify-center cursor-pointer"
-                      >
-                        <Maximize2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                    {activeVodItem.id.startsWith('yt_') ? (
+                      (() => {
+                        const ytVideoId = activeVodItem.id.slice(3);
+                        const curYtIdx = ytItems.findIndex(
+                          (v) => v.videoId === ytVideoId
+                        );
+                        const prevYt =
+                          curYtIdx > 0 ? ytItems[curYtIdx - 1] : undefined;
+                        const nextYt =
+                          curYtIdx >= 0 && curYtIdx < ytItems.length - 1
+                            ? ytItems[curYtIdx + 1]
+                            : ytItems[0];
 
-                {/* 100% Fullscreen Video Area */}
-                <div className="relative flex-1 w-full h-full min-h-0 bg-black overflow-hidden">
-                  {/* Ambient Cinema Glow Backdrop for Loading & Iframe Fallbacks */}
-                  {(detailedMeta?.background ||
-                    activeVodItem.background ||
-                    detailedMeta?.poster ||
-                    activeVodItem.poster) && (
-                      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-                        <img
-                          src={
-                            detailedMeta?.background ||
-                            activeVodItem.background ||
-                            detailedMeta?.poster ||
-                            activeVodItem.poster
-                          }
-                          alt=""
-                          aria-hidden="true"
-                          className="w-full h-full object-cover blur-3xl opacity-45 scale-115 saturate-150"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/50 via-zinc-950/25 to-zinc-950/60" />
-                      </div>
-                    )}
+                        if (ytUseEmbedFallback) {
+                          return (
+                            <iframe
+                              key={`yt_embed_${ytVideoId}`}
+                              src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
+                                ytVideoId
+                              )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
+                              title={activeVodItem.name}
+                              referrerPolicy="strict-origin-when-cross-origin"
+                              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                              allowFullScreen
+                              className="relative z-10 w-full h-full border-0 bg-transparent"
+                            />
+                          );
+                        }
 
-                  {activeVodItem.id.startsWith('yt_') ? (
-                    (() => {
-                      const ytVideoId = activeVodItem.id.slice(3);
-                      const curYtIdx = ytItems.findIndex(
-                        (v) => v.videoId === ytVideoId
-                      );
-                      const prevYt =
-                        curYtIdx > 0 ? ytItems[curYtIdx - 1] : undefined;
-                      const nextYt =
-                        curYtIdx >= 0 && curYtIdx < ytItems.length - 1
-                          ? ytItems[curYtIdx + 1]
-                          : ytItems[0];
-
-                      if (ytUseEmbedFallback) {
                         return (
-                          <iframe
-                            key={`yt_embed_${ytVideoId}`}
-                            src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
+                          <VodNativeHlsPlayer
+                            hlsUrl={`/api/youtube/stream?id=${encodeURIComponent(
                               ytVideoId
-                            )}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
+                            )}`}
+                            durationHintSec={
+                              activeYtDurationSec > 5 ? activeYtDurationSec : 600
+                            }
+                            preferredQuality={tvSettings.defaultVideoQuality}
+                            initialSubFontSize={tvSettings.defaultSubFontSize}
+                            preferredSubLang="off"
+                            startAtSeconds={0}
+                            poster={activeVodItem.poster}
+                            backdropUrl={activeVodItem.background || activeVodItem.poster}
                             title={activeVodItem.name}
-                            referrerPolicy="strict-origin-when-cross-origin"
-                            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                            allowFullScreen
-                            className="relative z-10 w-full h-full border-0 bg-transparent"
+                            subtitle="YouTube Premium"
+                            mediaType="movie"
+                            isOsdVisible={isVodOsdVisible}
+                            sourceQualityBadge="YT PREMIUM • 1080p • FĂRĂ RECLAME"
+                            onResolutionChange={setLiveVodResolution}
+                            onWakeOsd={wakeVodOsd}
+                            onHideOsd={hideVodOsd}
+                            prevEpisodeLabel={prevYt ? '◀ Clip Anterior' : undefined}
+                            nextEpisodeLabel={nextYt ? 'Clip Următor ▶' : undefined}
+                            onPrevEpisode={
+                              prevYt
+                                ? () => handlePlayYouTubeVideo(prevYt)
+                                : undefined
+                            }
+                            onNextEpisode={
+                              nextYt
+                                ? () => handlePlayYouTubeVideo(nextYt)
+                                : undefined
+                            }
+                            onStreamError={() => setYtUseEmbedFallback(true)}
                           />
                         );
-                      }
-
-                      return (
-                        <VodNativeHlsPlayer
-                          hlsUrl={`/api/youtube/stream?id=${encodeURIComponent(
-                            ytVideoId
-                          )}`}
-                          durationHintSec={
-                            activeYtDurationSec > 5 ? activeYtDurationSec : 600
-                          }
-                          preferredQuality={tvSettings.defaultVideoQuality}
-                          initialSubFontSize={tvSettings.defaultSubFontSize}
-                          preferredSubLang="off"
-                          startAtSeconds={0}
-                          poster={activeVodItem.poster}
-                          backdropUrl={activeVodItem.background || activeVodItem.poster}
-                          title={activeVodItem.name}
-                          subtitle="YouTube Premium"
-                          mediaType="movie"
-                          isOsdVisible={isVodOsdVisible}
-                          sourceQualityBadge="YT PREMIUM • 1080p • FĂRĂ RECLAME"
-                          onResolutionChange={setLiveVodResolution}
-                          onWakeOsd={wakeVodOsd}
-                        onHideOsd={hideVodOsd}
-                          prevEpisodeLabel={prevYt ? '◀ Clip Anterior' : undefined}
-                          nextEpisodeLabel={nextYt ? 'Clip Următor ▶' : undefined}
-                          onPrevEpisode={
-                            prevYt
-                              ? () => handlePlayYouTubeVideo(prevYt)
-                              : undefined
-                          }
-                          onNextEpisode={
-                            nextYt
-                              ? () => handlePlayYouTubeVideo(nextYt)
-                              : undefined
-                          }
-                          onStreamError={() => setYtUseEmbedFallback(true)}
-                        />
-                      );
-                    })()
-                  ) : activeServer === 'filelist_torrent' &&
-                    isLocalHomeServer() &&
-                    !matchedOfflineVodItem ? (
-                    isFileListStreamLoading ? (
-                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 text-zinc-200">
-                        <Loader2 className="w-10 h-10 text-[#60a5fa] animate-spin" />
-                        <p className="text-sm font-bold">
-                          {tr(
-                            'Pornire stream live din FileList.io (jeka7ro)...',
-                            'Starting live stream from FileList.io (jeka7ro)...',
-                            'Запуск прямого потока с FileList.io (jeka7ro)...'
-                          )}
-                        </p>
-                      </div>
-                    ) : resolvedFileListStream?.ok &&
-                      resolvedFileListStream.streamUrl ? (
-                      <VodNativeHlsPlayer
+                      })()
+                    ) : activeServer === 'filelist_torrent' &&
+                      isLocalHomeServer() &&
+                      !matchedOfflineVodItem ? (
+                      isFileListStreamLoading ? (
+                        <FilmioStartupLoader />
+                      ) : resolvedFileListStream?.ok &&
+                        resolvedFileListStream.streamUrl ? (
+                                              <VodNativeHlsPlayer
+                        key={`vod_fl_${activeVodItem.id}_${resolvedFileListStream.torrentId || 0}_${selectedSeason}_${selectedEpisode}`}
                         hlsUrl={resolvedFileListStream.streamUrl}
                         durationHintSec={(() => {
                           if (
@@ -10613,94 +11327,96 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           selectedAudioTrackIdx <
                             (resolvedFileListStream.audioNames?.length || 1)
                             ? selectedAudioTrackIdx
-                            : resolveAudioTrackIndexByPreference(
-                              resolvedFileListStream.audioNames || [],
-                              tvSettings.defaultAudioPref
-                            )
+                            : (resolvedFileListStream.audioNames?.length || 0) > 1
+                              ? resolveAudioTrackIndexByPreference(
+                                  resolvedFileListStream.audioNames || [],
+                                  effectiveVodAudioPref
+                                )
+                              : -1
                         }
-                        preferredQuality={tvSettings.defaultVideoQuality}
-                        initialSubFontSize={tvSettings.defaultSubFontSize}
-                        preferredSubLang={tvSettings.defaultSubLang}
-                        startAtSeconds={resumeStartSeconds}
-                        poster={
-                          detailedMeta?.poster ||
-                          activeVodItem.poster ||
-                          detailedMeta?.background ||
-                          activeVodItem.background
-                        }
-                        backdropUrl={
-                          detailedMeta?.background ||
-                          activeVodItem.background ||
-                          detailedMeta?.poster ||
-                          activeVodItem.poster
-                        }
-                        title={
-                          uiLang !== 'ru'
-                            ? detailedMeta?.nameOriginal ||
-                            detailedMeta?.name ||
-                            activeVodItem.nameOriginal ||
-                            activeVodItem.name
-                            : detailedMeta?.name || activeVodItem.name
-                        }
-                        subtitle={
-                          (activeVodItem.type === 'series'
-                            ? episodesForSeason.find(
-                              (ep) => ep.episode === selectedEpisode
-                            )?.name
-                            : '') ||
-                          detailedMeta?.releaseInfo ||
-                          activeVodItem.releaseInfo
-                        }
-                        imdbId={
-                          activeVodItem.id.startsWith('tt')
-                            ? activeVodItem.id
-                            : detailedMeta?.imdbId ||
-                            resolvedFileListStream.selectedTorrent?.imdbId ||
-                            activeVodItem.id
-                        }
-                        tmdbId={
-                          detailedMeta?.moviedb_id || activeVodItem.moviedb_id
-                        }
-                        mediaType={activeVodItem.type}
-                        season={selectedSeason}
-                        episode={selectedEpisode}
-                        subtitleVttUrl={activeSubVttUrl}
-                        subtitleLabel={activeSubLabel}
-                        subtitleCues={activeSubCues}
-                        isOsdVisible={isVodOsdVisible}
-                        activeServerId={activeServer}
-                        serverOptions={VOD_SERVERS}
-                        sourceQualityBadge={
-                          resolvedFileListStream.selectedTorrent?.quality ||
-                          activeVodItem.qualityBadge
-                        }
-                        externalQualityOptions={flQualityOptions}
-                        onStreamError={() => {
-                          if (
-                            resolvedDirectStream?.ok &&
-                            (resolvedDirectStream.dashUrl ||
-                              resolvedDirectStream.hlsUrl)
-                          ) {
-                            setActiveServer('kinogram_hls');
+                          preferredQuality={tvSettings.defaultVideoQuality}
+                          initialSubFontSize={tvSettings.defaultSubFontSize}
+                          preferredSubLang={tvSettings.defaultSubLang}
+                          startAtSeconds={resumeStartSeconds}
+                          poster={
+                            detailedMeta?.poster ||
+                            activeVodItem.poster ||
+                            detailedMeta?.background ||
+                            activeVodItem.background
                           }
-                        }}
-                        onResolutionChange={setLiveVodResolution}
-                        onWakeOsd={wakeVodOsd}
-                        onHideOsd={hideVodOsd}
-                        onClosePlayer={() => {
-                          setIsPlayingVod(false);
-                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                            setActiveVodItem(null);
-                            if (!activeVodItem.isAdultKlubnichka) {
-                              setIsSidebarOpen(true);
+                          backdropUrl={
+                            detailedMeta?.background ||
+                            activeVodItem.background ||
+                            detailedMeta?.poster ||
+                            activeVodItem.poster
+                          }
+                          title={
+                            uiLang !== 'ru'
+                              ? detailedMeta?.nameOriginal ||
+                              detailedMeta?.name ||
+                              activeVodItem.nameOriginal ||
+                              activeVodItem.name
+                              : detailedMeta?.name || activeVodItem.name
+                          }
+                          subtitle={
+                            (activeVodItem.type === 'series'
+                              ? episodesForSeason.find(
+                                (ep) => ep.episode === selectedEpisode
+                              )?.name
+                              : '') ||
+                            detailedMeta?.releaseInfo ||
+                            activeVodItem.releaseInfo
+                          }
+                          imdbId={
+                            activeVodItem.id.startsWith('tt')
+                              ? activeVodItem.id
+                              : detailedMeta?.imdbId ||
+                              resolvedFileListStream.selectedTorrent?.imdbId ||
+                              activeVodItem.id
+                          }
+                          tmdbId={
+                            detailedMeta?.moviedb_id || activeVodItem.moviedb_id
+                          }
+                          mediaType={activeVodItem.type}
+                          season={selectedSeason}
+                          episode={selectedEpisode}
+                          subtitleVttUrl={activeSubVttUrl}
+                          subtitleLabel={activeSubLabel}
+                          subtitleCues={activeSubCues}
+                          isOsdVisible={isVodOsdVisible}
+                          activeServerId={activeServer}
+                          serverOptions={VOD_SERVERS}
+                          sourceQualityBadge={
+                            resolvedFileListStream.selectedTorrent?.quality ||
+                            activeVodItem.qualityBadge
+                          }
+                          externalQualityOptions={flQualityOptions}
+                          onStreamError={() => {
+                            if (
+                              resolvedDirectStream?.ok &&
+                              (resolvedDirectStream.dashUrl ||
+                                resolvedDirectStream.hlsUrl)
+                            ) {
+                              setActiveServer('kinogram_hls');
                             }
-                          }
-                        }}
-                        prevEpisodeLabel={prevEpisodeInfo?.label}
-                        nextEpisodeLabel={nextEpisodeInfo?.label}
-                        onPrevEpisode={
-                          prevEpisodeInfo
-                            ? () => {
+                          }}
+                          onResolutionChange={setLiveVodResolution}
+                          onWakeOsd={wakeVodOsd}
+                          onHideOsd={hideVodOsd}
+                          onClosePlayer={() => {
+                            setIsPlayingVod(false);
+                            if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
+                              setActiveVodItem(null);
+                              if (!activeVodItem.isAdultKlubnichka) {
+                                setIsSidebarOpen(true);
+                              }
+                            }
+                          }}
+                          prevEpisodeLabel={prevEpisodeInfo?.label}
+                          nextEpisodeLabel={nextEpisodeInfo?.label}
+                          onPrevEpisode={
+                            prevEpisodeInfo
+                              ? () => {
                                 userSelectedFlTorrentIdRef.current = null;
                                 if (prevEpisodeInfo.season !== selectedSeason) {
                                   setSelectedSeason(prevEpisodeInfo.season);
@@ -10708,11 +11424,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setSelectedEpisode(prevEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
                               }
-                            : undefined
-                        }
-                        onNextEpisode={
-                          nextEpisodeInfo
-                            ? () => {
+                              : undefined
+                          }
+                          onNextEpisode={
+                            nextEpisodeInfo
+                              ? () => {
                                 userSelectedFlTorrentIdRef.current = null;
                                 if (nextEpisodeInfo.season !== selectedSeason) {
                                   setSelectedSeason(nextEpisodeInfo.season);
@@ -10720,347 +11436,343 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setSelectedEpisode(nextEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
                               }
-                            : undefined
-                        }
-                        onOpenEpisodesDrawer={
-                          activeVodItem.type === 'series'
-                            ? () => {
-                              setIsInfoSheetOpen(false);
-                              setIsEpisodesDrawerOpen((prev) => {
-                                const nextOpen = !prev;
-                                if (nextOpen) {
-                                  window.setTimeout(() => {
-                                    const targetBtn =
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] [data-drawer-next-ep="true"]'
-                                      ) ||
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] [data-drawer-initial-focus="true"]'
-                                      ) ||
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] button'
-                                      );
-                                    targetBtn?.focus();
-                                  }, 45);
-                                }
-                                return nextOpen;
-                              });
-                            }
-                            : undefined
-                        }
-                        onOpenInfoSheet={() => {
-                          setIsEpisodesDrawerOpen(false);
-                          setIsInfoSheetOpen((prev) => {
-                            const nextOpen = !prev;
-                            if (nextOpen) {
-                              window.setTimeout(() => {
-                                const targetBtn =
-                                  playerBoxRef.current?.querySelector<HTMLElement>(
-                                    '[data-vod-sheet-open="true"] [data-sheet-close-btn="true"]'
-                                  ) ||
-                                  playerBoxRef.current?.querySelector<HTMLElement>(
-                                    '[data-vod-sheet-open="true"] button'
-                                  );
-                                targetBtn?.focus();
-                              }, 45);
-                            }
-                            return nextOpen;
-                          });
-                        }}
-                        onSelectServer={(srvId) => {
-                          userManuallySelectedServerRef.current = true;
-                          if (srvId !== 'filelist_torrent') {
-                            userSelectedFlTorrentIdRef.current = null;
+                              : undefined
                           }
-                          setActiveServer(srvId as VodServerId);
-                        }}
-                        onSelectAudioTrackIndex={(idx) =>
-                          setSelectedAudioTrackIdx(idx)
-                        }
-                        onRequestOriginalAudio={() =>
-                          handleRequestOriginalAudio(false)
-                        }
-                        onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
-                          setActiveSubVttUrl(vttBlobUrl);
-                          setActiveSubLabel(label);
-                          setActiveSubCues(cues);
-                        }}
-                        onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
-                        onClearSubtitle={() => {
-                          setActiveSubVttUrl(null);
-                          setActiveSubLabel('');
-                          setActiveSubCues([]);
-                        }}
-                        onTimeUpdate={(cur, dur) => {
-                          const prevEntry =
-                            watchProgressMapRef.current[activeVodItem.id];
-                          const prevCur = prevEntry?.currentTime || 0;
-                          if (
-                            cur > 3 &&
-                            (!prevEntry?.isPlayingNow ||
-                              Math.abs(cur - prevCur) >= 15)
-                          ) {
-                            updateWatchProgress(
-                              activeVodItem,
-                              selectedSeason,
-                              selectedEpisode,
-                              cur,
-                              dur
-                            );
+                          onOpenEpisodesDrawer={
+                            activeVodItem.type === 'series'
+                              ? () => {
+                                setIsInfoSheetOpen(false);
+                                setIsEpisodesDrawerOpen((prev) => {
+                                  const nextOpen = !prev;
+                                  if (nextOpen) {
+                                    window.setTimeout(() => {
+                                      const targetBtn =
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] [data-drawer-next-ep="true"]'
+                                        ) ||
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] [data-drawer-initial-focus="true"]'
+                                        ) ||
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] button'
+                                        );
+                                      targetBtn?.focus();
+                                    }, 45);
+                                  }
+                                  return nextOpen;
+                                });
+                              }
+                              : undefined
                           }
-                        }}
-                      />
-                    ) : (
-                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center text-zinc-300">
-                        <p className="text-sm font-bold text-rose-400">
-                          {resolvedFileListStream?.error &&
-                          !/fetch failed/i.test(resolvedFileListStream.error)
-                            ? resolvedFileListStream.error
-                            : tr(
+                          onOpenInfoSheet={() => {
+                            setIsEpisodesDrawerOpen(false);
+                            setIsInfoSheetOpen((prev) => {
+                              const nextOpen = !prev;
+                              if (nextOpen) {
+                                window.setTimeout(() => {
+                                  const targetBtn =
+                                    playerBoxRef.current?.querySelector<HTMLElement>(
+                                      '[data-vod-sheet-open="true"] [data-sheet-close-btn="true"]'
+                                    ) ||
+                                    playerBoxRef.current?.querySelector<HTMLElement>(
+                                      '[data-vod-sheet-open="true"] button'
+                                    );
+                                  targetBtn?.focus();
+                                }, 45);
+                              }
+                              return nextOpen;
+                            });
+                          }}
+                          onSelectServer={(srvId) => {
+                            userManuallySelectedServerRef.current = true;
+                            if (srvId !== 'filelist_torrent') {
+                              userSelectedFlTorrentIdRef.current = null;
+                            }
+                            setActiveServer(srvId as VodServerId);
+                          }}
+                          onSelectAudioTrackIndex={(idx) =>
+                            setSelectedAudioTrackIdx(idx)
+                          }
+                          onRequestOriginalAudio={() =>
+                            handleRequestOriginalAudio(false)
+                          }
+                          onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
+                            setActiveSubVttUrl(vttBlobUrl);
+                            setActiveSubLabel(label);
+                            setActiveSubCues(cues);
+                          }}
+                          onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
+                          onClearSubtitle={() => {
+                            setActiveSubVttUrl(null);
+                            setActiveSubLabel('');
+                            setActiveSubCues([]);
+                          }}
+                          onTimeUpdate={(cur, dur) => {
+                            const prevEntry =
+                              watchProgressMapRef.current[activeVodItem.id];
+                            const prevCur = prevEntry?.currentTime || 0;
+                            if (
+                              cur > 3 &&
+                              (!prevEntry?.isPlayingNow ||
+                                Math.abs(cur - prevCur) >= 15)
+                            ) {
+                              updateWatchProgress(
+                                activeVodItem,
+                                selectedSeason,
+                                selectedEpisode,
+                                cur,
+                                dur
+                              );
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center text-zinc-300">
+                          <p className="text-sm font-bold text-rose-400">
+                            {resolvedFileListStream?.error &&
+                              !/fetch failed/i.test(resolvedFileListStream.error)
+                              ? resolvedFileListStream.error
+                              : tr(
                                 'Nu s-a găsit un torrent FileList activ pentru acest titlu. Reîncearcă S1 sau comută pe S2 / S3!',
                                 'No active FileList torrent found for this title. Retry S1 or switch to S2 / S3!',
                                 'Торрент FileList не найден. Повторите S1 или переключите на S2 / S3!'
                               )}
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const fallbackTorId =
-                                resolvedFileListStream?.torrents?.[0]?.id ||
-                                activeVodItem.flTorrentId ||
-                                0;
-                              if (fallbackTorId) {
-                                handleSelectFileListTorrent(fallbackTorId, undefined, true);
-                              } else {
-                                setIsFileListStreamLoading(true);
-                                const q =
-                                  detailedMeta?.nameOriginal ||
-                                  activeVodItem.nameOriginal ||
-                                  activeVodItem.name ||
-                                  '';
-                                const p = new URLSearchParams({
-                                  type: activeVodItem.type,
-                                  s: String(selectedSeason),
-                                  e: String(selectedEpisode),
-                                  q,
-                                });
-                                const curImdb = activeVodItem.id.startsWith('tt')
-                                  ? activeVodItem.id
-                                  : detailedMeta?.imdbId || '';
-                                if (curImdb) p.set('imdb', curImdb);
-                                fetch(buildFileListApiUrl(`/api/filelist/resolve?${p.toString()}`))
-                                  .then((r) => (r.ok ? r.json() : { ok: false }))
-                                  .then((d) => setResolvedFileListStream(normalizeFileListResolveData(d)))
-                                  .catch(() => {})
-                                  .finally(() => setIsFileListStreamLoading(false));
-                              }
-                            }}
-                            className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
-                          >
-                            {tr('Reîncearcă S1: FileList.io', 'Retry S1: FileList.io', 'Повторить S1: FileList.io')}
-                          </button>
-                          {VOD_SERVERS.filter(
-                            (s) => s.id !== 'filelist_torrent'
-                          ).map((srv) => (
+                          </p>
+                          <div className="flex flex-wrap items-center justify-center gap-2">
                             <button
-                              key={srv.id}
                               type="button"
-                              onClick={() => setActiveServer(srv.id)}
-                              className="h-10 px-4 rounded-xl bg-[#1e3a8a] text-white border border-[#3b82f6]/50 font-extrabold text-xs cursor-pointer"
+                              onClick={() => {
+                                const fallbackTorId =
+                                  resolvedFileListStream?.torrents?.[0]?.id ||
+                                  activeVodItem.flTorrentId ||
+                                  0;
+                                if (fallbackTorId) {
+                                  handleSelectFileListTorrent(fallbackTorId, undefined, true);
+                                } else {
+                                  setIsFileListStreamLoading(true);
+                                  const q =
+                                    detailedMeta?.nameOriginal ||
+                                    activeVodItem.nameOriginal ||
+                                    activeVodItem.name ||
+                                    '';
+                                  const p = new URLSearchParams({
+                                    type: activeVodItem.type,
+                                    s: String(selectedSeason),
+                                    e: String(selectedEpisode),
+                                    q,
+                                  });
+                                  const curImdb = activeVodItem.id.startsWith('tt')
+                                    ? activeVodItem.id
+                                    : detailedMeta?.imdbId || '';
+                                  if (curImdb) p.set('imdb', curImdb);
+                                  fetch(buildFileListApiUrl(`/api/filelist/resolve?${p.toString()}`))
+                                    .then((r) => (r.ok ? r.json() : { ok: false }))
+                                    .then((d) => setResolvedFileListStream(normalizeFileListResolveData(d)))
+                                    .catch(() => { })
+                                    .finally(() => setIsFileListStreamLoading(false));
+                                }
+                              }}
+                              className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
                             >
-                              {srv.label.split('(')[0]}
+                              {tr('Reîncearcă S1: FileList.io', 'Retry S1: FileList.io', 'Повторить S1: FileList.io')}
                             </button>
-                          ))}
+                            {VOD_SERVERS.filter(
+                              (s) => s.id !== 'filelist_torrent'
+                            ).map((srv) => (
+                              <button
+                                key={srv.id}
+                                type="button"
+                                onClick={() => setActiveServer(srv.id)}
+                                className="h-10 px-4 rounded-xl bg-[#1e3a8a] text-white border border-[#3b82f6]/50 font-extrabold text-xs cursor-pointer"
+                              >
+                                {srv.label.split('(')[0]}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )
-                  ) : activeServer === 'kinogram_hls' ||
-                    Boolean(matchedOfflineVodItem) ||
-                    (isFileListExclusiveRomanianTitle(
-                      detailedMeta || activeVodItem
-                    ) &&
-                      (isDirectStreamLoading ||
-                        Boolean(
-                          resolvedDirectStream?.ok &&
+                      )
+                    ) : activeServer === 'kinogram_hls' ||
+                      Boolean(matchedOfflineVodItem) ||
+                      (isFileListExclusiveRomanianTitle(
+                        detailedMeta || activeVodItem
+                      ) &&
+                        (isDirectStreamLoading ||
+                          Boolean(
+                            resolvedDirectStream?.ok &&
                             (resolvedDirectStream.dashUrl ||
                               resolvedDirectStream.hlsUrl)
-                        ))) ? (
-                    isDirectStreamLoading && !matchedOfflineVodItem ? (
-                      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 text-zinc-200">
-                        <Loader2 className="w-10 h-10 text-amber-400 animate-spin" />
-                        <p className="text-sm font-bold">
-                          Pornire automată Full Mode HD pentru Smart TV...
-                        </p>
-                      </div>
-                    ) : matchedOfflineVodItem ||
-                      (resolvedDirectStream?.ok &&
-                        (resolvedDirectStream.dashUrl ||
-                          resolvedDirectStream.hlsUrl)) ? (
-                      <VodNativeHlsPlayer
+                          ))) ? (
+                      isDirectStreamLoading && !matchedOfflineVodItem ? (
+                        <FilmioStartupLoader />
+                      ) : matchedOfflineVodItem ||
+                        (resolvedDirectStream?.ok &&
+                          (resolvedDirectStream.dashUrl ||
+                            resolvedDirectStream.hlsUrl)) ? (
+                                              <VodNativeHlsPlayer
+                        key={`vod_direct_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${matchedOfflineVodItem?.id || resolvedDirectStream?.sourcePath || 'direct'}`}
                         offlineItem={matchedOfflineVodItem}
                         dashUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.dashUrl}
                         hlsUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.hlsUrl}
-                        onStreamError={() => {
-                          if (activeVodItem.isAdultKlubnichka && klubnichkaQualities.length > 1) {
-                            const curIdx = klubnichkaQualities.findIndex(
-                              (q) => q.url === resolvedDirectStream?.hlsUrl
-                            );
-                            const nextLower =
-                              curIdx >= 0 && curIdx + 1 < klubnichkaQualities.length
-                                ? klubnichkaQualities[curIdx + 1]
-                                : klubnichkaQualities.find((q) => q.height <= 720);
-                            if (nextLower && nextLower.url !== resolvedDirectStream?.hlsUrl) {
-                              setResolvedDirectStream((prev) =>
-                                prev ? { ...prev, hlsUrl: nextLower.url } : prev
+                          onStreamError={() => {
+                            if (activeVodItem.isAdultKlubnichka && klubnichkaQualities.length > 1) {
+                              const curIdx = klubnichkaQualities.findIndex(
+                                (q) => q.url === resolvedDirectStream?.hlsUrl
                               );
-                              return;
+                              const nextLower =
+                                curIdx >= 0 && curIdx + 1 < klubnichkaQualities.length
+                                  ? klubnichkaQualities[curIdx + 1]
+                                  : klubnichkaQualities.find((q) => q.height <= 720);
+                              if (nextLower && nextLower.url !== resolvedDirectStream?.hlsUrl) {
+                                setResolvedDirectStream((prev) =>
+                                  prev ? { ...prev, hlsUrl: nextLower.url } : prev
+                                );
+                                return;
+                              }
                             }
-                          }
-                          if (
-                            resolvedDirectStream?.backupHlsUrls &&
-                            resolvedDirectStream.backupHlsUrls.length > 0
-                          ) {
-                            const [nextBackup, ...restBackups] =
-                              resolvedDirectStream.backupHlsUrls;
-                            if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
-                              setResolvedDirectStream((prev) =>
-                                prev
-                                  ? {
+                            if (
+                              resolvedDirectStream?.backupHlsUrls &&
+                              resolvedDirectStream.backupHlsUrls.length > 0
+                            ) {
+                              const [nextBackup, ...restBackups] =
+                                resolvedDirectStream.backupHlsUrls;
+                              if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
+                                setResolvedDirectStream((prev) =>
+                                  prev
+                                    ? {
                                       ...prev,
                                       hlsUrl: nextBackup,
                                       backupHlsUrls: restBackups,
                                     }
-                                  : prev
+                                    : prev
+                                );
+                                return;
+                              }
+                            }
+                            if (
+                              isLocalHomeServer() &&
+                              resolvedFileListStream?.ok &&
+                              resolvedFileListStream.streamUrl
+                            ) {
+                              setActiveServer('filelist_torrent');
+                            }
+                          }}
+                          durationHintSec={(() => {
+                            if (
+                              matchedOfflineVodItem?.duration &&
+                              matchedOfflineVodItem.duration > 60
+                            ) {
+                              return matchedOfflineVodItem.duration;
+                            }
+                            if (
+                              resolvedDirectStream?.duration &&
+                              resolvedDirectStream.duration > 60
+                            ) {
+                              return resolvedDirectStream.duration;
+                            }
+                            const rawRt = String(detailedMeta?.runtime || '');
+                            const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
+                            if (hmMatch) {
+                              return (
+                                Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60
                               );
-                              return;
                             }
-                          }
-                          if (
-                            isLocalHomeServer() &&
-                            resolvedFileListStream?.ok &&
-                            resolvedFileListStream.streamUrl
-                          ) {
-                            setActiveServer('filelist_torrent');
-                          }
-                        }}
-                        durationHintSec={(() => {
-                          if (
-                            matchedOfflineVodItem?.duration &&
-                            matchedOfflineVodItem.duration > 60
-                          ) {
-                            return matchedOfflineVodItem.duration;
-                          }
-                          if (
-                            resolvedDirectStream?.duration &&
-                            resolvedDirectStream.duration > 60
-                          ) {
-                            return resolvedDirectStream.duration;
-                          }
-                          const rawRt = String(detailedMeta?.runtime || '');
-                          const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
-                          if (hmMatch) {
-                            return (
-                              Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60
-                            );
-                          }
-                          const minMatch =
-                            rawRt.match(/(\d+)\s*min/i) || rawRt.match(/^(\d+)$/);
-                          if (minMatch && Number(minMatch[1]) > 5) {
-                            return Number(minMatch[1]) * 60;
-                          }
-                          const savedDur =
-                            watchProgressMap[activeVodItem.id]?.duration;
-                          if (savedDur && savedDur > 60) return savedDur;
-                          return activeVodItem.type === 'series' ? 2700 : 7200;
-                        })()}
-                        audioTrackLabels={
-                          matchedOfflineVodItem
-                            ? [matchedOfflineVodItem.audioLabel || 'Audio Offline']
-                            : resolvedDirectStream?.audioNames
-                        }
-                        initialAudioTrackIndex={
-                          matchedOfflineVodItem ? 0 : effectiveAudioTrackIdx
-                        }
-                        preferredQuality={tvSettings.defaultVideoQuality}
-                        initialSubFontSize={tvSettings.defaultSubFontSize}
-                        preferredSubLang={tvSettings.defaultSubLang}
-                        startAtSeconds={resumeStartSeconds}
-                        poster={
-                          detailedMeta?.poster ||
-                          activeVodItem.poster ||
-                          detailedMeta?.background ||
-                          activeVodItem.background
-                        }
-                        backdropUrl={
-                          detailedMeta?.background ||
-                          activeVodItem.background ||
-                          detailedMeta?.poster ||
-                          activeVodItem.poster
-                        }
-                        title={
-                          uiLang !== 'ru'
-                            ? detailedMeta?.nameOriginal ||
-                            detailedMeta?.name ||
-                            activeVodItem.nameOriginal ||
-                            activeVodItem.name
-                            : detailedMeta?.name || activeVodItem.name
-                        }
-                        subtitle={
-                          (activeVodItem.type === 'series'
-                            ? episodesForSeason.find(
-                              (ep) => ep.episode === selectedEpisode
-                            )?.name
-                            : '') ||
-                          detailedMeta?.releaseInfo ||
-                          activeVodItem.releaseInfo
-                        }
-                        imdbId={
-                          activeVodItem.id.startsWith('tt')
-                            ? activeVodItem.id
-                            : detailedMeta?.imdbId ||
-                            resolvedFileListStream?.selectedTorrent?.imdbId ||
-                            activeVodItem.id
-                        }
-                        tmdbId={
-                          detailedMeta?.moviedb_id || activeVodItem.moviedb_id
-                        }
-                        mediaType={activeVodItem.type}
-                        season={selectedSeason}
-                        episode={selectedEpisode}
-                        subtitleVttUrl={activeSubVttUrl}
-                        subtitleLabel={
-                          activeSubLabel ||
-                          matchedOfflineVodItem?.savedSubLabel ||
-                          ''
-                        }
-                        subtitleCues={
-                          activeSubCues.length > 0
-                            ? activeSubCues
-                            : matchedOfflineVodItem?.savedSubCues || []
-                        }
-                        isOsdVisible={isVodOsdVisible}
-                        activeServerId={activeServer}
-                        serverOptions={matchedOfflineVodItem ? [] : VOD_SERVERS}
-                        sourceQualityBadge={matchedOfflineVodItem?.qualityLabel}
-                        externalQualityOptions={matchedOfflineVodItem ? [] : flQualityOptions}
-                        onResolutionChange={setLiveVodResolution}
-                        onWakeOsd={wakeVodOsd}
-                        onHideOsd={hideVodOsd}
-                        onClosePlayer={() => {
-                          setIsPlayingVod(false);
-                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                            setActiveVodItem(null);
-                            if (!activeVodItem.isAdultKlubnichka) {
-                              setIsSidebarOpen(true);
+                            const minMatch =
+                              rawRt.match(/(\d+)\s*min/i) || rawRt.match(/^(\d+)$/);
+                            if (minMatch && Number(minMatch[1]) > 5) {
+                              return Number(minMatch[1]) * 60;
                             }
+                            const savedDur =
+                              watchProgressMap[activeVodItem.id]?.duration;
+                            if (savedDur && savedDur > 60) return savedDur;
+                            return activeVodItem.type === 'series' ? 2700 : 7200;
+                          })()}
+                          audioTrackLabels={
+                            matchedOfflineVodItem
+                              ? [matchedOfflineVodItem.audioLabel || 'Audio Offline']
+                              : resolvedDirectStream?.audioNames
                           }
-                        }}
-                        prevEpisodeLabel={prevEpisodeInfo?.label}
-                        nextEpisodeLabel={nextEpisodeInfo?.label}
-                        onPrevEpisode={
-                          prevEpisodeInfo
-                            ? () => {
+                          initialAudioTrackIndex={
+                            matchedOfflineVodItem ? 0 : effectiveAudioTrackIdx
+                          }
+                          preferredQuality={tvSettings.defaultVideoQuality}
+                          initialSubFontSize={tvSettings.defaultSubFontSize}
+                          preferredSubLang={tvSettings.defaultSubLang}
+                          startAtSeconds={resumeStartSeconds}
+                          poster={
+                            detailedMeta?.poster ||
+                            activeVodItem.poster ||
+                            detailedMeta?.background ||
+                            activeVodItem.background
+                          }
+                          backdropUrl={
+                            detailedMeta?.background ||
+                            activeVodItem.background ||
+                            detailedMeta?.poster ||
+                            activeVodItem.poster
+                          }
+                          title={
+                            uiLang !== 'ru'
+                              ? detailedMeta?.nameOriginal ||
+                              detailedMeta?.name ||
+                              activeVodItem.nameOriginal ||
+                              activeVodItem.name
+                              : detailedMeta?.name || activeVodItem.name
+                          }
+                          subtitle={
+                            (activeVodItem.type === 'series'
+                              ? episodesForSeason.find(
+                                (ep) => ep.episode === selectedEpisode
+                              )?.name
+                              : '') ||
+                            detailedMeta?.releaseInfo ||
+                            activeVodItem.releaseInfo
+                          }
+                          imdbId={
+                            activeVodItem.id.startsWith('tt')
+                              ? activeVodItem.id
+                              : detailedMeta?.imdbId ||
+                              resolvedFileListStream?.selectedTorrent?.imdbId ||
+                              activeVodItem.id
+                          }
+                          tmdbId={
+                            detailedMeta?.moviedb_id || activeVodItem.moviedb_id
+                          }
+                          mediaType={activeVodItem.type}
+                          season={selectedSeason}
+                          episode={selectedEpisode}
+                          subtitleVttUrl={activeSubVttUrl}
+                          subtitleLabel={
+                            activeSubLabel ||
+                            matchedOfflineVodItem?.savedSubLabel ||
+                            ''
+                          }
+                          subtitleCues={
+                            activeSubCues.length > 0
+                              ? activeSubCues
+                              : matchedOfflineVodItem?.savedSubCues || []
+                          }
+                          isOsdVisible={isVodOsdVisible}
+                          activeServerId={activeServer}
+                          serverOptions={matchedOfflineVodItem ? [] : VOD_SERVERS}
+                          sourceQualityBadge={matchedOfflineVodItem?.qualityLabel}
+                          externalQualityOptions={matchedOfflineVodItem ? [] : flQualityOptions}
+                          onResolutionChange={setLiveVodResolution}
+                          onWakeOsd={wakeVodOsd}
+                          onHideOsd={hideVodOsd}
+                          onClosePlayer={() => {
+                            setIsPlayingVod(false);
+                            if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
+                              setActiveVodItem(null);
+                              if (!activeVodItem.isAdultKlubnichka) {
+                                setIsSidebarOpen(true);
+                              }
+                            }
+                          }}
+                          prevEpisodeLabel={prevEpisodeInfo?.label}
+                          nextEpisodeLabel={nextEpisodeInfo?.label}
+                          onPrevEpisode={
+                            prevEpisodeInfo
+                              ? () => {
                                 userSelectedFlTorrentIdRef.current = null;
                                 if (prevEpisodeInfo.season !== selectedSeason) {
                                   setSelectedSeason(prevEpisodeInfo.season);
@@ -11068,11 +11780,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setSelectedEpisode(prevEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
                               }
-                            : undefined
-                        }
-                        onNextEpisode={
-                          nextEpisodeInfo
-                            ? () => {
+                              : undefined
+                          }
+                          onNextEpisode={
+                            nextEpisodeInfo
+                              ? () => {
                                 userSelectedFlTorrentIdRef.current = null;
                                 if (nextEpisodeInfo.season !== selectedSeason) {
                                   setSelectedSeason(nextEpisodeInfo.season);
@@ -11080,101 +11792,206 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 setSelectedEpisode(nextEpisodeInfo.episode);
                                 setResumeStartSeconds(0);
                               }
-                            : undefined
-                        }
-                        onOpenEpisodesDrawer={
-                          activeVodItem.type === 'series'
-                            ? () => {
-                              setIsInfoSheetOpen(false);
-                              setIsEpisodesDrawerOpen((prev) => {
-                                const nextOpen = !prev;
-                                if (nextOpen) {
-                                  window.setTimeout(() => {
-                                    const targetBtn =
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] [data-drawer-next-ep="true"]'
-                                      ) ||
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] [data-drawer-initial-focus="true"]'
-                                      ) ||
-                                      playerBoxRef.current?.querySelector<HTMLElement>(
-                                        '[data-episodes-drawer="true"] button'
-                                      );
-                                    targetBtn?.focus();
-                                  }, 45);
-                                }
-                                return nextOpen;
-                              });
-                            }
-                            : undefined
-                        }
-                        onOpenInfoSheet={() => {
-                          setIsEpisodesDrawerOpen(false);
-                          setIsInfoSheetOpen((prev) => {
-                            const nextOpen = !prev;
-                            if (nextOpen) {
-                              window.setTimeout(() => {
-                                const targetBtn =
-                                  playerBoxRef.current?.querySelector<HTMLElement>(
-                                    '[data-vod-sheet-open="true"] [data-sheet-close-btn="true"]'
-                                  ) ||
-                                  playerBoxRef.current?.querySelector<HTMLElement>(
-                                    '[data-vod-sheet-open="true"] button'
-                                  );
-                                targetBtn?.focus();
-                              }, 45);
-                            }
-                            return nextOpen;
-                          });
-                        }}
-                        onSelectServer={(srvId) => {
-                          userManuallySelectedServerRef.current = true;
-                          if (srvId !== 'filelist_torrent') {
-                            userSelectedFlTorrentIdRef.current = null;
+                              : undefined
                           }
-                          setActiveServer(srvId as VodServerId);
-                        }}
-                        onSelectAudioTrackIndex={(idx) =>
-                          setSelectedAudioTrackIdx(idx)
-                        }
-                        onRequestOriginalAudio={() =>
-                          handleRequestOriginalAudio(false)
-                        }
-                        onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
-                          setActiveSubVttUrl(vttBlobUrl);
-                          setActiveSubLabel(label);
-                          setActiveSubCues(cues);
-                        }}
-                        onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
-                        onClearSubtitle={() => {
-                          setActiveSubVttUrl(null);
-                          setActiveSubLabel('');
-                          setActiveSubCues([]);
-                        }}
-                        onTimeUpdate={(cur, dur) => {
-                          const prevEntry =
-                            watchProgressMapRef.current[activeVodItem.id];
-                          const prevCur = prevEntry?.currentTime || 0;
-                          if (
-                            cur > 3 &&
-                            (!prevEntry?.isPlayingNow ||
-                              Math.abs(cur - prevCur) >= 15)
-                          ) {
-                            updateWatchProgress(
-                              activeVodItem,
-                              selectedSeason,
-                              selectedEpisode,
-                              cur,
-                              dur
-                            );
+                          onOpenEpisodesDrawer={
+                            activeVodItem.type === 'series'
+                              ? () => {
+                                setIsInfoSheetOpen(false);
+                                setIsEpisodesDrawerOpen((prev) => {
+                                  const nextOpen = !prev;
+                                  if (nextOpen) {
+                                    window.setTimeout(() => {
+                                      const targetBtn =
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] [data-drawer-next-ep="true"]'
+                                        ) ||
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] [data-drawer-initial-focus="true"]'
+                                        ) ||
+                                        playerBoxRef.current?.querySelector<HTMLElement>(
+                                          '[data-episodes-drawer="true"] button'
+                                        );
+                                      targetBtn?.focus();
+                                    }, 45);
+                                  }
+                                  return nextOpen;
+                                });
+                              }
+                              : undefined
                           }
-                        }}
-                      />
-                    ) : isFileListExclusiveRomanianTitle(
+                          onOpenInfoSheet={() => {
+                            setIsEpisodesDrawerOpen(false);
+                            setIsInfoSheetOpen((prev) => {
+                              const nextOpen = !prev;
+                              if (nextOpen) {
+                                window.setTimeout(() => {
+                                  const targetBtn =
+                                    playerBoxRef.current?.querySelector<HTMLElement>(
+                                      '[data-vod-sheet-open="true"] [data-sheet-close-btn="true"]'
+                                    ) ||
+                                    playerBoxRef.current?.querySelector<HTMLElement>(
+                                      '[data-vod-sheet-open="true"] button'
+                                    );
+                                  targetBtn?.focus();
+                                }, 45);
+                              }
+                              return nextOpen;
+                            });
+                          }}
+                          onSelectServer={(srvId) => {
+                            userManuallySelectedServerRef.current = true;
+                            if (srvId !== 'filelist_torrent') {
+                              userSelectedFlTorrentIdRef.current = null;
+                            }
+                            setActiveServer(srvId as VodServerId);
+                          }}
+                          onSelectAudioTrackIndex={(idx) =>
+                            setSelectedAudioTrackIdx(idx)
+                          }
+                          onRequestOriginalAudio={() =>
+                            handleRequestOriginalAudio(false)
+                          }
+                          onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
+                            setActiveSubVttUrl(vttBlobUrl);
+                            setActiveSubLabel(label);
+                            setActiveSubCues(cues);
+                          }}
+                          onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
+                          onClearSubtitle={() => {
+                            setActiveSubVttUrl(null);
+                            setActiveSubLabel('');
+                            setActiveSubCues([]);
+                          }}
+                          onTimeUpdate={(cur, dur) => {
+                            const prevEntry =
+                              watchProgressMapRef.current[activeVodItem.id];
+                            const prevCur = prevEntry?.currentTime || 0;
+                            if (
+                              cur > 3 &&
+                              (!prevEntry?.isPlayingNow ||
+                                Math.abs(cur - prevCur) >= 15)
+                            ) {
+                              updateWatchProgress(
+                                activeVodItem,
+                                selectedSeason,
+                                selectedEpisode,
+                                cur,
+                                dur
+                              );
+                            }
+                          }}
+                        />
+                      ) : isFileListExclusiveRomanianTitle(
                         detailedMeta || activeVodItem
                       ) &&
-                      !activeVodItem.klubnichkaEmbedUrl &&
-                      !resolvedDirectStream?.embedUrl ? (
+                        !activeVodItem.klubnichkaEmbedUrl &&
+                        !resolvedDirectStream?.embedUrl ? (
+                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
+                          <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+                            <div className="text-lg sm:text-xl font-extrabold text-white">
+                              {activeVodItem.name}
+                              {activeVodItem.type === 'series'
+                                ? ` • S${selectedSeason}:E${selectedEpisode}`
+                                : ''}
+                            </div>
+                            <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                              {tr(
+                                'Acest titlu românesc (FileList.io 1080p Original) se redă direct prin motorul local P2P pentru a garanta episodul real fără reclame sau înlocuiri greșite.',
+                                'This Romanian FileList.io 1080p title streams directly via your Local Home Server P2P engine so the exact episode plays without wrong replacements.',
+                                'Этот румынский релиз FileList.io 1080p воспроизводится напрямую через локальный сервер P2P.'
+                              )}
+                            </p>
+                            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                              {!isMobilePhone && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsFileListStreamLoading(true);
+                                    void retryProbeLocalBridge().then((ok) => {
+                                      if (ok) {
+                                        setActiveServer('filelist_torrent');
+                                        setLocalBridgeTick((t) => t + 1);
+                                      } else {
+                                        setIsFileListStreamLoading(false);
+                                      }
+                                    });
+                                  }}
+                                  className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
+                                >
+                                  {tr(
+                                    'Conectează la localhost:8769',
+                                    'Connect to localhost:8769',
+                                    'Подключить localhost:8769'
+                                  )}
+                                </button>
+                              )}
+                              <a
+                                href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                                  activeVodItem.id
+                                )}&name=${encodeURIComponent(
+                                  activeVodItem.name
+                                )}&type=${encodeURIComponent(
+                                  activeVodItem.type
+                                )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                                  resumeStartSeconds || 0
+                                )}`}
+                                className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
+                              >
+                                {tr(
+                                  'Deschide pe Wi-Fi Local (192.168.2.57)',
+                                  'Open on Home Wi-Fi (192.168.2.57)',
+                                  'Открыть в домашней Wi-Fi (192.168.2.57)'
+                                )}
+                              </a>
+                              <a
+                                href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
+                                  activeVodItem.id
+                                )}&name=${encodeURIComponent(
+                                  activeVodItem.name
+                                )}&type=${encodeURIComponent(
+                                  activeVodItem.type
+                                )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                                  resumeStartSeconds || 0
+                                )}`}
+                                className="h-10 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white border border-white/20 font-extrabold text-xs inline-flex items-center justify-center"
+                              >
+                                {tr(
+                                  'Deschide prin Tailscale (100.79.113.57)',
+                                  'Open via Tailscale (100.79.113.57)',
+                                  'Открыть через Tailscale (100.79.113.57)'
+                                )}
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <iframe
+                          src={
+                            activeVodItem.klubnichkaEmbedUrl ||
+                            resolvedDirectStream?.embedUrl ||
+                            buildVodEmbedUrl(
+                              'vidsrc_pm',
+                              detailedMeta || activeVodItem,
+                              selectedSeason,
+                              selectedEpisode,
+                              preferredSubLang,
+                              resumeStartSeconds,
+                              detailedMeta?.imdbId ||
+                              resolvedFileListStream?.selectedTorrent?.imdbId
+                            )
+                          }
+                          title={activeVodItem.name}
+                          className="relative z-10 w-full h-full border-0"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                          allowFullScreen
+                        />
+                      )
+                    ) : isFileListExclusiveRomanianTitle(
+                      detailedMeta || activeVodItem
+                    ) && !resolvedDirectStream?.embedUrl ? (
                       <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
                         <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
                           <div className="text-lg sm:text-xl font-extrabold text-white">
@@ -11185,42 +12002,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           </div>
                           <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
                             {tr(
-                              'Acest titlu românesc (FileList.io 1080p Original) se redă direct prin motorul local P2P pentru a garanta episodul real fără reclame sau înlocuiri greșite.',
-                              'This Romanian FileList.io 1080p title streams directly via your Local Home Server P2P engine so the exact episode plays without wrong replacements.',
-                              'Этот румынский релиз FileList.io 1080p воспроизводится напрямую через локальный сервер P2P.'
+                              'Acest titlu românesc (FileList.io 1080p Original) nu există pe serverele externe de embed — pornește-l prin S1: FileList.io pe serverul local.',
+                              'This Romanian FileList.io 1080p title is only available on your Local Home Server via S1: FileList.io.',
+                              'Этот румынский релиз доступен только через локальный сервер S1: FileList.io.'
                             )}
                           </p>
                           <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                            {!isMobilePhone && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setIsFileListStreamLoading(true);
-                                  void retryProbeLocalBridge().then((ok) => {
-                                    if (ok) {
-                                      setActiveServer('filelist_torrent');
-                                      setLocalBridgeTick((t) => t + 1);
-                                    } else {
-                                      setIsFileListStreamLoading(false);
-                                    }
-                                  });
-                                }}
-                                className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
-                              >
-                                {tr(
-                                  'Conectează la localhost:8769',
-                                  'Connect to localhost:8769',
-                                  'Подключить localhost:8769'
-                                )}
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsFileListStreamLoading(true);
+                                void retryProbeLocalBridge().then((ok) => {
+                                  setActiveServer('filelist_torrent');
+                                  if (ok) {
+                                    setLocalBridgeTick((t) => t + 1);
+                                  } else {
+                                    setIsFileListStreamLoading(false);
+                                  }
+                                });
+                              }}
+                              className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
+                            >
+                              {tr(
+                                'Comută pe S1: FileList.io 1080p',
+                                'Switch to S1: FileList.io 1080p',
+                                'Переключить на S1: FileList.io 1080p'
+                              )}
+                            </button>
                             <a
                               href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
                                 activeVodItem.id
-                              )}&name=${encodeURIComponent(
-                                activeVodItem.name
-                              )}&type=${encodeURIComponent(
-                                activeVodItem.type
                               )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
                                 resumeStartSeconds || 0
                               )}`}
@@ -11232,41 +12043,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 'Открыть в домашней Wi-Fi (192.168.2.57)'
                               )}
                             </a>
-                            <a
-                              href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
-                                activeVodItem.id
-                              )}&name=${encodeURIComponent(
-                                activeVodItem.name
-                              )}&type=${encodeURIComponent(
-                                activeVodItem.type
-                              )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                                resumeStartSeconds || 0
-                              )}`}
-                              className="h-10 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white border border-white/20 font-extrabold text-xs inline-flex items-center justify-center"
-                            >
-                              {tr(
-                                'Deschide prin Tailscale (100.79.113.57)',
-                                'Open via Tailscale (100.79.113.57)',
-                                'Открыть через Tailscale (100.79.113.57)'
-                              )}
-                            </a>
                           </div>
                         </div>
                       </div>
                     ) : (
                       <iframe
                         src={
-                          activeVodItem.klubnichkaEmbedUrl ||
                           resolvedDirectStream?.embedUrl ||
                           buildVodEmbedUrl(
-                            'vidsrc_pm',
+                            activeServer,
                             detailedMeta || activeVodItem,
                             selectedSeason,
                             selectedEpisode,
                             preferredSubLang,
                             resumeStartSeconds,
                             detailedMeta?.imdbId ||
-                              resolvedFileListStream?.selectedTorrent?.imdbId
+                            resolvedFileListStream?.selectedTorrent?.imdbId
                           )
                         }
                         title={activeVodItem.name}
@@ -11276,818 +12068,738 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                         allowFullScreen
                       />
-                    )
-                  ) : isFileListExclusiveRomanianTitle(
-                      detailedMeta || activeVodItem
-                    ) && !resolvedDirectStream?.embedUrl ? (
-                    <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-zinc-950/85 backdrop-blur-xl">
-                      <div className="max-w-lg rounded-3xl border border-white/15 bg-black/70 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
-                        <div className="text-lg sm:text-xl font-extrabold text-white">
-                          {activeVodItem.name}
-                          {activeVodItem.type === 'series'
-                            ? ` • S${selectedSeason}:E${selectedEpisode}`
-                            : ''}
-                        </div>
-                        <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                          {tr(
-                            'Acest titlu românesc (FileList.io 1080p Original) nu există pe serverele externe de embed — pornește-l prin S1: FileList.io pe serverul local.',
-                            'This Romanian FileList.io 1080p title is only available on your Local Home Server via S1: FileList.io.',
-                            'Этот румынский релиз доступен только через локальный сервер S1: FileList.io.'
-                          )}
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsFileListStreamLoading(true);
-                              void retryProbeLocalBridge().then((ok) => {
-                                setActiveServer('filelist_torrent');
-                                if (ok) {
-                                  setLocalBridgeTick((t) => t + 1);
-                                } else {
-                                  setIsFileListStreamLoading(false);
-                                }
-                              });
-                            }}
-                            className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
-                          >
-                            {tr(
-                              'Comută pe S1: FileList.io 1080p',
-                              'Switch to S1: FileList.io 1080p',
-                              'Переключить на S1: FileList.io 1080p'
-                            )}
-                          </button>
-                          <a
-                            href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
-                              activeVodItem.id
-                            )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                              resumeStartSeconds || 0
-                            )}`}
-                            className="h-10 px-4 rounded-xl bg-[#1e3a8a] hover:bg-[#1d4ed8] text-white border border-[#3b82f6]/50 font-extrabold text-xs inline-flex items-center justify-center"
-                          >
-                            {tr(
-                              'Deschide pe Wi-Fi Local (192.168.2.57)',
-                              'Open on Home Wi-Fi (192.168.2.57)',
-                              'Открыть в домашней Wi-Fi (192.168.2.57)'
-                            )}
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <iframe
-                      src={
-                        resolvedDirectStream?.embedUrl ||
-                        buildVodEmbedUrl(
-                          activeServer,
-                          detailedMeta || activeVodItem,
-                          selectedSeason,
-                          selectedEpisode,
-                          preferredSubLang,
-                          resumeStartSeconds,
-                          detailedMeta?.imdbId ||
-                            resolvedFileListStream?.selectedTorrent?.imdbId
-                        )
-                      }
-                      title={activeVodItem.name}
-                      className="relative z-10 w-full h-full border-0"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                      allowFullScreen
-                    />
-                  )}
+                    )}
 
-                  {/* FLOATING BOTTOM CONTROL BAR FOR IFRAME FALLBACK STREAMS (Time Seek + Next Episode + Source) */}
-                  {!(
-                    activeServer === 'filelist_torrent' &&
-                    resolvedFileListStream?.ok &&
-                    resolvedFileListStream.streamUrl
-                  ) &&
-                    !(
-                      (activeServer === 'kinogram_hls' ||
-                        activeServer === 'filelist_torrent') &&
-                      resolvedDirectStream?.ok &&
-                      (resolvedDirectStream.dashUrl ||
-                        resolvedDirectStream.hlsUrl)
+                    {/* FLOATING BOTTOM CONTROL BAR FOR IFRAME FALLBACK STREAMS (Time Seek + Next Episode + Source) */}
+                    {!(
+                      activeServer === 'filelist_torrent' &&
+                      resolvedFileListStream?.ok &&
+                      resolvedFileListStream.streamUrl
                     ) &&
-                    !isFileListStreamLoading &&
-                    !isDirectStreamLoading && (
-                      <div
-                        data-vod-bottom-dock="true"
-                        className={`absolute inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 z-30 overflow-visible rounded-2xl sm:rounded-[28px] tahoe-emerald-osd px-3 sm:px-6 py-2.5 sm:py-4 flex flex-col gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible
+                      !(
+                        (activeServer === 'kinogram_hls' ||
+                          activeServer === 'filelist_torrent') &&
+                        resolvedDirectStream?.ok &&
+                        (resolvedDirectStream.dashUrl ||
+                          resolvedDirectStream.hlsUrl)
+                      ) &&
+                      !isFileListStreamLoading &&
+                      !isDirectStreamLoading && (
+                        <div
+                          data-vod-bottom-dock="true"
+                          className={`absolute inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 z-30 overflow-visible rounded-2xl sm:rounded-[28px] tahoe-emerald-osd px-3 sm:px-6 py-2.5 sm:py-4 flex flex-col gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible
                             ? 'opacity-100 translate-y-0 pointer-events-auto'
                             : 'opacity-0 translate-y-2 pointer-events-none'
-                          }`}
-                      >
-                        <div
-                          data-vod-bottom-row="true"
-                          className="w-full flex flex-wrap items-center justify-between gap-1.5 sm:gap-3"
+                            }`}
                         >
-                          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5">
-                            {/* Clean Apple TV+ Large Pop-Out Poster & Title + Episode Name inside Bottom Dock */}
-                            {(detailedMeta?.poster ||
-                              activeVodItem.poster ||
-                              detailedMeta?.background ||
-                              activeVodItem.background) && (
-                                <div className="hidden sm:flex items-center gap-4 pr-6 mr-2 mb-2 shrink-0 max-w-[540px] overflow-visible">
-                                  <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
-                                    <img
-                                      src={
-                                        detailedMeta?.poster ||
-                                        activeVodItem.poster ||
-                                        detailedMeta?.background ||
-                                        activeVodItem.background
-                                      }
-                                      alt={activeVodItem.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                  <div className="min-w-0 flex flex-col justify-center gap-1 py-1">
-                                    <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow mb-1">
-                                      {uiLang !== 'ru'
-                                        ? detailedMeta?.nameOriginal ||
-                                        detailedMeta?.name ||
-                                        activeVodItem.nameOriginal ||
-                                        activeVodItem.name
-                                        : detailedMeta?.name || activeVodItem.name}
+                          <div
+                            data-vod-bottom-row="true"
+                            className="w-full flex flex-wrap items-center justify-between gap-1.5 sm:gap-3"
+                          >
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5">
+                              {/* Clean Apple TV+ Large Pop-Out Poster & Title + Episode Name inside Bottom Dock */}
+                              {(detailedMeta?.poster ||
+                                activeVodItem.poster ||
+                                detailedMeta?.background ||
+                                activeVodItem.background) && (
+                                  <div className="hidden sm:flex items-center gap-4 pr-6 mr-2 mb-2 shrink-0 max-w-[540px] overflow-visible">
+                                    <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
+                                      <img
+                                        src={
+                                          detailedMeta?.poster ||
+                                          activeVodItem.poster ||
+                                          detailedMeta?.background ||
+                                          activeVodItem.background
+                                        }
+                                        alt={activeVodItem.name}
+                                        className="w-full h-full object-cover"
+                                      />
                                     </div>
-                                    <div className="flex items-center gap-2 min-w-0 text-sm sm:text-base font-semibold text-white/90">
-                                      {activeVodItem.type === 'series' && (
-                                        <>
-                                          <span className="text-white font-bold shrink-0 mr-2">
-                                            S{selectedSeason} · E{selectedEpisode}
-                                          </span>
-                                          <span className="text-white/40 mr-2">•</span>
-                                        </>
-                                      )}
-                                      <span className="truncate text-white/85">
-                                        {(activeVodItem.type === 'series'
-                                          ? episodesForSeason.find(
-                                            (ep) =>
-                                              ep.episode === selectedEpisode
-                                          )?.name
-                                          : '') ||
-                                          detailedMeta?.releaseInfo ||
-                                          activeVodItem.releaseInfo ||
-                                          'Cinema 4K'}
-                                      </span>
+                                    <div className="min-w-0 flex flex-col justify-center gap-1 py-1">
+                                      <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white truncate leading-tight tracking-tight drop-shadow mb-1">
+                                        {uiLang !== 'ru'
+                                          ? detailedMeta?.nameOriginal ||
+                                          detailedMeta?.name ||
+                                          activeVodItem.nameOriginal ||
+                                          activeVodItem.name
+                                          : detailedMeta?.name || activeVodItem.name}
+                                      </div>
+                                      <div className="flex items-center gap-2 min-w-0 text-sm sm:text-base font-semibold text-white/90">
+                                        {activeVodItem.type === 'series' && (
+                                          <>
+                                            <span className="text-white font-bold shrink-0 mr-2">
+                                              S{selectedSeason} · E{selectedEpisode}
+                                            </span>
+                                            <span className="text-white/40 mr-2">•</span>
+                                          </>
+                                        )}
+                                        <span className="truncate text-white/85">
+                                          {(activeVodItem.type === 'series'
+                                            ? episodesForSeason.find(
+                                              (ep) =>
+                                                ep.episode === selectedEpisode
+                                            )?.name
+                                            : '') ||
+                                            detailedMeta?.releaseInfo ||
+                                            activeVodItem.releaseInfo ||
+                                            'Cinema 4K'}
+                                        </span>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              )}
+                                )}
 
-                            <button
-                              type="button"
-                              data-vod-play-btn="true"
-                              data-vod-seek-back-15="true"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setResumeStartSeconds((s) =>
-                                  Math.max(0, s - 15)
-                                );
-                              }}
-                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
-                              <span>15s</span>
-                            </button>
+                              <button
+                                type="button"
+                                data-vod-play-btn="true"
+                                data-vod-seek-back-15="true"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setResumeStartSeconds((s) =>
+                                    Math.max(0, s - 15)
+                                  );
+                                }}
+                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
+                                <span>15s</span>
+                              </button>
 
-                            <button
-                              type="button"
-                              data-vod-seek-fwd-15="true"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setResumeStartSeconds((s) => s + 15);
-                              }}
-                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                            >
-                              <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
-                              <span>+15s</span>
-                            </button>
+                              <button
+                                type="button"
+                                data-vod-seek-fwd-15="true"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setResumeStartSeconds((s) => s + 15);
+                                }}
+                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              >
+                                <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
+                                <span>+15s</span>
+                              </button>
 
-                            <button
-                              type="button"
-                              data-vod-seek-fwd-60="true"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setResumeStartSeconds((s) => s + 60);
-                              }}
-                              className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                            >
-                              <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
-                              <span>+1 min</span>
-                            </button>
+                              <button
+                                type="button"
+                                data-vod-seek-fwd-60="true"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setResumeStartSeconds((s) => s + 60);
+                                }}
+                                className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              >
+                                <RotateCw className="w-3.5 h-3.5 max-sm:w-3 max-sm:h-3 shrink-0" />
+                                <span>+1 min</span>
+                              </button>
 
-                            {activeVodItem.type === 'series' &&
-                              prevEpisodeInfo && (
-                                <button
-                                  type="button"
-                                  data-vod-prev-ep-btn="true"
-                                  onFocus={wakeVodOsd}
-                                  onClick={() => {
-                                    wakeVodOsd();
-                                    userSelectedFlTorrentIdRef.current = null;
-                                    if (prevEpisodeInfo.season !== selectedSeason) {
-                                      setSelectedSeason(prevEpisodeInfo.season);
-                                    }
-                                    setSelectedEpisode(prevEpisodeInfo.episode);
-                                    setResumeStartSeconds(0);
-                                  }}
-                                  className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                                >
-                                  <span>{prevEpisodeInfo.label}</span>
-                                </button>
-                              )}
-
-                            {activeVodItem.type === 'series' && (
-                              <>
-                                {nextEpisodeInfo && (
+                              {activeVodItem.type === 'series' &&
+                                prevEpisodeInfo && (
                                   <button
                                     type="button"
-                                    data-vod-next-ep-btn="true"
+                                    data-vod-prev-ep-btn="true"
                                     onFocus={wakeVodOsd}
                                     onClick={() => {
                                       wakeVodOsd();
                                       userSelectedFlTorrentIdRef.current = null;
-                                      if (nextEpisodeInfo.season !== selectedSeason) {
-                                        setSelectedSeason(nextEpisodeInfo.season);
+                                      if (prevEpisodeInfo.season !== selectedSeason) {
+                                        setSelectedSeason(prevEpisodeInfo.season);
                                       }
-                                      setSelectedEpisode(nextEpisodeInfo.episode);
+                                      setSelectedEpisode(prevEpisodeInfo.episode);
                                       setResumeStartSeconds(0);
                                     }}
                                     className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
                                   >
-                                    <span>{nextEpisodeInfo.label}</span>
+                                    <span>{prevEpisodeInfo.label}</span>
                                   </button>
                                 )}
-                                <button
-                                  type="button"
-                                  data-vod-bottom-episodes-btn="true"
-                                  onFocus={wakeVodOsd}
-                                  onClick={() => {
-                                    wakeVodOsd();
-                                    setIsInfoSheetOpen(false);
-                                    setIsEpisodesDrawerOpen((v) => !v);
-                                  }}
-                                  title={`Episoade S${selectedSeason}·E${selectedEpisode}`}
-                                  className="h-9 max-sm:h-8 px-3 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                                >
-                                  <SfEpisodesIcon className="w-3.5 h-3.5 shrink-0" />
-                                  <span className="hidden sm:inline">Episoade</span>
-                                </button>
-                              </>
-                            )}
 
-                          </div>
+                              {activeVodItem.type === 'series' && (
+                                <>
+                                  {nextEpisodeInfo && (
+                                    <button
+                                      type="button"
+                                      data-vod-next-ep-btn="true"
+                                      onFocus={wakeVodOsd}
+                                      onClick={() => {
+                                        wakeVodOsd();
+                                        userSelectedFlTorrentIdRef.current = null;
+                                        if (nextEpisodeInfo.season !== selectedSeason) {
+                                          setSelectedSeason(nextEpisodeInfo.season);
+                                        }
+                                        setSelectedEpisode(nextEpisodeInfo.episode);
+                                        setResumeStartSeconds(0);
+                                      }}
+                                      className="h-9 max-sm:h-8 px-3.5 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 max-sm:gap-1 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                    >
+                                      <span>{nextEpisodeInfo.label}</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    data-vod-bottom-episodes-btn="true"
+                                    onFocus={wakeVodOsd}
+                                    onClick={() => {
+                                      wakeVodOsd();
+                                      setIsInfoSheetOpen(false);
+                                      setIsEpisodesDrawerOpen((v) => !v);
+                                    }}
+                                    title={`Episoade S${selectedSeason}·E${selectedEpisode}`}
+                                    className="h-9 max-sm:h-8 px-3 max-sm:px-2.5 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs max-sm:text-[11px] font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                                  >
+                                    <SfEpisodesIcon className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="hidden sm:inline">Episoade</span>
+                                  </button>
+                                </>
+                              )}
 
-                          <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 ml-auto">
-                            <button
-                              type="button"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setIsEpisodesDrawerOpen(false);
-                                setIsInfoSheetOpen((v) => !v);
-                              }}
-                              title="Sursă & Calitate Video (Butonul Roșu)"
-                              aria-label="Sursă & Calitate Video (Butonul Roșu)"
-                              className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FF453A] focus:text-white cursor-pointer"
-                            >
-                              <SfVideoCameraIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                            </button>
-                            <button
-                              type="button"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setIsSubFinderOpen(true);
-                              }}
-                              title="Subtitrări (Butonul Verde)"
-                              aria-label="Subtitrări"
-                              className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#30D158]/18 hover:bg-[#30D158]/30 border border-[#30D158]/45 text-[#30D158] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(48,209,88,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#30D158] focus:text-zinc-950 cursor-pointer"
-                            >
-                              <SfCaptionsBubbleIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                            </button>
-                            <button
-                              type="button"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setIsEpisodesDrawerOpen(false);
-                                setIsInfoSheetOpen((v) => !v);
-                              }}
-                              title="Descriere (Butonul Galben)"
-                              aria-label="Descriere"
-                              className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FFD60A]/18 hover:bg-[#FFD60A]/30 border border-[#FFD60A]/45 text-[#FFD60A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,214,10,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FFD60A] focus:text-zinc-950 cursor-pointer"
-                            >
-                              <SfInfoIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                            </button>
-                            <button
-                              type="button"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                setIsEpisodesDrawerOpen(false);
-                                setIsInfoSheetOpen((v) => !v);
-                              }}
-                              title="Pistă Audio & Sursă (Butonul Albastru)"
-                              aria-label="Pistă Audio & Sursă"
-                              className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#0A84FF]/18 hover:bg-[#0A84FF]/30 border border-[#0A84FF]/45 text-[#0A84FF] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(10,132,255,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#0A84FF] focus:text-white cursor-pointer"
-                            >
-                              <SfSpeakerWaveIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                            </button>
-                            <button
-                              type="button"
-                              onFocus={wakeVodOsd}
-                              onClick={() => {
-                                wakeVodOsd();
-                                const vid = playerBoxRef.current?.querySelector('video') as
-                                  | (HTMLVideoElement & {
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 ml-auto">
+                              <button
+                                type="button"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setIsEpisodesDrawerOpen(false);
+                                  setIsInfoSheetOpen((v) => !v);
+                                }}
+                                title="Sursă & Calitate Video (Butonul Roșu)"
+                                aria-label="Sursă & Calitate Video (Butonul Roșu)"
+                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FF453A]/18 hover:bg-[#FF453A]/30 border border-[#FF453A]/45 text-[#FF453A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,69,58,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FF453A] focus:text-white cursor-pointer"
+                              >
+                                <SfVideoCameraIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              </button>
+                              <button
+                                type="button"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setIsSubFinderOpen(true);
+                                }}
+                                title="Subtitrări (Butonul Verde)"
+                                aria-label="Subtitrări"
+                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#30D158]/18 hover:bg-[#30D158]/30 border border-[#30D158]/45 text-[#30D158] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(48,209,88,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#30D158] focus:text-zinc-950 cursor-pointer"
+                              >
+                                <SfCaptionsBubbleIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              </button>
+                              <button
+                                type="button"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setIsEpisodesDrawerOpen(false);
+                                  setIsInfoSheetOpen((v) => !v);
+                                }}
+                                title="Descriere (Butonul Galben)"
+                                aria-label="Descriere"
+                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FFD60A]/18 hover:bg-[#FFD60A]/30 border border-[#FFD60A]/45 text-[#FFD60A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,214,10,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FFD60A] focus:text-zinc-950 cursor-pointer"
+                              >
+                                <SfInfoIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              </button>
+                              <button
+                                type="button"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  setIsEpisodesDrawerOpen(false);
+                                  setIsInfoSheetOpen((v) => !v);
+                                }}
+                                title="Pistă Audio & Sursă (Butonul Albastru)"
+                                aria-label="Pistă Audio & Sursă"
+                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#0A84FF]/18 hover:bg-[#0A84FF]/30 border border-[#0A84FF]/45 text-[#0A84FF] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(10,132,255,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#0A84FF] focus:text-white cursor-pointer"
+                              >
+                                <SfSpeakerWaveIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              </button>
+                              <button
+                                type="button"
+                                onFocus={wakeVodOsd}
+                                onClick={() => {
+                                  wakeVodOsd();
+                                  const vid = playerBoxRef.current?.querySelector('video') as
+                                    | (HTMLVideoElement & {
                                       webkitShowPlaybackTargetPicker?: () => void;
                                       remote?: { prompt?: () => Promise<void> };
                                     })
-                                  | null;
-                                if (vid && typeof vid.webkitShowPlaybackTargetPicker === 'function') {
-                                  try {
-                                    vid.webkitShowPlaybackTargetPicker();
-                                    return;
-                                  } catch {
-                                    // ignore
+                                    | null;
+                                  if (vid && typeof vid.webkitShowPlaybackTargetPicker === 'function') {
+                                    try {
+                                      vid.webkitShowPlaybackTargetPicker();
+                                      return;
+                                    } catch {
+                                      // ignore
+                                    }
                                   }
-                                }
-                                if (vid?.remote && typeof vid.remote.prompt === 'function') {
-                                  vid.remote.prompt().catch(() => {});
+                                  if (vid?.remote && typeof vid.remote.prompt === 'function') {
+                                    vid.remote.prompt().catch(() => { });
+                                  }
+                                }}
+                                title="AirPlay / Redare pe TV"
+                                aria-label="AirPlay / Redare pe TV"
+                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 inline-flex items-center justify-center shrink-0 shadow-md transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
+                              >
+                                <SfAirPlayIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={requestTvFullscreen}
+                                className="sm:hidden h-8 px-2.5 rounded-full bg-blue-600/90 hover:bg-blue-500 text-white text-[11px] font-bold inline-flex items-center gap-1 shadow-md cursor-pointer"
+                              >
+                                <Maximize2 className="w-3 h-3 shrink-0" />
+                                <span>Ecran Complet</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                    {/* APPLE macOS TAHOE FLOATING INFORMATION SHEET OVERLAY IN FULLSCREEN PLAYER (YELLOW BUTTON: DESCRIERE FILM CU POZĂ & ACTORI) */}
+                    {isInfoSheetOpen && (
+                      <div
+                        data-vod-sheet-open="true"
+                        className="absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto p-6 sm:p-8 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300"
+                      >
+                        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start gap-6 sm:gap-8">
+                          {/* Left Poster Photo — Clean Apple TV+ Proportions */}
+                          <div className="relative w-32 h-48 sm:w-44 sm:h-64 rounded-[24px] overflow-hidden bg-zinc-900/90 border border-white/15 shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.85)] mx-auto sm:mx-0">
+                            <img
+                              src={
+                                (detailedMeta?.poster && !detailedMeta.poster.includes('pl.img.gg')
+                                  ? detailedMeta.poster
+                                  : activeVodItem.poster && !activeVodItem.poster.includes('pl.img.gg')
+                                    ? activeVodItem.poster
+                                    : detailedMeta?.poster || activeVodItem.poster) ||
+                                `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`
+                              }
+                              alt={detailedMeta?.name || activeVodItem.name}
+                              onError={(e) => {
+                                const fallback =
+                                  detailedMeta?.background ||
+                                  activeVodItem.background ||
+                                  '';
+                                if (
+                                  fallback &&
+                                  !fallback.includes('pl.img.gg') &&
+                                  e.currentTarget.src !== fallback &&
+                                  !e.currentTarget.dataset.triedFallback
+                                ) {
+                                  e.currentTarget.dataset.triedFallback = '1';
+                                  e.currentTarget.src = fallback;
+                                } else {
+                                  e.currentTarget.style.display = 'none';
                                 }
                               }}
-                              title="AirPlay / Redare pe TV"
-                              aria-label="AirPlay / Redare pe TV"
-                              className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 inline-flex items-center justify-center shrink-0 shadow-md transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer"
-                            >
-                              <SfAirPlayIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={requestTvFullscreen}
-                              className="sm:hidden h-8 px-2.5 rounded-full bg-blue-600/90 hover:bg-blue-500 text-white text-[11px] font-bold inline-flex items-center gap-1 shadow-md cursor-pointer"
-                            >
-                              <Maximize2 className="w-3 h-3 shrink-0" />
-                              <span>Ecran Complet</span>
-                            </button>
+                              className="relative z-10 w-full h-full object-cover"
+                            />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center bg-gradient-to-b from-[#172554]/50 to-[#0f172a]">
+                              <Clapperboard className="w-8 h-8 mb-2 text-[#60a5fa]/60" />
+                              <span className="text-xs font-bold text-zinc-200 line-clamp-3">
+                                {detailedMeta?.name || activeVodItem.name}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Right Metadata Details — Clean Apple TV+ / macOS Tahoe Hierarchy */}
+                          <div className="flex-1 min-w-0 flex flex-col justify-between space-y-4 w-full">
+                            {/* Row 1: Title + Year/Country + Series Episode Pill + Close Button */}
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
+                                  <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+                                    {detailedMeta?.name || activeVodItem.name}
+                                  </h2>
+                                  {(detailedMeta?.releaseInfo ||
+                                    activeVodItem.releaseInfo ||
+                                    detailedMeta?.country) && (
+                                      <span className="text-xs sm:text-sm text-zinc-300 font-medium">
+                                        {[
+                                          detailedMeta?.releaseInfo ||
+                                          activeVodItem.releaseInfo,
+                                          detailedMeta?.country,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(', ')}
+                                      </span>
+                                    )}
+                                  {activeVodItem.type === 'series' && (
+                                    <span className="px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-xs font-semibold text-white">
+                                      S{selectedSeason}:E{selectedEpisode}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                data-sheet-close-btn="true"
+                                onClick={() => setIsInfoSheetOpen(false)}
+                                className="h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/15 focus:outline-none focus:ring-2 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer transition"
+                              >
+                                <span>{tr('Închide', 'Close', 'Закрыть')}</span>
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Row 2: Frosted Glass Ratings + Runtime & Genres */}
+                            <div className="flex flex-wrap items-center gap-2">
+                              {(detailedMeta?.imdbRating ||
+                                activeVodItem.imdbRating) && (
+                                  <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-white font-semibold inline-flex items-center gap-1.5">
+                                    <span>
+                                      {detailedMeta?.imdbRating ||
+                                        activeVodItem.imdbRating}
+                                    </span>
+                                    <span className="text-[10px] text-amber-400 font-bold tracking-wider uppercase">
+                                      IMDb
+                                    </span>
+                                  </span>
+                                )}
+                              {detailedMeta?.ratingKinopoisk && (
+                                <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-white font-semibold inline-flex items-center gap-1.5">
+                                  <span>{detailedMeta.ratingKinopoisk}</span>
+                                  <span className="text-[10px] text-zinc-400 font-bold tracking-wider uppercase">
+                                    KP
+                                  </span>
+                                </span>
+                              )}
+                              {detailedMeta?.ageRating && (
+                                <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-zinc-200 font-semibold">
+                                  {detailedMeta.ageRating}
+                                </span>
+                              )}
+                              {(detailedMeta?.runtime ||
+                                (
+                                  detailedMeta?.genres ||
+                                  activeVodItem.genres ||
+                                  []
+                                ).length > 0) && (
+                                  <span className="text-xs sm:text-sm text-zinc-300 font-medium pl-1">
+                                    {[
+                                      detailedMeta?.runtime,
+                                      (
+                                        detailedMeta?.genres ||
+                                        activeVodItem.genres ||
+                                        []
+                                      )
+                                        .slice(0, 4)
+                                        .join(' | '),
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' • ')}
+                                  </span>
+                                )}
+                            </div>
+
+                            {/* Row 3: Airy Apple TV+ Synopsis (No cluttered box or neon headers) */}
+                            <div className="space-y-1.5">
+                              <p className="text-sm sm:text-[15px] text-zinc-100/95 leading-relaxed max-w-4xl font-normal line-clamp-4">
+                                {detailedMeta?.description ||
+                                  activeVodItem.description ||
+                                  tr(
+                                    'Descrierea completă se încarcă...',
+                                    'Loading full description...',
+                                    'Загрузка полного описания...'
+                                  )}
+                              </p>
+                            </div>
+
+                            {/* Row 4: Single Clean Horizontal Row of Director & Cast Glass Pills */}
+                            {castMembers.length > 0 && (
+                              <div className="flex items-center gap-3 overflow-x-auto pt-1 pb-1 no-scrollbar">
+                                {castMembers.slice(0, 8).map((actor) => {
+                                  const displayName = actor.nameEn || actor.name;
+                                  const hasValidPhoto =
+                                    typeof actor.photoUrl === 'string' &&
+                                    actor.photoUrl.length > 0 &&
+                                    !actor.photoUrl.includes('no-poster') &&
+                                    !actor.photoUrl.includes('pl.img.gg');
+                                  const initials = displayName
+                                    .split(/\s+/)
+                                    .filter(Boolean)
+                                    .slice(0, 2)
+                                    .map((part) => part[0])
+                                    .join('')
+                                    .toUpperCase();
+                                  return (
+                                    <div
+                                      key={`${actor.staffId}_${actor.name}`}
+                                      className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-white/[0.08] backdrop-blur-xl border border-white/15 shrink-0"
+                                    >
+                                      {hasValidPhoto ? (
+                                        <img
+                                          src={actor.photoUrl}
+                                          alt={displayName}
+                                          loading="lazy"
+                                          onError={(e) => {
+                                            e.currentTarget.style.display = 'none';
+                                          }}
+                                          className="w-9 h-11 rounded-xl object-cover bg-zinc-800 shrink-0"
+                                        />
+                                      ) : (
+                                        <div className="w-9 h-11 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-300 shrink-0">
+                                          {initials || '•'}
+                                        </div>
+                                      )}
+                                      <div className="min-w-0 max-w-[140px]">
+                                        <div className="text-xs font-semibold text-white truncate">
+                                          {displayName}
+                                        </div>
+                                        {actor.role && (
+                                          <div className="text-[11px] text-zinc-400 truncate">
+                                            {actor.role}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
                     )}
 
-                  {/* APPLE macOS TAHOE FLOATING INFORMATION SHEET OVERLAY IN FULLSCREEN PLAYER (YELLOW BUTTON: DESCRIERE FILM CU POZĂ & ACTORI) */}
-                  {isInfoSheetOpen && (
-                    <div
-                      data-vod-sheet-open="true"
-                      className="absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto p-6 sm:p-8 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300"
-                    >
-                      <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start gap-6 sm:gap-8">
-                        {/* Left Poster Photo — Clean Apple TV+ Proportions */}
-                        <div className="relative w-32 h-48 sm:w-44 sm:h-64 rounded-[24px] overflow-hidden bg-zinc-900/90 border border-white/15 shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.85)] mx-auto sm:mx-0">
-                          <img
-                            src={
-                              (detailedMeta?.poster && !detailedMeta.poster.includes('pl.img.gg')
-                                ? detailedMeta.poster
-                                : activeVodItem.poster && !activeVodItem.poster.includes('pl.img.gg')
-                                  ? activeVodItem.poster
-                                  : detailedMeta?.poster || activeVodItem.poster) ||
-                              `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`
-                            }
-                            alt={detailedMeta?.name || activeVodItem.name}
-                            onError={(e) => {
-                              const fallback =
-                                detailedMeta?.background ||
-                                activeVodItem.background ||
-                                '';
-                              if (
-                                fallback &&
-                                !fallback.includes('pl.img.gg') &&
-                                e.currentTarget.src !== fallback &&
-                                !e.currentTarget.dataset.triedFallback
-                              ) {
-                                e.currentTarget.dataset.triedFallback = '1';
-                                e.currentTarget.src = fallback;
-                              } else {
-                                e.currentTarget.style.display = 'none';
-                              }
-                            }}
-                            className="relative z-10 w-full h-full object-cover"
-                          />
-                          <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center bg-gradient-to-b from-[#172554]/50 to-[#0f172a]">
-                            <Clapperboard className="w-8 h-8 mb-2 text-[#60a5fa]/60" />
-                            <span className="text-xs font-bold text-zinc-200 line-clamp-3">
-                              {detailedMeta?.name || activeVodItem.name}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Right Metadata Details — Clean Apple TV+ / macOS Tahoe Hierarchy */}
-                        <div className="flex-1 min-w-0 flex flex-col justify-between space-y-4 w-full">
-                          {/* Row 1: Title + Year/Country + Series Episode Pill + Close Button */}
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
-                                <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
-                                  {detailedMeta?.name || activeVodItem.name}
-                                </h2>
-                                {(detailedMeta?.releaseInfo ||
-                                  activeVodItem.releaseInfo ||
-                                  detailedMeta?.country) && (
-                                  <span className="text-xs sm:text-sm text-zinc-300 font-medium">
-                                    {[
-                                      detailedMeta?.releaseInfo ||
-                                        activeVodItem.releaseInfo,
-                                      detailedMeta?.country,
-                                    ]
-                                      .filter(Boolean)
-                                      .join(', ')}
-                                  </span>
-                                )}
-                                {activeVodItem.type === 'series' && (
-                                  <span className="px-2.5 py-0.5 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-xs font-semibold text-white">
-                                    S{selectedSeason}:E{selectedEpisode}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              data-sheet-close-btn="true"
-                              onClick={() => setIsInfoSheetOpen(false)}
-                              className="h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/15 focus:outline-none focus:ring-2 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 cursor-pointer transition"
-                            >
-                              <span>{tr('Închide', 'Close', 'Закрыть')}</span>
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
-                          {/* Row 2: Frosted Glass Ratings + Runtime & Genres */}
-                          <div className="flex flex-wrap items-center gap-2">
-                            {(detailedMeta?.imdbRating ||
-                              activeVodItem.imdbRating) && (
-                              <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-white font-semibold inline-flex items-center gap-1.5">
-                                <span>
-                                  {detailedMeta?.imdbRating ||
-                                    activeVodItem.imdbRating}
-                                </span>
-                                <span className="text-[10px] text-amber-400 font-bold tracking-wider uppercase">
-                                  IMDb
-                                </span>
-                              </span>
-                            )}
-                            {detailedMeta?.ratingKinopoisk && (
-                              <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-white font-semibold inline-flex items-center gap-1.5">
-                                <span>{detailedMeta.ratingKinopoisk}</span>
-                                <span className="text-[10px] text-zinc-400 font-bold tracking-wider uppercase">
-                                  KP
-                                </span>
-                              </span>
-                            )}
-                            {detailedMeta?.ageRating && (
-                              <span className="px-2.5 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/15 text-xs text-zinc-200 font-semibold">
-                                {detailedMeta.ageRating}
-                              </span>
-                            )}
-                            {(detailedMeta?.runtime ||
-                              (
-                                detailedMeta?.genres ||
-                                activeVodItem.genres ||
-                                []
-                              ).length > 0) && (
-                              <span className="text-xs sm:text-sm text-zinc-300 font-medium pl-1">
-                                {[
-                                  detailedMeta?.runtime,
-                                  (
-                                    detailedMeta?.genres ||
-                                    activeVodItem.genres ||
-                                    []
-                                  )
-                                    .slice(0, 4)
-                                    .join(' | '),
-                                ]
-                                  .filter(Boolean)
-                                  .join(' • ')}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Row 3: Airy Apple TV+ Synopsis (No cluttered box or neon headers) */}
-                          <div className="space-y-1.5">
-                            <p className="text-sm sm:text-[15px] text-zinc-100/95 leading-relaxed max-w-4xl font-normal line-clamp-4">
-                              {detailedMeta?.description ||
-                                activeVodItem.description ||
-                                tr(
-                                  'Descrierea completă se încarcă...',
-                                  'Loading full description...',
-                                  'Загрузка полного описания...'
-                                )}
-                            </p>
-                          </div>
-
-                          {/* Row 4: Single Clean Horizontal Row of Director & Cast Glass Pills */}
-                          {castMembers.length > 0 && (
-                            <div className="flex items-center gap-3 overflow-x-auto pt-1 pb-1 no-scrollbar">
-                              {castMembers.slice(0, 8).map((actor) => {
-                                const displayName = actor.nameEn || actor.name;
-                                const hasValidPhoto =
-                                  typeof actor.photoUrl === 'string' &&
-                                  actor.photoUrl.length > 0 &&
-                                  !actor.photoUrl.includes('no-poster') &&
-                                  !actor.photoUrl.includes('pl.img.gg');
-                                const initials = displayName
-                                  .split(/\s+/)
-                                  .filter(Boolean)
-                                  .slice(0, 2)
-                                  .map((part) => part[0])
-                                  .join('')
-                                  .toUpperCase();
-                                return (
-                                  <div
-                                    key={`${actor.staffId}_${actor.name}`}
-                                    className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-white/[0.08] backdrop-blur-xl border border-white/15 shrink-0"
-                                  >
-                                    {hasValidPhoto ? (
-                                      <img
-                                        src={actor.photoUrl}
-                                        alt={displayName}
-                                        loading="lazy"
-                                        onError={(e) => {
-                                          e.currentTarget.style.display = 'none';
-                                        }}
-                                        className="w-9 h-11 rounded-xl object-cover bg-zinc-800 shrink-0"
-                                      />
-                                    ) : (
-                                      <div className="w-9 h-11 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-xs font-bold text-zinc-300 shrink-0">
-                                        {initials || '•'}
-                                      </div>
-                                    )}
-                                    <div className="min-w-0 max-w-[140px]">
-                                      <div className="text-xs font-semibold text-white truncate">
-                                        {displayName}
-                                      </div>
-                                      {actor.role && (
-                                        <div className="text-[11px] text-zinc-400 truncate">
-                                          {actor.role}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Floating Seasons & Episodes Drawer for Series */}
-                  {activeVodItem.type === 'series' &&
-                    isEpisodesDrawerOpen &&
-                    availableSeasons.length > 0 && (
-                      <div
-                        data-episodes-drawer="true"
-                        style={
-                          isMobilePhone && !(isMobileCustomFullscreen && isPortraitViewport)
-                            ? {
+                    {/* Floating Seasons & Episodes Drawer for Series */}
+                    {activeVodItem.type === 'series' &&
+                      isEpisodesDrawerOpen &&
+                      availableSeasons.length > 0 && (
+                        <div
+                          data-episodes-drawer="true"
+                          style={
+                            isMobilePhone && !(isMobileCustomFullscreen && isPortraitViewport)
+                              ? {
                                 top: 'calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 3.5rem)',
                                 left: 'max(1rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
                                 right: 'max(1rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
                                 maxHeight:
                                   'calc(100% - var(--safe-top, env(safe-area-inset-top, 0px)) - var(--safe-bottom, env(safe-area-inset-bottom, 0px)) - 5rem)',
                               }
-                            : undefined
-                        }
-                        className="absolute top-14 sm:top-16 inset-x-4 sm:inset-x-8 z-40 max-h-[calc(100%-5rem)] overflow-y-auto p-5 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] space-y-4"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                            <span className="text-xs font-extrabold uppercase tracking-wider text-zinc-400 mr-2">
-                              Sezoane:
-                            </span>
-                            {availableSeasons.map((sNum) => (
+                              : undefined
+                          }
+                          className="absolute top-14 sm:top-16 inset-x-4 sm:inset-x-8 z-40 max-h-[calc(100%-5rem)] overflow-y-auto p-5 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] space-y-4"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                              <span className="text-xs font-extrabold uppercase tracking-wider text-zinc-400 mr-2">
+                                Sezoane:
+                              </span>
+                              {availableSeasons.map((sNum) => (
+                                <button
+                                  key={sNum}
+                                  type="button"
+                                  onClick={() => {
+                                    userSelectedFlTorrentIdRef.current = null;
+                                    userManuallySelectedServerRef.current = false;
+                                    setSelectedSeason(sNum);
+                                    setSelectedEpisode(1);
+                                    setResumeStartSeconds(0);
+                                    setPendingResumePromptSec(null);
+                                  }}
+                                  className={`h-9 px-4 rounded-full text-xs sm:text-sm font-extrabold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${selectedSeason === sNum
+                                    ? 'bg-white text-[#141414] shadow-md'
+                                    : 'bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15'
+                                    }`}
+                                >
+                                  {tr(
+                                    `Sezonul ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                                    `Season ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
+                                    `Сезон ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {episodesForSeason.length > 1 && (
+                                <div className="flex items-center gap-1 bg-white/[0.06] p-1 rounded-full border border-white/15">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetSeriesEpisodesSortDesc(false)}
+                                    className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${!episodesSortDesc
+                                      ? 'bg-white text-[#141414] shadow-sm'
+                                      : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
+                                      }`}
+                                  >
+                                    De la primul (1 - {episodesForSeason.length})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetSeriesEpisodesSortDesc(true)}
+                                    className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${episodesSortDesc
+                                      ? 'bg-white text-[#141414] shadow-sm'
+                                      : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
+                                      }`}
+                                  >
+                                    De la ultimul ({episodesForSeason.length} - 1)
+                                  </button>
+                                </div>
+                              )}
                               <button
-                                key={sNum}
                                 type="button"
-                                onClick={() => {
-                                  userSelectedFlTorrentIdRef.current = null;
-                              userManuallySelectedServerRef.current = false;
-                              setSelectedSeason(sNum);
-                              setSelectedEpisode(1);
-                              setResumeStartSeconds(0);
-                              setPendingResumePromptSec(null);
-                                }}
-                                className={`h-9 px-4 rounded-full text-xs sm:text-sm font-extrabold shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${selectedSeason === sNum
-                                  ? 'bg-white text-[#141414] shadow-md'
-                                  : 'bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15'
-                                  }`}
+                                onClick={() => setIsEpisodesDrawerOpen(false)}
+                                className="h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs font-bold shrink-0 cursor-pointer"
                               >
-                                {tr(
-                                  `Sezonul ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
-                                  `Season ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`,
-                                  `Сезон ${sNum}${seasonYearsMap.get(sNum) ? ` (${seasonYearsMap.get(sNum)})` : ""}`
-                                )}
+                                Închide
                               </button>
-                            ))}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {episodesForSeason.length > 1 && (
-                              <div className="flex items-center gap-1 bg-white/[0.06] p-1 rounded-full border border-white/15">
-                                <button
-                                  type="button"
-                                  onClick={() => handleSetSeriesEpisodesSortDesc(false)}
-                                  className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${!episodesSortDesc
-                                    ? 'bg-white text-[#141414] shadow-sm'
-                                    : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
-                                    }`}
-                                >
-                                  De la primul (1 - {episodesForSeason.length})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSetSeriesEpisodesSortDesc(true)}
-                                  className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${episodesSortDesc
-                                    ? 'bg-white text-[#141414] shadow-sm'
-                                    : 'text-zinc-300 hover:text-white focus:bg-white focus:text-[#141414]'
-                                    }`}
-                                >
-                                  De la ultimul ({episodesForSeason.length} - 1)
-                                </button>
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setIsEpisodesDrawerOpen(false)}
-                              className="h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] text-zinc-100 text-xs font-bold shrink-0 cursor-pointer"
-                            >
-                              Închide
-                            </button>
-                          </div>
-                        </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {displayedEpisodesForSeason.map((ep) => {
-                            const isCurrent = selectedEpisode === ep.episode;
-                            const epCleanName = (ep.name || '').trim();
-                            const isGeneric =
-                              !epCleanName ||
-                              /^Episod(ul|e)?\s*\d+$/i.test(epCleanName) ||
-                              /^S\d+E\d+$/i.test(epCleanName);
-                            const epKey = `S${selectedSeason}E${ep.episode}`;
-                            const epProg =
-                              watchProgressMap[activeVodItem.id]
-                                ?.episodeProgressMap?.[epKey];
-                            const epDur =
-                              epProg?.duration && epProg.duration > 60
-                                ? epProg.duration
-                                : 2700;
-                            const epPct =
-                              epProg && epProg.currentTime > 10
-                                ? Math.min(
-                                  100,
-                                  Math.max(
-                                    5,
-                                    Math.round(
-                                      (epProg.currentTime / epDur) * 100
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {displayedEpisodesForSeason.map((ep) => {
+                              const isCurrent = selectedEpisode === ep.episode;
+                              const epCleanName = (ep.name || '').trim();
+                              const isGeneric =
+                                !epCleanName ||
+                                /^Episod(ul|e)?\s*\d+$/i.test(epCleanName) ||
+                                /^S\d+E\d+$/i.test(epCleanName);
+                              const epKey = `S${selectedSeason}E${ep.episode}`;
+                              const epProg =
+                                watchProgressMap[activeVodItem.id]
+                                  ?.episodeProgressMap?.[epKey];
+                              const epDur =
+                                epProg?.duration && epProg.duration > 60
+                                  ? epProg.duration
+                                  : 2700;
+                              const epPct =
+                                epProg && epProg.currentTime > 10
+                                  ? Math.min(
+                                    100,
+                                    Math.max(
+                                      5,
+                                      Math.round(
+                                        (epProg.currentTime / epDur) * 100
+                                      )
                                     )
                                   )
-                                )
-                                : 0;
-                            const isWatched = epPct >= 85;
-                            const resolvedImdb = activeVodItem.id.startsWith(
-                              'tt'
-                            )
-                              ? activeVodItem.id
-                              : detailedMeta?.imdbId || '';
-                            const isRuSeriesEp = isRussianVodItem(activeVodItem);
-                            const epThumb =
-                              ((ep.thumbnail || "")) ||
-                              (!isRuSeriesEp && resolvedImdb
-                                ? `https://episodes.metahub.space/${resolvedImdb}/${selectedSeason}/${ep.episode}/w780.jpg`
-                                : '') ||
-                              detailedMeta?.background ||
-                              activeVodItem.background ||
-                              detailedMeta?.poster ||
-                              activeVodItem.poster ||
-                              '';
-                            const epSynopsis = (
-                              ep.overview ||
-                              ep.description ||
-                              ''
-                            ).trim();
-                            const epDate = ep.released
-                              ? String(ep.released).slice(0, 10)
-                              : '';
+                                  : 0;
+                              const isWatched = epPct >= 85;
+                              const resolvedImdb = activeVodItem.id.startsWith(
+                                'tt'
+                              )
+                                ? activeVodItem.id
+                                : detailedMeta?.imdbId || '';
+                              const isRuSeriesEp = isRussianVodItem(activeVodItem);
+                              const epThumb =
+                                ((ep.thumbnail || "")) ||
+                                (!isRuSeriesEp && resolvedImdb
+                                  ? `https://episodes.metahub.space/${resolvedImdb}/${selectedSeason}/${ep.episode}/w780.jpg`
+                                  : '') ||
+                                detailedMeta?.background ||
+                                activeVodItem.background ||
+                                detailedMeta?.poster ||
+                                activeVodItem.poster ||
+                                '';
+                              const epSynopsis = (
+                                ep.overview ||
+                                ep.description ||
+                                ''
+                              ).trim();
+                              const epDate = ep.released
+                                ? String(ep.released).slice(0, 10)
+                                : '';
 
-                            return (
-                              <button
-                                key={ep.id || ep.episode}
-                                type="button"
-                                data-drawer-initial-focus={
-                                  isCurrent ? 'true' : undefined
-                                }
-                                data-drawer-next-ep={
-                                  nextEpisodeInfo &&
-                                  nextEpisodeInfo.season === selectedSeason &&
-                                  ep.episode === nextEpisodeInfo.episode
-                                    ? 'true'
-                                    : undefined
-                                }
-                                onClick={() => {
-                                  userSelectedFlTorrentIdRef.current = null;
-                                  setSelectedEpisode(ep.episode);
-                                  setResumeStartSeconds(
-                                    epProg &&
-                                      epProg.currentTime > 10 &&
-                                      epPct < 92
-                                      ? epProg.currentTime
-                                      : 0
-                                  );
-                                  setIsEpisodesDrawerOpen(false);
-                                }}
-                                className={`group flex items-center gap-3 p-2.5 rounded-2xl text-left transition-all border focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${isCurrent
-                                  ? 'bg-blue-500/20 text-white border-blue-400 shadow-lg'
-                                  : 'bg-white/[0.07] hover:bg-white/15 text-zinc-100 border-white/15'
-                                  }`}
-                              >
-                                <div className="relative w-28 h-16 rounded-xl overflow-hidden bg-zinc-900 shrink-0 border border-white/10">
-                                  <div className="absolute inset-0 flex items-center justify-center text-[#60a5fa]/40">
-                                    <Clapperboard className="w-5 h-5" />
-                                  </div>
-                                  {epThumb && (
-                                    <img
-                                      src={epThumb}
-                                      alt={`Ep ${ep.episode}`}
-                                      loading="lazy"
-                                      onError={(e) => {
-                                        const fallback =
-                                          detailedMeta?.background ||
-                                          detailedMeta?.poster ||
-                                          '';
-                                        if (
-                                          fallback &&
-                                          e.currentTarget.src !== fallback &&
-                                          !e.currentTarget.dataset.triedFallback
-                                        ) {
-                                          e.currentTarget.dataset.triedFallback = '1';
-                                          e.currentTarget.src = fallback;
-                                        } else {
-                                          e.currentTarget.style.display = 'none';
-                                        }
-                                      }}
-                                      className="relative z-10 w-full h-full object-cover"
-                                    />
-                                  )}
-                                  <span className="absolute top-1 left-1 z-20 px-1.5 py-0.5 rounded bg-black/80 text-[10px] font-black text-white">
-                                    E{ep.episode}
-                                  </span>
-                                  {isWatched && (
-                                    <span className="absolute top-1 right-1 z-20 px-1.5 py-0.5 rounded bg-[#1e3a8a] text-white text-[9px] font-black">
-                                      Văzut
-                                    </span>
-                                  )}
-                                  {epPct > 0 && (
-                                    <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-black/60">
-                                      <div
-                                        className="h-full bg-blue-400"
-                                        style={{ width: `${epPct}%` }}
+                              return (
+                                <button
+                                  key={ep.id || ep.episode}
+                                  type="button"
+                                  data-drawer-initial-focus={
+                                    isCurrent ? 'true' : undefined
+                                  }
+                                  data-drawer-next-ep={
+                                    nextEpisodeInfo &&
+                                      nextEpisodeInfo.season === selectedSeason &&
+                                      ep.episode === nextEpisodeInfo.episode
+                                      ? 'true'
+                                      : undefined
+                                  }
+                                  onClick={() => {
+                                    userSelectedFlTorrentIdRef.current = null;
+                                    setSelectedEpisode(ep.episode);
+                                    setResumeStartSeconds(
+                                      epProg &&
+                                        epProg.currentTime > 10 &&
+                                        epPct < 92
+                                        ? epProg.currentTime
+                                        : 0
+                                    );
+                                    setIsEpisodesDrawerOpen(false);
+                                  }}
+                                  className={`group flex items-center gap-3 p-2.5 rounded-2xl text-left transition-all border focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${isCurrent
+                                    ? 'bg-blue-500/20 text-white border-blue-400 shadow-lg'
+                                    : 'bg-white/[0.07] hover:bg-white/15 text-zinc-100 border-white/15'
+                                    }`}
+                                >
+                                  <div className="relative w-28 h-16 rounded-xl overflow-hidden bg-zinc-900 shrink-0 border border-white/10">
+                                    <div className="absolute inset-0 flex items-center justify-center text-[#60a5fa]/40">
+                                      <Clapperboard className="w-5 h-5" />
+                                    </div>
+                                    {epThumb && (
+                                      <img
+                                        src={epThumb}
+                                        alt={`Ep ${ep.episode}`}
+                                        loading="lazy"
+                                        onError={(e) => {
+                                          const fallback =
+                                            detailedMeta?.background ||
+                                            detailedMeta?.poster ||
+                                            '';
+                                          if (
+                                            fallback &&
+                                            e.currentTarget.src !== fallback &&
+                                            !e.currentTarget.dataset.triedFallback
+                                          ) {
+                                            e.currentTarget.dataset.triedFallback = '1';
+                                            e.currentTarget.src = fallback;
+                                          } else {
+                                            e.currentTarget.style.display = 'none';
+                                          }
+                                        }}
+                                        className="relative z-10 w-full h-full object-cover"
                                       />
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-xs sm:text-sm font-extrabold truncate">
-                                    {isGeneric
-                                      ? `Episodul ${ep.episode}`
-                                      : `${ep.episode}. ${epCleanName}`}
+                                    )}
+                                    <span className="absolute top-1 left-1 z-20 px-1.5 py-0.5 rounded bg-black/80 text-[10px] font-black text-white">
+                                      E{ep.episode}
+                                    </span>
+                                    {isWatched && (
+                                      <span className="absolute top-1 right-1 z-20 px-1.5 py-0.5 rounded bg-[#1e3a8a] text-white text-[9px] font-black">
+                                        Văzut
+                                      </span>
+                                    )}
+                                    {epPct > 0 && (
+                                      <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-black/60">
+                                        <div
+                                          className="h-full bg-blue-400"
+                                          style={{ width: `${epPct}%` }}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
-                                  {epDate && (
-                                    <div className="text-[10px] text-zinc-400 group-focus:text-zinc-600 font-semibold">
-                                      {epDate}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-xs sm:text-sm font-extrabold truncate">
+                                      {isGeneric
+                                        ? `Episodul ${ep.episode}`
+                                        : `${ep.episode}. ${epCleanName}`}
                                     </div>
-                                  )}
-                                  {epSynopsis && (
-                                    <div className="text-[11px] text-zinc-300 group-focus:text-zinc-700 line-clamp-2 mt-0.5 leading-snug">
-                                      {epSynopsis}
-                                    </div>
-                                  )}
-                                </div>
-                              </button>
-                            );
-                          })}
+                                    {epDate && (
+                                      <div className="text-[10px] text-zinc-400 group-focus:text-zinc-600 font-semibold">
+                                        {epDate}
+                                      </div>
+                                    )}
+                                    {epSynopsis && (
+                                      <div className="text-[11px] text-zinc-300 group-focus:text-zinc-700 line-clamp-2 mt-0.5 leading-snug">
+                                        {epSynopsis}
+                                      </div>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                  </div>
                 </div>
-              </div>
               </>
             ) : activeVodItem ? (
               /* 1B. APPLE macOS TAHOE LIQUID GLASS MOVIE / SERIES CARD */
@@ -13156,7 +13868,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           const names = resolvedDirectStream.audioNames || [];
                           const prefIdx = resolveAudioTrackIndexByPreference(
                             names,
-                            tvSettings.defaultAudioPref
+                            effectiveVodAudioPref
                           );
                           const ordered = names
                             .map((aName, idx) => ({ aName, idx }))
@@ -13209,7 +13921,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     </button>
                                   );
                                 })}
-                                {findPreferredOriginalAudioTrackIndex(names) < 0 && (
+                                {findExplicitOriginalAudioTrackIndex(names) < 0 && (
                                   <button
                                     type="button"
                                     data-vod-compact-option="true"
@@ -13865,7 +14577,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             return (
                               <div
                                 data-top-hero-card="true"
-                                className="relative w-full min-h-[245px] sm:min-h-[395px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-4 sm:p-9"
+                                className={`relative w-full ${
+                                  isCarMode
+                                    ? 'min-h-[200px] sm:min-h-[228px] max-h-[245px] p-4 sm:px-7 sm:py-4'
+                                    : 'min-h-[245px] sm:min-h-[395px] p-4 sm:p-9'
+                                } rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between`}
                               >
                                 {/* Full-Bleed Widescreen Backdrop */}
                                 <img
@@ -13948,8 +14664,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 </div>
 
                                 {/* Middle & Bottom: Display Title/Logo + Metadata + Play & More Info + Bottom-Right Badges */}
-                                <div className="relative z-10 mt-5 sm:mt-12 flex flex-col gap-3 sm:gap-4">
-                                  <div className="max-w-2xl space-y-2 sm:space-y-2.5">
+                                <div
+                                  className={`relative z-10 ${
+                                    isCarMode
+                                      ? 'mt-2 sm:mt-3 gap-2'
+                                      : 'mt-5 sm:mt-12 gap-3 sm:gap-4'
+                                  } flex flex-col`}
+                                >
+                                  <div
+                                    className={`max-w-2xl ${
+                                      isCarMode
+                                        ? 'space-y-1'
+                                        : 'space-y-2 sm:space-y-2.5'
+                                    }`}
+                                  >
                                     {!failedHeroLogoIds[heroItem.id] ? (
                                       <img
                                         key={`hero_logo_${heroItem.id}`}
@@ -13961,7 +14689,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                             [heroItem.id]: true,
                                           }))
                                         }
-                                        className="max-h-12 sm:max-h-24 max-w-[220px] sm:max-w-[420px] w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]"
+                                        className={`${
+                                          isCarMode
+                                            ? 'max-h-10 sm:max-h-12 max-w-[260px]'
+                                            : 'max-h-12 sm:max-h-24 max-w-[220px] sm:max-w-[420px]'
+                                        } w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]`}
                                       />
                                     ) : (
                                       <h2 className="text-2xl sm:text-5xl font-black uppercase tracking-tight text-white leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.95)] line-clamp-2">
@@ -15472,18 +16204,42 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       <audio
         ref={musicAudioRef}
         preload="auto"
+        playsInline
+        {...({
+          'webkit-playsinline': 'true',
+          'x-webkit-airplay': 'allow',
+        } as Record<string, string>)}
         onTimeUpdate={(e) => {
           const ct = e.currentTarget.currentTime || 0;
           setMusicElapsedSec(ct);
+          if (Date.now() - lastMusicPosSyncMsRef.current >= 2000) {
+            lastMusicPosSyncMsRef.current = Date.now();
+            const dur =
+              e.currentTarget.duration && Number.isFinite(e.currentTarget.duration)
+                ? e.currentTarget.duration
+                : musicDurationSec;
+            updateMediaSessionPosition('music', ct, dur);
+          }
         }}
         onLoadedMetadata={(e) => {
           const dur = e.currentTarget.duration;
           if (dur && Number.isFinite(dur) && dur > 5) {
             setMusicDurationSec(dur);
+            updateMediaSessionPosition(
+              'music',
+              e.currentTarget.currentTime || 0,
+              dur
+            );
           }
         }}
-        onPlay={() => setIsMusicPlaying(true)}
-        onPause={() => setIsMusicPlaying(false)}
+        onPlay={() => {
+          setIsMusicPlaying(true);
+          updateMediaSessionPlaybackState('music', 'playing');
+        }}
+        onPause={() => {
+          setIsMusicPlaying(false);
+          updateMediaSessionPlaybackState('music', 'paused');
+        }}
         onEnded={() => {
           if (isMusicRepeat && musicAudioRef.current) {
             musicAudioRef.current.currentTime = 0;

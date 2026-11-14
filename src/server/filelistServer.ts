@@ -2125,6 +2125,14 @@ async function probeTorrentVideoFile(
         label: string;
       }> = [];
 
+      const rawProbedTracks: Array<{
+        index: number;
+        lang: string;
+        codec: string;
+        extra: string;
+        metaTitle: string;
+      }> = [];
+
       const streamRegex = /Stream #0:(\d+)(?:\(([a-zA-Z]{2,3})\))?[^:]*:\s*Audio:\s*([a-zA-Z0-9_]+)([^\r\n]*)(?:\r?\n\s*Metadata:\r?\n(?:\s+[^\r\n]+\r?\n)*?\s+title\s*:\s*([^\r\n]+))?/gi;
       let match: RegExpExecArray | null;
       let audioOrder = 0;
@@ -2133,16 +2141,57 @@ async function probeTorrentVideoFile(
         const codec = (match[3] || 'audio').toUpperCase();
         const extra = (match[4] || '').includes('5.1') ? '5.1' : 'Stereo';
         const metaTitle = (match[5] || '').trim();
-        const prefix = audioOrder === 0 ? 'ORIGINAL • ' : '';
-        const label = `${prefix}${lang} (${codec} ${extra})${metaTitle ? ` — ${metaTitle}` : ''}`;
-        audioTracks.push({
+        rawProbedTracks.push({
           index: audioOrder,
           lang,
           codec,
-          title: metaTitle || lang,
-          label,
+          extra,
+          metaTitle,
         });
         audioOrder++;
+      }
+
+      const isRuOrUkDubTrack = (lang: string, metaTitle: string): boolean => {
+        const l = lang.toUpperCase();
+        if (/^(RU|RUS|UK|UKR|BE|BEL)$/.test(l)) {
+          return !/\b(original|orig)\b|оригинал/i.test(metaTitle);
+        }
+        if (l === 'ORIG' || l === 'UND') {
+          return (
+            /(русск|дубляж|закадр|многоголос|двухголос|lostfilm|hdrezka|red head|jaskier|кубик|сыендук|tvshows|alexfilm|newstudio|baibako|coldfilm)/i.test(
+              metaTitle
+            ) && !/оригинал/i.test(metaTitle)
+          );
+        }
+        return false;
+      };
+
+      let originalTrackOrder = rawProbedTracks.findIndex(
+        (t) =>
+          !isRuOrUkDubTrack(t.lang, t.metaTitle) &&
+          /\b(original|orig)\b|оригинал/i.test(t.metaTitle)
+      );
+      if (originalTrackOrder < 0) {
+        originalTrackOrder = rawProbedTracks.findIndex(
+          (t) => !isRuOrUkDubTrack(t.lang, t.metaTitle)
+        );
+      }
+      if (originalTrackOrder < 0) {
+        originalTrackOrder = rawProbedTracks.findIndex((t) =>
+          /оригинал/i.test(t.metaTitle)
+        );
+      }
+
+      for (const t of rawProbedTracks) {
+        const prefix = t.index === originalTrackOrder ? 'ORIGINAL • ' : '';
+        const label = `${prefix}${t.lang} (${t.codec} ${t.extra})${t.metaTitle ? ` — ${t.metaTitle}` : ''}`;
+        audioTracks.push({
+          index: t.index,
+          lang: t.lang,
+          codec: t.codec,
+          title: t.metaTitle || t.lang,
+          label,
+        });
       }
 
       if (audioTracks.length === 0) {
@@ -2550,9 +2599,13 @@ export async function handleFileListRequest(
       const imdbParam = parsedUrl.searchParams.get('imdb') || '';
       const rawQueryParam = parsedUrl.searchParams.get('q') || '';
       const typeParam = parsedUrl.searchParams.get('type') || 'movie';
+      const ruExplicit = parsedUrl.searchParams.get('ru');
       const isRussianParam =
-        parsedUrl.searchParams.get('ru') === '1' ||
-        /[а-яёА-ЯЁ]/i.test(rawQueryParam);
+        ruExplicit === '1'
+          ? true
+          : ruExplicit === '0'
+            ? false
+            : /[а-яёА-ЯЁ]/i.test(rawQueryParam);
       const queryParam =
         typeParam === 'series'
           ? rawQueryParam
@@ -2583,7 +2636,7 @@ export async function handleFileListRequest(
               episode
             ).catch(() => [])
           : Promise.resolve([]),
-        imdbParam && imdbParam.startsWith('tt')
+        !isRussianParam && imdbParam && imdbParam.startsWith('tt')
           ? getFileListCatalog({ imdb: imdbParam }).catch(() => [])
           : Promise.resolve([]),
         Promise.resolve([] as FileListTorrentCard[]),
@@ -2848,7 +2901,7 @@ export async function handleFileListRequest(
                 sizeFormatted: selectedTorrentMeta.sizeFormatted,
               },
             ],
-            streamUrl: `/api/filelist/stream?id=${targetTorrentId}&fileIdx=${magnetPresetIdx}`,
+            streamUrl: `/api/filelist/stream?id=${targetTorrentId}&fileIdx=${magnetPresetIdx}&orig=${isRussianParam ? '0' : '1'}`,
             durationSec: 0,
             videoCodec: 'h264',
             audioNames: ['ORIGINAL AUDIO (Stereo)'],
@@ -2985,7 +3038,7 @@ export async function handleFileListRequest(
             name: f.name,
             sizeFormatted: formatBytes(f.length),
           })),
-          streamUrl: `/api/filelist/stream?id=${targetTorrentId}&fileIdx=${selectedFileIdx}`,
+          streamUrl: `/api/filelist/stream?id=${targetTorrentId}&fileIdx=${selectedFileIdx}&orig=${isRussianParam ? '0' : '1'}`,
           durationSec: probe.durationSec,
           videoCodec: probe.videoCodec,
           audioNames: probe.audioTracks.map((a) => a.label),
@@ -3016,10 +3069,27 @@ export async function handleFileListRequest(
         0,
         parseFloat(parsedUrl.searchParams.get('start') || '0') || 0
       );
+      const rawAudioParam = parsedUrl.searchParams.get('audio');
+      const hasExplicitAudioParam =
+        rawAudioParam !== null && rawAudioParam.trim() !== '';
       const audioIdx = Math.max(
         0,
-        parseInt(parsedUrl.searchParams.get('audio') || '0', 10) || 0
+        parseInt(rawAudioParam || '0', 10) || 0
       );
+      const wantOrigAudio = parsedUrl.searchParams.get('orig') === '1';
+      const maxWParam =
+        parseInt(parsedUrl.searchParams.get('maxw') || '0', 10) || 0;
+      const forceVideoTranscode =
+        parsedUrl.searchParams.get('vtranscode') === '1';
+      const clientUa = String(req.headers['user-agent'] || '');
+      const isSmartTvClientUa =
+        /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX/i.test(
+          clientUa
+        ) ||
+        (/Android/i.test(clientUa) && !/Mobile/i.test(clientUa));
+      const capTo1080p =
+        (maxWParam > 0 && maxWParam <= 1920) ||
+        (maxWParam === 0 && isSmartTvClientUa);
 
       if (!id) {
         res.writeHead(400);
@@ -3099,10 +3169,26 @@ export async function handleFileListRequest(
         entry.probeCache.delete(fileIdx);
         cachedProbe = undefined;
       }
+      const looksMultiOrDualAudio =
+        id < 0 ||
+        /\b(dual|multi|rus|ukr|dub|mvo|avo|dvo)\b|[а-яё]/i.test(
+          rawFile.name || ''
+        );
       if (!cachedProbe) {
         if (verifiedDiskPath) {
           try {
             cachedProbe = await probeTorrentVideoFile(entry, fileIdx);
+          } catch {
+            // ignore
+          }
+        } else if (wantOrigAudio && !hasExplicitAudioParam && looksMultiOrDualAudio) {
+          try {
+            cachedProbe = await Promise.race([
+              probeTorrentVideoFile(entry, fileIdx),
+              new Promise<undefined>((resolve) =>
+                setTimeout(() => resolve(undefined), 2200)
+              ),
+            ]);
           } catch {
             // ignore
           }
@@ -3114,15 +3200,40 @@ export async function handleFileListRequest(
           }, 3500);
         }
       }
+      const is4kSource = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
       const isHevc =
         (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
-        /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(rawFile.name || '');
-      const safeAudioIdx =
-        cachedProbe && cachedProbe.audioTracks.length > 0
-          ? audioIdx < cachedProbe.audioTracks.length
-            ? audioIdx
-            : 0
-          : 0;
+        /\b(hevc|x265|h\.?265)\b/i.test(rawFile.name || '') ||
+        (is4kSource &&
+          !(cachedProbe && /h264|avc/i.test(cachedProbe.videoCodec)) &&
+          !/\b(x264|h\.?264|avc)\b/i.test(rawFile.name || ''));
+      const is10BitOrAltCodec =
+        (cachedProbe ? /av1|vp9/i.test(cachedProbe.videoCodec) : false) ||
+        /\b(10bit|hi10p|av1|vp9)\b/i.test(rawFile.name || '');
+      const needsVideoTranscode =
+        isHevc ||
+        forceVideoTranscode ||
+        is10BitOrAltCodec ||
+        (capTo1080p && is4kSource);
+      let safeAudioIdx = 0;
+      if (cachedProbe && cachedProbe.audioTracks.length > 0) {
+        if (hasExplicitAudioParam) {
+          safeAudioIdx =
+            audioIdx < cachedProbe.audioTracks.length ? audioIdx : 0;
+        } else if (wantOrigAudio) {
+          const origTrack =
+            cachedProbe.audioTracks.find((t) =>
+              t.label.startsWith('ORIGINAL • ')
+            ) ||
+            cachedProbe.audioTracks.find(
+              (t) => !/^(RU|RUS|UK|UKR|BE|BEL)$/i.test(t.lang)
+            );
+          safeAudioIdx = origTrack ? origTrack.index : 0;
+        } else {
+          safeAudioIdx =
+            audioIdx < cachedProbe.audioTracks.length ? audioIdx : 0;
+        }
+      }
 
       const streamHeaders: Record<string, string> = {
         'Content-Type': 'video/mp4',
@@ -3141,13 +3252,13 @@ export async function handleFileListRequest(
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
       const useDirectPipe = !verifiedDiskPath && startSec <= 1;
       const hwDecodeArgs =
-        isHevc && process.platform === 'darwin'
+        needsVideoTranscode && process.platform === 'darwin'
           ? ['-hwaccel', 'videotoolbox']
           : [];
 
       if (verifiedDiskPath) {
         if (startSec > 1) {
-          if (!isHevc) {
+          if (!needsVideoTranscode) {
             ffArgs.push('-noaccurate_seek');
           }
           ffArgs.push('-ss', String(Math.floor(startSec)));
@@ -3155,7 +3266,7 @@ export async function handleFileListRequest(
         ffArgs.push(...hwDecodeArgs, '-i', verifiedDiskPath);
       } else if (!useDirectPipe) {
         const rangePort = await ensureInternalRangeServer();
-        if (!isHevc) {
+        if (!needsVideoTranscode) {
           ffArgs.push('-noaccurate_seek');
         }
         ffArgs.push(
@@ -3182,24 +3293,26 @@ export async function handleFileListRequest(
         '-sn'
       );
 
-      if (isHevc) {
-        const is4kSource = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
-        const maxScaleW = is4kSource ? 3840 : 1920;
+      if (needsVideoTranscode) {
+        const maxScaleW = capTo1080p ? 1920 : is4kSource ? 3840 : 1920;
+        const use4kBitrate = !capTo1080p && is4kSource;
         const sdrFilter = `scale='min(${maxScaleW},iw)':trunc(ow/a/2)*2,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`;
         if (process.platform === 'darwin') {
           ffArgs.push(
             '-c:v',
             'h264_videotoolbox',
+            '-profile:v',
+            'high',
             '-realtime',
             'true',
             '-g',
             '48',
             '-b:v',
-            is4kSource ? '15M' : '8M',
+            use4kBitrate ? '15M' : '8M',
             '-maxrate',
-            is4kSource ? '20M' : '10M',
+            use4kBitrate ? '20M' : '10M',
             '-bufsize',
-            is4kSource ? '30M' : '16M',
+            use4kBitrate ? '30M' : '16M',
             '-vf',
             sdrFilter,
             '-color_primaries',
@@ -3213,6 +3326,9 @@ export async function handleFileListRequest(
           ffArgs.push(
             '-c:v',
             'libx264',
+            '-profile:v',
+            'high',
+            ...(maxScaleW <= 1920 ? ['-level:v', '4.1'] : []),
             '-preset',
             'ultrafast',
             '-tune',
@@ -3234,13 +3350,13 @@ export async function handleFileListRequest(
             '-colorspace',
             'bt709',
             '-maxrate',
-            is4kSource ? '15M' : '8M',
+            use4kBitrate ? '15M' : '8M',
             '-bufsize',
-            is4kSource ? '30M' : '16M'
+            use4kBitrate ? '30M' : '16M'
           );
         }
       } else {
-        // Direct bitstream copy for H.264 (0% CPU, original BluRay/WEB-DL quality, 150ms startup!)
+        // Direct bitstream copy for 1080p/720p 8-bit H.264 (0% CPU, original BluRay/WEB-DL quality, 150ms startup!)
         ffArgs.push('-c:v', 'copy');
       }
 
@@ -3251,7 +3367,7 @@ export async function handleFileListRequest(
           !selectedAudioMeta.label.includes('5.1')) ||
         (!selectedAudioMeta && /\baac2\.?0\b/i.test(rawFile.name || ''));
 
-      if (isAacStereo && !isHevc) {
+      if (isAacStereo && !needsVideoTranscode) {
         ffArgs.push('-c:a', 'copy');
       } else {
         ffArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');

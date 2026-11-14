@@ -10,7 +10,11 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   profiles: Array.isArray(SEED_PROFILES) ? [...SEED_PROFILES] : [],
   progressByProfile: { ...(SEED_PROGRESS_BY_PROFILE || {}) },
   savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
+  radioFavsByProfile: {},
 };
+if (!globalStore.radioFavsByProfile) {
+  globalStore.radioFavsByProfile = {};
+}
 globalThis.__aetherCloudSyncStore = globalStore;
 
 const corsHeaders = {
@@ -109,6 +113,52 @@ export default async (req) => {
         status: 200,
         headers: corsHeaders,
       });
+    }
+
+    // 2b. /api/tv-radio-favorites (Per-profile Radio Favorites with timestamped sync)
+    if (path.includes('tv-radio-favorites')) {
+      const currentRadioFavs = globalStore.radioFavsByProfile[profileId] || null;
+      if (req.method === 'POST') {
+        const incoming = await req.json().catch(() => null);
+        if (
+          incoming &&
+          typeof incoming === 'object' &&
+          Array.isArray(incoming.stations)
+        ) {
+          const incomingTs = Number(incoming.updatedAt) || Date.now();
+          const currentTs = Number(currentRadioFavs?.updatedAt) || 0;
+          if (!currentRadioFavs || incomingTs >= currentTs) {
+            globalStore.radioFavsByProfile[profileId] = {
+              updatedAt: incomingTs,
+              stations: incoming.stations.slice(0, 300),
+            };
+          }
+        }
+        return new Response(
+          JSON.stringify(
+            globalStore.radioFavsByProfile[profileId] || {
+              updatedAt: 0,
+              stations: [],
+            }
+          ),
+          {
+            status: 200,
+            headers: corsHeaders,
+          }
+        );
+      }
+      return new Response(
+        JSON.stringify(
+          currentRadioFavs || {
+            updatedAt: 0,
+            stations: [],
+          }
+        ),
+        {
+          status: 200,
+          headers: corsHeaders,
+        }
+      );
     }
 
     // 3. /api/tv-progress

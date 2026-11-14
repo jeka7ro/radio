@@ -184,6 +184,23 @@ export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
     clickcount: 7400,
   },
   {
+    stationuuid: '96253329-0601-11e8-ae97-52543be04c81',
+    name: 'RMC Hits',
+    url: 'https://icy.unitedradio.it/rmcweb001',
+    url_resolved: 'https://icy.unitedradio.it/rmcweb001',
+    homepage: 'https://www.radiomontecarlo.net',
+    favicon: 'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly93d3cucmFkaW9tb250ZWNhcmxvLm5ldC93cC1jb250ZW50L3VwbG9hZHMvMjAyNS8xMC9STUNfSElUU19XZWJSYWRpby0xNjAxNTI4MjA4MzE4LTMuanBnLXJtY19oaXRzLTMuanBn/-/0/0?r=e03719966665665d902cd409e6162b62',
+    tags: 'pop,hits,top 40,monte carlo,rmc',
+    country: 'Italy',
+    countrycode: 'IT',
+    language: 'italian',
+    votes: 9350,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7600,
+  },
+  {
     stationuuid: 'fav-radio-europaplus-ru',
     name: 'Европа Плюс (Europa Plus)',
     url: 'https://ep256.hostingradio.ru:8052/europaplus256.mp3',
@@ -201,6 +218,168 @@ export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
     clickcount: 7900,
   },
 ];
+
+export const RMC_HITS_STATION: Station = {
+  stationuuid: '96253329-0601-11e8-ae97-52543be04c81',
+  name: 'RMC Hits',
+  url: 'https://icy.unitedradio.it/rmcweb001',
+  url_resolved: 'https://icy.unitedradio.it/rmcweb001',
+  homepage: 'https://www.radiomontecarlo.net',
+  favicon:
+    'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly93d3cucmFkaW9tb250ZWNhcmxvLm5ldC93cC1jb250ZW50L3VwbG9hZHMvMjAyNS8xMC9STUNfSElUU19XZWJSYWRpby0xNjAxNTI4MjA4MzE4LTMuanBnLXJtY19oaXRzLTMuanBn/-/0/0?r=e03719966665665d902cd409e6162b62',
+  tags: 'pop,hits,top 40,monte carlo,rmc',
+  country: 'Italy',
+  countrycode: 'IT',
+  language: 'italian',
+  votes: 9350,
+  codec: 'MP3',
+  bitrate: 128,
+  hls: 0,
+  clickcount: 7600,
+};
+
+export function normalizeRadioStreamKey(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  return rawUrl
+    .trim()
+    .toLowerCase()
+    .replace(/^http:\/\/edge\.radiomontecarlo\.net\//i, 'https://icy.unitedradio.it/')
+    .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/')
+    .replace(/^http:\/\//i, 'https://')
+    .replace(/\?listening-from-radio-garden=.*$/i, '')
+    .replace(/\/+$/, '');
+}
+
+export function isSameRadioStation(
+  a?: Station | null,
+  b?: Station | null
+): boolean {
+  if (!a || !b) return false;
+  if (a.stationuuid && b.stationuuid && a.stationuuid === b.stationuuid) {
+    return true;
+  }
+  const urlA = normalizeRadioStreamKey(a.url_resolved || a.url);
+  const urlB = normalizeRadioStreamKey(b.url_resolved || b.url);
+  return Boolean(urlA && urlB && urlA === urlB);
+}
+
+function migrateRadioStationEntry(st: Station): Station {
+  const fixUrl = (u?: string) =>
+    (u || '')
+      .replace(/^http:\/\/edge\.radiomontecarlo\.net\//i, 'https://icy.unitedradio.it/')
+      .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/');
+  const nextUrl = fixUrl(st.url);
+  const nextResolved = fixUrl(st.url_resolved || st.url);
+  const isRmcHits =
+    /\brmc\s*hits\b/i.test(st.name || '') ||
+    /\/rmcweb001\b/i.test(nextResolved);
+  return {
+    ...st,
+    url: nextUrl,
+    url_resolved: nextResolved,
+    favicon: isRmcHits && !st.favicon ? RMC_HITS_STATION.favicon : st.favicon,
+  };
+}
+
+interface StoredProfileRadioFavs {
+  updatedAt: number;
+  stations: Station[];
+}
+
+function getProfileRadioFavsStorageKey(profileId: string): string {
+  const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+  return `aether_radio_favorites_v2_${cleanId}`;
+}
+
+function evictNonEssentialLocalStorageCaches(): void {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (
+        k &&
+        (k.startsWith('aether_cache_') ||
+          k.startsWith('radio_cache_') ||
+          k.startsWith('aether_epg_') ||
+          k.includes('global_search_'))
+      ) {
+        keysToRemove.push(k);
+      }
+    }
+    for (const k of keysToRemove) {
+      localStorage.removeItem(k);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function readProfileRadioFavsFromLocalStorage(
+  profileId: string
+): StoredProfileRadioFavs | null {
+  try {
+    const raw = localStorage.getItem(getProfileRadioFavsStorageKey(profileId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.stations)) {
+      return {
+        updatedAt: Number(parsed.updatedAt) || 0,
+        stations: parsed.stations.map(migrateRadioStationEntry),
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function writeProfileRadioFavsToLocalStorage(
+  profileId: string,
+  payload: StoredProfileRadioFavs
+): void {
+  const key = getProfileRadioFavsStorageKey(profileId);
+  const serialized = JSON.stringify({
+    updatedAt: payload.updatedAt,
+    stations: payload.stations.map(migrateRadioStationEntry),
+  });
+  try {
+    localStorage.setItem(key, serialized);
+  } catch {
+    evictNonEssentialLocalStorageCaches();
+    try {
+      localStorage.setItem(key, serialized);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function pushProfileRadioFavsToRemote(
+  profileId: string,
+  payload: StoredProfileRadioFavs
+): void {
+  if (typeof window === 'undefined') return;
+  const cleanProf = encodeURIComponent(
+    (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1'
+  );
+  const body = JSON.stringify(payload);
+  fetch(`/api/tv-radio-favorites?profileId=${cleanProf}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }).catch(() => {});
+  const isLanNonDevPort =
+    /^(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
+      window.location.hostname
+    ) && window.location.port !== '8769';
+  if (isLanNonDevPort) {
+    fetch(`https://filmio.my/api/tv-radio-favorites?profileId=${cleanProf}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
+  }
+}
 
 interface RadioState {
   // Persisted state
@@ -293,6 +472,8 @@ interface RadioState {
   toggleFavorite: (station: Station) => void;
   moveFavorite: (fromIndex: number, toIndex: number) => void;
   importFavorites: (stations: Station[]) => number;
+  switchRadioFavoritesProfile: (profileId: string) => void;
+  syncRadioFavoritesWithServer: (profileId?: string) => Promise<void>;
 
   // Recently played actions
   addRecentlyPlayed: (station: Station) => void;
@@ -748,19 +929,24 @@ export const useRadioStore = create<RadioState>()(
 
       toggleFavorite: (station) =>
         set((state) => {
-          const exists = state.favorites.some(
-            (s) => s.stationuuid === station.stationuuid
+          const cleanIncoming = migrateRadioStationEntry({
+            ...station,
+            url_resolved: station.url_resolved || station.url,
+          });
+          const exists = state.favorites.some((s) =>
+            isSameRadioStation(s, cleanIncoming)
           );
-          if (exists) {
-            return {
-              favorites: state.favorites.filter(
-                (s) => s.stationuuid !== station.stationuuid
-              ),
-            };
-          }
-          return {
-            favorites: [station, ...state.favorites],
+          const next = exists
+            ? state.favorites.filter((s) => !isSameRadioStation(s, cleanIncoming))
+            : [cleanIncoming, ...state.favorites];
+          const activeId = loadSharedActiveProfileId() || 'p1';
+          const payload: StoredProfileRadioFavs = {
+            updatedAt: Date.now(),
+            stations: next,
           };
+          writeProfileRadioFavsToLocalStorage(activeId, payload);
+          pushProfileRadioFavsToRemote(activeId, payload);
+          return { favorites: next };
         }),
 
       moveFavorite: (fromIndex, toIndex) =>
@@ -777,6 +963,13 @@ export const useRadioStore = create<RadioState>()(
           const updated = [...state.favorites];
           const [moved] = updated.splice(fromIndex, 1);
           updated.splice(toIndex, 0, moved);
+          const activeId = loadSharedActiveProfileId() || 'p1';
+          const payload: StoredProfileRadioFavs = {
+            updatedAt: Date.now(),
+            stations: updated,
+          };
+          writeProfileRadioFavsToLocalStorage(activeId, payload);
+          pushProfileRadioFavsToRemote(activeId, payload);
           return { favorites: updated };
         }),
 
@@ -796,11 +989,9 @@ export const useRadioStore = create<RadioState>()(
         if (validStations.length === 0) return 0;
 
         set((state) => {
-          const existingMap = new Map(
-            state.favorites.map((s) => [s.stationuuid, s])
-          );
+          const mergedList = [...state.favorites];
           for (const st of validStations) {
-            existingMap.set(st.stationuuid, {
+            const normalized = migrateRadioStationEntry({
               ...st,
               url_resolved: st.url_resolved || st.url,
               votes: Number(st.votes) || 0,
@@ -808,20 +999,106 @@ export const useRadioStore = create<RadioState>()(
               hls: Number(st.hls) || 0,
               clickcount: Number(st.clickcount) || 0,
             });
+            const idx = mergedList.findIndex((x) =>
+              isSameRadioStation(x, normalized)
+            );
+            if (idx >= 0) {
+              mergedList[idx] = normalized;
+            } else {
+              mergedList.push(normalized);
+            }
           }
-          return { favorites: Array.from(existingMap.values()) };
+          const activeId = loadSharedActiveProfileId() || 'p1';
+          const payload: StoredProfileRadioFavs = {
+            updatedAt: Date.now(),
+            stations: mergedList,
+          };
+          writeProfileRadioFavsToLocalStorage(activeId, payload);
+          pushProfileRadioFavsToRemote(activeId, payload);
+          return { favorites: mergedList };
         });
 
         return validStations.length;
       },
 
+      switchRadioFavoritesProfile: (profileId) => {
+        const cleanId =
+          (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        const stored = readProfileRadioFavsFromLocalStorage(cleanId);
+        if (stored) {
+          set({ favorites: stored.stations });
+        } else {
+          const initialStations = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+          const initPayload: StoredProfileRadioFavs = {
+            updatedAt: 1000,
+            stations: initialStations,
+          };
+          writeProfileRadioFavsToLocalStorage(cleanId, initPayload);
+          set({ favorites: initialStations });
+        }
+        void get().syncRadioFavoritesWithServer(cleanId);
+      },
+
+      syncRadioFavoritesWithServer: async (explicitProfileId) => {
+        if (typeof window === 'undefined') return;
+        const cleanId =
+          (explicitProfileId || loadSharedActiveProfileId() || 'p1').replace(
+            /[^a-zA-Z0-9_-]/g,
+            ''
+          ) || 'p1';
+        const localPayload = readProfileRadioFavsFromLocalStorage(cleanId) || {
+          updatedAt: 1000,
+          stations: get().favorites.map(migrateRadioStationEntry),
+        };
+        try {
+          const res = await fetch(
+            `/api/tv-radio-favorites?profileId=${encodeURIComponent(cleanId)}`
+          );
+          if (!res.ok) return;
+          const remote = (await res.json()) as {
+            updatedAt?: number;
+            stations?: Station[];
+          } | null;
+          const remoteTs = Number(remote?.updatedAt) || 0;
+          const remoteStations = Array.isArray(remote?.stations)
+            ? remote!.stations.map(migrateRadioStationEntry)
+            : [];
+
+          if (remoteTs > localPayload.updatedAt && Array.isArray(remote?.stations)) {
+            const nextPayload: StoredProfileRadioFavs = {
+              updatedAt: remoteTs,
+              stations: remoteStations,
+            };
+            writeProfileRadioFavsToLocalStorage(cleanId, nextPayload);
+            const currentActive =
+              (loadSharedActiveProfileId() || 'p1').replace(
+                /[^a-zA-Z0-9_-]/g,
+                ''
+              ) || 'p1';
+            if (currentActive === cleanId) {
+              set({ favorites: remoteStations });
+            }
+          } else if (
+            localPayload.updatedAt > remoteTs &&
+            localPayload.stations.length > 0
+          ) {
+            pushProfileRadioFavsToRemote(cleanId, localPayload);
+          }
+        } catch {
+          // ignore network errors
+        }
+      },
+
       addRecentlyPlayed: (station) =>
         set((state) => {
           const filtered = state.recentlyPlayed.filter(
-            (s) => s.stationuuid !== station.stationuuid
+            (s) => !isSameRadioStation(s, station)
           );
           return {
-            recentlyPlayed: [station, ...filtered].slice(0, 20),
+            recentlyPlayed: [
+              migrateRadioStationEntry(station),
+              ...filtered,
+            ].slice(0, 20),
           };
         }),
 
@@ -851,24 +1128,45 @@ export const useRadioStore = create<RadioState>()(
             try {
               localStorage.setItem(name, value);
             } catch {
-              // If customTvChannels is huge and exceeds 5MB localStorage quota, keep all adult ("взрослые") channels + top 1200 channels so iEdem adult channels at the end of the playlist are never cut off!
+              // Evict caches & progressively shrink customTvChannels so localStorage quota NEVER drops Radio favorites!
+              evictNonEssentialLocalStorageCaches();
+              try {
+                localStorage.setItem(name, value);
+                return;
+              } catch {
+                // continue to progressive trim
+              }
               try {
                 const parsed = JSON.parse(value);
-                if (Array.isArray(parsed?.state?.customTvChannels) && parsed.state.customTvChannels.length > 600) {
-                  const allCustom: TvChannel[] = parsed.state.customTvChannels;
+                if (parsed?.state) {
+                  const allCustom: TvChannel[] = Array.isArray(
+                    parsed.state.customTvChannels
+                  )
+                    ? parsed.state.customTvChannels
+                    : [];
                   const adultChannels = allCustom.filter((c) =>
                     /(?:взросл|для взрослых|эротик|шалун|русская ночь|brazzers|hustler|redlight|dorcel|penthouse|playboy|xxx|adult|18\+)/i.test(
                       `${c.group || ''} ${c.name || ''}`
                     )
                   );
-                  const otherChannels = allCustom
-                    .filter((c) => !adultChannels.includes(c))
-                    .slice(0, 1200);
-                  parsed.state.customTvChannels = [
-                    ...otherChannels,
-                    ...adultChannels,
-                  ];
-                  localStorage.setItem(name, JSON.stringify(parsed));
+                  const otherChannels = allCustom.filter(
+                    (c) => !adultChannels.includes(c)
+                  );
+                  for (const cap of [400, 120, 0]) {
+                    try {
+                      parsed.state.customTvChannels =
+                        cap > 0
+                          ? [
+                              ...otherChannels.slice(0, cap),
+                              ...adultChannels.slice(0, 80),
+                            ]
+                          : [];
+                      localStorage.setItem(name, JSON.stringify(parsed));
+                      break;
+                    } catch {
+                      // try smaller cap
+                    }
+                  }
                 }
               } catch {
                 // ignore
@@ -943,36 +1241,38 @@ export const useRadioStore = create<RadioState>()(
         } else {
           merged.favoriteTvChannels = existingFavs;
         }
-        const migrateStationUrl = (st: Station): Station => {
-          const fixUrl = (u?: string) =>
-            (u || '').replace(
-              /\/\/live7digi\.antenaplay\.ro\//gi,
-              '//live4ro.antenaplay.ro/'
-            );
-          if (
-            /live7digi\.antenaplay\.ro/i.test(
-              `${st.url || ''} ${st.url_resolved || ''}`
-            )
-          ) {
-            return {
-              ...st,
-              url: fixUrl(st.url),
-              url_resolved: fixUrl(st.url_resolved || st.url),
-            };
-          }
-          return st;
-        };
-        if (
-          !Array.isArray(persisted.favorites) ||
-          persisted.favorites.length === 0
-        ) {
-          merged.favorites = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+
+        const activeProfileId =
+          (loadSharedActiveProfileId() || 'p1').replace(
+            /[^a-zA-Z0-9_-]/g,
+            ''
+          ) || 'p1';
+        const perProfileFavs = readProfileRadioFavsFromLocalStorage(activeProfileId);
+        if (perProfileFavs) {
+          merged.favorites = perProfileFavs.stations;
         } else {
-          merged.favorites = persisted.favorites.map(migrateStationUrl);
+          let migratedFavs =
+            Array.isArray(persisted.favorites) && persisted.favorites.length > 0
+              ? persisted.favorites.map(migrateRadioStationEntry)
+              : [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+          // Ensure JEKA (p1) has RMC Hits restored on first migration if previous quota drops lost it
+          if (
+            activeProfileId === 'p1' &&
+            !migratedFavs.some((s) => isSameRadioStation(s, RMC_HITS_STATION))
+          ) {
+            migratedFavs = [RMC_HITS_STATION, ...migratedFavs];
+          }
+          writeProfileRadioFavsToLocalStorage(activeProfileId, {
+            updatedAt: 1000,
+            stations: migratedFavs,
+          });
+          merged.favorites = migratedFavs;
         }
+
         if (Array.isArray(persisted.recentlyPlayed)) {
-          merged.recentlyPlayed =
-            persisted.recentlyPlayed.map(migrateStationUrl);
+          merged.recentlyPlayed = persisted.recentlyPlayed.map(
+            migrateRadioStationEntry
+          );
         }
         return merged;
       },

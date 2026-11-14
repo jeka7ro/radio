@@ -70,6 +70,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/tv-radio-favorites"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/start.json"
   to = "/.netlify/functions/msx-start"
   status = 200
@@ -155,6 +161,12 @@
 
 [[headers]]
   for = "/tv"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Referrer-Policy = "no-referrer"
+
+[[headers]]
+  for = "/car"
   [headers.values]
     Cache-Control = "no-cache, no-store, must-revalidate"
     Referrer-Policy = "no-referrer"

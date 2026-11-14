@@ -212,13 +212,13 @@ select:focus-visible {
   color: #09090b !important;
 }
 
-/* Ensure horizontal & vertical spacing between OSD transport pills on Smart TV Chromium engines (< 84) that lack Flexbox gap */
-[data-vod-bottom-row="true"] > div > button,
-[data-vod-bottom-row="true"] > div > div {
+/* Ensure horizontal & vertical spacing between OSD transport pills ONLY on legacy Smart TV Chromium engines (< 84) that lack Flexbox gap */
+html.no-flex-gap [data-vod-bottom-row="true"] > div > button,
+html.no-flex-gap [data-vod-bottom-row="true"] > div > div {
   margin-right: 8px;
 }
-[data-vod-bottom-row="true"] > div > button:last-child,
-[data-vod-bottom-row="true"] > div > div:last-child {
+html.no-flex-gap [data-vod-bottom-row="true"] > div > button:last-child,
+html.no-flex-gap [data-vod-bottom-row="true"] > div > div:last-child {
   margin-right: 0;
 }
 
@@ -800,4 +800,100 @@ tbody td {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+}
+
+/* ============================================================================
+   MERCEDES-BENZ GLE 2022 (MBUX 12.3" 1920x720 8:3 ULTRA-WIDE) CAR MODE
+   ============================================================================ */
+html.car-widescreen-mode,
+html.car-widescreen-mode body,
+html.car-widescreen-mode #root {
+  width: 100dvw !important;
+  max-width: 100dvw !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  background-color: #000000 !important;
+}
+
+/* Driver-safe >= 44x44 CSS px hit targets in Car Mode cockpit bar (WCAG 2.5.5) */
+html.car-widescreen-mode header button {
+  min-block-size: 44px;
+  min-inline-size: 44px;
+}
+
+html.car-widescreen-mode main {
+  container: car-main / inline-size;
+}
+
+html.car-widescreen-mode [data-top-hero-card="true"] h2 {
+  font-size: clamp(1.35rem, 1rem + 1.4vw, 2.5rem);
+  text-wrap: balance;
+}
+
+@container car-main (inline-size > 1600px) {
+  html.car-widescreen-mode [data-car-shelf-grid="true"] {
+    grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+  }
+}
+
+/* ============================================================================
+   HARDWARE-OVERLAY-SAFE 21:9 CINEMA ZOOM (1.16x) FOR LG webOS OLED / TIZEN / GLE
+   Keeps <video> at exact 100%x100% viewport bounds with `transform: none` so
+   LG webOS SVP hardware video-guard stays active and never triggers standby/screensaver.
+   ============================================================================ */
+.vod-fit-cinema-xy,
+.vod-fit-cinema-x,
+.vod-fit-cinema-y {
+  object-fit: contain;
+  transform: scale(1.16);
+}
+
+@supports (object-view-box: inset(6.9%)) {
+  .vod-fit-cinema-xy {
+    object-fit: contain;
+    object-view-box: inset(6.9% 6.9% 6.9% 6.9%);
+    transform: none !important;
+  }
+  .vod-fit-cinema-x {
+    object-fit: contain;
+    object-view-box: inset(0% 6.9% 0% 6.9%);
+    transform: none !important;
+  }
+  .vod-fit-cinema-y {
+    object-fit: contain;
+    object-view-box: inset(6.9% 0% 6.9% 0%);
+    transform: none !important;
+  }
+}
+
+html.smart-tv-mode .vod-fit-cinema-xy,
+html.smart-tv-mode .vod-fit-cinema-x,
+html.smart-tv-mode .vod-fit-cinema-y {
+  transform: none !important;
+}
+
+@supports not (object-view-box: inset(6.9%)) {
+  html.smart-tv-mode .vod-fit-cinema-xy,
+  html.smart-tv-mode .vod-fit-cinema-x,
+  html.smart-tv-mode .vod-fit-cinema-y {
+    object-fit: cover;
+    object-position: 50% 50%;
+  }
+}
+
+/* ============================================================================
+   SUB-1080P SMART TV VIEWPORT SCALING (Sony Bravia / Android TV / Google TV 960x540 & 1280x720)
+   When an Android TV WebView locks window.innerWidth below 1680px (e.g. 960x540 dpr=2/4),
+   root font-size scales proportionally in index.html; scale fixed-px Lucide SVGs cleanly too.
+   ============================================================================ */
+html.smart-tv-sub1080 svg.lucide:not([class*="w-"]):not([class*="h-"]) {
+  width: 1.15rem !important;
+  height: 1.15rem !important;
+}
+html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
+  width: 6.5rem !important;
+  height: 6.5rem !important;
 }

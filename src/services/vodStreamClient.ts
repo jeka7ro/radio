@@ -46,6 +46,7 @@ export async function resolveDirectVodStreamClient(params: {
   year?: string;
   season?: number;
   episode?: number;
+  ru?: string;
 }): Promise<ResolvedDirectVodStream> {
   const {
     kp = '',
@@ -56,6 +57,7 @@ export async function resolveDirectVodStreamClient(params: {
     year = '',
     season = 1,
     episode = 1,
+    ru = '',
   } = params;
 
   const isLocalLan =
@@ -74,6 +76,9 @@ export async function resolveDirectVodStreamClient(params: {
     season: String(season),
     episode: String(episode),
   });
+  if (ru !== '') {
+    qs.set('ru', ru);
+  }
   const relativePath = `/api/vod-stream?${qs.toString()}`;
   const urlsToTry =
     !isLocalLan && hasLocalLoopbackBridge()

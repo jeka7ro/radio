@@ -268,8 +268,144 @@ export async function fetchStationsByCountry(
   return cleaned;
 }
 
+function normalizeRadioSearchText(str?: string): string {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+export function getStationPopularityScore(st: Station): number {
+  const votes = Number(st.votes) || 0;
+  const clicks = Number(st.clickcount) || 0;
+  const bitrateBonus = (Number(st.bitrate) || 0) >= 128 ? 30 : 0;
+  return votes + clicks * 3 + bitrateBonus;
+}
+
+export function getStationSearchMatchTier(
+  st: Station,
+  rawQuery: string
+): number {
+  const q = normalizeRadioSearchText(rawQuery);
+  if (!q) return 1;
+  const qCompact = q.replace(/[\s\-_.'`]+/g, '');
+  const qTokens = q.split(/\s+/).filter(Boolean);
+
+  const nameNorm = normalizeRadioSearchText(st.name);
+  const nameCompact = nameNorm.replace(/[\s\-_.'`]+/g, '');
+  const nameWords = nameNorm.split(/[^a-z0-9а-яё]+/i).filter(Boolean);
+
+  if (nameNorm === q || (qCompact.length >= 2 && nameCompact === qCompact)) {
+    return 5;
+  }
+  if (
+    nameNorm.startsWith(`${q} `) ||
+    nameNorm.startsWith(`${q}-`) ||
+    (qTokens.length >= 2 && nameNorm.startsWith(q))
+  ) {
+    return 4;
+  }
+  if (
+    qTokens.length > 0 &&
+    qTokens.every(
+      (tok) =>
+        nameWords.includes(tok) || nameWords.some((w) => w.startsWith(tok))
+    )
+  ) {
+    return 3;
+  }
+  if (
+    nameNorm.includes(q) ||
+    (qCompact.length >= 3 && nameCompact.includes(qCompact))
+  ) {
+    return 2;
+  }
+
+  const metaNorm = normalizeRadioSearchText(
+    `${st.tags || ''} ${st.country || ''} ${st.countrycode || ''} ${st.homepage || ''}`
+  );
+  const metaCompact = metaNorm.replace(/[\s\-_.'`]+/g, '');
+  const allSearchable = `${nameNorm} ${metaNorm}`;
+  if (
+    (qTokens.length > 0 && qTokens.every((tok) => allSearchable.includes(tok))) ||
+    (qCompact.length >= 3 && metaCompact.includes(qCompact))
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+export function rankStationsByRelevanceAndRating(
+  stations: Station[],
+  rawQuery = ''
+): Station[] {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) {
+    return [...stations].sort(
+      (a, b) => getStationPopularityScore(b) - getStationPopularityScore(a)
+    );
+  }
+  const scored: Array<{ st: Station; tier: number; pop: number }> = [];
+  for (const st of stations) {
+    const tier = getStationSearchMatchTier(st, trimmed);
+    if (tier <= 0) continue;
+    scored.push({
+      st,
+      tier,
+      pop: getStationPopularityScore(st),
+    });
+  }
+  scored.sort((a, b) => {
+    if (b.tier !== a.tier) return b.tier - a.tier;
+    return b.pop - a.pop;
+  });
+  return scored.map((x) => x.st);
+}
+
+const CURATED_GLOBAL_SEARCH_STATIONS: Station[] = [
+  {
+    stationuuid: '96253329-0601-11e8-ae97-52543be04c81',
+    name: 'RMC Hits',
+    url: 'https://icy.unitedradio.it/rmcweb001',
+    url_resolved: 'https://icy.unitedradio.it/rmcweb001',
+    homepage: 'https://www.radiomontecarlo.net',
+    favicon:
+      'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly93d3cucmFkaW9tb250ZWNhcmxvLm5ldC93cC1jb250ZW50L3VwbG9hZHMvMjAyNS8xMC9STUNfSElUU19XZWJSYWRpby0xNjAxNTI4MjA4MzE4LTMuanBnLXJtY19oaXRzLTMuanBn/-/0/0?r=e03719966665665d902cd409e6162b62',
+    tags: 'pop,hits,top 40,monte carlo,rmc',
+    country: 'Italy',
+    countrycode: 'IT',
+    language: 'italian',
+    votes: 9350,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7600,
+  },
+  {
+    stationuuid: 'fav-radio-rmc-it',
+    name: 'Radio Monte Carlo',
+    url: 'https://icy.unitedradio.it/RMC.mp3',
+    url_resolved: 'https://icy.unitedradio.it/RMC.mp3',
+    homepage: 'https://www.radiomontecarlo.net',
+    favicon:
+      'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly9yYWRpbzMub21ueXMuY29tL3dwLWNvbnRlbnQvdXBsb2Fkcy8yMDI1LzA2L2RlZmF1bHQtMS5qcGc/-/0/0?r=91587740ec678bd2765cf54837744f04',
+    tags: 'lounge,pop,jazz,chillout,monte carlo,rmc',
+    country: 'Italy',
+    countrycode: 'IT',
+    language: 'italian',
+    votes: 9200,
+    codec: 'MP3',
+    bitrate: 128,
+    hls: 0,
+    clickcount: 7400,
+  },
+];
+
 /**
- * Searches stations globally across ALL countries in the Radio Browser catalog.
+ * Searches stations globally across ALL countries in the Radio Browser catalog,
+ * ranked by exact/token match and Top Ratings (votes + clickcount).
  */
 export async function searchStationsGlobal(searchTerm: string): Promise<Station[]> {
   const trimmed = searchTerm.trim();
@@ -278,38 +414,60 @@ export async function searchStationsGlobal(searchTerm: string): Promise<Station[
   }
 
   const normalizedKey = trimmed.toLowerCase();
-  const cacheKey = `global_search_${normalizedKey}`;
+  const cacheKey = `global_search_v2_${normalizedKey}`;
   const cached = getCachedData<Station[]>(cacheKey);
   if (cached) {
     return cached;
   }
 
   const compact = normalizedKey.replace(/[\s\-_]+/g, '');
-  const queriesToRun: string[] = [trimmed];
+  const tokens = normalizedKey.split(/\s+/).filter(Boolean);
+  const nameQueries = new Set<string>([trimmed]);
 
   if (compact !== normalizedKey && compact.length >= 3) {
-    queriesToRun.push(compact);
+    nameQueries.add(compact);
   }
   if (compact.includes('montecarlo')) {
-    queriesToRun.push('RMC');
+    nameQueries.add('RMC');
+    nameQueries.add('Radio Monte Carlo');
+  }
+  if (/\brmc\b/i.test(normalizedKey)) {
+    nameQueries.add('RMC');
+    nameQueries.add('Radio Monte Carlo');
   }
 
-  const responses = await Promise.allSettled(
-    queriesToRun.map((q) => {
-      const params = new URLSearchParams({
-        name: q,
-        hidebroken: 'true',
-        order: 'votes',
-        reverse: 'true',
-        limit: '600',
-      });
-      return requestWithFallback<Station[]>(
-        `/json/stations/search?${params.toString()}`
-      );
-    })
-  );
+  const requests: Array<Promise<Station[]>> = Array.from(nameQueries).map((q) => {
+    const params = new URLSearchParams({
+      name: q,
+      hidebroken: 'true',
+      order: 'votes',
+      reverse: 'true',
+      limit: '500',
+    });
+    return requestWithFallback<Station[]>(
+      `/json/stations/search?${params.toString()}`
+    );
+  });
 
-  const combined: Station[] = [];
+  // Also search by genre/tag when searching a single word (e.g. "rock", "dance", "jazz", "lounge", "hits")
+  if (tokens.length === 1 && trimmed.length >= 3) {
+    const tagParams = new URLSearchParams({
+      tag: normalizedKey,
+      hidebroken: 'true',
+      order: 'votes',
+      reverse: 'true',
+      limit: '250',
+    });
+    requests.push(
+      requestWithFallback<Station[]>(
+        `/json/stations/search?${tagParams.toString()}`
+      )
+    );
+  }
+
+  const responses = await Promise.allSettled(requests);
+
+  const combined: Station[] = [...CURATED_GLOBAL_SEARCH_STATIONS];
   for (const res of responses) {
     if (res.status === 'fulfilled' && Array.isArray(res.value)) {
       combined.push(...res.value);
@@ -317,8 +475,35 @@ export async function searchStationsGlobal(searchTerm: string): Promise<Station[
   }
 
   const cleaned = normalizeStationsList(combined);
-  setCachedData(cacheKey, cleaned, DEFAULT_TTL_MS);
-  return cleaned;
+  // Deduplicate identical normalized stream URLs, keeping the highest-voted station
+  const byStreamKey = new Map<string, Station>();
+  for (const st of cleaned) {
+    const rawUrl = (st.url_resolved || st.url || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^http:\/\//, 'https://')
+      .replace(/\?listening-from-radio-garden=.*$/, '')
+      .replace(/\/+$/, '');
+    const key = rawUrl || st.stationuuid;
+    const prev = byStreamKey.get(key);
+    if (
+      !prev ||
+      getStationSearchMatchTier(st, trimmed) >
+        getStationSearchMatchTier(prev, trimmed) ||
+      (getStationSearchMatchTier(st, trimmed) ===
+        getStationSearchMatchTier(prev, trimmed) &&
+        getStationPopularityScore(st) > getStationPopularityScore(prev))
+    ) {
+      byStreamKey.set(key, st);
+    }
+  }
+
+  const ranked = rankStationsByRelevanceAndRating(
+    Array.from(byStreamKey.values()),
+    trimmed
+  );
+  setCachedData(cacheKey, ranked, DEFAULT_TTL_MS);
+  return ranked;
 }
 
 /**

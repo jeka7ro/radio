@@ -75,6 +75,14 @@ export const App: React.FC = () => {
     }
 
     const pathname = window.location.pathname.toLowerCase();
+    const isCarRoute =
+      pathname === '/car' ||
+      pathname.startsWith('/car/') ||
+      params.get('car') === '1' ||
+      params.get('gle') === '1';
+    if (isCarRoute) {
+      document.documentElement.classList.add('car-widescreen-mode');
+    }
     const isTvMode =
       pathname === '/tv' ||
       pathname.startsWith('/tv/') ||

@@ -1637,6 +1637,14 @@ async function resolveFromIedemVip({
 
   if (allHits.length === 0) return null;
 
+  // hls.js TSDemuxer cannot decode HEVC (0x24) inside MPEG-TS (.ts) segments — it plays AAC audio only with a black screen!
+  // Only native Apple Safari/WebKit decodes 4K HEVC MPEG-TS HLS natively; Smart TVs / Android TV / Chrome must prefer 1080p H.264 (fhd).
+  const canDecodeHevcMpegTs =
+    /Safari/i.test(effectiveUa) &&
+    !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Android|Web0S|WebOS|Tizen|BRAVIA|Sony|SmartTV|SMART-TV|Vewd|HbbTV|VIDAA/i.test(
+      effectiveUa
+    );
+
   if (!wantSeries) {
     const validMovies = allHits
       .filter((it) => it.url && (Number(it.duration) || 90) >= 35)
@@ -1647,8 +1655,12 @@ async function resolveFromIedemVip({
         return true;
       })
       .sort((a, b) => {
-        const scoreA = (a['4k'] ? 100 : 0) + (a.fhd ? 50 : 0);
-        const scoreB = (b['4k'] ? 100 : 0) + (b.fhd ? 50 : 0);
+        const scoreA = canDecodeHevcMpegTs
+          ? (a['4k'] ? 100 : 0) + (a.fhd ? 50 : 0)
+          : (!a['4k'] && a.fhd ? 120 : !a['4k'] ? 80 : 20);
+        const scoreB = canDecodeHevcMpegTs
+          ? (b['4k'] ? 100 : 0) + (b.fhd ? 50 : 0)
+          : (!b['4k'] && b.fhd ? 120 : !b['4k'] ? 80 : 20);
         return scoreB - scoreA;
       });
 
@@ -1667,7 +1679,7 @@ async function resolveFromIedemVip({
       title: best.title,
       duration: (Number(best.duration) || 105) * 60,
       audioNames: [
-        is4k ? 'Русский / Original (4K UHD)' : 'Русский / Original (1080p)',
+        is4k ? 'Русский (iEdem VIP • 4K UHD)' : 'Русский (iEdem VIP • 1080p)',
       ],
       hlsUrl: proxiedUrl,
       proxyHlsUrl: proxiedUrl,
@@ -1676,13 +1688,16 @@ async function resolveFromIedemVip({
     };
   }
 
-  // Series (multistream): group by season number and prefer 4K UHD
+  // Series (multistream): group by season number; prefer 1080p H.264 on MSE/TV browsers and 4K UHD only on native HEVC-TS Safari
   const bySeason = new Map();
   for (const it of allHits) {
     const sm = String(it.title || '').match(/Сезон\s*(\d+)/i);
     const sNum = sm ? Number(sm[1]) || 1 : 1;
     const prev = bySeason.get(sNum);
-    if (!prev || (!prev['4k'] && it['4k'])) {
+    if (
+      !prev ||
+      (canDecodeHevcMpegTs ? !prev['4k'] && it['4k'] : Boolean(prev['4k']) && !it['4k'])
+    ) {
       bySeason.set(sNum, it);
     }
   }
@@ -1708,8 +1723,8 @@ async function resolveFromIedemVip({
             duration: 3000,
             audioNames: [
               is4k
-                ? 'Русский / Original (4K UHD)'
-                : 'Русский / Original (1080p)',
+                ? 'Русский (iEdem VIP • 4K UHD)'
+                : 'Русский (iEdem VIP • 1080p)',
             ],
           };
         })
@@ -2692,6 +2707,15 @@ async function resolveFromRomanianCloudVod({
   };
 }
 
+function kinogramAudioIndicatesForeignContent(audioNames) {
+  if (!Array.isArray(audioNames) || audioNames.length === 0) return false;
+  if (audioNames.length >= 2) return true;
+  const single = String(audioNames[0] || '');
+  return /\b(eng|en|english|fra|fre|french|spa|esp|spanish|deu|ger|german|ita|italian|por|portuguese|kor|korean|jpn|jap|japanese|tur|turkish|ron|rum|romanian|chi|zho|chinese|pol|polish)\b|eng\.?\s*orig|дубл|dubbing|hdrezka|lostfilm|red\s*head|кубик|jaskier|tvshows|newcomers|viruseproject|субт|subt/i.test(
+    single
+  );
+}
+
 export async function resolveVodStreamData({
   kp,
   imdb,
@@ -2700,11 +2724,13 @@ export async function resolveVodStreamData({
   year = '',
   season = 1,
   episode = 1,
+  ru = '',
   userAgent = '',
 }) {
   const effectiveUa = pickSafeDesktopUa(userAgent);
   const cleanKp = String(kp || '').trim();
   const cleanTitle = String(title || '').trim();
+  const forceForeign = String(ru) === '0';
   let fallbackSeasonsCatalog = undefined;
 
   // 0. Check Romanian Cloud TV Shows & Series first (Asia Express, Insula Iubirii, Power Couple, Las Fierbinti, Chefi la Cutite, Clanul, Tatutu, etc.)
@@ -2730,14 +2756,16 @@ export async function resolveVodStreamData({
     }
   }
 
-  // 1. Check Official VK Video Curated Playlists & Verified Communities first
+  // 1. Check Official VK Video Curated Playlists & Verified Communities first (Russian TV Shows ONLY — never foreign!)
   const cleanImdb = String(imdb || '').trim();
-  const matchedVkShow = VK_CURATED_SHOWS.find(
-    (s) =>
-      (cleanKp && s.kpIds.includes(cleanKp)) ||
-      (cleanImdb && Array.isArray(s.imdbIds) && s.imdbIds.includes(cleanImdb)) ||
-      (cleanTitle && s.titleRe.test(cleanTitle))
-  );
+  const matchedVkShow = !forceForeign
+    ? VK_CURATED_SHOWS.find(
+        (s) =>
+          (cleanKp && s.kpIds.includes(cleanKp)) ||
+          (cleanImdb && Array.isArray(s.imdbIds) && s.imdbIds.includes(cleanImdb)) ||
+          (cleanTitle && s.titleRe.test(cleanTitle))
+      )
+    : null;
   if (matchedVkShow) {
     const vkSeasons = await matchedVkShow.buildSeasons();
     if (Array.isArray(vkSeasons) && vkSeasons.length > 0) {
@@ -2804,13 +2832,15 @@ export async function resolveVodStreamData({
     }
   }
 
-  // 2. Check Official RUTUBE Gazprom-Media TV Catalog (ТНТ, Пятница!, PREMIER, СТС)
+  // 2. Check Official RUTUBE Gazprom-Media TV Catalog (ТНТ, Пятница!, PREMIER, СТС — Russian TV Shows ONLY!)
   let rutubeFallbackRes = null;
-  const matchedRutubeShow = RUTUBE_CURATED_SHOWS.find(
-    (s) =>
-      (cleanKp && s.kpIds.includes(cleanKp)) ||
-      (cleanTitle && s.titleRe.test(cleanTitle))
-  );
+  const matchedRutubeShow = !forceForeign
+    ? RUTUBE_CURATED_SHOWS.find(
+        (s) =>
+          (cleanKp && s.kpIds.includes(cleanKp)) ||
+          (cleanTitle && s.titleRe.test(cleanTitle))
+      )
+    : null;
   if (matchedRutubeShow) {
     const rutubeRes = await resolveRutubeCuratedShow(
       matchedRutubeShow,
@@ -2837,16 +2867,19 @@ export async function resolveVodStreamData({
   }
 
   const isRuTvShowQuery =
-    Boolean(matchedVkShow || matchedRutubeShow) ||
-    (Number(cleanKp) >= 9001000 && Number(cleanKp) <= 9001999) ||
-    /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
-      cleanTitle
+    !forceForeign &&
+    (Boolean(matchedVkShow || matchedRutubeShow) ||
+      (Number(cleanKp) >= 9001000 && Number(cleanKp) <= 9001999) ||
+      /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
+        cleanTitle
+      ));
+  const isRussianNativeQuery =
+    !forceForeign &&
+    Boolean(
+      isRuTvShowQuery ||
+        /[а-яА-ЯёЁ]/.test(cleanTitle) ||
+        (cleanKp && !imdb)
     );
-  const isRussianNativeQuery = Boolean(
-    isRuTvShowQuery ||
-      /[а-яА-ЯёЁ]/.test(cleanTitle) ||
-      (cleanKp && !imdb)
-  );
 
   // For Russian TV Shows (ТВ-Шоу / Emisiuni RU), prioritize VK Видео Direct (#1) before iEdem MediaLibrary & Kinogram!
   if (isRuTvShowQuery && mediaType !== 'movie') {
@@ -2880,6 +2913,8 @@ export async function resolveVodStreamData({
       year,
     });
 
+    // STRICT RULE: VK Video is ONLY allowed for Russian TV Shows (emisiuni rusești)!
+    // Foreign movies/series use FileList.io (#1) + Multi-Audio Kinogram HLS, and Russian movies/series use Kinozal VIP (#1) + iEdem/Kinogram!
     if (isRuTvShowQuery && (cleanKp || /[а-яА-ЯёЁ]/.test(cleanTitle) || titleInfo.ruTitle)) {
       const vkSearchFirst = await resolveFromVkVideoSearch({
         ...titleInfo,
@@ -2895,36 +2930,23 @@ export async function resolveVodStreamData({
       }
     }
 
-    const iedemRes = await resolveFromIedemVip({
-      ...titleInfo,
-      season,
-      episode,
-      effectiveUa,
-    });
-    if (iedemRes && Array.isArray(iedemRes.seasons) && iedemRes.seasons.length > 0) {
-      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
-        fallbackSeasonsCatalog,
-        iedemRes.seasons
-      );
-    }
-    if (iedemRes && iedemRes.ok) {
-      return {
-        ...iedemRes,
-        seasons: fallbackSeasonsCatalog || iedemRes.seasons,
-      };
-    }
-
-    if (!isRuTvShowQuery && (cleanKp || /[а-яА-ЯёЁ]/.test(cleanTitle) || titleInfo.ruTitle)) {
-      const vkSearchRes = await resolveFromVkVideoSearch({
+    if (!forceForeign) {
+      const iedemRes = await resolveFromIedemVip({
         ...titleInfo,
         season,
         episode,
         effectiveUa,
       });
-      if (vkSearchRes && vkSearchRes.ok) {
+      if (iedemRes && Array.isArray(iedemRes.seasons) && iedemRes.seasons.length > 0) {
+        fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+          fallbackSeasonsCatalog,
+          iedemRes.seasons
+        );
+      }
+      if (iedemRes && iedemRes.ok) {
         return {
-          ...vkSearchRes,
-          ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+          ...iedemRes,
+          seasons: fallbackSeasonsCatalog || iedemRes.seasons,
         };
       }
     }
@@ -3077,8 +3099,14 @@ export async function resolveVodStreamData({
           ? targetEp.hls + (token ? `&${token}` : '')
           : undefined;
 
-        // Prefer iEdem VIP MediaLibrary 4K/1080p H.264 .m3u8 for Russian series (and single-season series) while keeping Collaps seasons & DASH!
-        if (cleanSeasons.length <= 1 || isRussianNativeQuery) {
+        const epAudioNames = Array.isArray(targetEp.audio?.names)
+          ? targetEp.audio.names
+          : ['Русский'];
+        const isForeignMultiAudioSeries =
+          forceForeign || kinogramAudioIndicatesForeignContent(epAudioNames);
+
+        // Prefer iEdem VIP MediaLibrary 4K/1080p H.264 .m3u8 ONLY for genuine Russian-origin series (never overwrite foreign multi-audio Original streams with Russian-only iEdem dubbing!)
+        if (isRussianNativeQuery && !isForeignMultiAudioSeries) {
           try {
             const titleInfo = await resolveTitleCandidatesAndYear({
               imdb,
@@ -3119,9 +3147,7 @@ export async function resolveVodStreamData({
           episode: Number(targetEp.episode) || 1,
           title: targetEp.title || '',
           duration: Number(targetEp.duration) || 0,
-          audioNames: Array.isArray(targetEp.audio?.names)
-            ? targetEp.audio.names
-            : ['Русский'],
+          audioNames: epAudioNames,
           dashUrl,
           dashaUrl,
           hlsUrl,
@@ -3144,7 +3170,7 @@ export async function resolveVodStreamData({
   const audioMatch = html.match(/audio:\s*(\{"names":\[[^\]]+\][^}]*\})/);
 
   if (hlsMatch?.[1] || dashMatch?.[1]) {
-    let audioNames = ['Русский / Original'];
+    let audioNames = ['Русский'];
     try {
       if (audioMatch?.[1]) {
         const parsed = JSON.parse(audioMatch[1]);
@@ -3169,7 +3195,10 @@ export async function resolveVodStreamData({
       ? wrapTvProxyUrl(hlsUrl, `${lastWorkingKinogramHost}/`, effectiveUa)
       : undefined;
 
-    if (isRussianNativeQuery) {
+    const isForeignMultiAudioMovie =
+      forceForeign || kinogramAudioIndicatesForeignContent(audioNames);
+
+    if (isRussianNativeQuery && !isForeignMultiAudioMovie) {
       try {
         const titleInfo = await resolveTitleCandidatesAndYear({
           imdb,
@@ -3234,6 +3263,7 @@ export async function handler(event) {
   const year = params.year || '';
   const season = Number(params.season) || 1;
   const episode = Number(params.episode) || 1;
+  const ru = params.ru ?? '';
   const userAgent =
     event.headers?.['user-agent'] || event.headers?.['User-Agent'] || '';
 
@@ -3253,6 +3283,7 @@ export async function handler(event) {
     year,
     season,
     episode,
+    ru,
     userAgent,
   });
   return {

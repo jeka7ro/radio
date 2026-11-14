@@ -810,29 +810,55 @@ export default async (req) => {
         }
       }
 
-      const rawLines = text.split(/\r?\n/).filter((l) => {
-        const t = l.trim();
+      const rawSplitLines = text.split(/\r?\n/);
+      const rawLines = [];
+      let skipNextUriLine = false;
+      for (const line of rawSplitLines) {
+        const t = line.trim();
+        if (skipNextUriLine && t && !t.startsWith('#')) {
+          skipNextUriLine = false;
+          continue;
+        }
         if (
           t.startsWith('#EXT-X-MEDIA:') &&
-          /TYPE=(SUBTITLES|CLOSED-CAPTIONS)/i.test(t)
+          (t.includes('GROUP-ID="failover-') ||
+            /TYPE=(SUBTITLES|CLOSED-CAPTIONS)/i.test(t))
         ) {
+          continue;
+        }
+        if (
+          t.startsWith('#EXT-X-STREAM-INF:') &&
+          t.includes('AUDIO="failover-')
+        ) {
+          skipNextUriLine = true;
+          continue;
+        }
+        rawLines.push(line);
+      }
+      const isOriginalHlsAudioMediaLine = (l) => {
+        const t = l.trim();
+        if (!t.startsWith('#EXT-X-MEDIA:') || !/TYPE=AUDIO/i.test(t)) {
           return false;
         }
-        return true;
-      });
+        if (/русский\s*\/\s*original/i.test(t)) return false;
+        if (
+          /LANGUAGE="(?:en|eng|fr|fra|fre|es|spa|de|deu|ger|it|ita|pt|por|ko|kor|ja|jpn|tr|tur|ro|ron|rum|zh|chi|zho|pl|pol|sv|swe|da|dan|no|nor|fi|fin|nl|nld|dut|cs|ces|cze|hu|hun|el|ell|gre|hi|hin|ar|ara|th|tha)(?:-[a-z0-9]+)?"/i.test(
+            t
+          )
+        ) {
+          return true;
+        }
+        return /NAME="[^"]*(?:\beng|\borig|\bfra|\bfre|\bspa|\bdeu|\bger|\bita|\bpor|\bkor|\bjpn|\btur|\bron|\brum|оригинал|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|китайск|польск|шведск|датск|норвеж|румынск|субтитр)[^"]*"/i.test(
+          t
+        );
+      };
       const audioLinesCount = rawLines.filter(
         (l) =>
           l.trim().startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(l)
       ).length;
       const useExplicitAudioIdx =
         requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
-      const hasOriginalAudioTrack = rawLines.some(
-        (l) =>
-          l.trim().startsWith('#EXT-X-MEDIA:') &&
-          /TYPE=AUDIO/i.test(l) &&
-          (/LANGUAGE="en"/i.test(l) ||
-            /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(l))
-      );
+      const hasOriginalAudioTrack = rawLines.some(isOriginalHlsAudioMediaLine);
       let promotedOriginalAudio = false;
       let currentAudioLineIdx = 0;
 
@@ -848,9 +874,7 @@ export default async (req) => {
           const thisAudioIdx = currentAudioLineIdx++;
           const shouldPromote = useExplicitAudioIdx
             ? thisAudioIdx === requestedAudioIdx
-            : !promotedOriginalAudio &&
-              (/LANGUAGE="en"/i.test(trimmed) ||
-                /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(trimmed));
+            : !promotedOriginalAudio && isOriginalHlsAudioMediaLine(trimmed);
           if (shouldPromote) {
             promotedOriginalAudio = true;
             currentLine = currentLine

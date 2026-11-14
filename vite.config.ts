@@ -1430,7 +1430,7 @@ function tvStreamProxyPlugin(): Plugin {
               res.end(fs.readFileSync(assetFile));
               return;
             }
-          } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/index.html') {
+          } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/car' || rawUrl.startsWith('/car/') || rawUrl === '/index.html') {
             const distIndex = path.join(distDir, 'index.html');
             if (fs.existsSync(distIndex)) {
               const ver = Math.floor(fs.statSync(distIndex).mtimeMs);
@@ -1818,6 +1818,114 @@ function tvStreamProxyPlugin(): Plugin {
           'Cache-Control': 'no-cache, no-store',
         });
         res.end(JSON.stringify(readDiskSaved()));
+      });
+
+      const getTvRadioFavsFileForProfile = (profileId: string) => {
+        const cleanId =
+          (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        return path.resolve(__dirname, `.tv-radio-favs-${cleanId}.json`);
+      };
+
+      server.middlewares.use('/api/tv-radio-favorites', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const reqUrl = new URL(req.url || '', 'http://localhost');
+        const profileId = reqUrl.searchParams.get('profileId') || 'p1';
+        const targetFile = getTvRadioFavsFileForProfile(profileId);
+
+        const readDiskRadioFavs = (): {
+          updatedAt: number;
+          stations: unknown[];
+        } | null => {
+          try {
+            if (fs.existsSync(targetFile)) {
+              const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
+              if (
+                parsed &&
+                typeof parsed === 'object' &&
+                Array.isArray(parsed.stations)
+              ) {
+                return {
+                  updatedAt: Number(parsed.updatedAt) || 0,
+                  stations: parsed.stations,
+                };
+              }
+            }
+          } catch {
+            // ignore
+          }
+          return null;
+        };
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || 'null');
+              if (
+                incoming &&
+                typeof incoming === 'object' &&
+                Array.isArray(incoming.stations)
+              ) {
+                const existing = readDiskRadioFavs();
+                const incomingTs = Number(incoming.updatedAt) || Date.now();
+                const existingTs = Number(existing?.updatedAt) || 0;
+                if (!existing || incomingTs >= existingTs) {
+                  const nextPayload = {
+                    updatedAt: incomingTs,
+                    stations: incoming.stations.slice(0, 300),
+                  };
+                  fs.writeFileSync(
+                    targetFile,
+                    JSON.stringify(nextPayload),
+                    'utf-8'
+                  );
+                  fetch(
+                    `https://filmio.my/api/tv-radio-favorites?profileId=${encodeURIComponent(
+                      profileId
+                    )}`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(nextPayload),
+                    }
+                  ).catch(() => {});
+                }
+              }
+            } catch {
+              // ignore
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(
+              JSON.stringify(
+                readDiskRadioFavs() || { updatedAt: 0, stations: [] }
+              )
+            );
+          });
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(
+          JSON.stringify(
+            readDiskRadioFavs() || { updatedAt: 0, stations: [] }
+          )
+        );
       });
 
       const tvProfilesFile = path.resolve(__dirname, '.tv-profiles.json');
@@ -2240,6 +2348,7 @@ function tvStreamProxyPlugin(): Plugin {
           const year = reqUrl.searchParams.get('year') || '';
           const season = Number(reqUrl.searchParams.get('season')) || 1;
           const episode = Number(reqUrl.searchParams.get('episode')) || 1;
+          const ru = reqUrl.searchParams.get('ru') ?? '';
           const reqUa = String(req.headers['user-agent'] || '');
           const vodStreamPath = path.resolve(
             __dirname,
@@ -2258,6 +2367,7 @@ function tvStreamProxyPlugin(): Plugin {
             year,
             season,
             episode,
+            ru,
             userAgent: reqUa,
           });
           if (result.ok && result.hlsUrl) {
@@ -2937,6 +3047,23 @@ function tvStreamProxyPlugin(): Plugin {
               }
               filteredLines.push(line);
             }
+            const isOriginalHlsAudioMediaLine = (l: string): boolean => {
+              const t = l.trim();
+              if (!t.startsWith('#EXT-X-MEDIA:') || !/TYPE=AUDIO/i.test(t)) {
+                return false;
+              }
+              if (/русский\s*\/\s*original/i.test(t)) return false;
+              if (
+                /LANGUAGE="(?:en|eng|fr|fra|fre|es|spa|de|deu|ger|it|ita|pt|por|ko|kor|ja|jpn|tr|tur|ro|ron|rum|zh|chi|zho|pl|pol|sv|swe|da|dan|no|nor|fi|fin|nl|nld|dut|cs|ces|cze|hu|hun|el|ell|gre|hi|hin|ar|ara|th|tha)(?:-[a-z0-9]+)?"/i.test(
+                  t
+                )
+              ) {
+                return true;
+              }
+              return /NAME="[^"]*(?:\beng|\borig|\bfra|\bfre|\bspa|\bdeu|\bger|\bita|\bpor|\bkor|\bjpn|\btur|\bron|\brum|оригинал|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|китайск|польск|шведск|датск|норвеж|румынск|субтитр)[^"]*"/i.test(
+                t
+              );
+            };
             const audioLinesCount = filteredLines.filter(
               (l) =>
                 l.trim().startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(l)
@@ -2944,11 +3071,7 @@ function tvStreamProxyPlugin(): Plugin {
             const useExplicitAudioIdx =
               requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
             const hasOriginalAudioTrack = filteredLines.some(
-              (l) =>
-                l.trim().startsWith('#EXT-X-MEDIA:') &&
-                /TYPE=AUDIO/i.test(l) &&
-                (/LANGUAGE="en"/i.test(l) ||
-                  /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(l))
+              isOriginalHlsAudioMediaLine
             );
             let promotedOriginalAudio = false;
             let currentAudioLineIdx = 0;
@@ -2965,8 +3088,7 @@ function tvStreamProxyPlugin(): Plugin {
                 const shouldPromote = useExplicitAudioIdx
                   ? thisAudioIdx === requestedAudioIdx
                   : !promotedOriginalAudio &&
-                    (/LANGUAGE="en"/i.test(trimmed) ||
-                      /NAME="[^"]*(?:eng|orig)[^"]*"/i.test(trimmed));
+                    isOriginalHlsAudioMediaLine(trimmed);
                 if (shouldPromote) {
                   promotedOriginalAudio = true;
                   currentLine = currentLine

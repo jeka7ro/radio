@@ -57,6 +57,7 @@ import {
 } from '../services/subtitleSearchService';
 import { resolveDirectVodStreamClient } from '../services/vodStreamClient';
 import { VodNativeHlsPlayer } from '../components/tv/VodNativeHlsPlayer';
+import { FilmioStartupLoader } from '../components/common/FilmioStartupLoader';
 import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
 import {
   ActorProfileModal,
@@ -222,13 +223,13 @@ const SUBTITLE_LANGUAGES: Array<{
   id: SubtitleLangId;
   label: string;
 }> = [
-  { id: 'ro', label: 'Română' },
-  { id: 'ru', label: 'Русский' },
-  { id: 'en', label: 'English' },
-  { id: 'es', label: 'Español' },
-  { id: 'fr', label: 'Français' },
-  { id: 'de', label: 'Deutsch' },
-];
+    { id: 'ro', label: 'Română' },
+    { id: 'ru', label: 'Русский' },
+    { id: 'en', label: 'English' },
+    { id: 'es', label: 'Español' },
+    { id: 'fr', label: 'Français' },
+    { id: 'de', label: 'Deutsch' },
+  ];
 
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
@@ -273,21 +274,21 @@ const GENRE_FILTERS: Array<{
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { id: 'top', label: 'Populare Acum', Icon: Flame },
-  { id: 'imdbRating', label: 'Top IMDb', Icon: Star },
-  { id: 'Action', label: 'Acțiune', Icon: Zap },
-  { id: 'Sci-Fi', label: 'Sci-Fi', Icon: Rocket },
-  { id: 'Thriller', label: 'Thriller', Icon: Film },
-  { id: 'Comedy', label: 'Comedie', Icon: Smile },
-  { id: 'Drama', label: 'Dramă', Icon: Clapperboard },
-  { id: 'Crime', label: 'Crimă & Mister', Icon: Sparkles },
-  { id: 'Adventure', label: 'Aventură', Icon: Compass },
-  { id: 'Horror', label: 'Horror', Icon: Film },
-  { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
-  { id: 'Romance', label: 'Romantic', Icon: Heart },
-  { id: 'Documentary', label: 'Documentare', Icon: Globe },
-  { id: 'Adult', label: '18+ Adulți / Для взрослых', Icon: Flame },
-];
+    { id: 'top', label: 'Populare Acum', Icon: Flame },
+    { id: 'imdbRating', label: 'Top IMDb', Icon: Star },
+    { id: 'Action', label: 'Acțiune', Icon: Zap },
+    { id: 'Sci-Fi', label: 'Sci-Fi', Icon: Rocket },
+    { id: 'Thriller', label: 'Thriller', Icon: Film },
+    { id: 'Comedy', label: 'Comedie', Icon: Smile },
+    { id: 'Drama', label: 'Dramă', Icon: Clapperboard },
+    { id: 'Crime', label: 'Crimă & Mister', Icon: Sparkles },
+    { id: 'Adventure', label: 'Aventură', Icon: Compass },
+    { id: 'Horror', label: 'Horror', Icon: Film },
+    { id: 'Animation', label: 'Animație & Familie', Icon: Smile },
+    { id: 'Romance', label: 'Romantic', Icon: Heart },
+    { id: 'Documentary', label: 'Documentare', Icon: Globe },
+    { id: 'Adult', label: '18+ Adulți / Для взрослых', Icon: Flame },
+  ];
 
 const ORIGIN_COUNTRIES: Array<{
   id: OriginCountryFilterId;
@@ -295,44 +296,44 @@ const ORIGIN_COUNTRIES: Array<{
   shortLabel: string;
   kpCountryId?: number;
 }> = [
-  { id: 'ALL', label: 'Toate Țările (Global)', shortLabel: 'Toate Țările' },
-  {
-    id: 'RU',
-    label: 'Rusia (Россия — Filme & Seriale RU)',
-    shortLabel: 'Rusia (RU)',
-    kpCountryId: 34,
-  },
-  {
-    id: 'RO',
-    label: 'România (RO)',
-    shortLabel: 'România',
-    kpCountryId: 37,
-  },
-  { id: 'US', label: 'SUA (Hollywood)', shortLabel: 'SUA', kpCountryId: 1 },
-  {
-    id: 'GB',
-    label: 'Marea Britanie (UK)',
-    shortLabel: 'UK',
-    kpCountryId: 5,
-  },
-  {
-    id: 'TR',
-    label: 'Turcia (Seriale & Filme TR)',
-    shortLabel: 'Turcia',
-    kpCountryId: 44,
-  },
-  {
-    id: 'KR',
-    label: 'Coreea de Sud (K-Drama)',
-    shortLabel: 'Coreea (KR)',
-    kpCountryId: 49,
-  },
-  { id: 'FR', label: 'Franța', shortLabel: 'Franța', kpCountryId: 3 },
-  { id: 'DE', label: 'Germania', shortLabel: 'Germania', kpCountryId: 9 },
-  { id: 'ES', label: 'Spania', shortLabel: 'Spania', kpCountryId: 8 },
-  { id: 'IT', label: 'Italia', shortLabel: 'Italia', kpCountryId: 10 },
-  { id: 'UA', label: 'Ucraina', shortLabel: 'Ucraina', kpCountryId: 106 },
-];
+    { id: 'ALL', label: 'Toate Țările (Global)', shortLabel: 'Toate Țările' },
+    {
+      id: 'RU',
+      label: 'Rusia (Россия — Filme & Seriale RU)',
+      shortLabel: 'Rusia (RU)',
+      kpCountryId: 34,
+    },
+    {
+      id: 'RO',
+      label: 'România (RO)',
+      shortLabel: 'România',
+      kpCountryId: 37,
+    },
+    { id: 'US', label: 'SUA (Hollywood)', shortLabel: 'SUA', kpCountryId: 1 },
+    {
+      id: 'GB',
+      label: 'Marea Britanie (UK)',
+      shortLabel: 'UK',
+      kpCountryId: 5,
+    },
+    {
+      id: 'TR',
+      label: 'Turcia (Seriale & Filme TR)',
+      shortLabel: 'Turcia',
+      kpCountryId: 44,
+    },
+    {
+      id: 'KR',
+      label: 'Coreea de Sud (K-Drama)',
+      shortLabel: 'Coreea (KR)',
+      kpCountryId: 49,
+    },
+    { id: 'FR', label: 'Franța', shortLabel: 'Franța', kpCountryId: 3 },
+    { id: 'DE', label: 'Germania', shortLabel: 'Germania', kpCountryId: 9 },
+    { id: 'ES', label: 'Spania', shortLabel: 'Spania', kpCountryId: 8 },
+    { id: 'IT', label: 'Italia', shortLabel: 'Italia', kpCountryId: 10 },
+    { id: 'UA', label: 'Ucraina', shortLabel: 'Ucraina', kpCountryId: 106 },
+  ];
 
 const YEAR_FILTERS: Array<{
   id: YearFilterId;
@@ -340,13 +341,13 @@ const YEAR_FILTERS: Array<{
   yearFrom?: number;
   yearTo?: number;
 }> = [
-  { id: 'ALL', label: 'Toți anii' },
-  { id: '2025-2026', label: '2025 – 2026 (Noi)', yearFrom: 2025, yearTo: 2026 },
-  { id: '2020-2024', label: '2020 – 2024', yearFrom: 2020, yearTo: 2024 },
-  { id: '2010-2019', label: '2010 – 2019', yearFrom: 2010, yearTo: 2019 },
-  { id: '2000-2009', label: '2000 – 2009', yearFrom: 2000, yearTo: 2009 },
-  { id: '1950-1999', label: 'Clasice (< 2000)', yearFrom: 1950, yearTo: 1999 },
-];
+    { id: 'ALL', label: 'Toți anii' },
+    { id: '2025-2026', label: '2025 – 2026 (Noi)', yearFrom: 2025, yearTo: 2026 },
+    { id: '2020-2024', label: '2020 – 2024', yearFrom: 2020, yearTo: 2024 },
+    { id: '2010-2019', label: '2010 – 2019', yearFrom: 2010, yearTo: 2019 },
+    { id: '2000-2009', label: '2000 – 2009', yearFrom: 2000, yearTo: 2009 },
+    { id: '1950-1999', label: 'Clasice (< 2000)', yearFrom: 1950, yearTo: 1999 },
+  ];
 
 const KP_GENRE_MAP: Record<string, number> = {
   Action: 11,
@@ -438,9 +439,9 @@ async function fetchKinopoiskCatalogPages(params: {
           : f.nameOriginal || f.nameEn || f.nameRu;
         const secondaryName =
           preferRussianTitles &&
-          f.nameOriginal &&
-          f.nameRu &&
-          f.nameOriginal !== f.nameRu
+            f.nameOriginal &&
+            f.nameRu &&
+            f.nameOriginal !== f.nameRu
             ? ` (${f.nameOriginal})`
             : '';
         const ratingVal = f.ratingKinopoisk || f.ratingImdb;
@@ -529,7 +530,7 @@ function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(items),
-    }).catch(() => {});
+    }).catch(() => { });
   } catch {
     // ignore
   }
@@ -602,13 +603,13 @@ function saveWatchProgressMap(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
-      }).catch(() => {});
+      }).catch(() => { });
       if (isLocalHomeServer()) {
         fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: payload,
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
   } catch {
@@ -944,7 +945,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           setCastMembers(list);
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         if (!cancelled) {
           setIsCastLoading(false);
@@ -1039,7 +1040,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       fetch(
         `/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}&deleteId=${encodeURIComponent(id)}`,
         { method: 'DELETE' }
-      ).catch(() => {});
+      ).catch(() => { });
       return next;
     });
   };
@@ -1071,8 +1072,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           : item.type === 'series'
             ? (epSaved?.currentTime ??
               (saved &&
-              saved.season === targetSeason &&
-              saved.episode === targetEpisode
+                saved.season === targetSeason &&
+                saved.episode === targetEpisode
                 ? saved.currentTime
                 : 0))
             : (saved?.currentTime ?? 0);
@@ -1088,21 +1089,21 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
       preserveEpisodeOnOpenRef.current = Boolean(
         overrideSeason !== undefined ||
-          overrideEpisode !== undefined ||
-          (saved && item.type === 'series')
+        overrideEpisode !== undefined ||
+        (saved && item.type === 'series')
       );
 
       const normalizedVodItem: CinemetaItem =
         item.type === 'series'
           ? {
-              ...item,
-              releaseTitle: item.releaseTitle || item.name,
-              name:
-                item.name
-                  .replace(/\s*\(S\d+[^)]*\)\s*/gi, '')
-                  .replace(/[.\s•-]*Сезон\s*\d+.*$/i, '')
-                  .trim() || item.name,
-            }
+            ...item,
+            releaseTitle: item.releaseTitle || item.name,
+            name:
+              item.name
+                .replace(/\s*\(S\d+[^)]*\)\s*/gi, '')
+                .replace(/[.\s•-]*Сезон\s*\d+.*$/i, '')
+                .trim() || item.name,
+          }
           : item;
 
       setActiveVodItem(normalizedVodItem);
@@ -1167,7 +1168,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             setProfiles(merged);
           }
         })
-        .catch(() => {});
+        .catch(() => { });
 
       fetch(`/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}`)
         .then((r) => (r.ok ? r.json() : null))
@@ -1230,7 +1231,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             }
           }
         })
-        .catch(() => {});
+        .catch(() => { });
 
       fetch(`/api/tv-saved?profileId=${encodeURIComponent(activeProfileId)}`)
         .then((r) => (r.ok ? r.json() : null))
@@ -1260,7 +1261,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             saveSavedVodItems(combined, activeProfileId);
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     };
 
     syncCrossDeviceState();
@@ -1309,10 +1310,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       setResolvedDirectStream((prev) =>
         cachedDirectSeasonsRef.current.seasons.length > 0
           ? {
-              ok: false,
-              type: prev?.type || 'series',
-              seasons: cachedDirectSeasonsRef.current.seasons,
-            }
+            ok: false,
+            type: prev?.type || 'series',
+            seasons: cachedDirectSeasonsRef.current.seasons,
+          }
           : null
       );
     }
@@ -1358,21 +1359,21 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
         const torrentPromise = isLocalHomeServer()
           ? (async () => {
-              const flParams = new URLSearchParams({
-                type: activeVodItem.type,
-                s: String(selectedSeason),
-                e: String(selectedEpisode),
-                q: cleanQuery,
-                ru: isRuVod ? '1' : '0',
-              });
-              if (year) flParams.set('year', String(year).slice(0, 4));
-              if (imdb) flParams.set('imdb', imdb);
-              const flRes = await fetch(
-                buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`)
-              ).catch(() => null);
-              const rawFl = flRes?.ok ? await flRes.json().catch(() => null) : null;
-              return normalizeFileListResolveData(rawFl);
-            })()
+            const flParams = new URLSearchParams({
+              type: activeVodItem.type,
+              s: String(selectedSeason),
+              e: String(selectedEpisode),
+              q: cleanQuery,
+              ru: isRuVod ? '1' : '0',
+            });
+            if (year) flParams.set('year', String(year).slice(0, 4));
+            if (imdb) flParams.set('imdb', imdb);
+            const flRes = await fetch(
+              buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`)
+            ).catch(() => null);
+            const rawFl = flRes?.ok ? await flRes.json().catch(() => null) : null;
+            return normalizeFileListResolveData(rawFl);
+          })()
           : Promise.resolve(null);
 
         const [data, flData] = await Promise.all([directPromise, torrentPromise]);
@@ -1382,7 +1383,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
           data?.seasons && data.seasons.length > 0
             ? data.seasons
             : cachedDirectSeasonsRef.current.itemId === activeVodItem.id &&
-                cachedDirectSeasonsRef.current.seasons.length > 0
+              cachedDirectSeasonsRef.current.seasons.length > 0
               ? cachedDirectSeasonsRef.current.seasons
               : undefined;
         if (mergedSeasons && mergedSeasons.length > 0) {
@@ -1390,6 +1391,24 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             itemId: activeVodItem.id,
             seasons: mergedSeasons,
           };
+          if (
+            mediaType === 'series' &&
+            !isRuTvShow &&
+            !(flData?.ok && flData.streamUrl)
+          ) {
+            const validSeasons = mergedSeasons
+              .map((s) => Number(s.season))
+              .filter((n) => n > 0)
+              .sort((a, b) => a - b);
+            if (
+              validSeasons.length > 0 &&
+              !validSeasons.includes(Number(selectedSeason))
+            ) {
+              setSelectedSeason(validSeasons[0]);
+              setSelectedEpisode(1);
+              return;
+            }
+          }
         }
 
         const mergedData: ResolvedDirectVodStream = mergedSeasons
@@ -1406,15 +1425,15 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         const torrentStreamObj: ResolvedDirectVodStream | null =
           hasTorrent && flData
             ? {
-                ok: true,
-                sourcePath: isRuVod
-                  ? 'Kinozal VIP Torrent (4K / 1080p)'
-                  : 'FileList.io VIP Torrent (4K / 1080p)',
-                hlsUrl: flData.streamUrl,
-                duration: flData.durationSec || mergedData?.duration,
-                audioNames: flData.audioNames,
-                ...(mergedSeasons ? { seasons: mergedSeasons } : {}),
-              }
+              ok: true,
+              sourcePath: isRuVod
+                ? 'Kinozal VIP Torrent (4K / 1080p)'
+                : 'FileList.io VIP Torrent (4K / 1080p)',
+              hlsUrl: flData.streamUrl,
+              duration: flData.durationSec || mergedData?.duration,
+              audioNames: flData.audioNames,
+              ...(mergedSeasons ? { seasons: mergedSeasons } : {}),
+            }
             : null;
 
         // Priority Matrix:
@@ -1460,7 +1479,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         if (!cancelled) {
           const keptSeasons =
             cachedDirectSeasonsRef.current.itemId === activeVodItem.id &&
-            cachedDirectSeasonsRef.current.seasons.length > 0
+              cachedDirectSeasonsRef.current.seasons.length > 0
               ? cachedDirectSeasonsRef.current.seasons
               : undefined;
           setResolvedDirectStream({
@@ -1493,7 +1512,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         setActiveSubLabel(subRes.track.langLabel);
         setActiveSubCues(subRes.cues);
       })
-      .catch(() => {});
+      .catch(() => { });
 
     void fetchDirectStream();
     return () => {
@@ -2060,9 +2079,9 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         if (prev) {
           const keepDirectRuName = Boolean(
             isRuSeries &&
-              prev.name &&
-              /[а-яёА-ЯЁ]/.test(prev.name) &&
-              !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(prev.name)
+            prev.name &&
+            /[а-яёА-ЯЁ]/.test(prev.name) &&
+            !/\(\d+\s*сезон\)\s*-\s*\d+\s*(?:серия|выпуск)/i.test(prev.name)
           );
           epByKey.set(key, {
             ...v,
@@ -2271,12 +2290,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   const activeItemForEmbed: CinemetaItem | null = activeVodItem
     ? {
-        ...activeVodItem,
-        kpId: resolvedDirectStream?.sourcePath?.startsWith('kp/')
-          ? resolvedDirectStream.sourcePath.replace(/^kp\//, '')
-          : activeVodItem.kpId,
-        moviedb_id: detailedMeta?.moviedb_id ?? activeVodItem.moviedb_id,
-      }
+      ...activeVodItem,
+      kpId: resolvedDirectStream?.sourcePath?.startsWith('kp/')
+        ? resolvedDirectStream.sourcePath.replace(/^kp\//, '')
+        : activeVodItem.kpId,
+      moviedb_id: detailedMeta?.moviedb_id ?? activeVodItem.moviedb_id,
+    }
     : null;
 
   const currentVodOfflineId = activeVodItem
@@ -2320,11 +2339,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'movies'
-                  ? 'bg-brand-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
-              }`}
+              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${activeTab === 'movies'
+                ? 'bg-brand-600 text-white shadow-xs'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                }`}
             >
               <Film className="w-4 h-4" aria-hidden="true" />
               <span>Filme</span>
@@ -2338,11 +2356,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'series'
-                  ? 'bg-brand-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
-              }`}
+              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${activeTab === 'series'
+                ? 'bg-brand-600 text-white shadow-xs'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                }`}
             >
               <Tv className="w-4 h-4" aria-hidden="true" />
               <span>Seriale</span>
@@ -2357,11 +2374,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   setActiveVodItem(null);
                   setActiveOfflineItem(null);
                 }}
-                className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                  activeTab === 'iedem'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/70 hover:bg-emerald-100'
-                }`}
+                className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${activeTab === 'iedem'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/70 hover:bg-emerald-100'
+                  }`}
               >
                 <Film className="w-4 h-4" aria-hidden="true" />
                 <span>iEdem</span>
@@ -2376,11 +2392,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 setActiveVodItem(null);
                 setActiveOfflineItem(null);
               }}
-              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'lampa'
-                  ? 'bg-amber-600 text-white shadow-xs'
-                  : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/70 hover:bg-amber-100'
-              }`}
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${activeTab === 'lampa'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800/70 hover:bg-amber-100'
+                }`}
             >
               <Popcorn className="w-4 h-4" aria-hidden="true" />
               <span>Lampa TV</span>
@@ -2447,11 +2462,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }}
               title={`Descărcate Offline pe Dispozitiv (${offlineItems.length})`}
               aria-label={`Descărcate Offline (${offlineItems.length})`}
-              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'offline'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-zinc-700'
-              }`}
+              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${activeTab === 'offline'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-slate-100 dark:bg-zinc-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-zinc-700'
+                }`}
             >
               <HardDriveDownload className="w-4 h-4" aria-hidden="true" />
               {offlineItems.length > 0 && (
@@ -2471,11 +2485,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }}
               title={`Salvate în Lista Mea (${savedItems.length})`}
               aria-label={`Salvate (${savedItems.length})`}
-              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'saved'
-                  ? 'bg-rose-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-zinc-700'
-              }`}
+              className={`relative h-9 px-2.5 rounded-full text-xs font-bold inline-flex items-center justify-center gap-1 shrink-0 transition-colors cursor-pointer ${activeTab === 'saved'
+                ? 'bg-rose-600 text-white shadow-xs'
+                : 'bg-slate-100 dark:bg-zinc-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-zinc-700'
+                }`}
             >
               <Heart className="w-4 h-4" aria-hidden="true" />
               {savedItems.length > 0 && (
@@ -2495,11 +2508,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               }}
               title="Importă Fișier .M3U / Link Video Direct (.MP4, .M3U8)"
               aria-label="Importă Fișier .M3U / .MP4"
-              className={`h-9 w-9 rounded-full inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
-                activeTab === 'custom'
-                  ? 'bg-brand-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
-              }`}
+              className={`h-9 w-9 rounded-full inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer ${activeTab === 'custom'
+                ? 'bg-brand-600 text-white shadow-xs'
+                : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                }`}
             >
               <Upload className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -2706,11 +2718,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 type="button"
                 onClick={() => setIsSubFinderOpen(true)}
                 title="Caută, aplică sau descarcă subtitrări .SRT de pe internet"
-                className={`h-8 px-3 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                  activeSubCues.length > 0 || activeSubVttUrl
-                    ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white font-bold'
-                    : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-emerald-300'
-                }`}
+                className={`h-8 px-3 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${activeSubCues.length > 0 || activeSubVttUrl
+                  ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white font-bold'
+                  : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-emerald-300'
+                  }`}
               >
                 <Subtitles className="w-3.5 h-3.5 shrink-0" />
                 <span className="max-w-[140px] truncate">
@@ -2824,512 +2835,505 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   onClick={() => setPendingResumePromptSec(null)}
                   className="px-1.5 py-0.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold cursor-pointer"
                 >
-                  </button>
+                </button>
               </div>
             )}
 
             {activeServer === 'kinogram_hls' ||
-            (isFileListExclusiveRomanianTitle(activeVodItem) &&
-              (isDirectStreamLoading ||
-                Boolean(
-                  resolvedDirectStream?.ok &&
+              (isFileListExclusiveRomanianTitle(activeVodItem) &&
+                (isDirectStreamLoading ||
+                  Boolean(
+                    resolvedDirectStream?.ok &&
                     (resolvedDirectStream.dashUrl ||
                       resolvedDirectStream.hlsUrl)
-                ))) ? (
+                  ))) ? (
               isDirectStreamLoading ? (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-zinc-300">
-                  <Loader2 className="w-8 h-8 text-brand-400 animate-spin" />
-                  <span className="text-xs font-semibold">
-                    Pornire automată stream HD (Audio RU / Original)...
-                  </span>
+                <div className="relative w-full h-full bg-black">
+                  <FilmioStartupLoader />
                 </div>
               ) : resolvedDirectStream?.ok &&
-                (resolvedDirectStream.dashUrl ||
+                  (resolvedDirectStream.dashUrl ||
                   resolvedDirectStream.hlsUrl) ? (
-                <VodNativeHlsPlayer
-                  key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${resolvedDirectStream.sourcePath || 'direct'}`}
-                  dashUrl={resolvedDirectStream.dashUrl}
-                  hlsUrl={resolvedDirectStream.hlsUrl}
-                  preferredQuality="max"
-                  audioTrackLabels={resolvedDirectStream.audioNames}
-                  startAtSeconds={resumeStartSeconds}
-                  imdbId={
-                    activeVodItem.id.startsWith('tt') ? activeVodItem.id : ''
-                  }
-                  mediaType={activeVodItem.type}
-                  season={selectedSeason}
-                  episode={selectedEpisode}
-                  subtitleVttUrl={activeSubVttUrl}
-                  subtitleLabel={activeSubLabel}
-                  subtitleCues={activeSubCues}
-                  onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
-                    setActiveSubVttUrl(vttBlobUrl);
-                    setActiveSubLabel(label);
-                    setActiveSubCues(cues);
-                  }}
-                  onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
-                  onClearSubtitle={() => {
-                    setActiveSubVttUrl(null);
-                    setActiveSubLabel('');
-                    setActiveSubCues([]);
-                  }}
-                  poster={
-                    activeVodItem.background ||
-                    activeVodItem.poster ||
-                    `https://images.metahub.space/background/medium/${activeVodItem.id}/img`
-                  }
-                  onTimeUpdate={(cur, dur) => {
-                    setLiveCurrentTime(cur);
-                    if (dur > 60) setLiveDuration(dur);
-                    updateWatchProgress(
-                      activeVodItem,
-                      selectedSeason,
-                      selectedEpisode,
-                      cur,
-                      dur || liveDuration,
-                      activeServer,
-                      preferredSubLang
-                    );
-                  }}
-                  onStreamError={() => {
-                    if (
-                      resolvedDirectStream?.backupHlsUrls &&
-                      resolvedDirectStream.backupHlsUrls.length > 0
-                    ) {
-                      const [nextBackup, ...restBackups] =
-                        resolvedDirectStream.backupHlsUrls;
-                      if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
-                        setResolvedDirectStream((prev) =>
-                          prev
-                            ? {
+                  <VodNativeHlsPlayer
+                    key={`hls_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${resolvedDirectStream.sourcePath || 'direct'}`}
+                    dashUrl={resolvedDirectStream.dashUrl}
+                    hlsUrl={resolvedDirectStream.hlsUrl}
+                    preferredQuality="max"
+                    audioTrackLabels={resolvedDirectStream.audioNames}
+                    startAtSeconds={resumeStartSeconds}
+                    imdbId={
+                      activeVodItem.id.startsWith('tt') ? activeVodItem.id : ''
+                    }
+                    mediaType={activeVodItem.type}
+                    season={selectedSeason}
+                    episode={selectedEpisode}
+                    subtitleVttUrl={activeSubVttUrl}
+                    subtitleLabel={activeSubLabel}
+                    subtitleCues={activeSubCues}
+                    onApplyAutoSubtitle={({ vttBlobUrl, label, cues }) => {
+                      setActiveSubVttUrl(vttBlobUrl);
+                      setActiveSubLabel(label);
+                      setActiveSubCues(cues);
+                    }}
+                    onOpenSubtitleFinder={() => setIsSubFinderOpen(true)}
+                    onClearSubtitle={() => {
+                      setActiveSubVttUrl(null);
+                      setActiveSubLabel('');
+                      setActiveSubCues([]);
+                    }}
+                    poster={
+                      activeVodItem.background ||
+                      activeVodItem.poster ||
+                      `https://images.metahub.space/background/medium/${activeVodItem.id}/img`
+                    }
+                    onTimeUpdate={(cur, dur) => {
+                      setLiveCurrentTime(cur);
+                      if (dur > 60) setLiveDuration(dur);
+                      updateWatchProgress(
+                        activeVodItem,
+                        selectedSeason,
+                        selectedEpisode,
+                        cur,
+                        dur || liveDuration,
+                        activeServer,
+                        preferredSubLang
+                      );
+                    }}
+                    onStreamError={() => {
+                      if (
+                        resolvedDirectStream?.backupHlsUrls &&
+                        resolvedDirectStream.backupHlsUrls.length > 0
+                      ) {
+                        const [nextBackup, ...restBackups] =
+                          resolvedDirectStream.backupHlsUrls;
+                        if (nextBackup && nextBackup !== resolvedDirectStream.hlsUrl) {
+                          setResolvedDirectStream((prev) =>
+                            prev
+                              ? {
                                 ...prev,
                                 hlsUrl: nextBackup,
                                 backupHlsUrls: restBackups,
                               }
-                            : prev
-                        );
+                              : prev
+                          );
+                          return;
+                        }
+                      }
+                      if (fallbackDirectStreamRef.current) {
+                        const nextStream = fallbackDirectStreamRef.current;
+                        fallbackDirectStreamRef.current = null;
+                        setResolvedDirectStream(nextStream);
                         return;
                       }
-                    }
-                    if (fallbackDirectStreamRef.current) {
-                      const nextStream = fallbackDirectStreamRef.current;
-                      fallbackDirectStreamRef.current = null;
-                      setResolvedDirectStream(nextStream);
-                      return;
-                    }
-                    setActiveServer(
-                      activeVodItem.id.startsWith('kp_')
-                        ? 'kinogram_embed'
-                        : 'vidspark'
-                    );
-                  }}
-                />
-              ) : isFileListExclusiveRomanianTitle(activeVodItem) ? (
-                <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
-                  <div className="text-base font-extrabold text-white">
-                    {activeVodItem.name}
-                    {activeVodItem.type === 'series'
-                      ? ` • S${selectedSeason}:E${selectedEpisode}`
-                      : ''}
-                  </div>
-                  <p className="text-xs text-zinc-400 max-w-md">
-                    Acest titlu românesc (FileList.io 1080p) se redă direct prin serverul local P2P pentru a garanta episodul real.
-                  </p>
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    <a
-                      href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
-                        activeVodItem.id
-                      )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                        resumeStartSeconds || 0
-                      )}`}
-                      className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-600 text-white font-bold text-xs"
-                    >
-                      Deschide pe Wi-Fi Local (192.168.2.57)
-                    </a>
-                    <a
-                      href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
-                        activeVodItem.id
-                      )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                        resumeStartSeconds || 0
-                      )}`}
-                      className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs"
-                    >
-                      Deschide prin Tailscale (100.79.113.57)
-                    </a>
-                  </div>
-                </div>
-              ) : (
-                <div className="relative w-full h-full">
-                  <iframe
-                    ref={vodIframeRef}
-                    key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
-                    src={buildVodEmbedUrl(
-                      activeVodItem.id.startsWith('kp_')
-                        ? 'kinogram_embed'
-                        : 'vidspark',
-                      activeItemForEmbed,
-                      selectedSeason,
-                      selectedEpisode,
-                      preferredSubLang,
-                      resumeStartSeconds
-                    )}
-                    title={activeVodItem.name}
-                    className="w-full h-full border-0"
-                    referrerPolicy="origin"
-                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                    allowFullScreen
+                      setActiveServer(
+                        activeVodItem.id.startsWith('kp_')
+                          ? 'kinogram_embed'
+                          : 'vidspark'
+                      );
+                    }}
                   />
-                  {activeSubCues.length > 0 && (
-                    <>
-                      <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
-                        <span className="max-w-[110px] truncate font-bold">
-                          CC: {activeSubLabel || 'Activă'}
+                  ) : isFileListExclusiveRomanianTitle(activeVodItem) ? (
+                  <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
+                    <div className="text-base font-extrabold text-white">
+                      {activeVodItem.name}
+                      {activeVodItem.type === 'series'
+                        ? ` • S${selectedSeason}:E${selectedEpisode}`
+                        : ''}
+                    </div>
+                    <p className="text-xs text-zinc-400 max-w-md">
+                      Acest titlu românesc (FileList.io 1080p) se redă direct prin serverul local P2P pentru a garanta episodul real.
+                    </p>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <a
+                        href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
+                          activeVodItem.id
+                        )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                          resumeStartSeconds || 0
+                        )}`}
+                        className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-600 text-white font-bold text-xs"
+                      >
+                        Deschide pe Wi-Fi Local (192.168.2.57)
+                      </a>
+                      <a
+                        href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
+                          activeVodItem.id
+                        )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
+                          resumeStartSeconds || 0
+                        )}`}
+                        className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs"
+                      >
+                        Deschide prin Tailscale (100.79.113.57)
+                      </a>
+                    </div>
+                  </div>
+                  ) : (
+                  <div className="relative w-full h-full">
+                    <iframe
+                      ref={vodIframeRef}
+                      key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
+                      src={buildVodEmbedUrl(
+                        activeVodItem.id.startsWith('kp_')
+                          ? 'kinogram_embed'
+                          : 'vidspark',
+                        activeItemForEmbed,
+                        selectedSeason,
+                        selectedEpisode,
+                        preferredSubLang,
+                        resumeStartSeconds
+                      )}
+                      title={activeVodItem.name}
+                      className="w-full h-full border-0"
+                      referrerPolicy="origin"
+                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
+                    {activeSubCues.length > 0 && (
+                      <>
+                        <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
+                          <span className="max-w-[110px] truncate font-bold">
+                            CC: {activeSubLabel || 'Activă'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIframeSubOffsetSec((s) => s - 1)}
+                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
+                          >
+                            -1s
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIframeSubOffsetSec((s) => s + 1)}
+                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
+                          >
+                            +1s
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveSubVttUrl(null);
+                              setActiveSubLabel('');
+                              setActiveSubCues([]);
+                            }}
+                            className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
+                          >
+                          </button>
+                        </div>
+                        {(() => {
+                          const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
+                          const cue = activeSubCues.find(
+                            (c) => effectiveSec >= c.start && effectiveSec <= c.end
+                          );
+                          if (!cue) return null;
+                          return (
+                            <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
+                              <div
+                                className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
+                                style={{
+                                  textShadow:
+                                    '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
+                                }}
+                              >
+                                {cue.text}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                  )
+                  ) : (
+                  <div className="relative w-full h-full">
+                    <iframe
+                      ref={vodIframeRef}
+                      key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
+                      src={buildVodEmbedUrl(
+                        activeServer,
+                        activeItemForEmbed,
+                        selectedSeason,
+                        selectedEpisode,
+                        preferredSubLang,
+                        resumeStartSeconds
+                      )}
+                      title={activeVodItem.name}
+                      className="w-full h-full border-0"
+                      referrerPolicy="origin"
+                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                      onLoad={() => {
+                        if (resumeStartSeconds > 5) {
+                          window.setTimeout(() => {
+                            try {
+                              vodIframeRef.current?.contentWindow?.postMessage(
+                                { action: 'seek', time: resumeStartSeconds },
+                                '*'
+                              );
+                            } catch {
+                              // ignore
+                            }
+                          }, 1200);
+                        }
+                      }}
+                    />
+                    {activeSubCues.length > 0 && (
+                      <>
+                        <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
+                          <span className="max-w-[110px] truncate font-bold">
+                            CC: {activeSubLabel || 'Activă'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIframeSubOffsetSec((s) => s - 1)}
+                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
+                          >
+                            -1s
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIframeSubOffsetSec((s) => s + 1)}
+                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
+                          >
+                            +1s
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveSubVttUrl(null);
+                              setActiveSubLabel('');
+                              setActiveSubCues([]);
+                            }}
+                            className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
+                          >
+                          </button>
+                        </div>
+                        {(() => {
+                          const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
+                          const cue = activeSubCues.find(
+                            (c) => effectiveSec >= c.start && effectiveSec <= c.end
+                          );
+                          if (!cue) return null;
+                          return (
+                            <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
+                              <div
+                                className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
+                                style={{
+                                  textShadow:
+                                    '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
+                                }}
+                              >
+                                {cue.text}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+            )}
+                </div>
+
+          {/* Active Offline Download Progress Bar (only visible during download) */}
+            {(activeDownloadProgress || downloadError) && (
+              <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-t border-zinc-800 space-y-2 text-xs">
+                {activeDownloadProgress && (
+                  <div className="p-2.5 rounded-xl bg-zinc-950 border border-emerald-700/60 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-emerald-300 font-bold flex items-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{activeDownloadProgress.stage}</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="tabular-nums font-bold text-white">
+                          {activeDownloadProgress.percent}% •{' '}
+                          {formatBytes(activeDownloadProgress.downloadedBytes)}
                         </span>
                         <button
                           type="button"
-                          onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
+                          onClick={handleCancelDownload}
+                          className="px-2.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-bold"
                         >
-                          -1s
+                          Anulează
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                          className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                        >
-                          +1s
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveSubVttUrl(null);
-                            setActiveSubLabel('');
-                            setActiveSubCues([]);
-                          }}
-                          className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
-                        >
-                          </button>
                       </div>
-                      {(() => {
-                        const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
-                        const cue = activeSubCues.find(
-                          (c) => effectiveSec >= c.start && effectiveSec <= c.end
-                        );
-                        if (!cue) return null;
-                        return (
-                          <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
-                            <div
-                              className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
-                              style={{
-                                textShadow:
-                                  '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
-                              }}
-                            >
-                              {cue.text}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </>
-                  )}
-                </div>
-              )
-            ) : (
-              <div className="relative w-full h-full">
-                <iframe
-                  ref={vodIframeRef}
-                  key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
-                  src={buildVodEmbedUrl(
-                    activeServer,
-                    activeItemForEmbed,
-                    selectedSeason,
-                    selectedEpisode,
-                    preferredSubLang,
-                    resumeStartSeconds
-                  )}
-                  title={activeVodItem.name}
-                  className="w-full h-full border-0"
-                  referrerPolicy="origin"
-                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                  onLoad={() => {
-                    if (resumeStartSeconds > 5) {
-                      window.setTimeout(() => {
-                        try {
-                          vodIframeRef.current?.contentWindow?.postMessage(
-                            { action: 'seek', time: resumeStartSeconds },
-                            '*'
-                          );
-                        } catch {
-                          // ignore
-                        }
-                      }, 1200);
-                    }
-                  }}
-                />
-                {activeSubCues.length > 0 && (
-                  <>
-                    <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
-                      <span className="max-w-[110px] truncate font-bold">
-                        CC: {activeSubLabel || 'Activă'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                      >
-                        -1s
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                        className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                      >
-                        +1s
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveSubVttUrl(null);
-                          setActiveSubLabel('');
-                          setActiveSubCues([]);
-                        }}
-                        className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
-                      >
-                        </button>
                     </div>
-                    {(() => {
-                      const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
-                      const cue = activeSubCues.find(
-                        (c) => effectiveSec >= c.start && effectiveSec <= c.end
-                      );
-                      if (!cue) return null;
-                      return (
-                        <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
-                          <div
-                            className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
-                            style={{
-                              textShadow:
-                                '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
-                            }}
-                          >
-                            {cue.text}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
+                        style={{ width: `${activeDownloadProgress.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {downloadError && (
+                  <p className="text-rose-400 font-semibold">{downloadError}</p>
+                )}
+              </div>
+            )}
+
+            {/* Series Seasons & Episodes Selector */}
+            {activeVodItem.type === 'series' && (
+              <div className="p-4 sm:p-5 bg-zinc-900/90 border-t border-zinc-800 space-y-4">
+                {isMetaLoading && effectiveVideos.length === 0 ? (
+                  <div className="flex items-center gap-2 text-xs text-zinc-400 py-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
+                    <span>Se încarcă sezoanele și episoadele...</span>
+                  </div>
+                ) : (
+                  <>
+                    {/* Season Pills */}
+                    {availableSeasons.length > 0 && (
+                      <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                        <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 shrink-0">
+                          Sezoane:
+                        </span>
+                        {availableSeasons.map((seasonNum) => {
+                          const active = seasonNum === selectedSeason;
+                          return (
+                            <button
+                              key={seasonNum}
+                              type="button"
+                              onClick={() => handleSelectEpisode(seasonNum, 1)}
+                              className={`min-h-[34px] px-3.5 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${active
+                                ? 'bg-amber-500 text-zinc-950 shadow-xs'
+                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                                }`}
+                            >
+                              Sezonul {seasonNum}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Episodes Grid for Selected Season */}
+                    {episodesForSeason.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-64 overflow-y-auto pr-1">
+                        {episodesForSeason.map((ep) => {
+                          const epNum = ep.episode || ep.number || 1;
+                          const isCurrentEp = epNum === selectedEpisode;
+                          const epKey = `S${selectedSeason}E${epNum}`;
+                          const epSaved =
+                            watchProgressMap[activeVodItem.id]
+                              ?.episodeProgressMap?.[epKey];
+
+                          return (
+                            <button
+                              key={ep.id || `${ep.season}_${epNum}`}
+                              type="button"
+                              onClick={() =>
+                                handleSelectEpisode(selectedSeason, epNum)
+                              }
+                              className={`p-2.5 rounded-2xl border text-left flex items-start gap-2.5 transition-all ${isCurrentEp
+                                ? 'bg-amber-500/20 border-amber-500 text-white'
+                                : 'bg-zinc-950/70 hover:bg-zinc-800/80 border-zinc-800 text-zinc-200'
+                                }`}
+                            >
+                              <div className="relative w-20 h-12 rounded-lg overflow-hidden shrink-0 bg-zinc-800 flex items-center justify-center">
+                                {ep.thumbnail ? (
+                                  <img
+                                    src={ep.thumbnail}
+                                    alt={ep.name}
+                                    loading="lazy"
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <Play className="w-4 h-4 text-amber-400 fill-current" />
+                                )}
+                                {epSaved && epSaved.currentTime > 10 && (
+                                  <span className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/85 text-[9px] font-bold text-emerald-400">
+                                    {formatWatchSeconds(epSaved.currentTime)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[11px] font-extrabold text-amber-400 shrink-0">
+                                    Ep. {epNum}
+                                  </span>
+                                  <span className="text-xs font-bold truncate">
+                                    {ep.name || `Episodul ${epNum}`}
+                                  </span>
+                                </div>
+                                {(ep.overview || ep.description) && (
+                                  <p className="text-[11px] text-zinc-400 line-clamp-1 mt-0.5">
+                                    {ep.overview || ep.description}
+                                  </p>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
             )}
-          </div>
 
-          {/* Active Offline Download Progress Bar (only visible during download) */}
-          {(activeDownloadProgress || downloadError) && (
-            <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-t border-zinc-800 space-y-2 text-xs">
-              {activeDownloadProgress && (
-                <div className="p-2.5 rounded-xl bg-zinc-950 border border-emerald-700/60 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-emerald-300 font-bold flex items-center gap-1.5">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>{activeDownloadProgress.stage}</span>
+            {/* Movie / Series Details Footer */}
+            <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-800/80 flex flex-col sm:flex-row items-start justify-between gap-4">
+              <div className="space-y-1.5 max-w-4xl">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                  {(detailedMeta?.genres || activeVodItem.genres)?.map((g) => (
+                    <span
+                      key={g}
+                      className="px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-200 font-medium"
+                    >
+                      {g}
                     </span>
-                    <div className="flex items-center gap-2">
-                      <span className="tabular-nums font-bold text-white">
-                        {activeDownloadProgress.percent}% •{' '}
-                        {formatBytes(activeDownloadProgress.downloadedBytes)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleCancelDownload}
-                        className="px-2.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-bold"
-                      >
-                        Anulează
-                      </button>
-                    </div>
-                  </div>
-                  <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"
-                      style={{ width: `${activeDownloadProgress.percent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {downloadError && (
-                <p className="text-rose-400 font-semibold">{downloadError}</p>
-              )}
-            </div>
-          )}
-
-          {/* Series Seasons & Episodes Selector */}
-          {activeVodItem.type === 'series' && (
-            <div className="p-4 sm:p-5 bg-zinc-900/90 border-t border-zinc-800 space-y-4">
-              {isMetaLoading && effectiveVideos.length === 0 ? (
-                <div className="flex items-center gap-2 text-xs text-zinc-400 py-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
-                  <span>Se încarcă sezoanele și episoadele...</span>
-                </div>
-              ) : (
-                <>
-                  {/* Season Pills */}
-                  {availableSeasons.length > 0 && (
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                      <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 shrink-0">
-                        Sezoane:
-                      </span>
-                      {availableSeasons.map((seasonNum) => {
-                        const active = seasonNum === selectedSeason;
-                        return (
-                          <button
-                            key={seasonNum}
-                            type="button"
-                            onClick={() => handleSelectEpisode(seasonNum, 1)}
-                            className={`min-h-[34px] px-3.5 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${
-                              active
-                                ? 'bg-amber-500 text-zinc-950 shadow-xs'
-                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                            }`}
-                          >
-                            Sezonul {seasonNum}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  ))}
+                  {(detailedMeta?.runtime || activeVodItem.runtime) && (
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-brand-400" />
+                      {detailedMeta?.runtime || activeVodItem.runtime}
+                    </span>
                   )}
-
-                  {/* Episodes Grid for Selected Season */}
-                  {episodesForSeason.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-64 overflow-y-auto pr-1">
-                      {episodesForSeason.map((ep) => {
-                        const epNum = ep.episode || ep.number || 1;
-                        const isCurrentEp = epNum === selectedEpisode;
-                        const epKey = `S${selectedSeason}E${epNum}`;
-                        const epSaved =
-                          watchProgressMap[activeVodItem.id]
-                            ?.episodeProgressMap?.[epKey];
-
-                        return (
-                          <button
-                            key={ep.id || `${ep.season}_${epNum}`}
-                            type="button"
-                            onClick={() =>
-                              handleSelectEpisode(selectedSeason, epNum)
-                            }
-                            className={`p-2.5 rounded-2xl border text-left flex items-start gap-2.5 transition-all ${
-                              isCurrentEp
-                                ? 'bg-amber-500/20 border-amber-500 text-white'
-                                : 'bg-zinc-950/70 hover:bg-zinc-800/80 border-zinc-800 text-zinc-200'
-                            }`}
-                          >
-                            <div className="relative w-20 h-12 rounded-lg overflow-hidden shrink-0 bg-zinc-800 flex items-center justify-center">
-                              {ep.thumbnail ? (
-                                <img
-                                  src={ep.thumbnail}
-                                  alt={ep.name}
-                                  loading="lazy"
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <Play className="w-4 h-4 text-amber-400 fill-current" />
-                              )}
-                              {epSaved && epSaved.currentTime > 10 && (
-                                <span className="absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded bg-black/85 text-[9px] font-bold text-emerald-400">
-                                  {formatWatchSeconds(epSaved.currentTime)}
-                                </span>
-                              )}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[11px] font-extrabold text-amber-400 shrink-0">
-                                  Ep. {epNum}
-                                </span>
-                                <span className="text-xs font-bold truncate">
-                                  {ep.name || `Episodul ${epNum}`}
-                                </span>
-                              </div>
-                              {(ep.overview || ep.description) && (
-                                <p className="text-[11px] text-zinc-400 line-clamp-1 mt-0.5">
-                                  {ep.overview || ep.description}
-                                </p>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Movie / Series Details Footer */}
-          <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-800/80 flex flex-col sm:flex-row items-start justify-between gap-4">
-            <div className="space-y-1.5 max-w-4xl">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-                {(detailedMeta?.genres || activeVodItem.genres)?.map((g) => (
-                  <span
-                    key={g}
-                    className="px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-200 font-medium"
-                  >
-                    {g}
-                  </span>
-                ))}
-                {(detailedMeta?.runtime || activeVodItem.runtime) && (
-                  <span className="inline-flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-brand-400" />
-                    {detailedMeta?.runtime || activeVodItem.runtime}
-                  </span>
+                </div>
+                {(detailedMeta?.description || activeVodItem.description) && (
+                  <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                    {detailedMeta?.description || activeVodItem.description}
+                  </p>
+                )}
+                {detailedMeta?.cast && detailedMeta.cast.length > 0 && (
+                  <p className="text-xs text-zinc-400">
+                    <strong className="text-zinc-200">Distribuție:</strong>{' '}
+                    {detailedMeta.cast.slice(0, 6).join(', ')}
+                  </p>
                 )}
               </div>
-              {(detailedMeta?.description || activeVodItem.description) && (
-                <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-                  {detailedMeta?.description || activeVodItem.description}
-                </p>
-              )}
-              {detailedMeta?.cast && detailedMeta.cast.length > 0 && (
-                <p className="text-xs text-zinc-400">
-                  <strong className="text-zinc-200">Distribuție:</strong>{' '}
-                  {detailedMeta.cast.slice(0, 6).join(', ')}
-                </p>
-              )}
-            </div>
 
-            <button
-              type="button"
-              onClick={() => toggleSaveVodItem(activeVodItem)}
-              className={`min-h-[38px] px-4 py-1.5 rounded-full text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors ${
-                savedItems.some((x) => x.id === activeVodItem.id)
+              <button
+                type="button"
+                onClick={() => toggleSaveVodItem(activeVodItem)}
+                className={`min-h-[38px] px-4 py-1.5 rounded-full text-xs font-bold inline-flex items-center gap-1.5 shrink-0 transition-colors ${savedItems.some((x) => x.id === activeVodItem.id)
                   ? 'bg-rose-600 text-white'
                   : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
-              }`}
-            >
-              <Heart
-                className={`w-4 h-4 ${
-                  savedItems.some((x) => x.id === activeVodItem.id)
+                  }`}
+              >
+                <Heart
+                  className={`w-4 h-4 ${savedItems.some((x) => x.id === activeVodItem.id)
                     ? 'fill-current'
                     : ''
-                }`}
-              />
-              <span>
-                {savedItems.some((x) => x.id === activeVodItem.id)
-                  ? 'Salvat în Mediatecă'
-                  : 'Salvează în Lista Mea'}
-              </span>
-            </button>
-          </div>
+                    }`}
+                />
+                <span>
+                  {savedItems.some((x) => x.id === activeVodItem.id)
+                    ? 'Salvat în Mediatecă'
+                    : 'Salvează în Lista Mea'}
+                </span>
+              </button>
+            </div>
 
-          {/* Cast & Actors Section with Photos, Roles & Biographies */}
-          <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-800/80">
-            <CastCardsSection
-              castList={castMembers}
-              isLoading={isCastLoading}
-              uiLang="ro"
-              onSelectActor={(actor) => setSelectedActor(actor)}
-            />
-          </div>
+            {/* Cast & Actors Section with Photos, Roles & Biographies */}
+            <div className="p-4 sm:p-5 bg-zinc-950 border-t border-zinc-800/80">
+              <CastCardsSection
+                castList={castMembers}
+                isLoading={isCastLoading}
+                uiLang="ro"
+                onSelectActor={(actor) => setSelectedActor(actor)}
+              />
+            </div>
         </section>
       )}
 
@@ -3408,11 +3412,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                 return (
                   <div
                     key={item.id}
-                    className={`p-3.5 rounded-2xl border flex gap-3.5 transition-all ${
-                      isPlaying
-                        ? 'bg-emerald-950/30 border-emerald-500 ring-2 ring-emerald-500/30'
-                        : 'bg-white dark:bg-zinc-900 border-slate-200/80 dark:border-zinc-800'
-                    }`}
+                    className={`p-3.5 rounded-2xl border flex gap-3.5 transition-all ${isPlaying
+                      ? 'bg-emerald-950/30 border-emerald-500 ring-2 ring-emerald-500/30'
+                      : 'bg-white dark:bg-zinc-900 border-slate-200/80 dark:border-zinc-800'
+                      }`}
                   >
                     <div
                       onClick={() => {
@@ -3627,393 +3630,386 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
       {(activeTab === 'movies' ||
         activeTab === 'series' ||
         activeTab === 'saved') && (
-        <>
-          {activeTab !== 'saved' && (
-            <div className="space-y-2.5">
-              {/* Search Bar + Filter Dropdowns (Țară, Anul lansării, Limbă Audio/Subtitrare) */}
-              <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2">
-                <div className="relative flex-1">
-                  <Search
-                    aria-hidden="true"
-                    className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                  />
-                  <input
-                    type="search"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={
-                      activeTab === 'series'
-                        ? 'Caută seriale în orice limbă (ex: Breaking Bad, Слово пацана, Бригада, Мажор)...'
-                        : 'Caută filme în orice limbă (ex: Dune, Gladiator, Брат, Мастер и Маргарита)...'
-                    }
-                    className="w-full min-h-[38px] sm:min-h-[40px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
-                  />
-                  {searchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Filter Selects: Țară / Origine, Anul lansării, Limbă Audio / Subtitrare */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <select
-                    aria-label="Filtrează după țara de origine"
-                    value={selectedOriginCountry}
-                    onChange={(e) => {
-                      const val = e.target.value as OriginCountryFilterId;
-                      setSelectedOriginCountry(val);
-                      if (val === 'RU') {
-                        setPreferredSubLang('ru');
-                      } else if (val === 'RO') {
-                        setPreferredSubLang('ro');
+          <>
+            {activeTab !== 'saved' && (
+              <div className="space-y-2.5">
+                {/* Search Bar + Filter Dropdowns (Țară, Anul lansării, Limbă Audio/Subtitrare) */}
+                <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search
+                      aria-hidden="true"
+                      className="w-4 h-4 text-slate-400 dark:text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder={
+                        activeTab === 'series'
+                          ? 'Caută seriale în orice limbă (ex: Breaking Bad, Слово пацана, Бригада, Мажор)...'
+                          : 'Caută filme în orice limbă (ex: Dune, Gladiator, Брат, Мастер и Маргарита)...'
                       }
-                    }}
-                    className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${
-                      selectedOriginCountry !== 'ALL'
-                        ? 'bg-indigo-600 text-white border-indigo-500'
-                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
-                    }`}
-                  >
-                    {ORIGIN_COUNTRIES.map((c) => (
-                      <option
-                        key={c.id}
-                        value={c.id}
-                        className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
+                      className="w-full min-h-[38px] sm:min-h-[40px] pl-9 pr-9 py-1.5 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-brand-600 transition-shadow"
+                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
                       >
-                        Țară: {c.label}
-                      </option>
-                    ))}
-                  </select>
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
 
-                  <select
-                    aria-label="Filtrează după anul lansării"
-                    value={selectedYearFilter}
-                    onChange={(e) =>
-                      setSelectedYearFilter(e.target.value as YearFilterId)
-                    }
-                    className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${
-                      selectedYearFilter !== 'ALL'
-                        ? 'bg-amber-600 text-white border-amber-500'
-                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
-                    }`}
-                  >
-                    {YEAR_FILTERS.map((y) => (
-                      <option
-                        key={y.id}
-                        value={y.id}
-                        className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
-                      >
-                        An: {y.label}
-                      </option>
-                    ))}
-                  </select>
-
-                  <select
-                    aria-label="Limbă Audio / Subtitrare preferată"
-                    value={preferredSubLang}
-                    onChange={(e) =>
-                      setPreferredSubLang(e.target.value as SubtitleLangId)
-                    }
-                    className="h-[36px] sm:h-[38px] px-3 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold outline-none cursor-pointer"
-                  >
-                    <option value="ro">Limbă / Sub: Română (RO)</option>
-                    <option value="ru">Limbă / Audio: Русский (RU)</option>
-                    <option value="en">Limbă / Sub: English (EN)</option>
-                    <option value="es">Limbă / Sub: Español (ES)</option>
-                    <option value="fr">Limbă / Sub: Français (FR)</option>
-                    <option value="de">Limbă / Sub: Deutsch (DE)</option>
-                  </select>
-
-                  {(selectedOriginCountry !== 'ALL' ||
-                    selectedYearFilter !== 'ALL' ||
-                    selectedGenre !== 'top' ||
-                    searchQuery) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedOriginCountry('ALL');
-                        setSelectedYearFilter('ALL');
-                        setSelectedGenre('top');
-                        setSearchQuery('');
-                      }}
-                      title="Resetează toate filtrele"
-                      className="h-[36px] sm:h-[38px] px-3 rounded-full bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 text-rose-600 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/60 text-xs font-bold inline-flex items-center gap-1 cursor-pointer shrink-0"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reset</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Quick Country Origin Pills (Toate Țările, Rusia, România, SUA, UK, Turcia, Coreea...) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                {ORIGIN_COUNTRIES.slice(0, 9).map((c) => {
-                  const active = selectedOriginCountry === c.id;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedOriginCountry(c.id);
-                        if (c.id === 'RU') {
+                  {/* Filter Selects: Țară / Origine, Anul lansării, Limbă Audio / Subtitrare */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <select
+                      aria-label="Filtrează după țara de origine"
+                      value={selectedOriginCountry}
+                      onChange={(e) => {
+                        const val = e.target.value as OriginCountryFilterId;
+                        setSelectedOriginCountry(val);
+                        if (val === 'RU') {
                           setPreferredSubLang('ru');
-                        } else if (c.id === 'RO') {
+                        } else if (val === 'RO') {
                           setPreferredSubLang('ro');
                         }
                       }}
-                      className={`min-h-[30px] px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                        active
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-indigo-400'
-                      }`}
+                      className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${selectedOriginCountry !== 'ALL'
+                        ? 'bg-indigo-600 text-white border-indigo-500'
+                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
+                        }`}
                     >
-                      <Globe className="w-3 h-3 shrink-0" />
-                      <span>{c.shortLabel}</span>
-                    </button>
-                  );
-                })}
-              </div>
+                      {ORIGIN_COUNTRIES.map((c) => (
+                        <option
+                          key={c.id}
+                          value={c.id}
+                          className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
+                        >
+                          Țară: {c.label}
+                        </option>
+                      ))}
+                    </select>
 
-              {/* Genre Pills */}
-              {!debouncedQuery && (
+                    <select
+                      aria-label="Filtrează după anul lansării"
+                      value={selectedYearFilter}
+                      onChange={(e) =>
+                        setSelectedYearFilter(e.target.value as YearFilterId)
+                      }
+                      className={`h-[36px] sm:h-[38px] px-3 rounded-full border text-xs font-semibold outline-none cursor-pointer transition-colors ${selectedYearFilter !== 'ALL'
+                        ? 'bg-amber-600 text-white border-amber-500'
+                        : 'bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-200 border-slate-200/90 dark:border-zinc-800'
+                        }`}
+                    >
+                      {YEAR_FILTERS.map((y) => (
+                        <option
+                          key={y.id}
+                          value={y.id}
+                          className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100"
+                        >
+                          An: {y.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      aria-label="Limbă Audio / Subtitrare preferată"
+                      value={preferredSubLang}
+                      onChange={(e) =>
+                        setPreferredSubLang(e.target.value as SubtitleLangId)
+                      }
+                      className="h-[36px] sm:h-[38px] px-3 rounded-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 text-xs font-semibold outline-none cursor-pointer"
+                    >
+                      <option value="ro">Limbă / Sub: Română (RO)</option>
+                      <option value="ru">Limbă / Audio: Русский (RU)</option>
+                      <option value="en">Limbă / Sub: English (EN)</option>
+                      <option value="es">Limbă / Sub: Español (ES)</option>
+                      <option value="fr">Limbă / Sub: Français (FR)</option>
+                      <option value="de">Limbă / Sub: Deutsch (DE)</option>
+                    </select>
+
+                    {(selectedOriginCountry !== 'ALL' ||
+                      selectedYearFilter !== 'ALL' ||
+                      selectedGenre !== 'top' ||
+                      searchQuery) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedOriginCountry('ALL');
+                            setSelectedYearFilter('ALL');
+                            setSelectedGenre('top');
+                            setSearchQuery('');
+                          }}
+                          title="Resetează toate filtrele"
+                          className="h-[36px] sm:h-[38px] px-3 rounded-full bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 text-rose-600 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/60 text-xs font-bold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Reset</span>
+                        </button>
+                      )}
+                  </div>
+                </div>
+
+                {/* Quick Country Origin Pills (Toate Țările, Rusia, România, SUA, UK, Turcia, Coreea...) */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-                  {GENRE_FILTERS.filter(
-                    (g) => adultContentEnabled || g.id !== 'Adult'
-                  ).map((g) => {
-                    const active = selectedGenre === g.id;
-                    const GenreIcon = g.Icon;
-                    const isAdultGenre = g.id === 'Adult';
+                  {ORIGIN_COUNTRIES.slice(0, 9).map((c) => {
+                    const active = selectedOriginCountry === c.id;
                     return (
                       <button
-                        key={g.id}
+                        key={c.id}
                         type="button"
-                        onClick={() => setSelectedGenre(g.id)}
-                        className={`min-h-[30px] sm:min-h-[34px] px-2.5 sm:px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                          active
+                        onClick={() => {
+                          setSelectedOriginCountry(c.id);
+                          if (c.id === 'RU') {
+                            setPreferredSubLang('ru');
+                          } else if (c.id === 'RO') {
+                            setPreferredSubLang('ro');
+                          }
+                        }}
+                        className={`min-h-[30px] px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${active
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-indigo-400'
+                          }`}
+                      >
+                        <Globe className="w-3 h-3 shrink-0" />
+                        <span>{c.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Genre Pills */}
+                {!debouncedQuery && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                    {GENRE_FILTERS.filter(
+                      (g) => adultContentEnabled || g.id !== 'Adult'
+                    ).map((g) => {
+                      const active = selectedGenre === g.id;
+                      const GenreIcon = g.Icon;
+                      const isAdultGenre = g.id === 'Adult';
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => setSelectedGenre(g.id)}
+                          className={`min-h-[30px] sm:min-h-[34px] px-2.5 sm:px-3 py-0.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${active
                             ? isAdultGenre
                               ? 'bg-rose-600 text-white shadow-xs'
                               : 'bg-brand-700 text-white dark:bg-brand-600 shadow-xs'
                             : isAdultGenre
                               ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-300/80 dark:border-rose-800 hover:border-rose-500'
                               : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border border-slate-200/80 dark:border-zinc-800 hover:border-brand-400'
-                        }`}
-                      >
-                        <GenreIcon className="w-3.5 h-3.5 shrink-0" />
-                        <span>{g.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                            }`}
+                        >
+                          <GenreIcon className="w-3.5 h-3.5 shrink-0" />
+                          <span>{g.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
-          {/* Poster Grid */}
-          {isLoading && activeTab !== 'saved' ? (
-            <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
-              {Array.from({ length: 18 }).map((_, idx) => (
-                <div
-                  key={idx}
-                  className="aspect-[2/3] rounded-2xl bg-slate-200/70 dark:bg-zinc-800/60 animate-pulse"
-                />
-              ))}
-            </div>
-          ) : displayedItems.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-center space-y-3">
-              <p className="text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-200">
-                {activeTab === 'saved'
-                  ? 'Nu ai salvat încă niciun film sau serial în Lista Mea'
-                  : 'Niciun film sau serial găsit pentru filtrele selectate'}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('movies');
-                  setSelectedOriginCountry('ALL');
-                  setSelectedYearFilter('ALL');
-                  setSearchQuery('');
-                  setSelectedGenre('top');
-                }}
-                className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 text-white text-xs font-semibold"
-              >
-                Resetează filtrele și explorează catalogul
-              </button>
-            </div>
-          ) : (
-            <>
+            {/* Poster Grid */}
+            {isLoading && activeTab !== 'saved' ? (
               <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
-                {displayedItems.map((item) => {
-                  const isSaved = savedItems.some((x) => x.id === item.id);
-                  const isPlayingNow = activeVodItem?.id === item.id;
-                  const progressEntry = watchProgressMap[item.id];
-                  const hasProgress =
-                    progressEntry && progressEntry.currentTime >= 10;
-                  const progressPct = hasProgress
-                    ? Math.min(
+                {Array.from({ length: 18 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className="aspect-[2/3] rounded-2xl bg-slate-200/70 dark:bg-zinc-800/60 animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : displayedItems.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-center space-y-3">
+                <p className="text-sm sm:text-base font-bold text-slate-800 dark:text-zinc-200">
+                  {activeTab === 'saved'
+                    ? 'Nu ai salvat încă niciun film sau serial în Lista Mea'
+                    : 'Niciun film sau serial găsit pentru filtrele selectate'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('movies');
+                    setSelectedOriginCountry('ALL');
+                    setSelectedYearFilter('ALL');
+                    setSearchQuery('');
+                    setSelectedGenre('top');
+                  }}
+                  className="min-h-[36px] px-4 py-1.5 rounded-full bg-brand-600 text-white text-xs font-semibold"
+                >
+                  Resetează filtrele și explorează catalogul
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
+                  {displayedItems.map((item) => {
+                    const isSaved = savedItems.some((x) => x.id === item.id);
+                    const isPlayingNow = activeVodItem?.id === item.id;
+                    const progressEntry = watchProgressMap[item.id];
+                    const hasProgress =
+                      progressEntry && progressEntry.currentTime >= 10;
+                    const progressPct = hasProgress
+                      ? Math.min(
                         96,
                         Math.max(
                           6,
                           Math.round(
                             (progressEntry.currentTime /
                               (progressEntry.duration || 5400)) *
-                              100
+                            100
                           )
                         )
                       )
-                    : 0;
-                  const posterUrl =
-                    item.poster ||
-                    `https://images.metahub.space/poster/medium/${item.id}/img`;
+                      : 0;
+                    const posterUrl =
+                      item.poster ||
+                      `https://images.metahub.space/poster/medium/${item.id}/img`;
 
-                  return (
-                    <article
-                      key={`${item.type}_${item.id}`}
-                      onClick={() => handleOpenVodItem(item)}
-                      className={`group cursor-pointer rounded-xl sm:rounded-2xl border overflow-hidden flex flex-col justify-between transition-all duration-200 ${
-                        isPlayingNow
+                    return (
+                      <article
+                        key={`${item.type}_${item.id}`}
+                        onClick={() => handleOpenVodItem(item)}
+                        className={`group cursor-pointer rounded-xl sm:rounded-2xl border overflow-hidden flex flex-col justify-between transition-all duration-200 ${isPlayingNow
                           ? 'bg-brand-50 dark:bg-brand-950/40 border-brand-500 ring-2 ring-brand-500/40 shadow-md'
                           : 'bg-white dark:bg-zinc-900 border-slate-200/80 dark:border-zinc-800/90 hover:border-brand-400 hover:shadow-xl hover:-translate-y-0.5'
-                      }`}
-                    >
-                      {/* 2:3 Movie Poster */}
-                      <div className="relative aspect-[2/3] w-full bg-zinc-900 overflow-hidden">
-                        <img
-                          src={posterUrl}
-                          alt={item.name}
-                          loading="lazy"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
+                          }`}
+                      >
+                        {/* 2:3 Movie Poster */}
+                        <div className="relative aspect-[2/3] w-full bg-zinc-900 overflow-hidden">
+                          <img
+                            src={posterUrl}
+                            alt={item.name}
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
 
-                        {/* Top-Left Rating Badge */}
-                        <div className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 flex items-center gap-1">
-                          {item.imdbRating ? (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 sm:px-2 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] sm:text-[11px] font-extrabold shadow">
-                              <Star className="w-2.5 h-2.5 sm:w-3 sm:h-3 fill-current" />
-                              {item.imdbRating}
-                            </span>
-                          ) : (
-                            <span className="px-1.5 sm:px-2 py-0.5 rounded-full bg-black/75 text-white text-[9px] sm:text-[10px] font-bold uppercase">
-                              {item.type === 'series' ? 'SERIAL' : 'FILM'}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Top-Right Save Heart */}
-                        <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2">
-                          <button
-                            type="button"
-                            onClick={(e) => toggleSaveVodItem(item, e)}
-                            aria-label="Salvează în Lista Mea"
-                            className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center backdrop-blur-xs transition-colors ${
-                              isSaved
-                                ? 'bg-rose-600 text-white'
-                                : 'bg-black/65 text-zinc-200 hover:bg-rose-600 hover:text-white'
-                            }`}
-                          >
-                            <Heart
-                              className={`w-3 h-3 sm:w-4 sm:h-4 ${
-                                isSaved ? 'fill-current' : ''
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* Resume Badge at Bottom of Poster */}
-                        {hasProgress && (
-                          <div className="absolute bottom-2 inset-x-1.5 flex justify-center pointer-events-none">
-                            <span className="px-2 py-0.5 rounded-full bg-black/85 backdrop-blur-xs text-emerald-400 text-[9px] sm:text-[10px] font-bold truncate shadow">
-                              {item.type === 'series'
-                                ? `▶ S${progressEntry.season}:E${progressEntry.episode} • ${formatWatchSeconds(progressEntry.currentTime)}`
-                                : `▶ ${formatWatchSeconds(progressEntry.currentTime)}`}
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Progress Bar on Poster Bottom */}
-                        {hasProgress && (
-                          <div className="absolute bottom-0 inset-x-0 h-1 bg-zinc-800/90">
-                            <div
-                              className="h-full bg-emerald-500"
-                              style={{ width: `${progressPct}%` }}
-                            />
-                          </div>
-                        )}
-
-                        {/* Play Overlay on Hover */}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center p-2 transition-opacity">
-                          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-brand-600 text-white flex items-center justify-center shadow-lg">
-                            <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current ml-0.5" />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Info */}
-                      <div className="p-2 sm:p-3 flex-1 flex flex-col justify-between gap-1">
-                        <div>
-                          <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100 line-clamp-1 group-hover:text-brand-600 dark:group-hover:text-brand-400">
-                            {item.name}
-                          </h3>
-                          <div className="flex items-center gap-1 mt-0.5 text-[10px] sm:text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
-                            <span>{item.type === 'series' ? 'Serial' : 'Film'}</span>
-                            {(item.releaseInfo || item.year) && (
-                              <>
-                                <span>•</span>
-                                <span>{item.releaseInfo || item.year}</span>
-                              </>
+                          {/* Top-Left Rating Badge */}
+                          <div className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 flex items-center gap-1">
+                            {item.imdbRating ? (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 sm:px-2 py-0.5 rounded-full bg-black/80 backdrop-blur-xs text-amber-400 text-[10px] sm:text-[11px] font-extrabold shadow">
+                                <Star className="w-2.5 h-2.5 sm:w-3 sm:h-3 fill-current" />
+                                {item.imdbRating}
+                              </span>
+                            ) : (
+                              <span className="px-1.5 sm:px-2 py-0.5 rounded-full bg-black/75 text-white text-[9px] sm:text-[10px] font-bold uppercase">
+                                {item.type === 'series' ? 'SERIAL' : 'FILM'}
+                              </span>
                             )}
                           </div>
+
+                          {/* Top-Right Save Heart */}
+                          <div className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2">
+                            <button
+                              type="button"
+                              onClick={(e) => toggleSaveVodItem(item, e)}
+                              aria-label="Salvează în Lista Mea"
+                              className={`w-6 h-6 sm:w-8 sm:h-8 rounded-full flex items-center justify-center backdrop-blur-xs transition-colors ${isSaved
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-black/65 text-zinc-200 hover:bg-rose-600 hover:text-white'
+                                }`}
+                            >
+                              <Heart
+                                className={`w-3 h-3 sm:w-4 sm:h-4 ${isSaved ? 'fill-current' : ''
+                                  }`}
+                              />
+                            </button>
+                          </div>
+
+                          {/* Resume Badge at Bottom of Poster */}
+                          {hasProgress && (
+                            <div className="absolute bottom-2 inset-x-1.5 flex justify-center pointer-events-none">
+                              <span className="px-2 py-0.5 rounded-full bg-black/85 backdrop-blur-xs text-emerald-400 text-[9px] sm:text-[10px] font-bold truncate shadow">
+                                {item.type === 'series'
+                                  ? `▶ S${progressEntry.season}:E${progressEntry.episode} • ${formatWatchSeconds(progressEntry.currentTime)}`
+                                  : `▶ ${formatWatchSeconds(progressEntry.currentTime)}`}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Progress Bar on Poster Bottom */}
+                          {hasProgress && (
+                            <div className="absolute bottom-0 inset-x-0 h-1 bg-zinc-800/90">
+                              <div
+                                className="h-full bg-emerald-500"
+                                style={{ width: `${progressPct}%` }}
+                              />
+                            </div>
+                          )}
+
+                          {/* Play Overlay on Hover */}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center p-2 transition-opacity">
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-brand-600 text-white flex items-center justify-center shadow-lg">
+                              <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current ml-0.5" />
+                            </div>
+                          </div>
                         </div>
 
-                        {item.genres && item.genres.length > 0 && (
-                          <p className="hidden sm:block text-[11px] text-slate-500 dark:text-zinc-400 truncate">
-                            {item.genres.slice(0, 2).join(' • ')}
-                          </p>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
+                        {/* Card Info */}
+                        <div className="p-2 sm:p-3 flex-1 flex flex-col justify-between gap-1">
+                          <div>
+                            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-zinc-100 line-clamp-1 group-hover:text-brand-600 dark:group-hover:text-brand-400">
+                              {item.name}
+                            </h3>
+                            <div className="flex items-center gap-1 mt-0.5 text-[10px] sm:text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
+                              <span>{item.type === 'series' ? 'Serial' : 'Film'}</span>
+                              {(item.releaseInfo || item.year) && (
+                                <>
+                                  <span>•</span>
+                                  <span>{item.releaseInfo || item.year}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
 
-              {/* Load More Button */}
-              {(activeTab === 'movies' || activeTab === 'series') && hasMore && (
-                <div className="flex justify-center pt-4">
-                  <button
-                    type="button"
-                    disabled={isLoadingMore}
-                    onClick={() => void handleLoadMore()}
-                    className="min-h-[42px] px-6 py-2 rounded-full bg-brand-700 hover:bg-brand-600 disabled:opacity-60 text-white text-sm font-semibold inline-flex items-center gap-2 shadow-sm transition-colors"
-                  >
-                    {isLoadingMore ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Se încarcă...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" />
-                        <span>
-                          Încarcă mai multe{' '}
-                          {activeTab === 'series' ? 'seriale' : 'filme'}
-                        </span>
-                      </>
-                    )}
-                  </button>
+                          {item.genres && item.genres.length > 0 && (
+                            <p className="hidden sm:block text-[11px] text-slate-500 dark:text-zinc-400 truncate">
+                              {item.genres.slice(0, 2).join(' • ')}
+                            </p>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
-              )}
-            </>
-          )}
-        </>
-      )}
+
+                {/* Load More Button */}
+                {(activeTab === 'movies' || activeTab === 'series') && hasMore && (
+                  <div className="flex justify-center pt-4">
+                    <button
+                      type="button"
+                      disabled={isLoadingMore}
+                      onClick={() => void handleLoadMore()}
+                      className="min-h-[42px] px-6 py-2 rounded-full bg-brand-700 hover:bg-brand-600 disabled:opacity-60 text-white text-sm font-semibold inline-flex items-center gap-2 shadow-sm transition-colors"
+                    >
+                      {isLoadingMore ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Se încarcă...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4" />
+                          <span>
+                            Încarcă mai multe{' '}
+                            {activeTab === 'series' ? 'seriale' : 'filme'}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
 
       {/* iEDEM MEDIATEKA (1080P & 4K RU MOVIES & SERIES) */}
       {activeTab === 'iedem' && canProfileAccessIedem(activeProfile) && (
@@ -4038,22 +4034,20 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
               <button
                 type="button"
                 onClick={() => setLampaServer('https://yumata.github.io/lampa/')}
-                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
-                  lampaServer.includes('yumata')
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
-                }`}
+                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${lampaServer.includes('yumata')
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
+                  }`}
               >
                 Lampa Official (HTTPS)
               </button>
               <button
                 type="button"
                 onClick={() => setLampaServer('http://lampa.mx/')}
-                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
-                  lampaServer.includes('lampa.mx')
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
-                }`}
+                className={`min-h-[34px] px-3 py-1 rounded-full text-xs font-semibold transition-colors ${lampaServer.includes('lampa.mx')
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
+                  }`}
               >
                 Lampa.mx
               </button>
@@ -4161,11 +4155,10 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                           <button
                             type="button"
                             onClick={() => handleCopyPlugin(plugin.url)}
-                            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors ${
-                              isCopied
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-brand-600 hover:bg-brand-500 text-white'
-                            }`}
+                            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors ${isCopied
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-brand-600 hover:bg-brand-500 text-white'
+                              }`}
                           >
                             {isCopied ? (
                               <>
@@ -4399,24 +4392,24 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         activeMedia={
           activeVodItem
             ? {
-                id: activeVodItem.id,
-                name: activeVodItem.name,
-                type: activeVodItem.type,
-                poster: activeVodItem.poster,
-                season: selectedSeason,
-                episode: selectedEpisode,
-                currentTime: liveCurrentTime,
-              }
+              id: activeVodItem.id,
+              name: activeVodItem.name,
+              type: activeVodItem.type,
+              poster: activeVodItem.poster,
+              season: selectedSeason,
+              episode: selectedEpisode,
+              currentTime: liveCurrentTime,
+            }
             : continueWatchingList[0]
               ? {
-                  id: continueWatchingList[0].item.id,
-                  name: continueWatchingList[0].item.name,
-                  type: continueWatchingList[0].item.type,
-                  poster: continueWatchingList[0].item.poster,
-                  season: continueWatchingList[0].season,
-                  episode: continueWatchingList[0].episode,
-                  currentTime: continueWatchingList[0].currentTime,
-                }
+                id: continueWatchingList[0].item.id,
+                name: continueWatchingList[0].item.name,
+                type: continueWatchingList[0].item.type,
+                poster: continueWatchingList[0].item.poster,
+                season: continueWatchingList[0].season,
+                episode: continueWatchingList[0].episode,
+                currentTime: continueWatchingList[0].currentTime,
+              }
               : null
         }
       />

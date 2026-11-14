@@ -11,6 +11,11 @@ import {
   extractTextFromHlsId3Sample,
   parseRawStreamMetadata,
 } from '../utils/cleanTrackMetadata';
+import {
+  claimMediaSession,
+  releaseMediaSession,
+  updateMediaSessionPlaybackState,
+} from '../utils/mediaSessionManager';
 
 export const MAX_AUTO_RETRIES = 2;
 
@@ -40,6 +45,13 @@ export function useAudioPlayer() {
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'none';
+    try {
+      audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
+      audio.setAttribute('x-webkit-airplay', 'allow');
+    } catch {
+      // ignore
+    }
     audioRef.current = audio;
 
     return () => {
@@ -82,10 +94,10 @@ export function useAudioPlayer() {
         audio.removeAttribute('src');
         audio.load();
       }
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState =
-          playerStatus === 'paused' ? 'paused' : 'none';
-      }
+      updateMediaSessionPlaybackState(
+        'radio',
+        playerStatus === 'paused' ? 'paused' : 'none'
+      );
     }
   }, [playerStatus, currentStation]);
 
@@ -183,9 +195,7 @@ export function useAudioPlayer() {
       if (isCancelled) return;
       setRetryAttempt(0);
       setPlayerStatus('playing');
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'playing';
-      }
+      updateMediaSessionPlaybackState('radio', 'playing');
     };
 
     const handleWaiting = () => {
@@ -272,7 +282,7 @@ export function useAudioPlayer() {
                           );
                         }
                       })
-                      .catch(() => {});
+                      .catch(() => { });
                   }
                 }
               } catch {
@@ -400,14 +410,14 @@ export function useAudioPlayer() {
     };
   }, [currentStation, playerStatus, setNowPlayingMeta, setNowPlayingTitle]);
 
-  // Configure Media Session API for lock-screen and headset controls
+  // Configure Media Session API for Apple CarPlay, steering-wheel, lock-screen and headset controls
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
       return;
     }
 
     if (!currentStation) {
-      navigator.mediaSession.metadata = null;
+      releaseMediaSession('radio');
       return;
     }
 
@@ -415,68 +425,74 @@ export function useAudioPlayer() {
       nowPlayingMeta?.coverUrl ||
       nowPlayingMeta?.artistAvatarUrl ||
       currentStation.favicon ||
-      '/icons/icon-192.svg';
+      '/apple-touch-icon.png';
     const tagsSubtitle = currentStation.tags
       ? currentStation.tags
-          .split(',')
-          .slice(0, 3)
-          .map((t) => t.trim())
-          .filter(Boolean)
-          .join(' • ')
-      : currentStation.country || 'AetherRadio Live';
+        .split(',')
+        .slice(0, 3)
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .join(' • ')
+      : currentStation.country || 'Filmio Radio Live';
 
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
+    claimMediaSession(
+      'radio',
+      {
         title: nowPlayingMeta?.title || currentStation.name,
         artist:
           nowPlayingMeta?.artist ||
-          (nowPlayingMeta?.title ? currentStation.name : tagsSubtitle || 'AetherRadio'),
-        album: nowPlayingMeta?.album || currentStation.name || 'Live Radio',
-        artwork: [
-          { src: artworkUrl, sizes: '512x512', type: 'image/jpeg' },
-          { src: '/icons/icon-512.svg', sizes: '512x512', type: 'image/svg+xml' },
-        ],
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => {
-        const handledByTvHome =
-          typeof window !== 'undefined' &&
-          !window.dispatchEvent(
-            new CustomEvent('aether:tv-home-play-request', { cancelable: true })
-          );
-        if (handledByTvHome) {
-          return;
-        }
-        const state = useRadioStore.getState();
-        if (
-          typeof document !== 'undefined' &&
-          document.documentElement.classList.contains('smart-tv-mode') &&
-          state.playerStatus !== 'playing'
-        ) {
-          return;
-        }
-        if (state.currentStation) {
-          state.triggerStreamReload();
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('pause', () => {
-        useRadioStore.getState().setPlayerStatus('paused');
-      });
-
-      navigator.mediaSession.setActionHandler('stop', () => {
-        useRadioStore.getState().setPlayerStatus('paused');
-      });
-
-      navigator.mediaSession.setActionHandler('nexttrack', () => {
-        playNextAvailableStation();
-      });
-
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
-        playPreviousStation();
-      });
-    } catch {
-      // Ignore unsupported MediaSession handlers on older browsers
-    }
-  }, [currentStation, nowPlayingMeta, playNextAvailableStation, playPreviousStation]);
+          (nowPlayingMeta?.title ? currentStation.name : tagsSubtitle || 'Filmio Radio'),
+        album: nowPlayingMeta?.album || currentStation.name || 'Filmio Radio Live',
+        artworkUrl,
+      },
+      {
+        onPlay: () => {
+          const handledByTvHome =
+            typeof window !== 'undefined' &&
+            !window.dispatchEvent(
+              new CustomEvent('aether:tv-home-play-request', { cancelable: true })
+            );
+          if (handledByTvHome) {
+            return;
+          }
+          const state = useRadioStore.getState();
+          if (
+            typeof document !== 'undefined' &&
+            document.documentElement.classList.contains('smart-tv-mode') &&
+            state.playerStatus !== 'playing'
+          ) {
+            return;
+          }
+          if (state.currentStation) {
+            state.triggerStreamReload();
+          }
+        },
+        onPause: () => {
+          useRadioStore.getState().setPlayerStatus('paused');
+        },
+        onStop: () => {
+          useRadioStore.getState().setPlayerStatus('paused');
+        },
+        onNext: () => {
+          playNextAvailableStation();
+        },
+        onPrev: () => {
+          playPreviousStation();
+        },
+        onSeekBackward: null,
+        onSeekForward: null,
+        onSeekTo: null,
+      }
+    );
+    updateMediaSessionPlaybackState(
+      'radio',
+      playerStatus === 'playing' ? 'playing' : 'paused'
+    );
+  }, [
+    currentStation,
+    nowPlayingMeta,
+    playerStatus,
+    playNextAvailableStation,
+    playPreviousStation,
+  ]);
 }
