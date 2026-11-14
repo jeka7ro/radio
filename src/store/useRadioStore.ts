@@ -29,7 +29,27 @@ function detectInitialAdultAccess(): boolean {
   }
 }
 
+export const RMC_HITS_STATION: Station = {
+  stationuuid: '96253329-0601-11e8-ae97-52543be04c81',
+  name: 'RMC Hits',
+  url: 'https://icy.unitedradio.it/rmcweb001',
+  url_resolved: 'https://icy.unitedradio.it/rmcweb001',
+  homepage: 'https://www.radiomontecarlo.net',
+  favicon:
+    'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly93d3cucmFkaW9tb250ZWNhcmxvLm5ldC93cC1jb250ZW50L3VwbG9hZHMvMjAyNS8xMC9STUNfSElUU19XZWJSYWRpby0xNjAxNTI4MjA4MzE4LTMuanBnLXJtY19oaXRzLTMuanBn/-/0/0?r=e03719966665665d902cd409e6162b62',
+  tags: 'pop,hits,top 40,monte carlo,rmc',
+  country: 'Italy',
+  countrycode: 'IT',
+  language: 'italian',
+  votes: 9350,
+  codec: 'MP3',
+  bitrate: 128,
+  hls: 0,
+  clickcount: 7600,
+};
+
 export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
+  RMC_HITS_STATION,
   {
     stationuuid: 'fav-radio-kissfm-ro',
     name: 'Kiss FM Romania',
@@ -218,25 +238,6 @@ export const DEFAULT_SMART_FAVORITE_RADIO_STATIONS: Station[] = [
     clickcount: 7900,
   },
 ];
-
-export const RMC_HITS_STATION: Station = {
-  stationuuid: '96253329-0601-11e8-ae97-52543be04c81',
-  name: 'RMC Hits',
-  url: 'https://icy.unitedradio.it/rmcweb001',
-  url_resolved: 'https://icy.unitedradio.it/rmcweb001',
-  homepage: 'https://www.radiomontecarlo.net',
-  favicon:
-    'https://img-api.cloud.mediaset.net/api/images/rd/v1/ita/aHR0cHM6Ly93d3cucmFkaW9tb250ZWNhcmxvLm5ldC93cC1jb250ZW50L3VwbG9hZHMvMjAyNS8xMC9STUNfSElUU19XZWJSYWRpby0xNjAxNTI4MjA4MzE4LTMuanBnLXJtY19oaXRzLTMuanBn/-/0/0?r=e03719966665665d902cd409e6162b62',
-  tags: 'pop,hits,top 40,monte carlo,rmc',
-  country: 'Italy',
-  countrycode: 'IT',
-  language: 'italian',
-  votes: 9350,
-  codec: 'MP3',
-  bitrate: 128,
-  hls: 0,
-  clickcount: 7600,
-};
 
 export function normalizeRadioStreamKey(rawUrl?: string): string {
   if (!rawUrl) return '';
@@ -1026,14 +1027,34 @@ export const useRadioStore = create<RadioState>()(
           (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
         const stored = readProfileRadioFavsFromLocalStorage(cleanId);
         if (stored) {
-          set({ favorites: stored.stations });
+          let list = stored.stations;
+          if (
+            cleanId === 'p1' &&
+            !list.some((s) => isSameRadioStation(s, RMC_HITS_STATION))
+          ) {
+            list = [RMC_HITS_STATION, ...list];
+            const updated: StoredProfileRadioFavs = {
+              updatedAt: Date.now(),
+              stations: list,
+            };
+            writeProfileRadioFavsToLocalStorage('p1', updated);
+            pushProfileRadioFavsToRemote('p1', updated);
+          }
+          set({ favorites: list });
         } else {
-          const initialStations = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+          let initialStations = [...DEFAULT_SMART_FAVORITE_RADIO_STATIONS];
+          if (
+            cleanId === 'p1' &&
+            !initialStations.some((s) => isSameRadioStation(s, RMC_HITS_STATION))
+          ) {
+            initialStations = [RMC_HITS_STATION, ...initialStations];
+          }
           const initPayload: StoredProfileRadioFavs = {
-            updatedAt: 1000,
+            updatedAt: Date.now(),
             stations: initialStations,
           };
           writeProfileRadioFavsToLocalStorage(cleanId, initPayload);
+          pushProfileRadioFavsToRemote(cleanId, initPayload);
           set({ favorites: initialStations });
         }
         void get().syncRadioFavoritesWithServer(cleanId);
@@ -1249,7 +1270,20 @@ export const useRadioStore = create<RadioState>()(
           ) || 'p1';
         const perProfileFavs = readProfileRadioFavsFromLocalStorage(activeProfileId);
         if (perProfileFavs) {
-          merged.favorites = perProfileFavs.stations;
+          let favs = perProfileFavs.stations;
+          if (
+            activeProfileId === 'p1' &&
+            !favs.some((s) => isSameRadioStation(s, RMC_HITS_STATION))
+          ) {
+            favs = [RMC_HITS_STATION, ...favs];
+            const updated: StoredProfileRadioFavs = {
+              updatedAt: Date.now(),
+              stations: favs,
+            };
+            writeProfileRadioFavsToLocalStorage('p1', updated);
+            pushProfileRadioFavsToRemote('p1', updated);
+          }
+          merged.favorites = favs;
         } else {
           let migratedFavs =
             Array.isArray(persisted.favorites) && persisted.favorites.length > 0

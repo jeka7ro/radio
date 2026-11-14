@@ -6305,6 +6305,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     seasons: mergedSeasons,
                   };
                 }
+                if (!isEarlyRuIedem) {
+                  // Foreign series: DO NOT load iEdem Russian stream! Only save merged seasons for episode navigation
+                  return prev
+                    ? { ...prev, seasons: mergedSeasons }
+                    : { ok: false, type: 'series', seasons: mergedSeasons };
+                }
                 if (
                   prev?.audioNames &&
                   findExplicitOriginalAudioTrackIndex(prev.audioNames) >= 0

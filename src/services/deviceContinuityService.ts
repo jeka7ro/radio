@@ -700,7 +700,13 @@ export function isDirectLocalHost(): boolean {
   );
 }
 
-const LOCAL_BRIDGE_ORIGIN = 'http://localhost:8769';
+const LOCAL_CANDIDATE_BRIDGE_ORIGINS = [
+  'http://localhost:8769',
+  'http://192.168.101.87:8769',
+  'http://127.0.0.1:8769',
+];
+const LOCAL_BRIDGE_ORIGIN = LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
+let activeBridgeOrigin = '';
 let localBridgeAvailable: boolean | null = null;
 let localBridgeProbeStarted = false;
 
@@ -730,30 +736,62 @@ function probeLocalBridge(force = false): Promise<boolean> {
   if (localBridgeAvailable === null) {
     try {
       const cached = sessionStorage.getItem('filmio_local_bridge_ok');
-      localBridgeAvailable = cached === '1';
+      const cachedOrigin = sessionStorage.getItem('filmio_local_bridge_origin');
+      if (cached === '1' && cachedOrigin) {
+        localBridgeAvailable = true;
+        activeBridgeOrigin = cachedOrigin;
+      }
     } catch {
       localBridgeAvailable = false;
     }
   }
 
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 2500);
-  return fetch(`${LOCAL_BRIDGE_ORIGIN}/api/filelist/status`, {
-    signal: controller.signal,
-  })
-    .then((r) => {
+  const storedOrigin = (() => {
+    try {
+      return (
+        sessionStorage.getItem('filmio_local_bridge_origin') ||
+        localStorage.getItem('filmio_local_bridge_origin') ||
+        ''
+      );
+    } catch {
+      return '';
+    }
+  })();
+
+  const originsToProbe = Array.from(
+    new Set([storedOrigin, ...LOCAL_CANDIDATE_BRIDGE_ORIGINS].filter(Boolean))
+  );
+
+  const probeOne = async (origin: string): Promise<string> => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 2000);
+    try {
+      const r = await fetch(`${origin}/api/filelist/status`, {
+        signal: controller.signal,
+      });
+      if (r.ok) return origin;
+      throw new Error('Not ok');
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
+
+  return Promise.any(originsToProbe.map((o) => probeOne(o)))
+    .then((winner) => {
       const prev = localBridgeAvailable;
-      localBridgeAvailable = r.ok;
+      localBridgeAvailable = true;
+      activeBridgeOrigin = winner;
       try {
-        if (r.ok) sessionStorage.setItem('filmio_local_bridge_ok', '1');
-        else sessionStorage.removeItem('filmio_local_bridge_ok');
+        sessionStorage.setItem('filmio_local_bridge_ok', '1');
+        sessionStorage.setItem('filmio_local_bridge_origin', winner);
+        localStorage.setItem('filmio_local_bridge_origin', winner);
       } catch {
         // ignore
       }
-      if (prev !== localBridgeAvailable) {
-        notifyLocalBridgeChanged(Boolean(localBridgeAvailable));
+      if (prev !== true) {
+        notifyLocalBridgeChanged(true);
       }
-      return Boolean(localBridgeAvailable);
+      return true;
     })
     .catch(() => {
       const prev = localBridgeAvailable;
@@ -767,8 +805,7 @@ function probeLocalBridge(force = false): Promise<boolean> {
         notifyLocalBridgeChanged(false);
       }
       return false;
-    })
-    .finally(() => window.clearTimeout(timer));
+    });
 }
 
 export function retryProbeLocalBridge(): Promise<boolean> {
@@ -853,7 +890,7 @@ export function isFileListExclusiveRomanianTitle(
 
 export function getFileListServerBase(): string {
   if (typeof window === 'undefined' || isDirectLocalHost()) return '';
-  return LOCAL_BRIDGE_ORIGIN;
+  return activeBridgeOrigin || LOCAL_BRIDGE_ORIGIN;
 }
 
 export function buildFileListApiUrl(path: string): string {

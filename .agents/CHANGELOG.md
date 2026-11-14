@@ -6,6 +6,24 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-14 23:10 — Rezolvare definitivă Sony Bravia KD-85X80L: carduri redimensionate proporțional la 8-10 pe rând, auto-descoperire punte LAN Home Server (`192.168.101.87:8769`), blocare totală iEdem rusesc pe seriale străine & garantare radio RMC Hits pe profilul JEKA
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Redimensionare proporțională carduri și grile TV (`src/index.css`)**:
+     - Înlocuit valorile statice în pixeli (`minmax(175px/185px/240px, 1fr)`) cu valori responsive în `rem` (`minmax(11rem, 1fr)` și `minmax(15rem, 1fr)`) pentru `html.smart-tv-mode` și `html.smart-tv-sub1080`, plus media-query dedicat pentru viewport TV landscape `<= 1400px`.
+     - Pe Sony Bravia 85" (unde Android WebView raportează `960×540`), cardurile nu se mai lățesc la 25% din ecran (3-4 carduri gigante); acum încap 8-10 carduri pe rând, exact ca pe un ecran nativ 1080p.
+  2. **Auto-descoperire punte LAN Home Server FileList (`src/services/deviceContinuityService.ts`)**:
+     - Adăugată lista de candidați LAN `LOCAL_CANDIDATE_BRIDGE_ORIGINS` (`http://localhost:8769`, `http://192.168.101.87:8769`, `http://127.0.0.1:8769`).
+     - Pe Sony TV (unde `localhost` este televizorul însuși), `probeLocalBridge` testează în paralel originea LAN a Mac-ului (`http://192.168.101.87:8769`), reține originea câștigătoare în `activeBridgeOrigin` și `sessionStorage`, deblocând accesul la playerul FileList torrent P2P chiar și atunci când TV-ul accesează `https://filmio.my`.
+  3. **Blocare totală stream iEdem rusesc pe seriale străine (`src/views/SmartTvLampaViewCore.tsx`)**:
+     - În `fetchIedemItemDetail` (`detail.type === 'multistream'`), adăugat gardul `if (!isEarlyRuIedem)`: pentru orice serial străin (Netflix, HBO, Hollywood), stream-ul rusesc iEdem nu este niciodată setat ca `hlsUrl` sau `audioNames: ['Русский (iEdem VIP)']`, păstrând doar lista de sezoane/episoade pentru navigație și lăsând activ playerul FileList cu audio original.
+  4. **Garantare Radio RMC Hits pe profilul JEKA (`src/store/useRadioStore.ts`)**:
+     - Inclus `RMC_HITS_STATION` direct în `DEFAULT_SMART_FAVORITE_RADIO_STATIONS`.
+     - La încărcarea sau comutarea pe profilul `p1` (JEKA), dacă `RMC Hits` lipsea din `localStorage`, este adăugat automat la începutul listei de favorite, salvat local și sincronizat pe serverul remote.
+- **Fișiere:** `src/index.css`, `src/services/deviceContinuityService.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/store/useRadioStore.ts`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-14 22:50 — Eliminare definitivă și totală a surselor și pistelor rusești pentru toate filmele și serialele străine (Netflix, HBO, Hollywood — ex. The Gentlemen) & Compatibilitate completă Sony Bravia KD-85X80L (Google TV)
 - **Autor:** Antigravity
 - **Ce s-a făcut:**

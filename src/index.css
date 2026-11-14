@@ -897,3 +897,48 @@ html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
   width: 6.5rem !important;
   height: 6.5rem !important;
 }
+
+/* ============================================================================
+   SMART TV CARD & GRID PROPORTIONAL DENSITY (Sony Bravia KD-85X80L / Android TV 960x540 & 1280x720)
+   Tailwind's fixed-px minmax(175px/185px/240px) clamps grids to only 3-4 cards across 85" screens.
+   By converting them to rem units that scale with root font-size (smart-tv-sub1080),
+   the screen renders 8-10 cards per row identically to 1080p density.
+   ============================================================================ */
+html.smart-tv-mode [class*="minmax(175px"],
+html.smart-tv-mode [class*="minmax(185px"],
+html.smart-tv-sub1080 [class*="minmax(175px"],
+html.smart-tv-sub1080 [class*="minmax(185px"] {
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)) !important;
+  gap: 0.85rem !important;
+}
+
+html.smart-tv-mode [class*="minmax(240px"],
+html.smart-tv-mode [class*="minmax(260px"],
+html.smart-tv-sub1080 [class*="minmax(240px"],
+html.smart-tv-sub1080 [class*="minmax(260px"] {
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)) !important;
+  gap: 0.85rem !important;
+}
+
+html.smart-tv-mode [data-vod-card="true"],
+html.smart-tv-sub1080 [data-vod-card="true"] {
+  max-width: 14rem !important;
+  width: 100% !important;
+}
+
+@media (max-width: 1400px) and (min-aspect-ratio: 16/10) {
+  html.smart-tv-mode [class*="minmax(175px"],
+  html.smart-tv-mode [class*="minmax(185px"] {
+    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)) !important;
+    gap: 0.65rem !important;
+  }
+  html.smart-tv-mode [class*="minmax(240px"],
+  html.smart-tv-mode [class*="minmax(260px"] {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+    gap: 0.65rem !important;
+  }
+  html.smart-tv-mode [data-vod-card="true"] {
+    max-width: 110px !important;
+  }
+}
+
