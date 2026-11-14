@@ -607,7 +607,7 @@ export function isSmartTvDevice(): boolean {
   }
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
   if (
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL/i.test(
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
       ua
     )
   ) {
@@ -617,9 +617,7 @@ export function isSmartTvDevice(): boolean {
     const sw = window.screen?.width || window.innerWidth || 0;
     const sh = window.screen?.height || window.innerHeight || 0;
     const aspect = Math.max(sw, sh) / Math.max(1, Math.min(sw, sh));
-    const maxTouch =
-      typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
-    if (aspect >= 1.65 && maxTouch <= 1) {
+    if (aspect >= 1.5) {
       return true;
     }
   }

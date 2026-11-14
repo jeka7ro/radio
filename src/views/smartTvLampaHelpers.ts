@@ -443,24 +443,22 @@ export function isRussianVodItem(
   item: Partial<CinemetaItem> | null | undefined
 ): boolean {
   if (!item) return false;
-  if (
-    item.iedemFid ||
-    String(item.id || '').startsWith('iedem_')
-  ) {
-    return true;
-  }
+
+  // 1. Check explicit country first
   if (item.country) {
     if (/(Росси|СССР|Russia|USSR|Soviet|Беларус)/i.test(item.country)) {
       return true;
     }
     if (
-      /(United States|USA|США|UK|United Kingdom|Великобритани|France|Франци|Germany|Германи|Spain|Испани|Italy|Итали|Canada|Канад|Japan|Япони|Korea|Коре|China|Китай|Turkey|Турци|Romania|România|Australia|Австрали)/i.test(
+      /(United States|USA|США|UK|United Kingdom|Великобритани|England|France|Франци|Germany|Германи|Spain|Испани|Italy|Итали|Canada|Канад|Japan|Япони|Korea|Коре|China|Китай|Turkey|Турци|Romania|România|Australia|Австрали|Mexico|Мексик|Brazil|Бразил|Sweden|Швеци|Denmark|Дани|Norway|Норвег|Poland|Польш)/i.test(
         item.country
       )
     ) {
       return false;
     }
   }
+
+  // 2. Curated Russian TV shows or Kinozal synthetic IDs
   const rawKpIdNum = Number(
     item.kpId ||
     (String(item.id || '').startsWith('kp_')
@@ -473,8 +471,23 @@ export function isRussianVodItem(
   ) {
     return true;
   }
+
+  // 3. If item has Latin original name, it is almost certainly foreign (e.g. "The Gentlemen", "Breaking Bad", "Avatar")
+  const origName = String(item.nameOriginal || '').trim();
+  if (origName && /[a-zA-Z]{2,}/.test(origName)) {
+    return false;
+  }
+
+  // 4. If it has IMDb ID (tt...) and has Latin characters in title/name
+  if (String(item.id || '').startsWith('tt')) {
+    if (/[a-zA-Z]/.test(String(item.name || ''))) {
+      return false;
+    }
+  }
+
+  // 5. Russian text in title without any Latin original title or foreign marker
   const hasCyrillicName = /[а-яёА-ЯЁ]/.test(String(item.name || ''));
-  const hasLatinOrig = /[a-zA-Z]/.test(String(item.nameOriginal || ''));
+  const hasLatinOrig = /[a-zA-Z]/.test(origName);
   if (hasCyrillicName && !hasLatinOrig) {
     return true;
   }

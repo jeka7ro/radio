@@ -6,6 +6,33 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-14 22:50 — Eliminare definitivă și totală a surselor și pistelor rusești pentru toate filmele și serialele străine (Netflix, HBO, Hollywood — ex. The Gentlemen) & Compatibilitate completă Sony Bravia KD-85X80L (Google TV)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Detecție exactă și scalare nativă pentru modelul Sony Bravia KD-85X80L (`index.html`, `src/utils/mediaSessionManager.ts`, `src/server/filelistServer.ts`)**:
+     - Adăugat pattern-ul explicit `KD-[0-9]{2}[A-Z0-9]*` (inclusiv `KD-85X80L`, seria X80L/X85L/X90L/XR/XBR/K), eliminând dependența de string-ul generic „BRAVIA” sau „Sony”.
+     - Relaxat gardul de aspect ratio pe Android TV la `aspect >= 1.5` fără constrângere pe `maxTouchPoints`, garantând activarea `smart-tv-mode`, scalarea automată a font-ului root la 8px (eliminând iconițele gigantice cauzate de viewport-ul Android WebView `960×540`) și plafonarea automată la 1080p Level 4.1 pe `/api/filelist/stream` pentru a preveni ecranul negru al decodorului hardware MediaTek X1.
+  2. **Corecție critică clasificare filme/seriale rusești vs. străine (`src/views/smartTvLampaHelpers.ts`)**:
+     - Eliminat bug-ul major din `isRussianVodItem` care returna `true` automat pentru orice element cu `iedemFid` sau `id.startsWith('iedem_')`, ceea ce clasifica eronat seriale străine celebre (ex. *The Gentlemen*, seriale Netflix) ca fiind rusești și forța surse Kinozal/VK și pista audio rusă.
+     - Acum `isRussianVodItem` verifică țara (`country` non-rusă), titlul original în caractere latine (`nameOriginal` cu `/[a-zA-Z]{2,}/`) și `tt...` (IMDb), garantând că toate producțiile internaționale sunt clasificate 100% ca `isForeignVod = true`.
+  2. **Eliminare surse rusești pe filme/seriale străine (`src/views/SmartTvLampaViewCore.tsx`)**:
+     - În `SmartTvLampaViewCore.tsx`, blocată inițializarea `resolvedDirectStream` cu `Русский (iEdem VIP)` pentru titluri străine (`isEarlyRuIedem` guard).
+     - În `earlyFlParams`, trimis `ru: '0'` când titlul este străin (căutare FileList în loc de Kinozal).
+     - În `syncPreferredVodServer`, pentru titluri străine, este strict interzisă comutarea pe `VK Video` sau dublaje rusești; `filelist_torrent` rămâne activ 100%.
+     - La click pe torrente FileList, adăugat `&orig=${isCurrentVodForeign ? '1' : '0'}` în `streamUrl`.
+     - Ambele instanțe `<VodNativeHlsPlayer>` (FileList și Direct/Kinogram) primesc acum `isForeign={isCurrentVodForeign}` și `preferredAudioLang={effectiveVodAudioPref}`.
+  3. **Pistă Audio Originală garantată pe serverul FileList (`src/server/filelistServer.ts`)**:
+     - În `/api/filelist/resolve`, se așteaptă până la 1500ms `probeTorrentVideoFile` pentru popularea cache-ului real de piste audio.
+     - În `/api/filelist/stream`, `wantOrigAudio` este activat implicit pentru toate torrentele FileList (`id > 0` și `orig !== '0'`).
+     - Dacă `wantOrigAudio` este activ și un parametru `audio=0` accidental indică o pistă rusă în timp ce există o pistă originală (ex. Dual Audio MKV), `safeAudioIdx` ignoră parametrul și selectează obligatoriu pista originală.
+  4. **Pistă Audio Originală garantată în player și proxy HLS (`src/components/tv/VodNativeHlsPlayer.tsx`, `vite.config.ts`, `netlify/functions/tv-proxy.mjs`, `src/services/subtitleSearchService.ts`)**:
+     - În `subtitleSearchService.ts`, adăugată Prioritatea 5 (orice pistă non-rusă/non-ucraineană) în `findExplicitOriginalAudioTrackIndex`.
+     - În `VodNativeHlsPlayer.tsx`, `forcedAudioIdx` se inițializează cu `-1` (nu mai forțează `audio=0`), iar la pornirea stream-ului FileList și tv-proxy se adaugă `orig=1` fără parametru `audio=` forțat.
+     - În `vite.config.ts` și `netlify/functions/tv-proxy.mjs`, parametrul `orig=1` este propagat pe toate playlist-urile copil și blochează `useExplicitAudioIdx`, promovând automat pista audio originală la `DEFAULT=YES AUTOSELECT=YES` și retrogradând dublajele ruse la `DEFAULT=NO AUTOSELECT=NO`.
+  5. **MediatecaView (`src/views/MediatecaView.tsx`)**:
+     - Transmis `isForeign={!isRussianVodItem(activeVodItem)}` și `preferredAudioLang="original"` în `<VodNativeHlsPlayer>`.
+- **Fișiere:** `src/views/smartTvLampaHelpers.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/server/filelistServer.ts`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/services/subtitleSearchService.ts`, `src/views/MediatecaView.tsx`, `vite.config.ts`, `netlify/functions/tv-proxy.mjs`, `.agents/CHANGELOG.md`
+
 ### 2026-11-14 22:30 — Remediere completă TV Sony Bravia 80" / Android TV / Google TV: scalare corectă iconițe & UI 1080p (eliminare iconițe gigante la viewport `960×540`) și remediere ecran negru „doar sunet, fără video” pe toate sursele
 - **Autor:** Antigravity
 - **Ce s-a făcut:**

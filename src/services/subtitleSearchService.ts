@@ -435,6 +435,15 @@ export function findExplicitOriginalAudioTrackIndex(labels: string[]): number {
   );
   if (subTrackIdx >= 0) return subTrackIdx;
 
+  // Priority 5: Any non-Russian/non-Ukrainian audio track when mixed with Russian dubbed tracks
+  const nonRuIdx = labels.findIndex((raw) => {
+    const s = String(raw || '');
+    return !/\b(ru|rus|russian|uk|ukr|ua)\b|рус|дубл|hdrezka|lostfilm|red\s*head|jaskier|кубик|tvshows|укр|так\s*треба/i.test(
+      s
+    );
+  });
+  if (nonRuIdx >= 0) return nonRuIdx;
+
   return -1;
 }
 

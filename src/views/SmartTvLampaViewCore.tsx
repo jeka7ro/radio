@@ -6245,7 +6245,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         activeVodItem.type !== 'series' ||
         (selectedSeason || 1) === iedemCardSeason;
 
-      if (activeVodItem.iedemStreamUrl && activeVodItem.type !== 'series') {
+      const isEarlyRuIedem = isRussianVodItem(activeVodItem);
+      if (isEarlyRuIedem && activeVodItem.iedemStreamUrl && activeVodItem.type !== 'series') {
         setResolvedDirectStream({
           ok: true,
           type: 'movie',
@@ -6333,7 +6334,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 detail.variants?.['auto'] ||
                 activeVodItem.iedemStreamUrl ||
                 '';
-              if (directTarget) {
+              if (directTarget && isEarlyRuIedem) {
                 setResolvedDirectStream((prev) => {
                   if (
                     prev?.audioNames &&
@@ -6378,13 +6379,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         // Resolve Kinozal VIP 4K/1080p Russian torrent immediately in parallel (Priority #1 for Russian Movies & Series, Priority #2 after VK Видео for Russian TV Shows)
         if (isLocalHomeServer()) {
           setIsFileListStreamLoading(true);
+          const isLikelyForeign =
+            /[a-zA-Z]{2,}/.test(activeVodItem.name || '') ||
+            /[a-zA-Z]{2,}/.test(activeVodItem.nameOriginal || '') ||
+            !isRussianVodItem(activeVodItem);
           const earlyFlParams = new URLSearchParams({
             q: searchCleanTitle,
             year: targetYear,
             type: activeVodItem.type,
             s: String(selectedSeason),
             e: String(selectedEpisode),
-            ru: '1',
+            ru: isLikelyForeign ? '0' : '1',
           });
           if (userSelectedFlTorrentIdRef.current) {
             earlyFlParams.set('id', String(userSelectedFlTorrentIdRef.current));
@@ -7125,6 +7130,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
       if (directResolvedOk) {
+        if (isForeignVod) {
+          const hasOrigAudio =
+            resolvedDirectStream?.audioNames &&
+            findExplicitOriginalAudioTrackIndex(resolvedDirectStream.audioNames) >= 0;
+          if (isVkDirectSourcePath(resolvedDirectStream?.sourcePath) || !hasOrigAudio) {
+            if (canUseLocalTorrent) {
+              setActiveServer('filelist_torrent');
+              return;
+            }
+          }
+        }
         if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
           setSelectedAudioTrackIdx(prefTrackIdx);
         }
@@ -7976,7 +7992,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ok: true,
           torrentId,
           selectedTorrent: clickedTor,
-          streamUrl: buildFileListApiUrl(`/api/filelist/stream?id=${torrentId}&fileIdx=${typeof fileIdx === 'number' ? fileIdx : 0}`),
+          streamUrl: buildFileListApiUrl(`/api/filelist/stream?id=${torrentId}&fileIdx=${typeof fileIdx === 'number' ? fileIdx : 0}&orig=${isCurrentVodForeign ? '1' : '0'}`),
         };
       });
       setIsFileListStreamLoading(true);
@@ -11334,7 +11350,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 )
                               : -1
                         }
-                          preferredQuality={tvSettings.defaultVideoQuality}
+                        isForeign={isCurrentVodForeign}
+                        preferredAudioLang={effectiveVodAudioPref}
+                        preferredQuality={tvSettings.defaultVideoQuality}
                           initialSubFontSize={tvSettings.defaultSubFontSize}
                           preferredSubLang={tvSettings.defaultSubLang}
                           startAtSeconds={resumeStartSeconds}
@@ -11694,7 +11712,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           initialAudioTrackIndex={
                             matchedOfflineVodItem ? 0 : effectiveAudioTrackIdx
                           }
-                          preferredQuality={tvSettings.defaultVideoQuality}
+                        isForeign={isCurrentVodForeign}
+                        preferredAudioLang={effectiveVodAudioPref}
+                        preferredQuality={tvSettings.defaultVideoQuality}
                           initialSubFontSize={tvSettings.defaultSubFontSize}
                           preferredSubLang={tvSettings.defaultSubLang}
                           startAtSeconds={resumeStartSeconds}

@@ -39,6 +39,7 @@ import {
 import {
   SubtitleCue,
   OnlineSubtitleTrack,
+  AudioTrackPreference,
   fetchOnlineSubtitlesByImdb,
   downloadSubtitleAsVttBlobUrl,
   resolveAudioTrackIndexByPreference,
@@ -150,6 +151,8 @@ interface VodNativeHlsPlayerProps {
   hlsUrl?: string;
   durationHintSec?: number;
   offlineItem?: OfflineMediaItem | null;
+  isForeign?: boolean;
+  preferredAudioLang?: 'original' | 'ro' | 'ru' | 'uk' | 'first';
   audioTrackLabels?: string[];
   initialAudioTrackIndex?: number;
   preferredQuality?: TvPreferredQuality;
@@ -243,6 +246,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   hlsUrl,
   durationHintSec = 0,
   offlineItem,
+  isForeign = false,
+  preferredAudioLang,
   audioTrackLabels = [],
   initialAudioTrackIndex,
   preferredQuality = 'max',
@@ -326,6 +331,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     startAtSecondsRef.current = startAtSeconds || 0;
   }, [startAtSeconds]);
 
+  const effectiveAudioPref = useMemo<AudioTrackPreference>(() => {
+    if (isForeign) {
+      return preferredAudioLang === 'ro' ? 'ro' : 'original';
+    }
+    return preferredAudioLang || getActiveProfileMediaPrefs().defaultAudioPref;
+  }, [isForeign, preferredAudioLang]);
+
   const [forcedAudioIdx, setForcedAudioIdx] = useState<number>(() => {
     if (
       typeof initialAudioTrackIndex === 'number' &&
@@ -333,10 +345,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     ) {
       return initialAudioTrackIndex;
     }
-    const profileAudioPref = getActiveProfileMediaPrefs().defaultAudioPref;
-    return audioTrackLabels.length > 0
-      ? resolveAudioTrackIndexByPreference(audioTrackLabels, profileAudioPref)
-      : 0;
+    return audioTrackLabels.length > 1
+      ? resolveAudioTrackIndexByPreference(audioTrackLabels, effectiveAudioPref)
+      : -1;
   });
 
   const [status, setStatus] = useState<'loading' | 'playing' | 'error'>(
@@ -1210,8 +1221,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       );
     const flStreamUrl =
       !supports4kAvcLevel51 &&
-      rawFlStreamUrl.includes('/api/filelist/stream') &&
-      !/[?&]maxw=\d+/.test(rawFlStreamUrl)
+        rawFlStreamUrl.includes('/api/filelist/stream') &&
+        !/[?&]maxw=\d+/.test(rawFlStreamUrl)
         ? `${rawFlStreamUrl}${rawFlStreamUrl.includes('?') ? '&' : '?'}maxw=1920`
         : rawFlStreamUrl;
 
@@ -1338,9 +1349,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               } catch {
                 // ignore
               }
-              const retry1080Url = `${flStreamUrl.replace(/([?&])maxw=\d+/g, '')}${
-                flStreamUrl.includes('?') ? '&' : '?'
-              }maxw=1920&vtranscode=1`;
+              const retry1080Url = `${flStreamUrl.replace(/([?&])maxw=\d+/g, '')}${flStreamUrl.includes('?') ? '&' : '?'
+                }maxw=1920&vtranscode=1`;
               loadFileListStreamIntoVideo(video, retry1080Url);
               return;
             }
@@ -2293,11 +2303,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           const isLevelVideoCodecSupported = (lvl: (typeof data.levels)[number]): boolean => {
             const vCodec = String(
               lvl.videoCodec ||
-                ((lvl as { attrs?: Record<string, string> }).attrs?.CODECS || '')
-                  .split(',')
-                  .map((c) => c.trim())
-                  .find((c) => /^(avc1|hvc1|hev1|dvh1|dvhe|vp09|vp9|av01)/i.test(c)) ||
-                ''
+              ((lvl as { attrs?: Record<string, string> }).attrs?.CODECS || '')
+                .split(',')
+                .map((c) => c.trim())
+                .find((c) => /^(avc1|hvc1|hev1|dvh1|dvhe|vp09|vp9|av01)/i.test(c)) ||
+              ''
             ).trim();
             const normHeight = normalizeVideoQualityHeight(lvl.width, lvl.height);
             // MediaTek / Sony Bravia / Android TV hardware H.264 decoders max out at 1080p (Level 4.1/4.2);
@@ -2421,10 +2431,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           setAudioTracks(list);
 
           // Default to active profile's preferred Audio Language (or explicit forcedAudioIdx / initialAudioTrackIndex if valid)
-          const profileAudioPref = getActiveProfileMediaPrefs().defaultAudioPref;
           const autoPrefIdx = resolveAudioTrackIndexByPreference(
             list.map((x) => x.name),
-            profileAudioPref
+            effectiveAudioPref
           );
           const targetIdx =
             forcedAudioIdx >= 0 && forcedAudioIdx < list.length
@@ -2552,12 +2561,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         setStreamOffsetSec(initialSeek);
         appliedStartRef.current = true;
 
-        const cleanBase = hlsUrl
+        let cleanBase = hlsUrl
           .replace(/([?&])start=\d+/g, '')
           .replace(/([?&])audio=\d+/g, '');
+        if (isForeign && !cleanBase.includes('orig=')) {
+          const sep0 = cleanBase.includes('?') ? '&' : '?';
+          cleanBase = `${cleanBase}${sep0}orig=1`;
+        }
         const sep = cleanBase.includes('?') ? '&' : '?';
-        const audioParam = forcedAudioIdx >= 0 ? forcedAudioIdx : 0;
-        const flStreamUrl = `${cleanBase}${sep}start=${initialSeek}&audio=${audioParam}`;
+        const flStreamUrl =
+          forcedAudioIdx >= 0
+            ? `${cleanBase}${sep}start=${initialSeek}&audio=${forcedAudioIdx}`
+            : `${cleanBase}${sep}start=${initialSeek}`;
 
         logTvVod('start_filelist_stream', flStreamUrl);
         loadFileListStreamIntoVideo(video, flStreamUrl);
@@ -2733,11 +2748,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }));
                 setAudioTracks(list);
 
-                const profileAudioPref =
-                  getActiveProfileMediaPrefs().defaultAudioPref;
                 const autoPrefIdx = resolveAudioTrackIndexByPreference(
                   list.map((x) => x.name),
-                  profileAudioPref
+                  effectiveAudioPref
                 );
                 const targetIdx =
                   typeof initialAudioTrackIndex === 'number' &&
@@ -2787,12 +2800,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         : hlsUrl || '';
       if (
         targetUrl &&
-        targetUrl.includes('/api/tv-proxy') &&
-        forcedAudioIdx >= 0
+        targetUrl.includes('/api/tv-proxy')
       ) {
-        const cleanBase = targetUrl.replace(/([?&])audioIdx=\d+/g, '');
+        let cleanBase = targetUrl.replace(/([?&])audioIdx=\d+/g, '');
+        if (isForeign && !cleanBase.includes('orig=')) {
+          const sep0 = cleanBase.includes('?') ? '&' : '?';
+          cleanBase = `${cleanBase}${sep0}orig=1`;
+        }
         const sep = cleanBase.includes('?') ? '&' : '?';
-        targetUrl = `${cleanBase}${sep}audioIdx=${forcedAudioIdx}`;
+        targetUrl =
+          forcedAudioIdx >= 0
+            ? `${cleanBase}${sep}audioIdx=${forcedAudioIdx}`
+            : cleanBase;
       }
 
       startHlsPlayback(targetUrl);
@@ -6627,11 +6646,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               }
                               setActiveAudioTrack(trk.id);
                               setForcedAudioIdx(idx);
-                              saveActiveProfileMediaPrefs({
-                                defaultAudioPref: inferAudioPrefFromTrackName(
-                                  trk.name
-                                ),
-                              });
+                              if (!isForeign) {
+                                saveActiveProfileMediaPrefs({
+                                  defaultAudioPref: inferAudioPrefFromTrackName(
+                                    trk.name
+                                  ),
+                                });
+                              }
                               onSelectAudioTrackIndex?.(idx);
                               if (dashRef.current) {
                                 const dashTracks =

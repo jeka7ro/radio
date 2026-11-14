@@ -2488,6 +2488,7 @@ function tvStreamProxyPlugin(): Plugin {
           const customUa = reqUrl.searchParams.get('ua') || '';
           const rawMode = reqUrl.searchParams.get('raw') === '1';
           const skipAd = reqUrl.searchParams.get('skipAd') === '1';
+          const wantOrigAudio = reqUrl.searchParams.get('orig') === '1';
           const audioIdxParam = reqUrl.searchParams.get('audioIdx');
           const requestedAudioIdx =
             audioIdxParam !== null && /^\d+$/.test(audioIdxParam)
@@ -2837,7 +2838,7 @@ function tvStreamProxyPlugin(): Plugin {
             /\.m3u8?(\?|$)/i.test(finalUrl);
 
           const extraParams = `${customRef ? `&ref=${encodeURIComponent(customRef)}` : ''
-            }${effectiveUa ? `&ua=${encodeURIComponent(effectiveUa)}` : ''}${skipAd ? '&skipAd=1' : ''}`;
+            }${effectiveUa ? `&ua=${encodeURIComponent(effectiveUa)}` : ''}${skipAd ? '&skipAd=1' : ''}${wantOrigAudio ? '&orig=1' : ''}`;
 
           const buildProxyUrl = (rawUri: string) => {
             try {
@@ -3060,7 +3061,7 @@ function tvStreamProxyPlugin(): Plugin {
               ) {
                 return true;
               }
-              return /NAME="[^"]*(?:\beng|\borig|\bfra|\bfre|\bspa|\bdeu|\bger|\bita|\bpor|\bkor|\bjpn|\btur|\bron|\brum|оригинал|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|китайск|польск|шведск|датск|норвеж|румынск|субтитр)[^"]*"/i.test(
+              return /NAME="[^"]*(?:\beng|\borig|\benglish|\boriginal|\bv\.?o\.?|\bfra|\bfre|\bspa|\bdeu|\bger|\bita|\bpor|\bkor|\bjpn|\btur|\bron|\brum|оригинал|француз|испанск|немецк|итальян|португал|корейск|японск|турецк|китайск|польск|шведск|датск|норвеж|румынск|субтитр)[^"]*"/i.test(
                 t
               );
             };
@@ -3069,7 +3070,7 @@ function tvStreamProxyPlugin(): Plugin {
                 l.trim().startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(l)
             ).length;
             const useExplicitAudioIdx =
-              requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
+              !wantOrigAudio && requestedAudioIdx >= 0 && requestedAudioIdx < audioLinesCount;
             const hasOriginalAudioTrack = filteredLines.some(
               isOriginalHlsAudioMediaLine
             );

@@ -2998,7 +2998,19 @@ export async function handleFileListRequest(
             // ignore
           }
         } else {
-          probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
+          try {
+            cachedProbe = await Promise.race([
+              probeTorrentVideoFile(entry, selectedFileIdx),
+              new Promise<undefined>((resolve) =>
+                setTimeout(() => resolve(undefined), 1500)
+              ),
+            ]);
+          } catch {
+            // ignore
+          }
+          if (!cachedProbe) {
+            probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
+          }
         }
       }
       const inferredCodec = /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(
@@ -3071,19 +3083,22 @@ export async function handleFileListRequest(
       );
       const rawAudioParam = parsedUrl.searchParams.get('audio');
       const hasExplicitAudioParam =
-        rawAudioParam !== null && rawAudioParam.trim() !== '';
+        rawAudioParam !== null && rawAudioParam.trim() !== '' && rawAudioParam !== '-1';
       const audioIdx = Math.max(
         0,
         parseInt(rawAudioParam || '0', 10) || 0
       );
-      const wantOrigAudio = parsedUrl.searchParams.get('orig') === '1';
+      const rawOrigParam = parsedUrl.searchParams.get('orig');
+      const isExplicitRussianContent = rawOrigParam === '0' || id < 0;
+      const wantOrigAudio =
+        rawOrigParam === '1' || (!isExplicitRussianContent && rawOrigParam !== '0');
       const maxWParam =
         parseInt(parsedUrl.searchParams.get('maxw') || '0', 10) || 0;
       const forceVideoTranscode =
         parsedUrl.searchParams.get('vtranscode') === '1';
       const clientUa = String(req.headers['user-agent'] || '');
       const isSmartTvClientUa =
-        /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX/i.test(
+        /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
           clientUa
         ) ||
         (/Android/i.test(clientUa) && !/Mobile/i.test(clientUa));
@@ -3181,12 +3196,12 @@ export async function handleFileListRequest(
           } catch {
             // ignore
           }
-        } else if (wantOrigAudio && !hasExplicitAudioParam && looksMultiOrDualAudio) {
+        } else if (wantOrigAudio) {
           try {
             cachedProbe = await Promise.race([
               probeTorrentVideoFile(entry, fileIdx),
               new Promise<undefined>((resolve) =>
-                setTimeout(() => resolve(undefined), 2200)
+                setTimeout(() => resolve(undefined), 3500)
               ),
             ]);
           } catch {
@@ -3217,22 +3232,40 @@ export async function handleFileListRequest(
         (capTo1080p && is4kSource);
       let safeAudioIdx = 0;
       if (cachedProbe && cachedProbe.audioTracks.length > 0) {
+        const origTrack =
+          cachedProbe.audioTracks.find((t) =>
+            t.label.startsWith('ORIGINAL • ')
+          ) ||
+          cachedProbe.audioTracks.find(
+            (t) => !/^(RU|RUS|UK|UKR|BE|BEL)$/i.test(t.lang)
+          );
+        const origIdx = origTrack ? origTrack.index : 0;
+
         if (hasExplicitAudioParam) {
-          safeAudioIdx =
-            audioIdx < cachedProbe.audioTracks.length ? audioIdx : 0;
+          const requestedTrack = cachedProbe.audioTracks[audioIdx];
+          const isRequestedRussian =
+            requestedTrack &&
+            /^(RU|RUS|UK|UKR|BE|BEL)$/i.test(requestedTrack.lang);
+          // If foreign content and requested track is Russian while an original track exists, force original!
+          if (
+            wantOrigAudio &&
+            isRequestedRussian &&
+            origTrack &&
+            origTrack.index !== audioIdx
+          ) {
+            safeAudioIdx = origIdx;
+          } else {
+            safeAudioIdx =
+              audioIdx < cachedProbe.audioTracks.length ? audioIdx : origIdx;
+          }
         } else if (wantOrigAudio) {
-          const origTrack =
-            cachedProbe.audioTracks.find((t) =>
-              t.label.startsWith('ORIGINAL • ')
-            ) ||
-            cachedProbe.audioTracks.find(
-              (t) => !/^(RU|RUS|UK|UKR|BE|BEL)$/i.test(t.lang)
-            );
-          safeAudioIdx = origTrack ? origTrack.index : 0;
+          safeAudioIdx = origIdx;
         } else {
           safeAudioIdx =
             audioIdx < cachedProbe.audioTracks.length ? audioIdx : 0;
         }
+      } else if (wantOrigAudio && hasExplicitAudioParam && audioIdx > 0) {
+        safeAudioIdx = audioIdx;
       }
 
       const streamHeaders: Record<string, string> = {
