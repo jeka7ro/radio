@@ -1233,12 +1233,19 @@ async function resolveRutubeCuratedShow(showCfg, season = 1, episode = 1, effect
     })),
   }));
 
-  const targetSeason = seasonsOut.find(
-    (s) => Number(s.season) === Number(season)
-  );
-  const targetEp = targetSeason?.episodes.find(
+  const targetSeason =
+    seasonsOut.find((s) => Number(s.season) === Number(season)) ||
+    seasonsOut[0];
+  let targetEp = targetSeason?.episodes.find(
     (e) => Number(e.episode) === Number(episode)
   );
+  if (!targetEp && targetSeason?.episodes?.length > 0) {
+    const epIdx = Math.max(0, Number(episode) - 1);
+    targetEp =
+      (epIdx < targetSeason.episodes.length
+        ? targetSeason.episodes[epIdx]
+        : null) || targetSeason.episodes[0];
+  }
 
   if (!targetSeason || !targetEp || !targetEp.videoId) {
     return {
@@ -2783,12 +2790,19 @@ export async function resolveVodStreamData({
         fallbackSeasonsCatalog,
         serializedVkSeasons
       );
-      const targetSeason = vkSeasons.find(
-        (s) => Number(s.season) === Number(season)
-      );
-      const targetEp = targetSeason?.episodes.find(
+      const targetSeason =
+        vkSeasons.find((s) => Number(s.season) === Number(season)) ||
+        vkSeasons[0];
+      let targetEp = targetSeason?.episodes.find(
         (e) => Number(e.episode) === Number(episode)
       );
+      if (!targetEp && targetSeason?.episodes?.length > 0) {
+        const epIdx = Math.max(0, Number(episode) - 1);
+        targetEp =
+          (epIdx < targetSeason.episodes.length
+            ? targetSeason.episodes[epIdx]
+            : null) || targetSeason.episodes[0];
+      }
       if (targetSeason && targetEp) {
         if (targetEp.rutubeVideoId) {
           const hlsUrl = await fetchRutubePlayHls(targetEp.rutubeVideoId);

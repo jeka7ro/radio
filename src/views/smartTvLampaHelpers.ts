@@ -50,6 +50,7 @@ export type StreamingPlatformId =
 export type TvSectionId =
   | 'home'
   | 'movies'
+  | 'imdb'
   | 'cartoons'
   | 'series'
   | 'uhd_4k'
@@ -106,6 +107,8 @@ export type SubtitleLangId = 'ro' | 'ru' | 'en' | 'es' | 'fr' | 'de';
 export interface CinemetaItem {
   id: string;
   imdbId?: string;
+  imdb_id?: string;
+  title?: string;
   kpId?: string;
   iedemFid?: number;
   iedemStreamUrl?: string;
@@ -686,6 +689,7 @@ export interface ResolvedDirectVodStream {
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
+  proxyHlsUrl?: string;
   backupHlsUrls?: string[];
   embedUrl?: string;
   title?: string;
@@ -982,11 +986,11 @@ export const RADIO_COUNTRIES: Array<{
 export const VOD_SERVERS: Array<{ id: VodServerId; label: string }> = [
   {
     id: 'filelist_torrent',
-    label: 'S1: FileList.io & Kinozal VIP (4K UHD / 1080p BluRay)',
+    label: 'FileList.io (Filme & Seriale 4K) • Kinozal VIP (RU)',
   },
   {
     id: 'kinogram_hls',
-    label: 'S2: iEdem VIP MediaLibrary (1080p Full HD)',
+    label: 'VK Video Direct (4K / 1080p Emisiuni & Seriale RU)',
   },
 ];
 
@@ -1031,6 +1035,244 @@ export function sanitizeDeviceName(name?: string): string {
   return name.replace(/[^\p{L}\p{N}\s/().•-]/gu, '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Canonical identity helpers & deduplication for VOD watch progress
+ */
+export function getVodCanonicalKey(
+  itemOrEntry?: CinemetaItem | VodWatchProgressEntry | null,
+  map?: Record<string, VodWatchProgressEntry> | null
+): string | null {
+  if (!itemOrEntry) return null;
+  const item: CinemetaItem | undefined =
+    'item' in itemOrEntry ? itemOrEntry.item : (itemOrEntry as CinemetaItem);
+  if (!item) return null;
+
+  const rawId = String(item.id || '').trim();
+  const rawImdb = String(item.imdbId || item.imdb_id || '').trim();
+  if (rawImdb.startsWith('tt')) return rawImdb;
+  if (rawId.startsWith('tt')) return rawId;
+
+  if (map) {
+    const existing = findWatchProgressEntry(map, item);
+    if (existing?.item) {
+      const exImdb = String(existing.item.imdbId || existing.item.imdb_id || '').trim();
+      if (exImdb.startsWith('tt')) return exImdb;
+      if (String(existing.item.id || '').startsWith('tt')) return String(existing.item.id);
+    }
+  }
+
+  const kpId = String(item.kpId || '').trim();
+  if (kpId) return 'kp_' + kpId;
+  if (rawId.startsWith('kp_')) return rawId;
+
+  return rawId || null;
+}
+
+export function areVodItemsSame(
+  a?: CinemetaItem | null,
+  b?: CinemetaItem | null
+): boolean {
+  if (!a || !b) return false;
+  const aType = a.type;
+  const bType = b.type;
+  if (aType && bType && aType !== bType) return false;
+
+  const aId = String(a.id || '').trim();
+  const bId = String(b.id || '').trim();
+  if (aId && bId && aId === bId) return true;
+
+  const aImdb = String(a.imdbId || a.imdb_id || (aId.startsWith('tt') ? aId : '')).trim();
+  const bImdb = String(b.imdbId || b.imdb_id || (bId.startsWith('tt') ? bId : '')).trim();
+  if (aImdb.startsWith('tt') && bImdb.startsWith('tt')) {
+    return aImdb === bImdb;
+  }
+
+  const aKp = String(a.kpId || (aId.startsWith('kp_') ? aId.replace('kp_', '') : '')).trim();
+  const bKp = String(b.kpId || (bId.startsWith('kp_') ? bId.replace('kp_', '') : '')).trim();
+  if (aKp && bKp) {
+    return aKp === bKp;
+  }
+
+  const aTitles = [a.name, a.title, a.nameOriginal]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase().trim());
+  const bTitles = [b.name, b.title, b.nameOriginal]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase().trim());
+  if (aTitles.some((t1) => bTitles.some((t2) => t1 === t2 && t1.length > 2))) {
+    return true;
+  }
+
+  return false;
+}
+
+export function mergeTwoProgressEntries(
+  base: VodWatchProgressEntry,
+  incoming: VodWatchProgressEntry
+): VodWatchProgressEntry {
+  const baseTime = base.updatedAt || 0;
+  const incTime = incoming.updatedAt || 0;
+  const preferIncoming = incTime >= baseTime;
+  const primary = preferIncoming ? incoming : base;
+  const secondary = preferIncoming ? base : incoming;
+
+  const mergedEpMap: Record<string, EpisodeProgress> = {
+    ...(secondary.episodeProgressMap || {}),
+    ...(primary.episodeProgressMap || {}),
+  };
+  if (secondary.episodeProgressMap && primary.episodeProgressMap) {
+    for (const [epK, epV] of Object.entries(secondary.episodeProgressMap)) {
+      const primV = primary.episodeProgressMap[epK];
+      if (!primV || (epV.updatedAt || 0) > (primV.updatedAt || 0)) {
+        mergedEpMap[epK] = epV;
+      }
+    }
+  }
+
+  const resolvedImdb =
+    primary.item.imdbId ||
+    secondary.item.imdbId ||
+    (primary.item.id?.startsWith('tt')
+      ? primary.item.id
+      : secondary.item.id?.startsWith('tt')
+      ? secondary.item.id
+      : undefined);
+
+  const resolvedKp = primary.item.kpId || secondary.item.kpId;
+  const canonicalId =
+    resolvedImdb?.startsWith('tt')
+      ? resolvedImdb
+      : primary.item.id?.startsWith('tt')
+      ? primary.item.id
+      : secondary.item.id?.startsWith('tt')
+      ? secondary.item.id
+      : primary.item.id;
+
+  const mergedItem: CinemetaItem = {
+    ...secondary.item,
+    ...primary.item,
+    id: canonicalId,
+    imdbId: resolvedImdb,
+    kpId: resolvedKp,
+    flTorrentId: primary.item.flTorrentId || secondary.item.flTorrentId,
+    releaseTitle: primary.item.releaseTitle || secondary.item.releaseTitle,
+    poster: primary.item.poster || secondary.item.poster,
+    background: primary.item.background || secondary.item.background,
+  };
+
+  const sameEp =
+    primary.season === secondary.season && primary.episode === secondary.episode;
+  const primaryCur = primary.currentTime || 0;
+  const secondaryCur = secondary.currentTime || 0;
+  const targetCurrentTime = sameEp
+    ? Math.max(primaryCur, secondaryCur)
+    : (primaryCur <= 10 && secondaryCur > 10 ? secondaryCur : primaryCur);
+
+  return {
+    ...secondary,
+    ...primary,
+    item: mergedItem,
+    currentTime: targetCurrentTime,
+    duration: Math.max(primary.duration || 0, secondary.duration || 0),
+    totalEpisodesInSeason:
+      primary.totalEpisodesInSeason || secondary.totalEpisodesInSeason,
+    totalSeasons:
+      Math.max(primary.totalSeasons || 0, secondary.totalSeasons || 0) ||
+      primary.totalSeasons ||
+      secondary.totalSeasons,
+    episodeProgressMap: mergedEpMap,
+    updatedAt: Math.max(baseTime, incTime),
+  };
+}
+
+export function deduplicateProgressMap(
+  map: Record<string, VodWatchProgressEntry>
+): Record<string, VodWatchProgressEntry> {
+  if (!map || typeof map !== 'object') return {};
+  const entries = Object.values(map).filter(
+    (e) => e && typeof e === 'object' && e.item
+  );
+  if (entries.length <= 1) return map;
+
+  const result: Record<string, VodWatchProgressEntry> = {};
+  const canonicalGroups: VodWatchProgressEntry[][] = [];
+
+  for (const entry of entries) {
+    let matchedGroup: VodWatchProgressEntry[] | null = null;
+    for (const group of canonicalGroups) {
+      if (areVodItemsSame(group[0]?.item, entry.item)) {
+        matchedGroup = group;
+        break;
+      }
+    }
+    if (matchedGroup) {
+      matchedGroup.push(entry);
+    } else {
+      canonicalGroups.push([entry]);
+    }
+  }
+
+  for (const group of canonicalGroups) {
+    if (group.length === 1) {
+      const single = group[0];
+      const targetKey = getVodCanonicalKey(single) || single.item.id;
+      if (single.item.imdbId?.startsWith('tt') && !single.item.id.startsWith('tt')) {
+        single.item = { ...single.item, id: single.item.imdbId };
+      }
+      result[targetKey] = single;
+    } else {
+      let merged = group[0];
+      for (let i = 1; i < group.length; i++) {
+        merged = mergeTwoProgressEntries(merged, group[i]);
+      }
+      const targetKey = getVodCanonicalKey(merged) || merged.item.id;
+      result[targetKey] = merged;
+    }
+  }
+
+  return result;
+}
+
+export function findWatchProgressEntry(
+  map: Record<string, VodWatchProgressEntry> | undefined | null,
+  itemOrId: CinemetaItem | string | null | undefined
+): VodWatchProgressEntry | undefined {
+  if (!map || !itemOrId) return undefined;
+
+  if (typeof itemOrId === 'string') {
+    const rawId = itemOrId.trim();
+    if (map[rawId]) return map[rawId];
+    for (const entry of Object.values(map)) {
+      if (!entry?.item) continue;
+      if (
+        entry.item.id === rawId ||
+        entry.item.imdbId === rawId ||
+        (rawId.startsWith('kp_') && entry.item.kpId === rawId.replace('kp_', '')) ||
+        (entry.item.kpId && ('kp_' + entry.item.kpId) === rawId)
+      ) {
+        return entry;
+      }
+    }
+    return undefined;
+  }
+
+  // It's a CinemetaItem
+  if (map[itemOrId.id]) return map[itemOrId.id];
+  const imdb = itemOrId.imdbId || (itemOrId.id?.startsWith('tt') ? itemOrId.id : null);
+  if (imdb && map[imdb]) return map[imdb];
+  const kp = itemOrId.kpId || (itemOrId.id?.startsWith('kp_') ? itemOrId.id.replace('kp_', '') : null);
+  if (kp && map['kp_' + kp]) return map['kp_' + kp];
+
+  for (const entry of Object.values(map)) {
+    if (!entry?.item) continue;
+    if (areVodItemsSame(entry.item, itemOrId)) {
+      return entry;
+    }
+  }
+
+  return undefined;
+}
+
 export function loadWatchProgressMap(
   profileId = 'p1'
 ): Record<string, VodWatchProgressEntry> {
@@ -1069,10 +1311,42 @@ export function loadWatchProgressMap(
           delete nextVal.item.imdbId;
           delete nextVal.item.nameOriginal;
         }
+        const isZvyozdy =
+          key === 'tt31712367' ||
+          key === 'kp_5508530' ||
+          nextVal.item?.id === 'tt31712367' ||
+          nextVal.item?.id === 'kp_5508530' ||
+          String(nextVal.item?.kpId) === '5508530' ||
+          nextVal.item?.name?.toLowerCase().includes('zvyozdy') ||
+          nextVal.item?.name?.toLowerCase().includes('звёзд');
+        if (isZvyozdy) {
+          nextVal.item.poster = '/posters/zvyozdy.jpg';
+          nextVal.item.background = '/posters/zvyozdy.jpg';
+        }
+        // Strict isolation: foreign content must NEVER be saved under kp_ or use Russian servers
+        if (key === 'kp_1435343' || (key.startsWith('kp_') && !isRussianVodItem(nextVal.item))) {
+          const canonicalImdb =
+            nextVal.item?.imdbId ||
+            (nextVal.item?.id?.startsWith('tt')
+              ? nextVal.item.id
+              : key === 'kp_1435343'
+              ? 'tt13210838'
+              : undefined);
+          if (canonicalImdb && canonicalImdb.startsWith('tt')) {
+            nextVal.item.id = canonicalImdb;
+            nextVal.item.imdbId = canonicalImdb;
+            nextVal.server = 'filelist_torrent';
+            if (nextVal.subLang === 'ru') nextVal.subLang = 'ro';
+            out[canonicalImdb] = nextVal;
+          }
+          continue; // Remove foreign kp_ entry from map
+        }
         if (nextVal.deviceName) {
           nextVal.deviceName = sanitizeDeviceName(nextVal.deviceName);
         }
-        if (
+        if (!isRussianVodItem(nextVal.item)) {
+          nextVal.server = 'filelist_torrent';
+        } else if (
           !localFl &&
           (nextVal.server === 'filelist_torrent' ||
             nextVal.server === 'vidspark')
@@ -1186,7 +1460,7 @@ export function loadWatchProgressMap(
         // ignore
       }
     }
-    return sanitizeMap(parsed);
+    return deduplicateProgressMap(sanitizeMap(parsed));
   } catch {
     return { ...seedMap };
   }
@@ -1197,7 +1471,8 @@ export function saveWatchProgressMap(
   profileId = 'p1'
 ): void {
   const cleanProf = encodeURIComponent(profileId || 'p1');
-  const payload = JSON.stringify(map);
+  const cleanMap = deduplicateProgressMap(map);
+  const payload = JSON.stringify(cleanMap);
   try {
     localStorage.setItem(getWatchProgressKeyForProfile(profileId), payload);
     localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
@@ -1541,18 +1816,18 @@ export const SMART_TV_SERVER_OPTIONS: Array<{
 }> = [
     {
       id: 'auto_best',
-      label: 'Automat — FileList.io + Kinozal + iEdem VIP (4K UHD / 1080p)',
-      desc: 'Selectează automat cea mai bună sursă plătită (FileList VIP, Kinozal VIP sau iEdem MediaLibrary)',
+      label: 'Automat — FileList.io (Filme) + Kinozal & VK Video (Seriale RU)',
+      desc: 'Selectează automat FileList pentru filme/seriale internaționale și Kinozal VIP / VK Video pentru producții rusești',
     },
     {
       id: 'filelist_torrent',
-      label: 'S1: 4K UHD & 1080p BluRay Direct',
-      desc: 'Streaming direct la calitate maximă 4K UHD și 1080p BluRay fără reclame',
+      label: 'S1: FileList.io & Kinozal VIP (4K UHD & 1080p BluRay)',
+      desc: 'FileList pentru filme internaționale și Kinozal VIP pentru seriale/filme rusești',
     },
     {
       id: 'kinogram_hls',
-      label: 'S2: iEdem VIP MediaLibrary (1080p Full HD)',
-      desc: 'Playerul nativ cu flux direct HLS din iEdem MediaLibrary',
+      label: 'S2: VK Video Direct 4K & 1080p (Emisiuni & Seriale RU)',
+      desc: 'Fluxuri directe 4K / 1080p oficiale din VK Video pentru show-uri și emisiuni TV rusești',
     },
   ];
 

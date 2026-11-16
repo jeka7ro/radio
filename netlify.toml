@@ -76,6 +76,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/tv-channel-favorites"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/start.json"
   to = "/.netlify/functions/msx-start"
   status = 200

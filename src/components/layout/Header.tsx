@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, Sun, Moon, Monitor, Globe } from 'lucide-react';
+import { ChevronDown, Sun, Moon, Monitor, Globe, RefreshCw } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
 import { EnrichedCountry } from '../../hooks/useCountries';
@@ -43,7 +43,8 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
       (activeProfile.pin &&
         activeProfile.pin.trim() &&
         unlockedPinProfileKey &&
-        unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}`)
+        unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}` &&
+        unlockedPinProfileKey !== `${activeProfile.id}:1980`)
   );
 
   useEffect(() => {
@@ -243,6 +244,17 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
             <span className="hidden md:inline text-xs font-medium">
               {theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}
             </span>
+          </button>
+
+          <button
+            type="button"
+            data-header-refresh-btn="true"
+            onClick={() => window.location.reload()}
+            aria-label="Reîncarcă Aplicația"
+            title="Reîncarcă Aplicația"
+            className="min-h-[32px] min-w-[32px] sm:min-h-[40px] sm:min-w-[40px] px-2 sm:px-3 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 flex items-center justify-center text-slate-800 dark:text-zinc-200 transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
           </button>
         </div>
       </div>

@@ -19,6 +19,7 @@ import {
   Film,
   X,
   Sparkles,
+  Star,
   Lock,
 } from "lucide-react";
 import { isAdultTvChannel } from "../../services/tvApi";
@@ -64,12 +65,19 @@ let persistedIsKlubnichkaOpen = false;
 
 export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   section,
+  imdbMediaType,
+  setImdbMediaType,
+  imdbYear,
+  setImdbYear,
+  imdbGenre,
+  setImdbGenre,
   platformMediaTab,
   setPlatformMediaTab,
   tr,
   isVodLoading,
   vodItems,
   savedVodItems,
+  watchProgressMap,
   handleFocusVodItem,
   handleOpenVod,
   hasMoreVod,
@@ -184,6 +192,39 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   setIsFlKeyboardOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setFlSearchQuery: React.Dispatch<React.SetStateAction<string>>;
 }) => {
+  const handleCardPlayKey = (
+    e: React.KeyboardEvent,
+    item: CinemetaItem,
+    explicitSeason?: number,
+    explicitEpisode?: number
+  ) => {
+    if (
+      e.keyCode === 415 ||
+      e.keyCode === 179 ||
+      e.keyCode === 250 ||
+      e.keyCode === 10252 ||
+      e.key === "MediaPlay" ||
+      e.key === "MediaPlayPause" ||
+      e.key === "Play" ||
+      ((e.key === "p" || e.key === "P") &&
+        !(
+          document.activeElement?.tagName === "INPUT" ||
+          document.activeElement?.tagName === "TEXTAREA"
+        ))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      const prog = (watchProgressMap && watchProgressMap[item.id]) || {};
+      const s =
+        explicitSeason ??
+        (item.type === "series" ? Math.max(1, Number(prog.season) || 1) : 1);
+      const ep =
+        explicitEpisode ??
+        (item.type === "series" ? Math.max(1, Number(prog.episode) || 1) : 1);
+      handleOpenVod(item, true, s, ep);
+    }
+  };
+
   const [stationLiveTracks, setStationLiveTracks] = React.useState<
     Record<
       string,
@@ -897,6 +938,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
                                     onClick={() => handleOpenVod(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     className="group text-left focus:outline-none cursor-pointer max-w-[220px] w-full"
                                   >
                                     <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -986,6 +1028,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       onFocus={() => handleFocusVodItem(item)}
                                       onMouseEnter={() => handleFocusVodItem(item)}
                                       onClick={() => handleOpenVod(item)}
+                                      onKeyDown={(e) => handleCardPlayKey(e, item)}
                                       className="group w-full block text-left focus:outline-none cursor-pointer"
                                     >
                                       <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -1275,6 +1318,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   onFocus={() => handleFocusVodItem(item)}
                                   onMouseEnter={() => handleFocusVodItem(item)}
                                   onClick={() => handleOpenVod(item)}
+                                  onKeyDown={(e) => handleCardPlayKey(e, item)}
                                   className="group text-left focus:outline-none cursor-pointer max-w-[220px] w-full"
                                 >
                                   <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -1357,6 +1401,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
                                     onClick={() => handleOpenVod(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
                                     <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -1416,6 +1461,300 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           </div>
                         )}
                       </>
+                    )}
+                  </div>
+                )}
+
+                {/* DEDICATED TOP IMDB SECTION (BEST MOVIES & SERIES SORTED DESCENDING BY RATING) */}
+                {section === 'imdb' && (
+                  <div className="space-y-6 pb-16">
+                    {/* Top Header + Filter Controls */}
+                    <div className="p-4 sm:p-6 rounded-[28px] tahoe-glass border border-white/15 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-[#f5c518] text-black font-black text-sm tracking-wider shadow">
+                              IMDb
+                            </span>
+                            <span>{tr('Top IMDb — Cele mai bune Filme și Seriale', 'Top IMDb — Best Movies & TV Series', 'Топ IMDb — Лучшие Фильмы и Сериалы')}</span>
+                          </h2>
+                          <p className="text-xs sm:text-sm text-zinc-300 mt-1">
+                            {tr(
+                              'Sortate descrescător după nota IMDb (10.0 → 1.0) • Navigabil complet cu telecomanda TV',
+                              'Sorted descending by IMDb score (10.0 → 1.0) • Fully navigable with Smart TV remote',
+                              'Сортировка по рейтингу IMDb от лучших к худшим (10.0 → 1.0) • Управление пультом'
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Row 1: Tip Conținut (All / Movies / Series) */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/10">
+                        <span className="text-xs font-black uppercase tracking-wider text-amber-400 mr-2 shrink-0">
+                          {tr('Format:', 'Format:', 'Тип:')}
+                        </span>
+                        {[
+                          { id: 'all' as const, label: tr('Toate', 'All', 'Все') },
+                          { id: 'movie' as const, label: tr('Filme', 'Movies', 'Фильмы') },
+                          { id: 'series' as const, label: tr('Seriale', 'Series', 'Сериалы') },
+                        ].map((mTab) => {
+                          const isActive = (imdbMediaType || 'all') === mTab.id;
+                          return (
+                            <button
+                              key={`imdb_m_${mTab.id}`}
+                              type="button"
+                              tabIndex={0}
+                              data-imdb-pill="true"
+                              onClick={() => {
+                                if (setImdbMediaType) setImdbMediaType(mTab.id);
+                              }}
+                              className={`h-9 px-4 rounded-full text-xs font-extrabold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
+                                isActive
+                                  ? 'bg-[#f5c518] text-black shadow-lg font-black'
+                                  : 'bg-white/10 hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-200 border border-white/15'
+                              }`}
+                            >
+                              {mTab.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Row 2: Filtru An (Year) */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/10">
+                        <span className="text-xs font-black uppercase tracking-wider text-zinc-300 mr-2 shrink-0">
+                          {tr('An:', 'Year:', 'Год:')}
+                        </span>
+                        {[
+                          { id: 'any', label: tr('Toți anii', 'All Years', 'Все годы') },
+                          { id: '2026', label: '2026' },
+                          { id: '2025', label: '2025' },
+                          { id: '2024', label: '2024' },
+                          { id: '2020-2027', label: '2020–2027' },
+                          { id: '2010-2019', label: '2010–2019' },
+                          { id: '2000-2009', label: '2000–2009' },
+                          { id: '1990-1999', label: '1990–1999' },
+                          { id: '<1990', label: '< 1990' },
+                        ].map((yTab) => {
+                          const isActive = (imdbYear || 'any') === yTab.id;
+                          return (
+                            <button
+                              key={`imdb_y_${yTab.id}`}
+                              type="button"
+                              tabIndex={0}
+                              data-imdb-pill="true"
+                              onClick={() => {
+                                if (setImdbYear) setImdbYear(yTab.id);
+                              }}
+                              className={`h-8 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
+                                isActive
+                                  ? 'bg-white text-[#141414] shadow-md font-black'
+                                  : 'bg-white/[0.08] hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/10'
+                              }`}
+                            >
+                              {yTab.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Row 3: Filtru Gen (Genre) */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/10">
+                        <span className="text-xs font-black uppercase tracking-wider text-zinc-300 mr-2 shrink-0">
+                          {tr('Gen:', 'Genre:', 'Жанр:')}
+                        </span>
+                        {[
+                          { id: 'top', label: tr('Toate genurile', 'All Genres', 'Все жанры') },
+                          { id: 'Action', label: tr('Acțiune', 'Action', 'Боевик') },
+                          { id: 'Comedy', label: tr('Comedie', 'Comedy', 'Комедия') },
+                          { id: 'Drama', label: tr('Dramă', 'Drama', 'Драма') },
+                          { id: 'Sci-Fi', label: tr('SF & Fantasy', 'Sci-Fi', 'Фантастика') },
+                          { id: 'Crime', label: tr('Crimă', 'Crime', 'Криминал') },
+                          { id: 'Animation', label: tr('Animație', 'Animation', 'Мультфильм') },
+                          { id: 'Thriller', label: tr('Thriller', 'Thriller', 'Триллер') },
+                          { id: 'Horror', label: tr('Horror', 'Horror', 'Ужасы') },
+                          { id: 'Adventure', label: tr('Aventură', 'Adventure', 'Приключения') },
+                        ].map((gTab) => {
+                          const isActive = (imdbGenre || 'top') === gTab.id;
+                          return (
+                            <button
+                              key={`imdb_g_${gTab.id}`}
+                              type="button"
+                              tabIndex={0}
+                              data-imdb-pill="true"
+                              onClick={() => {
+                                if (setImdbGenre) setImdbGenre(gTab.id);
+                              }}
+                              className={`h-8 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
+                                isActive
+                                  ? 'bg-[#60a5fa] text-white shadow-md font-black'
+                                  : 'bg-white/[0.08] hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/10'
+                              }`}
+                            >
+                              {gTab.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* VOD Cards Grid */}
+                    {isVodLoading ? (
+                      <div className="flex flex-col items-center justify-center py-20">
+                        <FilmioStartupLoader />
+                      </div>
+                    ) : vodItems.length === 0 ? (
+                      <div className="p-8 sm:p-12 text-center rounded-[28px] tahoe-glass border border-white/15 space-y-3">
+                        <div className="text-lg font-bold text-white">
+                          {tr(
+                            'Niciun titlu găsit cu filtrele selectate.',
+                            'No titles found with current filters.',
+                            'Ничего не найдено по выбранным фильтрам.'
+                          )}
+                        </div>
+                        <p className="text-xs sm:text-sm text-zinc-400">
+                          {tr(
+                            'Încearcă să selectezi alt an sau alt gen din bara de filtre de mai sus.',
+                            'Try selecting a different year or genre above.',
+                            'Попробуйте выбрать другой год или жанр выше.'
+                          )}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (setImdbMediaType) setImdbMediaType('all');
+                            if (setImdbYear) setImdbYear('any');
+                            if (setImdbGenre) setImdbGenre('top');
+                          }}
+                          className="h-10 px-6 rounded-full bg-white text-[#141414] font-extrabold text-xs inline-flex items-center justify-center cursor-pointer shadow mt-2"
+                        >
+                          {tr('Resetează toate filtrele', 'Reset all filters', 'Сбросить все фильтры')}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4.5">
+                        {vodItems.filter(Boolean).filter((it: any) => it && it.id).map((item: CinemetaItem) => {
+                          const posterUrl =
+                            item.poster ||
+                            `https://images.metahub.space/poster/medium/${item.id}/img`;
+                          const rawImdb = item.imdbRating || '';
+                          const numImdb = parseFloat(String(rawImdb)) || 0;
+                          const displayScore = numImdb > 0 ? numImdb.toFixed(1) : '7.8';
+                          const isFav = (savedVodItems || []).some((x: CinemetaItem) => x.id === item.id);
+                          const prog = watchProgressMap ? watchProgressMap[item.id] : undefined;
+                          const hasProgress = prog && prog.currentTime > 10;
+
+                          return (
+                            <button
+                              key={`imdb_card_${item.id}`}
+                              type="button"
+                              tabIndex={0}
+                              data-vod-card="true"
+                              data-imdb-card="true"
+                              data-vod-id={item.id}
+                              onFocus={() => handleFocusVodItem(item)}
+                              onMouseEnter={() => handleFocusVodItem(item)}
+                              onClick={() => handleOpenVod(item)}
+                              onKeyDown={(e) => handleCardPlayKey(e, item)}
+                              className="group text-left focus:outline-none cursor-pointer max-w-[220px] w-full"
+                            >
+                              <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
+                                <img
+                                  src={posterUrl}
+                                  alt={item.name}
+                                  loading="lazy"
+                                  onError={(e) => {
+                                    if (item.background && e.currentTarget.src !== item.background) {
+                                      e.currentTarget.src = item.background;
+                                    } else {
+                                      e.currentTarget.src = 'https://images.metahub.space/poster/medium/fallback/img';
+                                    }
+                                  }}
+                                  className="w-full h-full object-cover"
+                                />
+
+                                {/* Gold IMDb Rating Badge (Top Left) */}
+                                <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-[#f5c518] text-black font-black text-[11px] shadow-lg flex items-center gap-1">
+                                  <Star className="w-3 h-3 fill-current text-black" />
+                                  <span>{displayScore}</span>
+                                </div>
+
+                                {/* Media Type Badge (Top Right) */}
+                                <span className={`absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider shadow whitespace-nowrap ${
+                                  item.type === 'series'
+                                    ? 'bg-[#172554]/95 text-white border border-[#2563eb]/50'
+                                    : 'bg-black/75 text-zinc-100 border border-white/20'
+                                }`}>
+                                  {item.type === 'series' ? tr('SERIAL', 'SERIES', 'СЕРИАЛ') : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                </span>
+
+                                {/* Watched / In Progress Indicators */}
+                                {hasProgress && (
+                                  <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/60">
+                                    <div
+                                      className="h-full bg-blue-500 rounded-r"
+                                      style={{
+                                        width: `${Math.min(
+                                          100,
+                                          Math.max(
+                                            5,
+                                            Math.round(
+                                              (prog.currentTime / (prog.duration || 5400)) * 100
+                                            )
+                                          )
+                                        )}%`,
+                                      }}
+                                    />
+                                  </div>
+                                )}
+
+                                {isFav && (
+                                  <span className="absolute bottom-2.5 right-2.5 px-1.5 py-0.5 rounded-md bg-black/80 text-amber-400 text-xs shadow">
+                                    ★
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="mt-2.5 px-0.5">
+                                <div className="text-sm sm:text-[15px] font-bold text-zinc-100 group-focus:text-white leading-snug line-clamp-1">
+                                  {item.name}
+                                </div>
+                                <div className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1.5 truncate">
+                                  <span>{item.releaseInfo || item.year || '2026'}</span>
+                                  {Array.isArray(item.genres) && item.genres[0] && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="truncate">{item.genres.slice(0, 2).join(', ')}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Pagination / Load More */}
+                    {hasMoreVod && !isVodLoading && (
+                      <div className="flex justify-center pt-4">
+                        <button
+                          type="button"
+                          tabIndex={0}
+                          data-imdb-pill="true"
+                          disabled={isLoadingMoreVod}
+                          onClick={() => {
+                            const nextPage = (vodPage || 1) + 1;
+                            if (setVodPage) setVodPage(nextPage);
+                            if (fetchVodCatalog) fetchVodCatalog(nextPage, true);
+                          }}
+                          className="h-11 px-8 rounded-full bg-white text-[#141414] font-extrabold text-sm shadow-lg hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
+                        >
+                          {isLoadingMoreVod
+                            ? tr('Se încarcă mai multe...', 'Loading more...', 'Загрузка...')
+                            : tr('Încarcă mai multe titluri Top IMDb', 'Load more Top IMDb titles', 'Загрузить ещё')}
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1509,6 +1848,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 onFocus={() => handleFocusVodItem(item)}
                                 onMouseEnter={() => handleFocusVodItem(item)}
                                 onClick={() => handleOpenVod(item)}
+                                onKeyDown={(e) => handleCardPlayKey(e, item)}
                                 className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -2882,7 +3222,10 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 key={`${item.id}_${item.name}`}
                                 type="button"
                                 data-vod-card="true"
+                                onFocus={() => handleFocusVodItem(item)}
+                                onMouseEnter={() => handleFocusVodItem(item)}
                                 onClick={() => handleOpenVod(item)}
+                                onKeyDown={(e) => handleCardPlayKey(e, item)}
                                 className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
@@ -3408,6 +3751,26 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             type="button"
                             data-vod-card="true"
                             onClick={() => handlePlayYouTubeVideo(yt)}
+                            onKeyDown={(e) => {
+                              if (
+                                e.keyCode === 415 ||
+                                e.keyCode === 179 ||
+                                e.keyCode === 250 ||
+                                e.keyCode === 10252 ||
+                                e.key === "MediaPlay" ||
+                                e.key === "MediaPlayPause" ||
+                                e.key === "Play" ||
+                                ((e.key === "p" || e.key === "P") &&
+                                  !(
+                                    document.activeElement?.tagName === "INPUT" ||
+                                    document.activeElement?.tagName === "TEXTAREA"
+                                  ))
+                              ) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handlePlayYouTubeVideo(yt);
+                              }
+                            }}
                             className="group text-left focus:outline-none cursor-pointer flex flex-col"
                           >
                             <div className="aspect-video w-full rounded-2xl bg-[#1e1e1e] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all duration-200">
@@ -3733,6 +4096,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               onFocus={() => handleFocusVodItem(mappedVod)}
                               onMouseEnter={() => handleFocusVodItem(mappedVod)}
                               onClick={() => handleOpenVod(mappedVod, false)}
+                              onKeyDown={(e) => handleCardPlayKey(e, mappedVod)}
                               className="group text-left focus:outline-none cursor-pointer"
                             >
                               <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-[#60a5fa] group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
@@ -3861,9 +4225,18 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               <button
                                 type="button"
                                 data-watched-poster-btn="true"
+                                data-vod-card="true"
                                 onFocus={() => handleFocusVodItem(item)}
                                 onMouseEnter={() => handleFocusVodItem(item)}
                                 onClick={() => handleOpenVod(item)}
+                                onKeyDown={(e) =>
+                                  handleCardPlayKey(
+                                    e,
+                                    item,
+                                    entry.season,
+                                    entry.episode
+                                  )
+                                }
                                 className="group text-left focus:outline-none cursor-pointer flex-1"
                               >
                                 <div
@@ -3997,7 +4370,10 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 key={item.id}
                                 type="button"
                                 data-vod-card="true"
+                                onFocus={() => handleFocusVodItem(item)}
+                                onMouseEnter={() => handleFocusVodItem(item)}
                                 onClick={() => handleOpenVod(item)}
+                                onKeyDown={(e) => handleCardPlayKey(e, item)}
                                 className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">

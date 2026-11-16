@@ -34,6 +34,7 @@ dist-ssr
 .tv-watch-progress*.json
 .tv-saved*.json
 .tv-radio-favs*.json
+.tv-channel-favs*.json
 .netlify
 
 

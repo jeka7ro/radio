@@ -340,7 +340,8 @@ export default async (req) => {
             vkParam,
             vkQualityParam,
             targetUrl,
-            effectiveUa
+            effectiveUa,
+            true
           );
           if (healedUrl && healedUrl !== targetUrl) {
             targetUrl = healedUrl;
@@ -665,7 +666,8 @@ export default async (req) => {
             vkParam,
             vkQualityParam,
             targetUrl,
-            effectiveUa
+            effectiveUa,
+            true
           )
         : await refreshVidmolyTargetUrl(vmParam, targetUrl, effectiveUa);
       if (healedUrl && healedUrl !== targetUrl) {

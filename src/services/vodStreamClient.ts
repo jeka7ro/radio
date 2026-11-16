@@ -114,15 +114,17 @@ export async function resolveDirectVodStreamClient(params: {
                 : rawData.vkQualities,
             }
           : rawData;
-        if (data?.ok && data.hlsUrl) {
-          if (isLocalLan && data.proxyHlsUrl) {
-            return {
-              ...data,
-              rawHlsUrl: data.rawHlsUrl || data.hlsUrl,
-              hlsUrl: data.proxyHlsUrl,
-            };
-          }
-          return data;
+        if (data?.ok && (data.hlsUrl || data.proxyHlsUrl)) {
+          const effectiveHls =
+            isLocalLan && data.proxyHlsUrl
+              ? data.proxyHlsUrl
+              : data.hlsUrl || data.proxyHlsUrl;
+          return {
+            ...data,
+            rawHlsUrl: data.rawHlsUrl || data.hlsUrl,
+            hlsUrl: effectiveHls,
+            proxyHlsUrl: data.proxyHlsUrl || effectiveHls,
+          };
         }
         if (
           data?.embedUrl ||

@@ -11,9 +11,13 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   progressByProfile: { ...(SEED_PROGRESS_BY_PROFILE || {}) },
   savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
   radioFavsByProfile: {},
+  tvFavChannelsByProfile: {},
 };
 if (!globalStore.radioFavsByProfile) {
   globalStore.radioFavsByProfile = {};
+}
+if (!globalStore.tvFavChannelsByProfile) {
+  globalStore.tvFavChannelsByProfile = {};
 }
 globalThis.__aetherCloudSyncStore = globalStore;
 
@@ -161,6 +165,52 @@ export default async (req) => {
       );
     }
 
+    // 2c. /api/tv-channel-favorites (Per-profile TV Channel Favorites with timestamped sync)
+    if (path.includes('tv-channel-favorites')) {
+      const currentTvFavs = globalStore.tvFavChannelsByProfile[profileId] || null;
+      if (req.method === 'POST') {
+        const incoming = await req.json().catch(() => null);
+        if (
+          incoming &&
+          typeof incoming === 'object' &&
+          Array.isArray(incoming.channels)
+        ) {
+          const incomingTs = Number(incoming.updatedAt) || Date.now();
+          const currentTs = Number(currentTvFavs?.updatedAt) || 0;
+          if (!currentTvFavs || incomingTs >= currentTs) {
+            globalStore.tvFavChannelsByProfile[profileId] = {
+              updatedAt: incomingTs,
+              channels: incoming.channels.slice(0, 300),
+            };
+          }
+        }
+        return new Response(
+          JSON.stringify(
+            globalStore.tvFavChannelsByProfile[profileId] || {
+              updatedAt: 0,
+              channels: [],
+            }
+          ),
+          {
+            status: 200,
+            headers: corsHeaders,
+          }
+        );
+      }
+      return new Response(
+        JSON.stringify(
+          currentTvFavs || {
+            updatedAt: 0,
+            channels: [],
+          }
+        ),
+        {
+          status: 200,
+          headers: corsHeaders,
+        }
+      );
+    }
+
     // 3. /api/tv-progress
     const currentProgress = globalStore.progressByProfile[profileId] || {};
     const deleteId = url.searchParams.get('deleteId') || '';
@@ -217,7 +267,72 @@ export default async (req) => {
             };
           }
         }
-        globalStore.progressByProfile[profileId] = merged;
+
+        // Deduplicate merged progress by canonical IMDb / KP ID / title
+        const dedupedProgress = {};
+        const pGroups = [];
+        for (const [pk, pEntry] of Object.entries(merged)) {
+          if (!pEntry || typeof pEntry !== 'object' || !pEntry.item) {
+            dedupedProgress[pk] = pEntry;
+            continue;
+          }
+          let matched = false;
+          for (const g of pGroups) {
+            const a = g[0]?.item;
+            const b = pEntry.item;
+            if (a?.type && b?.type && a.type !== b.type) continue;
+            const aId = String(a?.id || '').trim();
+            const bId = String(b?.id || '').trim();
+            if (aId && bId && aId === bId) { g.push(pEntry); matched = true; break; }
+            const aImdb = String(a?.imdbId || a?.imdb_id || (aId.startsWith('tt') ? aId : '')).trim();
+            const bImdb = String(b?.imdbId || b?.imdb_id || (bId.startsWith('tt') ? bId : '')).trim();
+            if (aImdb.startsWith('tt') && bImdb.startsWith('tt') && aImdb === bImdb) { g.push(pEntry); matched = true; break; }
+            const aKp = String(a?.kpId || (aId.startsWith('kp_') ? aId.replace('kp_', '') : '')).trim();
+            const bKp = String(b?.kpId || (bId.startsWith('kp_') ? bId.replace('kp_', '') : '')).trim();
+            if (aKp && bKp && aKp === bKp) { g.push(pEntry); matched = true; break; }
+            const aT = String(a?.name || a?.title || a?.nameOriginal || '').toLowerCase().trim();
+            const bT = String(b?.name || b?.title || b?.nameOriginal || '').toLowerCase().trim();
+            if (aT && bT && aT.length > 2 && aT === bT) { g.push(pEntry); matched = true; break; }
+          }
+          if (!matched) pGroups.push([pEntry]);
+        }
+
+        for (const g of pGroups) {
+          let fin = g[0];
+          if (g.length > 1) {
+            for (let i = 1; i < g.length; i++) {
+              const other = g[i];
+              const fT = fin.updatedAt || 0;
+              const oT = other.updatedAt || 0;
+              const prim = oT >= fT ? other : fin;
+              const sec = oT >= fT ? fin : other;
+              const epMap = { ...(sec.episodeProgressMap || {}), ...(prim.episodeProgressMap || {}) };
+              const itm = { ...(sec.item || {}), ...(prim.item || {}) };
+              const cImdb = prim.item?.imdbId || sec.item?.imdbId || (String(prim.item?.id || '').startsWith('tt') ? prim.item.id : String(sec.item?.id || '').startsWith('tt') ? sec.item.id : undefined);
+              if (cImdb) { itm.imdbId = cImdb; itm.id = cImdb; }
+              fin = {
+                ...sec,
+                ...prim,
+                item: itm,
+                episodeProgressMap: epMap,
+                currentTime: prim.season === sec.season && prim.episode === sec.episode ? Math.max(prim.currentTime || 0, sec.currentTime || 0) : prim.currentTime,
+                updatedAt: Math.max(fT, oT),
+              };
+            }
+          }
+          const cKey = fin.item?.imdbId && String(fin.item.imdbId).startsWith('tt')
+            ? fin.item.imdbId
+            : String(fin.item?.id || '').startsWith('tt')
+            ? fin.item.id
+            : fin.item?.kpId
+            ? `kp_${fin.item.kpId}`
+            : fin.item?.id;
+          if (cKey) {
+            dedupedProgress[cKey] = fin;
+          }
+        }
+
+        globalStore.progressByProfile[profileId] = dedupedProgress;
       }
       return new Response(
         JSON.stringify(globalStore.progressByProfile[profileId] || {}),

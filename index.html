@@ -115,20 +115,20 @@
         var isCarRoute = lowerPath === '/car' || lowerPath.indexOf('/car/') === 0 || window.location.search.indexOf('car=1') !== -1 || window.location.search.indexOf('gle=1') !== -1 || storedCarMode === '1' || isMbuxUltraWide;
         if (isCarRoute) {
           document.documentElement.classList.add('car-widescreen-mode');
-        } else if ((isExplicitTvUa || isAndroidLandscapeTv || window.location.pathname.toLowerCase().indexOf('/tv') === 0) && !/iPhone|iPod|iPad|Android.*Mobile/i.test(uaRaw)) {
+        } else if ((isExplicitTvUa || isAndroidLandscapeTv || window.location.pathname.toLowerCase().indexOf('/tv') === 0 || isTvRoute) && (!/iPhone|iPod|iPad/i.test(uaRaw) && (!/Android.*Mobile/i.test(uaRaw) || isExplicitTvUa))) {
           // Sony Bravia / Android TV / Google TV / Vewd browsers default to 960x540 (dpr=2/4) or 1280x720 (dpr=1.5/3),
           // making every rem/px icon 2x oversized on 75"-85" screens. Request a true 1920x1080 TV viewport first,
           // and apply exact proportional root font-size scaling if the TV WebView locks innerWidth below 1600px.
           var vpMeta = document.querySelector('meta[name="viewport"]');
-          if (vpMeta && vw > 0 && vw < 1600 && vh > 0 && (vw / vh) >= 1.55) {
+          if (vpMeta && vw > 0 && vw < 1600 && vh > 0 && (vw / vh) >= 1.45) {
             var tvInitScale = Math.max(0.25, Math.min(1, Math.round((vw / 1920) * 10000) / 10000));
             vpMeta.setAttribute('content', 'width=1920, initial-scale=' + tvInitScale + ', minimum-scale=0.25, maximum-scale=2.0, user-scalable=no, viewport-fit=cover');
           }
           var syncTvRootScale = function () {
             var curW = window.innerWidth || 0;
             var curH = window.innerHeight || 0;
-            if (curW > 0 && curW < 1680 && curH > 0 && (curW / curH) >= 1.5) {
-              var scaledPx = Math.max(8, Math.min(16, Math.round((curW / 1920) * 16 * 100) / 100));
+            if (curW > 0 && curW < 1680 && curH > 0 && (curW / curH) >= 1.45) {
+              var scaledPx = Math.max(7.5, Math.min(16, Math.round((curW / 1920) * 16 * 100) / 100));
               document.documentElement.classList.add('smart-tv-sub1080');
               document.documentElement.style.fontSize = scaledPx + 'px';
             } else {
@@ -147,9 +147,9 @@
         if (isIosPhone && isPwaStandalone) {
           document.documentElement.classList.add('ios-pwa-standalone');
           var screenMax = Math.max(window.screen ? window.screen.height : 0, window.screen ? window.screen.width : 0, window.innerHeight || 0, window.innerWidth || 0);
-          document.documentElement.style.setProperty('--ios-pwa-top-floor', screenMax >= 874 ? '62px' : screenMax >= 852 ? '59px' : screenMax >= 812 ? '48px' : '20px');
-          document.documentElement.style.setProperty('--ios-pwa-bottom-floor', screenMax >= 812 ? '24px' : '0px');
-          document.documentElement.style.setProperty('--ios-pwa-side-floor', screenMax >= 874 ? '62px' : screenMax >= 852 ? '59px' : screenMax >= 812 ? '47px' : '0px');
+          document.documentElement.style.setProperty('--ios-pwa-top-floor', screenMax >= 874 ? '50px' : screenMax >= 852 ? '48px' : screenMax >= 812 ? '44px' : '20px');
+          document.documentElement.style.setProperty('--ios-pwa-bottom-floor', screenMax >= 812 ? '16px' : '0px');
+          document.documentElement.style.setProperty('--ios-pwa-side-floor', screenMax >= 874 ? '50px' : screenMax >= 852 ? '48px' : screenMax >= 812 ? '44px' : '0px');
         }
       } catch (e) {
         document.documentElement.classList.add('dark');
@@ -187,7 +187,7 @@
     />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Filmio" />
     <meta name="application-name" content="Filmio" />
     <meta property="og:title" content="Filmio" />

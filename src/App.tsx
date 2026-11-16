@@ -88,7 +88,8 @@ export const App: React.FC = () => {
       pathname.startsWith('/tv/') ||
       params.has('tv') ||
       params.get('tvmode') === '1' ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
+      isSmartTvMode ||
+      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX|BRAVIA|Sony|Android TV|GoogleTV|AFT/i.test(
         navigator.userAgent
       );
     if (isTvMode) {
@@ -216,20 +217,72 @@ export const App: React.FC = () => {
     }
   }, [isSmartTvMode, activeTab, selectedCountry.localizedName, currentStation, playerStatus, t]);
 
+interface TvErrorBoundaryProps {
+  children: React.ReactNode;
+}
+interface TvErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+class TvErrorBoundary extends React.Component<TvErrorBoundaryProps, TvErrorBoundaryState> {
+  constructor(props: TvErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error): TvErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[TV-ERROR-BOUNDARY]', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 bg-[#0f172a] text-white flex flex-col items-center justify-center p-6 text-center z-50">
+          <div className="max-w-md p-6 rounded-3xl bg-white/10 border border-white/20 shadow-2xl space-y-4">
+            <h2 className="text-xl font-bold">Filmio Smart TV</h2>
+            <p className="text-sm text-zinc-300">
+              A apărut o problemă temporară de afișare.
+            </p>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => {
+                this.setState({ hasError: false });
+                window.location.reload();
+              }}
+              className="h-11 px-6 rounded-full bg-white text-zinc-950 font-extrabold text-sm cursor-pointer shadow focus:ring-4 focus:ring-amber-400"
+            >
+              Reîncarcă Aplicația
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
   if (isSmartTvMode) {
     return (
-      <SmartTvLampaView
-        onExitTvMode={() => {
-          document.documentElement.classList.remove('smart-tv-mode');
-          try {
-            localStorage.removeItem('aether_smart_tv_mode');
-            window.history.replaceState({}, '', '/');
-          } catch {
-            // ignore
-          }
-          setIsSmartTvMode(false);
-        }}
-      />
+      <TvErrorBoundary>
+        <SmartTvLampaView
+          onExitTvMode={() => {
+            document.documentElement.classList.remove('smart-tv-mode');
+            try {
+              localStorage.removeItem('aether_smart_tv_mode');
+              window.history.replaceState({}, '', '/');
+            } catch {
+              // ignore
+            }
+            setIsSmartTvMode(false);
+          }}
+        />
+      </TvErrorBoundary>
     );
   }
 

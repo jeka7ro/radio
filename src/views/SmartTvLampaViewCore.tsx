@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Home,
   Clapperboard,
+  Star,
   Smile,
   SlidersHorizontal,
   Bookmark,
@@ -62,7 +63,15 @@ import {
   type OfflineMediaItem,
   type OfflineDownloadProgress,
 } from '../services/offlineMediaService';
-import { resolveKlubnichkaDirectStream } from '../services/klubnichkaService';
+import {
+  resolveKlubnichkaDirectStream,
+  fetchKlubnichkaCatalog,
+  type KlubnichkaVideoCard,
+} from '../services/klubnichkaService';
+import {
+  persistedKlubCache,
+  mapKlubCardToCinemetaItem,
+} from '../components/tv/SmartTvKlubnichkaSection';
 import {
   SfEpisodesIcon,
   SfCaptionsBubbleIcon,
@@ -228,6 +237,10 @@ import {
   formatWatchSeconds,
   getWatchProgressKeyForProfile,
   getSavedVodKeyForProfile,
+  getVodCanonicalKey,
+  areVodItemsSame,
+  findWatchProgressEntry,
+  deduplicateProgressMap,
   sanitizeDeviceName,
   loadWatchProgressMap,
   saveWatchProgressMap,
@@ -313,6 +326,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const toggleFavorite = useRadioStore((state) => state.toggleFavorite);
   const switchRadioFavoritesProfile = useRadioStore(
     (state) => state.switchRadioFavoritesProfile
+  );
+  const syncTvChannelFavoritesWithServer = useRadioStore(
+    (state) => state.syncTvChannelFavoritesWithServer
   );
   const syncRadioFavoritesWithServer = useRadioStore(
     (state) => state.syncRadioFavoritesWithServer
@@ -813,7 +829,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [profileAvatarIdxDraft, setProfileAvatarIdxDraft] = useState<number>(0);
 
   const [unlockedPinProfileKey, setUnlockedPinProfileKey] = useState<string>('');
-  const handleSelectProfileRef = useRef<(id: string) => void>(() => {});
+  const handleSelectProfileRef = useRef<(id: string) => void>(() => { });
 
   const activeProfile = useMemo(
     () =>
@@ -829,7 +845,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     (activeProfile.pin &&
       activeProfile.pin.trim() &&
       unlockedPinProfileKey &&
-      unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}`)
+      unlockedPinProfileKey !== `${activeProfile.id}:${activeProfile.pin.trim()}` &&
+      unlockedPinProfileKey !== `${activeProfile.id}:1980`)
   );
 
   // Sync profiles list across LAN & Cloud devices via /api/tv-profiles (merging without losing local custom profiles)
@@ -867,6 +884,33 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       window.removeEventListener('aether:profiles-updated', onProfilesUpdated);
       window.removeEventListener('aether:active-profile-changed', onActiveProfileChanged);
       window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  // Enforce Smart TV root mode and proportional sub1080 font-size scaling on Android TV / Sony Bravia (960x540 / 1280x720)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    document.documentElement.classList.add('smart-tv-mode');
+    const syncTvScale = () => {
+      const curW = window.innerWidth || 0;
+      const curH = window.innerHeight || 0;
+      if (curW > 0 && curW < 1680 && curH > 0 && curW / curH >= 1.45) {
+        const scaledPx = Math.max(7.5, Math.min(16, (curW / 1920) * 16));
+        document.documentElement.classList.add('smart-tv-sub1080');
+        document.documentElement.style.fontSize = `${scaledPx}px`;
+      } else {
+        document.documentElement.classList.remove('smart-tv-sub1080');
+        document.documentElement.style.fontSize = '';
+      }
+    };
+    syncTvScale();
+    window.addEventListener('resize', syncTvScale, { passive: true });
+    const t1 = window.setTimeout(syncTvScale, 60);
+    const t2 = window.setTimeout(syncTvScale, 300);
+    return () => {
+      window.removeEventListener('resize', syncTvScale);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
     };
   }, []);
 
@@ -1242,6 +1286,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [savedVodItems, setSavedVodItems] = useState<CinemetaItem[]>(() =>
     loadSavedVodItems(loadActiveProfileId())
   );
+  const savedVodItemsRef = useRef(savedVodItems);
+  savedVodItemsRef.current = savedVodItems;
+  const handleFocusVodItemRef = useRef<(item: CinemetaItem, isHeroBannerPreload?: boolean) => void>(() => { });
+  const lastFocusedVodItemRef = useRef<CinemetaItem | null>(null);
 
   const handleSelectProfile = useCallback(
     (profileId: string) => {
@@ -1395,6 +1443,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [selectedActor, setSelectedActor] = useState<CastMemberCard | null>(
     null
   );
+  const [imdbMediaType, setImdbMediaType] = useState<'all' | 'movie' | 'series'>('all');
+  const [imdbYear, setImdbYear] = useState<string>('any');
+  const [imdbGenre, setImdbGenre] = useState<string>('top');
   const [isHandoffModalOpen, setIsHandoffModalOpen] = useState<boolean>(false);
   const [resolvedDirectStream, setResolvedDirectStream] =
     useState<ResolvedDirectVodStream | null>(null);
@@ -1403,6 +1454,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   >([]);
   const iedemAltDirectStreamRef = useRef<ResolvedDirectVodStream | null>(null);
   const userRequestedOriginalAudioRef = useRef<boolean>(false);
+  const hasPreloadedNextEpRef = useRef<string | null>(null);
   const [isDirectStreamLoading, setIsDirectStreamLoading] =
     useState<boolean>(false);
   const [resolvedFileListStream, setResolvedFileListStream] =
@@ -1555,6 +1607,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [isVodOsdVisible, setIsVodOsdVisible] = useState<boolean>(true);
   const [isEpisodesDrawerOpen, setIsEpisodesDrawerOpen] =
     useState<boolean>(false);
+  const [isKlubSuggestionsOpen, setIsKlubSuggestionsOpen] =
+    useState<boolean>(false);
+  const [klubSuggestions, setKlubSuggestions] = useState<KlubnichkaVideoCard[]>([]);
+  const klubSuggestionsListRef = useRef<HTMLDivElement | null>(null);
   const [isInfoSheetOpen, setIsInfoSheetOpen] = useState<boolean>(false);
   const [isPlayingVod, setIsPlayingVod] = useState<boolean>(false);
   isPlayingVodRef.current = isPlayingVod;
@@ -1681,6 +1737,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     selectedAudioTrackIdx,
     effectiveVodAudioPref,
   ]);
+
+  const effectivePlayerPoster = useMemo(() => {
+    const isZvyozdyItem =
+      activeVodItem?.id === 'tt31712367' ||
+      activeVodItem?.id === 'kp_5508530' ||
+      String(activeVodItem?.kpId) === '5508530' ||
+      detailedMeta?.id === 'tt31712367' ||
+      detailedMeta?.id === 'kp_5508530' ||
+      String(detailedMeta?.kpId) === '5508530' ||
+      activeVodItem?.name?.toLowerCase().includes('zvyozdy') ||
+      activeVodItem?.name?.toLowerCase().includes('звёзд') ||
+      detailedMeta?.name?.toLowerCase().includes('zvyozdy') ||
+      detailedMeta?.name?.toLowerCase().includes('звёзд');
+
+    if (isZvyozdyItem) return '/posters/zvyozdy.jpg';
+
+    const raw =
+      detailedMeta?.poster ||
+      activeVodItem?.poster ||
+      detailedMeta?.background ||
+      activeVodItem?.background ||
+      '';
+
+    if (raw && !raw.includes('tt31712367')) return raw;
+    return detailedMeta?.background || activeVodItem?.background || '/posters/zvyozdy.jpg';
+  }, [activeVodItem, detailedMeta]);
 
   const handleRequestOriginalAudio = useCallback(
     (startPlaybackImmediately = false) => {
@@ -2112,9 +2194,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               ? selectedAudioTrackIdx
               : epAudioNames?.length
                 ? resolveAudioTrackIndexByPreference(
-                    epAudioNames,
-                    effectiveVodAudioPref
-                  )
+                  epAudioNames,
+                  effectiveVodAudioPref
+                )
                 : Math.max(0, effectiveAudioTrackIdx);
           await downloadHlsToOfflineDb({
             id: offlineId,
@@ -2355,6 +2437,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handleFocusVodItem = useCallback(
     (item: CinemetaItem, isHeroBannerPreload = false) => {
+      lastFocusedVodItemRef.current = item;
       // SMART TV SMOOTH PERFORMANCE OPTIMIZATION (REVERSIBLE):
       // Avoid triggering full-view React re-renders and 3x API fetches on every D-pad poster focus.
       // Only fetch/update spotlight metadata when preloading for the Home Hero Banner.
@@ -2453,6 +2536,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     },
     [uiLang]
   );
+  handleFocusVodItemRef.current = handleFocusVodItem;
 
   // When entering TV Online (section === 'tv'), ALWAYS start automatically from the FIRST channel in Favorites
   // in Fixed Split-View Mode (Player on the left + Channel Grid on the right).
@@ -2604,6 +2688,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           window.dispatchEvent(new CustomEvent('aether:vod-close-menu'));
           return;
         }
+        if (isKlubSuggestionsOpen) {
+          setIsKlubSuggestionsOpen(false);
+          return;
+        }
         if (isInfoSheetOpen) {
           setIsInfoSheetOpen(false);
           vodAudioBtnRef.current?.focus();
@@ -2686,6 +2774,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     pendingResumePromptSec,
     isInfoSheetOpen,
     isEpisodesDrawerOpen,
+    isKlubSuggestionsOpen,
     isTrailerModalOpen,
     isSettingsDrawerOpen,
     settingsSubMenu,
@@ -2798,6 +2887,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             window.dispatchEvent(new CustomEvent('aether:vod-close-menu'));
             return;
           }
+          if (isKlubSuggestionsOpen) {
+            setIsKlubSuggestionsOpen(false);
+            window.setTimeout(() => {
+              playerBoxRef.current
+                ?.querySelector<HTMLButtonElement>('[data-vod-play-btn="true"]')
+                ?.focus();
+            }, 35);
+            return;
+          }
           if (isInfoSheetOpen) {
             setIsInfoSheetOpen(false);
             vodAudioBtnRef.current?.focus();
@@ -2820,6 +2918,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             hideVodOsd();
             return;
           }
+          flushPlaybackOnClose();
           setIsPlayingVod(false);
           setIsInfoSheetOpen(false);
           if (activeVodItem?.id.startsWith('yt_') || activeVodItem?.isAdultKlubnichka) {
@@ -2884,7 +2983,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
 
-      // Hardware TV Remote Play / Pause buttons when on Home Screen (auto-resume latest Continue Watching), Movie Detail Card (!isPlayingVod), or when Radio is active
+      // Hardware TV Remote Play / Pause buttons when on Home Screen, Movie Detail Card (!isPlayingVod), or when Radio is active
       if (
         !isPlayingVod &&
         !isInputFocused &&
@@ -2901,12 +3000,88 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       ) {
         const isPurePauseKey =
           e.keyCode === 19 || e.key === 'MediaPause' || e.key === 'Pause';
+
+        const activeEl = document.activeElement as HTMLElement | null;
+
+        // 1. If an episode card is focused (either in Series Detail or Episodes Drawer), start playback of that episode
+        const focusedEpisode = activeEl?.closest(
+          '[data-episode-card="true"]'
+        ) as HTMLElement | null;
+        if (focusedEpisode && !isPurePauseKey && activeVodItem) {
+          e.preventDefault();
+          e.stopPropagation();
+          const epNum = Number(focusedEpisode.getAttribute('data-episode-num')) || selectedEpisode;
+          const sNum = Number(focusedEpisode.getAttribute('data-season-num')) || selectedSeason;
+          userSelectedFlTorrentIdRef.current = null;
+          setSelectedSeason(sNum);
+          setSelectedEpisode(epNum);
+          const epKey = `S${sNum}E${epNum}`;
+          const epProg = (findWatchProgressEntry(watchProgressMapRef.current, activeVodItem) || findWatchProgressEntry(watchProgressMap, activeVodItem))?.episodeProgressMap?.[epKey];
+          const epDur = epProg?.duration && epProg.duration > 60 ? epProg.duration : 2700;
+          const epPct = epProg && epProg.currentTime > 10 ? Math.min(100, Math.max(5, Math.round((epProg.currentTime / epDur) * 100))) : 0;
+          const startAt = epProg && epProg.currentTime > 10 && epPct < 92 ? epProg.currentTime : 0;
+          handleStartVodPlayback(startAt);
+          return;
+        }
+
+        // 2. If already viewing a movie/series detail card and not pure pause:
         if (activeVodItem && !isPurePauseKey) {
           e.preventDefault();
           e.stopPropagation();
           playVodBtnRef.current?.click();
           return;
         }
+
+        // 3. If focused on a VOD poster / card / button anywhere:
+        const focusedCard = activeEl?.closest(
+          '[data-watched-poster-btn="true"], [data-vod-card="true"], [data-klub-card="true"], [data-vod-id]'
+        ) as HTMLElement | null;
+
+        if (focusedCard && !isPurePauseKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (playerStatus === 'playing' || playerStatus === 'loading') {
+            stopRadio();
+          }
+          const vodId = focusedCard.getAttribute('data-vod-id');
+          let targetItem: CinemetaItem | null = null;
+          if (vodId) {
+            targetItem =
+              historyList.find((h) => h.item.id === vodId)?.item ||
+              homeShelves.watchingNowMix.find((i) => i.id === vodId) ||
+              homeShelves.newlyAddedMix.find((i) => i.id === vodId) ||
+              homeShelves.popularSeries.find((i) => i.id === vodId) ||
+              homeShelves.popularMovies.find((i) => i.id === vodId) ||
+              homeShelves.cartoons.find((i) => i.id === vodId) ||
+              vodItems.find((i) => i.id === vodId) ||
+              heroBillboardItems.find((i) => i.id === vodId) ||
+              null;
+          }
+          if (!targetItem) {
+            targetItem = lastFocusedVodItemRef.current;
+          }
+          if (targetItem) {
+            const progress = findWatchProgressEntry(watchProgressMapRef.current, targetItem) || findWatchProgressEntry(watchProgressMap, targetItem);
+            const resumeSeason =
+              targetItem.type === 'series'
+                ? Math.max(1, Number(progress?.season) || 1)
+                : 1;
+            const resumeEpisode =
+              targetItem.type === 'series'
+                ? Math.max(1, Number(progress?.episode) || 1)
+                : 1;
+            handleOpenVod(targetItem, true, resumeSeason, resumeEpisode);
+            return;
+          }
+        }
+
+        // 4. If focus is inside <main> (browsing cards / shelves / grids), DO NOT fallback to playing random last watched!
+        const isInsideMainContent = Boolean(activeEl?.closest('main'));
+        if (isInsideMainContent) {
+          return;
+        }
+
+        // 5. Only if in an empty/sidebar area on home screen, quick-resume last watched:
         if (!activeVodItem && !isPurePauseKey && triggerHomeQuickPlayRef.current()) {
           e.preventDefault();
           e.stopPropagation();
@@ -2926,6 +3101,42 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           } else if (!isPurePauseKey) {
             playStation(currentStation, radioStations);
           }
+          return;
+        }
+      }
+
+      // Hardware TV Remote Color Buttons when NOT playing video (!isPlayingVod)
+      // Yellow Button (405 / F3 / ColorF2Yellow / Yellow / 'y' / 'Y'): Mark current Movie, Episode, or Series as Watched / Unwatched
+      const isYellowKey =
+        (e.keyCode === 405 ||
+          e.key === 'F3' ||
+          e.key === 'ColorF2Yellow' ||
+          e.key === 'Yellow' ||
+          ((e.key === 'y' || e.key === 'Y') && !isInputFocused));
+
+      if (!isPlayingVod && isYellowKey && !isSettingsDrawerOpen && !isSubFinderOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const activeEl = document.activeElement as HTMLElement | null;
+        const focusedEpBtn = activeEl?.closest('[data-episode-card="true"]');
+        if (focusedEpBtn) {
+          const sNum = Number(focusedEpBtn.getAttribute('data-season')) || selectedSeason || 1;
+          const epNum = Number(focusedEpBtn.getAttribute('data-episode')) || selectedEpisode || 1;
+          handleToggleWatchedStatus(activeVodItem, sNum, epNum);
+          return;
+        }
+
+        if (activeVodItem) {
+          handleToggleWatchedStatus(activeVodItem, selectedSeason, selectedEpisode);
+          return;
+        }
+
+        const focusedCard = activeEl?.closest(
+          '[data-watched-poster-btn="true"], [data-vod-card="true"], [data-klub-card="true"]'
+        );
+        if (focusedCard && lastFocusedVodItemRef.current) {
+          handleToggleWatchedStatus(lastFocusedVodItemRef.current);
           return;
         }
       }
@@ -3014,14 +3225,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         const isVodSubMenuOpen =
           Boolean(vodMenuState) && vodMenuState !== 'none';
         const isAnyVodOverlayOpen =
-          isInfoSheetOpen || isEpisodesDrawerOpen || isVodSubMenuOpen;
+          isInfoSheetOpen || isEpisodesDrawerOpen || isKlubSuggestionsOpen || isVodSubMenuOpen;
         const activeEl = document.activeElement as HTMLElement | null;
         const isOsdControlFocused =
           isVodOsdVisible &&
           Boolean(
             activeEl &&
             playerBoxRef.current?.contains(activeEl) &&
-            activeEl !== playerBoxRef.current
+            activeEl !== playerBoxRef.current &&
+            (activeEl.tagName === 'BUTTON' ||
+              activeEl.tagName === 'INPUT' ||
+              activeEl.tagName === 'SELECT' ||
+              activeEl.hasAttribute('data-vod-timeline-slider'))
           );
 
         // 1. YELLOW BUTTON (405 / F3 / ColorF2Yellow): Toggle Movie/Series Description Sheet with Poster, Synopsis & Cast
@@ -3234,6 +3449,81 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         }
 
+        // Klubnichka 18+ Suggestions Drawer Remote Navigation (ArrowDown opens, ArrowLeft/Right cycles, ArrowUp closes, OK / PLAY starts video)
+        if (activeVodItem?.isAdultKlubnichka) {
+          if (isKlubSuggestionsOpen) {
+            const cards = Array.from(
+              playerBoxRef.current?.querySelectorAll<HTMLButtonElement>(
+                '[data-klub-suggestion-card="true"]'
+              ) || []
+            );
+            const curIdx = cards.indexOf(activeEl as HTMLButtonElement);
+
+            if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              e.stopPropagation();
+              const nextCard = cards[curIdx + 1] || cards[0];
+              nextCard?.focus();
+              nextCard?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+              return;
+            }
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              e.stopPropagation();
+              const prevCard = curIdx > 0 ? cards[curIdx - 1] : cards[cards.length - 1];
+              prevCard?.focus();
+              prevCard?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsKlubSuggestionsOpen(false);
+              window.setTimeout(() => {
+                playerBoxRef.current
+                  ?.querySelector<HTMLButtonElement>('[data-vod-play-btn="true"]')
+                  ?.focus();
+              }, 35);
+              return;
+            }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            if (
+              e.key === 'Enter' ||
+              e.key === 'Play' ||
+              kc === 13 ||
+              kc === 415 ||
+              kc === 179
+            ) {
+              if (curIdx >= 0 && klubSuggestions[curIdx]) {
+                e.preventDefault();
+                e.stopPropagation();
+                const selectedCard = klubSuggestions[curIdx];
+                const mapped = mapKlubCardToCinemetaItem(selectedCard);
+                persistedKlubCache.lastClickedCardId = selectedCard.id;
+                setIsKlubSuggestionsOpen(false);
+                handleOpenVod(mapped, true);
+                return;
+              }
+            }
+          } else if (e.key === 'ArrowDown' && !isVodSubMenuOpen && !isInfoSheetOpen && !isEpisodesDrawerOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsKlubSuggestionsOpen(true);
+            window.setTimeout(() => {
+              const firstCard = playerBoxRef.current?.querySelector<HTMLButtonElement>(
+                '[data-klub-suggestion-card="true"]'
+              );
+              firstCard?.focus();
+              firstCard?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+            }, 50);
+            return;
+          }
+        }
+
         // Deterministic Row-by-Row TV Remote Navigation inside VOD Popover Menus (Subtitles, Audio, Server, Quality)
         const vodPopoverEl =
           playerBoxRef.current?.querySelector<HTMLElement>(
@@ -3344,33 +3634,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         ) {
           e.preventDefault();
           e.stopPropagation();
-          wakeVodOsd();
-          if (isVodOsdVisible) {
-            const bottomBtns = getBottomRowBtns();
-            const targetBtn =
-              e.key === 'ArrowRight'
-                ? bottomBtns[1] || bottomBtns[0]
-                : bottomBtns[0];
-            targetBtn?.focus();
-            return;
-          }
+          hideVodOsd();
           window.dispatchEvent(
-            new CustomEvent('aether:vod-seek', {
-              detail: { deltaSec: e.key === 'ArrowRight' ? 15 : -15 },
+            new CustomEvent('aether:vod-transport', {
+              detail: { action: e.key === 'ArrowRight' ? 'ff' : 'rw' },
             })
           );
-          window.setTimeout(() => {
-            const targetSeekBtn =
-              playerBoxRef.current?.querySelector<HTMLButtonElement>(
-                e.key === 'ArrowRight'
-                  ? '[data-vod-seek-fwd-15="true"]'
-                  : '[data-vod-seek-back-15="true"]'
-              ) ||
-              playerBoxRef.current?.querySelector<HTMLButtonElement>(
-                '[data-vod-play-btn="true"]'
-              );
-            targetSeekBtn?.focus();
-          }, 25);
           return;
         }
 
@@ -3450,12 +3719,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
               e.preventDefault();
               e.stopPropagation();
-              wakeVodOsd();
               window.dispatchEvent(
-                new CustomEvent('aether:vod-seek', {
-                  detail: { deltaSec: e.key === 'ArrowRight' ? 15 : -15 },
+                new CustomEvent('aether:vod-transport', {
+                  detail: { action: e.key === 'ArrowRight' ? 'ff' : 'rw' },
                 })
               );
+              wakeVodOsd();
               return;
             }
             if (e.key === 'ArrowDown') {
@@ -3653,11 +3922,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             ? 'button:not([disabled]), select:not([disabled]), input[data-tv-focusable="true"]:not([disabled])'
             : 'input:not([disabled]), button:not([disabled]), select:not([disabled])';
         const rawNodes = root.querySelectorAll<HTMLElement>(focusSelector);
+        const vhLimit = typeof window !== 'undefined' ? (window.innerHeight || 1080) : 1080;
         for (let i = 0; i < rawNodes.length; i++) {
           const el = rawNodes[i];
           const r = el.getBoundingClientRect();
           if (r.width > 0 && r.height > 0) {
-            focusablesWithRect.push({ el, rect: r });
+            if (r.top < vhLimit * 2.2 && r.bottom > -vhLimit * 0.8) {
+              focusablesWithRect.push({ el, rect: r });
+            }
           }
         }
         if (focusablesWithRect.length === 0) return;
@@ -4326,6 +4598,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     pendingResumePromptSec,
     isInfoSheetOpen,
     isEpisodesDrawerOpen,
+    isKlubSuggestionsOpen,
+    klubSuggestions,
     wakeVodOsd,
     isSubFinderOpen,
     isSettingsDrawerOpen,
@@ -4434,7 +4708,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
       if (effectiveCountry === 'FAV') {
         const favFiltered = sortVodItemsByProductionYear(
-          savedVodItems.filter((x) => x.type === mediaType)
+          savedVodItemsRef.current.filter((x) => x.type === mediaType)
         );
         setVodItems(favFiltered);
         setHasMoreVod(false);
@@ -4537,8 +4811,74 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           );
           setVodItems(sortedMerged);
           setHasMoreVod(false);
-          if (sortedMerged[0]) {
+          if (sortedMerged[0] && !lastFocusedVodItemRef.current) {
             handleFocusVodItem(sortedMerged[0]);
+          }
+          return;
+        }
+
+        if (section === 'imdb') {
+          const skip = (pageNum - 1) * 50;
+          const targetType = imdbMediaType || 'all';
+          const effGenre = imdbGenre && imdbGenre !== 'top' ? imdbGenre : '';
+          const genreQuery = effGenre ? `&genre=${encodeURIComponent(effGenre)}` : '';
+          const movieUrl =
+            skip > 0
+              ? `https://v3-cinemeta.strem.io/catalog/movie/imdbRating/skip=${skip}.json?${genreQuery}`
+              : `https://v3-cinemeta.strem.io/catalog/movie/imdbRating${effGenre ? `/genre=${encodeURIComponent(effGenre)}` : ''}.json`;
+          const seriesUrl =
+            skip > 0
+              ? `https://v3-cinemeta.strem.io/catalog/series/imdbRating/skip=${skip}.json?${genreQuery}`
+              : `https://v3-cinemeta.strem.io/catalog/series/imdbRating${effGenre ? `/genre=${encodeURIComponent(effGenre)}` : ''}.json`;
+
+          const fetchPromises: Array<Promise<{ metas?: CinemetaItem[] }>> = [];
+          if (targetType === 'movie' || targetType === 'all') {
+            fetchPromises.push(
+              fetch(movieUrl)
+                .then((r) => (r.ok ? r.json() : { metas: [] }))
+                .catch(() => ({ metas: [] }))
+            );
+          } else {
+            fetchPromises.push(Promise.resolve({ metas: [] }));
+          }
+          if (targetType === 'series' || targetType === 'all') {
+            fetchPromises.push(
+              fetch(seriesUrl)
+                .then((r) => (r.ok ? r.json() : { metas: [] }))
+                .catch(() => ({ metas: [] }))
+            );
+          } else {
+            fetchPromises.push(Promise.resolve({ metas: [] }));
+          }
+
+          const [mData, sData] = await Promise.all(fetchPromises);
+          const mList: CinemetaItem[] = (mData?.metas || []).map((m: any) => ({ ...m, type: 'movie' }));
+          const sList: CinemetaItem[] = (sData?.metas || []).map((s: any) => ({ ...s, type: 'series' }));
+
+          let combined = [...mList, ...sList];
+          if (imdbYear && imdbYear !== 'any') {
+            combined = combined.filter((it) => {
+              const y = parseInt(it.releaseInfo || it.year || '0', 10);
+              if (imdbYear === '<1990') return y > 0 && y < 1990;
+              if (imdbYear === '1990-1999') return y >= 1990 && y <= 1999;
+              if (imdbYear === '2000-2009') return y >= 2000 && y <= 2009;
+              if (imdbYear === '2010-2019') return y >= 2010 && y <= 2019;
+              if (imdbYear === '2020-2027') return y >= 2020 && y <= 2027;
+              return String(y) === imdbYear;
+            });
+          }
+
+          combined.sort((a, b) => {
+            const rA = parseFloat(a.imdbRating || '0') || 0;
+            const rB = parseFloat(b.imdbRating || '0') || 0;
+            return rB - rA;
+          });
+
+          const deduped = deduplicateVodItems(combined);
+          setVodItems((prev) => (append ? deduplicateVodItems([...prev, ...deduped]) : deduped));
+          setHasMoreVod(deduped.length >= 20);
+          if (!append && deduped[0] && !lastFocusedVodItemRef.current) {
+            handleFocusVodItemRef.current(deduped[0]);
           }
           return;
         }
@@ -4668,7 +5008,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             : [];
 
           const kpNewMapped: CinemetaItem[] = Array.isArray(kpNewData?.items)
-            ? kpNewData.items.map(
+            ? kpNewData.items
+              .filter((f: any) => {
+                const countryStr = Array.isArray(f.countries)
+                  ? f.countries.map((c: any) => c.country).filter(Boolean).join(', ')
+                  : '';
+                return isRussianVodItem({
+                  country: countryStr,
+                  name: f.nameRu || f.nameOriginal,
+                  nameOriginal: f.nameOriginal,
+                  kpId: String(f.kinopoiskId),
+                });
+              })
+              .map(
               (f: {
                 kinopoiskId: number;
                 imdbId?: string | null;
@@ -4843,8 +5195,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           });
           setVodItems(sortedRecommended);
           setHasMoreVod(true);
-          if (sortedWatchingNow[0]) {
-            handleFocusVodItem(sortedWatchingNow[0]);
+          if (sortedWatchingNow[0] && !lastFocusedVodItemRef.current) {
+            handleFocusVodItemRef.current(sortedWatchingNow[0]);
           }
         } else if (useKinopoisk) {
           const kpType = mediaType === 'series' ? 'TV_SERIES' : 'FILM';
@@ -4943,8 +5295,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             return deduplicateVodItems([...prev, ...sortedMapped]);
           });
           setHasMoreVod(pageNum < (data.totalPages || 1));
-          if (!append && sortedMapped[0]) {
-            handleFocusVodItem(sortedMapped[0]);
+          if (!append && sortedMapped[0] && !lastFocusedVodItemRef.current) {
+            handleFocusVodItemRef.current(sortedMapped[0]);
           }
         } else {
           const skip = (pageNum - 1) * 50;
@@ -4980,7 +5332,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             return deduplicateVodItems([...prev, ...list]);
           });
           setHasMoreVod(list.length >= 30);
-          if (!append && list[0]) {
+          if (!append && list[0] && !lastFocusedVodItemRef.current) {
             handleFocusVodItem(list[0]);
           }
         }
@@ -4999,8 +5351,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       filterRating,
       filterYear,
       platformMediaTab,
-      handleFocusVodItem,
-      savedVodItems,
+      imdbMediaType,
+      imdbYear,
+      imdbGenre,
     ]
   );
 
@@ -5008,6 +5361,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     if (
       section === 'home' ||
       section === 'movies' ||
+      section === 'imdb' ||
       section === 'cartoons' ||
       section === 'series' ||
       section === 'catalog' ||
@@ -5025,6 +5379,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     filterRating,
     filterYear,
     platformMediaTab,
+    imdbMediaType,
+    imdbYear,
+    imdbGenre,
     fetchVodCatalog,
   ]);
 
@@ -5298,6 +5655,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
         if (kpRes.status === 'fulfilled' && Array.isArray(kpRes.value.items)) {
           for (const f of kpRes.value.items.slice(0, 16)) {
+            const cStr = Array.isArray(f.countries)
+              ? f.countries.map((c: any) => c.country).filter(Boolean).join(', ')
+              : '';
+            const isRuShow = isRussianVodItem({
+              country: cStr,
+              name: f.nameRu || f.nameOriginal,
+              nameOriginal: f.nameOriginal,
+              kpId: String(f.kinopoiskId || f.filmId || ''),
+            });
+            // Never inject foreign movies/series from Kinopoisk search; foreign content comes exclusively from Cinemeta/FileList
+            if (!isRuShow) continue;
             const kpId = String(f.kinopoiskId || f.filmId || '').trim();
             if (!kpId) continue;
             const isSeries =
@@ -5495,7 +5863,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       ) {
         ensureTvFullscreen();
       }
-      const saved = watchProgressMapRef.current[item.id] || watchProgressMap[item.id];
+      const saved = findWatchProgressEntry(watchProgressMapRef.current, item) || findWatchProgressEntry(watchProgressMap, item);
       const relMatch = String(item.releaseTitle || item.name || '').match(
         /\bS(\d{1,2})[.\s_-]*E(\d{1,2})\b/i
       );
@@ -5698,7 +6066,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const sp = new URLSearchParams(window.location.search);
     const playVodId = (sp.get('playVod') || '').trim();
     if (!playVodId) return;
-    const savedEntry = watchProgressMap[playVodId];
+    const savedEntry = findWatchProgressEntry(watchProgressMap, playVodId);
     const nameParam = (sp.get('name') || '').trim();
     const typeParam = sp.get('type') === 'movie' ? 'movie' : 'series';
     const cleanTt = playVodId.startsWith('tt') ? playVodId.split(':')[0] : '';
@@ -5753,7 +6121,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           setPendingResumePromptSec(null);
         }
       } else if (activeVodItem) {
-        const saved = watchProgressMap[activeVodItem.id];
+        const saved =
+          findWatchProgressEntry(watchProgressMapRef.current, activeVodItem) ||
+          findWatchProgressEntry(watchProgressMap, activeVodItem);
         const epKey = `S${selectedSeason}E${selectedEpisode}`;
         const epSaved = saved?.episodeProgressMap?.[epKey];
         const latestSec =
@@ -5772,6 +6142,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         } else {
           setResumeStartSeconds(0);
           setPendingResumePromptSec(null);
+        }
+      }
+      if (
+        resolvedDirectStream?.ok &&
+        (resolvedDirectStream.dashUrl ||
+          resolvedDirectStream.hlsUrl ||
+          resolvedDirectStream.proxyHlsUrl)
+      ) {
+        if (!isCurrentVodForeign && (activeServer !== 'filelist_torrent' || !resolvedFileListStream?.streamUrl)) {
+          setActiveServer('kinogram_hls');
         }
       }
       setIsSidebarOpen(false);
@@ -5805,6 +6185,90 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       wakeVodOsd,
       tvSettings.autoFullscreenOnPlay,
     ]
+  );
+
+  const handleCardPlayKey = useCallback(
+    (
+      e: React.KeyboardEvent,
+      item: CinemetaItem,
+      explicitSeason?: number,
+      explicitEpisode?: number
+    ) => {
+      if (
+        e.keyCode === 415 ||
+        e.keyCode === 179 ||
+        e.keyCode === 250 ||
+        e.keyCode === 10252 ||
+        e.key === 'MediaPlay' ||
+        e.key === 'MediaPlayPause' ||
+        e.key === 'Play' ||
+        ((e.key === 'p' || e.key === 'P') &&
+          !(
+            document.activeElement?.tagName === 'INPUT' ||
+            document.activeElement?.tagName === 'TEXTAREA'
+          ))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        lastFocusedVodItemRef.current = item;
+        if (playerStatus === 'playing' || playerStatus === 'loading') {
+          stopRadio();
+        }
+        const prog = (findWatchProgressEntry(watchProgressMapRef.current, item) || findWatchProgressEntry(watchProgressMap, item) || {}) as Partial<VodWatchProgressEntry>;
+        const s =
+          explicitSeason ??
+          (item.type === 'series' ? Math.max(1, Number(prog.season) || 1) : 1);
+        const ep =
+          explicitEpisode ??
+          (item.type === 'series' ? Math.max(1, Number(prog.episode) || 1) : 1);
+        handleOpenVod(item, true, s, ep);
+      }
+    },
+    [handleOpenVod, playerStatus, stopRadio, watchProgressMap]
+  );
+
+  const handleEpisodePlayKey = useCallback(
+    (e: React.KeyboardEvent, ep: { episode: number }, seasonNum?: number) => {
+      if (
+        e.keyCode === 415 ||
+        e.keyCode === 179 ||
+        e.keyCode === 250 ||
+        e.keyCode === 10252 ||
+        e.key === 'MediaPlay' ||
+        e.key === 'MediaPlayPause' ||
+        e.key === 'Play' ||
+        ((e.key === 'p' || e.key === 'P') &&
+          !(
+            document.activeElement?.tagName === 'INPUT' ||
+            document.activeElement?.tagName === 'TEXTAREA'
+          ))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (playerStatus === 'playing' || playerStatus === 'loading') {
+          stopRadio();
+        }
+        userSelectedFlTorrentIdRef.current = null;
+        const targetSeason = typeof seasonNum === 'number' ? seasonNum : selectedSeason;
+        setSelectedSeason(targetSeason);
+        setSelectedEpisode(ep.episode);
+        const epKey = `S${targetSeason}E${ep.episode}`;
+        const epProg = activeVodItem
+          ? (findWatchProgressEntry(watchProgressMapRef.current, activeVodItem) || findWatchProgressEntry(watchProgressMap, activeVodItem))?.episodeProgressMap?.[epKey]
+          : null;
+        const epDur = epProg?.duration && epProg.duration > 60 ? epProg.duration : 2700;
+        const epPct =
+          epProg && epProg.currentTime > 10
+            ? Math.min(100, Math.max(5, Math.round((epProg.currentTime / epDur) * 100)))
+            : 0;
+        const startAt =
+          epProg && epProg.currentTime > 10 && epPct < 92
+            ? epProg.currentTime
+            : 0;
+        handleStartVodPlayback(startAt);
+      }
+    },
+    [activeVodItem, handleStartVodPlayback, playerStatus, selectedSeason, stopRadio, watchProgressMap]
   );
 
   // Open Official Movie / Series Trailer in Lampa Fullscreen Modal
@@ -6565,7 +7029,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       : matchedFilm.year && String(matchedFilm.year) !== 'null'
                         ? String(matchedFilm.year).slice(0, 4)
                         : undefined;
-                                    const countriesStr = Array.isArray(kpData.countries)
+                  const countriesStr = Array.isArray(kpData.countries)
                     ? kpData.countries
                       .map((c: { country: string }) => c.country)
                       .filter(Boolean)
@@ -6606,11 +7070,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       description:
                         hasTechnicalTorrentDesc
                           ? kpData.description ||
-                            kpData.shortDescription ||
-                            base.description
+                          kpData.shortDescription ||
+                          base.description
                           : base.description ||
-                            kpData.description ||
-                            kpData.shortDescription,
+                          kpData.description ||
+                          kpData.shortDescription,
                       slogan: kpData.slogan || base.slogan,
                       ratingKinopoisk: kpData.ratingKinopoisk
                         ? String(kpData.ratingKinopoisk)
@@ -6740,7 +7204,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 ) {
                   setActiveServer('filelist_torrent');
                 }
-                                const origIdx = findExplicitOriginalAudioTrackIndex(
+                const origIdx = findExplicitOriginalAudioTrackIndex(
                   enrichedAlt.audioNames || []
                 );
                 if (!isMatchingIedemCardSeason) {
@@ -6749,12 +7213,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     const prefIdx =
                       (isForeignIedemItem ||
                         userRequestedOriginalAudioRef.current) &&
-                      origIdx >= 0
+                        origIdx >= 0
                         ? origIdx
                         : resolveAudioTrackIndexByPreference(
-                            enrichedAlt.audioNames || [],
-                            iedemAudioPref
-                          );
+                          enrichedAlt.audioNames || [],
+                          iedemAudioPref
+                        );
                     setSelectedAudioTrackIdx(prefIdx);
                     if (
                       !(!isRuTvShowIedem && iedemFlOk && canUseLocalTorrent) &&
@@ -6783,17 +7247,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   setResolvedDirectStream((prev) =>
                     prev
                       ? {
-                          ...prev,
-                          seasons: mergeSeasonsLists(
-                            prev.seasons,
-                            mergedSeasons
-                          ),
-                        }
+                        ...prev,
+                        seasons: mergeSeasonsLists(
+                          prev.seasons,
+                          mergedSeasons
+                        ),
+                      }
                       : {
-                          ok: false,
-                          type: 'series',
-                          seasons: mergedSeasons,
-                        }
+                        ok: false,
+                        type: 'series',
+                        seasons: mergedSeasons,
+                      }
                   );
                 }
               })
@@ -7151,7 +7615,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
 
-      // Foreign/RO Movies & Series (FileList.io VIP #1) AND Russian Movies & Series (Kinozal VIP #1 -> iEdem #2)
+      // STRICT RULE: All foreign/American/English content MUST ONLY play from FileList!
+      if (isForeignVod) {
+        setActiveServer('filelist_torrent');
+        return;
+      }
+
+      // Russian Movies & Series (Kinozal VIP #1 -> iEdem #2)
       if (canUseLocalTorrent && (flResolvedOk || !flFinished)) {
         setActiveServer('filelist_torrent');
         return;
@@ -7344,7 +7814,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           prev?.poster ||
                           d.meta.poster
                           : d.meta.poster ||
-                            `https://images.metahub.space/poster/medium/${ttId}/img`,
+                          `https://images.metahub.space/poster/medium/${ttId}/img`,
                       description:
                         uiLang !== 'ru'
                           ? d.meta.description || prev?.description
@@ -7365,7 +7835,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     }));
                   }
                 })
-                .catch(() => {});
+                .catch(() => { });
             };
 
             if (!imdb && (resolvedTt || resolvedLatinTitle)) {
@@ -7406,7 +7876,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       );
                     }
                   })
-                  .catch(() => {});
+                  .catch(() => { });
               }
 
               if (resolvedTt) {
@@ -7457,7 +7927,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       }
                     }
                   )
-                  .catch(() => {});
+                  .catch(() => { });
               }
 
               if (isLocalHomeServer()) {
@@ -7648,7 +8118,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         .catch(() => { });
     }
 
-        resolveDirectVodStreamClient({
+    resolveDirectVodStreamClient({
       imdb,
       kp,
       title: activeVodItem.nameOriginal || activeVodItem.name,
@@ -7678,9 +8148,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               setResolvedDirectStream((prev) =>
                 prev
                   ? {
-                      ...prev,
-                      seasons: mergeSeasonsLists(prev.seasons, earlyMerged),
-                    }
+                    ...prev,
+                    seasons: mergeSeasonsLists(prev.seasons, earlyMerged),
+                  }
                   : { ok: false, type: "series", seasons: earlyMerged }
               );
             }
@@ -7706,7 +8176,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             : data;
         setResolvedDirectStream(mergedData);
         directResolvedOk = Boolean(
-          mergedData?.ok && (mergedData.dashUrl || mergedData.hlsUrl)
+          mergedData?.ok &&
+          (mergedData.dashUrl ||
+            mergedData.hlsUrl ||
+            mergedData.proxyHlsUrl)
         );
         directIsVk = Boolean(
           directResolvedOk && isVkDirectSourcePath(mergedData.sourcePath)
@@ -7719,9 +8192,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           : tvSettings.defaultAudioPref;
         const prefTrackIdx = directResolvedOk
           ? resolveAudioTrackIndexByPreference(
-              data.audioNames || [],
-              audioPrefForItem
-            )
+            data.audioNames || [],
+            audioPrefForItem
+          )
           : undefined;
         if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
           setSelectedAudioTrackIdx((prevIdx) =>
@@ -7893,12 +8366,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const validSeasons =
       metaVideos.length > 0
         ? Array.from(new Set(metaVideos.map((v) => Number(v.season)))).sort(
-            (a, b) => a - b
-          )
+          (a, b) => a - b
+        )
         : directSeasons.length > 0
           ? Array.from(
-              new Set(directSeasons.map((s) => Number(s.season)))
-            ).sort((a, b) => a - b)
+            new Set(directSeasons.map((s) => Number(s.season)))
+          ).sort((a, b) => a - b)
           : [];
 
     if (validSeasons.length === 0) return;
@@ -7912,16 +8385,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const validEpisodes =
       metaVideos.length > 0
         ? metaVideos
-            .filter((v) => Number(v.season) === selectedSeason && Number(v.episode) > 0)
-            .map((v) => Number(v.episode))
-            .sort((a, b) => a - b)
+          .filter((v) => Number(v.season) === selectedSeason && Number(v.episode) > 0)
+          .map((v) => Number(v.episode))
+          .sort((a, b) => a - b)
         : (
-            directSeasons.find((s) => Number(s.season) === selectedSeason)
-              ?.episodes || []
-          )
-            .map((ep) => Number(ep.episode))
-            .filter((n) => n > 0)
-            .sort((a, b) => a - b);
+          directSeasons.find((s) => Number(s.season) === selectedSeason)
+            ?.episodes || []
+        )
+          .map((ep) => Number(ep.episode))
+          .filter((n) => n > 0)
+          .sort((a, b) => a - b);
 
     if (validEpisodes.length > 0 && !validEpisodes.includes(selectedEpisode)) {
       setSelectedEpisode(validEpisodes[0] || 1);
@@ -8027,7 +8500,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsFileListStreamLoading(true);
       setActiveServer('filelist_torrent');
       if (isPlayingVod) {
-        const savedProg = watchProgressMap[activeVodItem.id];
+        const savedProg =
+          findWatchProgressEntry(watchProgressMapRef.current, activeVodItem) ||
+          findWatchProgressEntry(watchProgressMap, activeVodItem);
         const isSameEpProg =
           activeVodItem.type !== 'series' ||
           (savedProg?.season === selectedSeason &&
@@ -8130,6 +8605,27 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ]
   );
 
+  const currentServerOptions = useMemo<Array<{ id: VodServerId; label: string }>>(() => {
+    if (isCurrentVodForeign) {
+      return [
+        {
+          id: 'filelist_torrent',
+          label: 'FileList.io (4K UHD / Audio Original)',
+        },
+      ];
+    }
+    return [
+      {
+        id: 'filelist_torrent',
+        label: 'Kinozal VIP (4K UHD / 1080p Torrents)',
+      },
+      {
+        id: 'kinogram_hls',
+        label: 'VK Video Direct (4K UHD / 1080p)',
+      },
+    ];
+  }, [isCurrentVodForeign]);
+
   const flQualityOptions = useMemo<VodExternalQualityOption[]>(() => {
     if (klubnichkaQualities.length > 0 && activeVodItem?.isAdultKlubnichka) {
       return klubnichkaQualities.map((q) => ({
@@ -8161,9 +8657,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (s.includes('360')) return 360;
       return 1080;
     };
-    const rawVkQuals = (resolvedDirectStream?.vkQualities || []).filter(
-      (q) => q.height >= 720
-    );
+    const rawVkQuals = isCurrentVodForeign
+      ? []
+      : (resolvedDirectStream?.vkQualities || []).filter((q) => q.height >= 720);
     const vkOptsWithRank = rawVkQuals.map((q, idx) => ({
       heightRank: q.height || parseHeightRank(q.label),
       seedRank: 5,
@@ -8207,12 +8703,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       opt: VodExternalQualityOption;
     }> = [];
     if (
+      !isCurrentVodForeign &&
       vkOptsWithRank.length === 0 &&
       resolvedDirectStream?.ok &&
-      (resolvedDirectStream.dashUrl || resolvedDirectStream.hlsUrl)
+      (resolvedDirectStream.dashUrl ||
+        resolvedDirectStream.hlsUrl ||
+        resolvedDirectStream.proxyHlsUrl)
     ) {
       const sp = String(resolvedDirectStream.sourcePath || '');
-      const hUrl = String(resolvedDirectStream.hlsUrl || '');
+      const hUrl = String(
+        resolvedDirectStream.proxyHlsUrl ||
+        resolvedDirectStream.hlsUrl ||
+        ''
+      );
       const dHeight =
         /2160|4k|uhd/i.test(sp)
           ? 2160
@@ -8529,7 +9032,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }
 
     if (activeVodItem?.type === 'series') {
-      const savedProg = watchProgressMapRef.current[activeVodItem.id];
+      const savedProg = findWatchProgressEntry(watchProgressMapRef.current, activeVodItem);
       const progSeasons = Object.keys(savedProg?.episodeProgressMap || {}).map(
         (k) => Number(k.match(/^S(\d+)E/i)?.[1] || 0)
       );
@@ -8655,7 +9158,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   useEffect(() => {
     if (!activeVodItem) return;
-    const saved = watchProgressMap[activeVodItem.id];
+    const saved =
+      findWatchProgressEntry(watchProgressMapRef.current, activeVodItem) ||
+      findWatchProgressEntry(watchProgressMap, activeVodItem);
     setEpisodesSortDesc(loadSeriesEpisodeSortDesc(activeVodItem.id, saved));
   }, [activeVodItem?.id]);
 
@@ -8829,13 +9334,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     selectedSeason,
   ]);
 
+  const lastPlaybackTimeRef = useRef<{ cur: number; dur: number } | null>(null);
+
   const updateWatchProgress = useCallback(
     (
       item: CinemetaItem,
       season: number,
       episode: number,
       currentTime: number,
-      duration: number
+      duration: number,
+      forcePlayingState?: boolean
     ) => {
       if (item.isAdultKlubnichka || item.id.startsWith('klub_')) {
         return;
@@ -8852,11 +9360,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const totalSeasonsCount = availableSeasons.length || 0;
 
       const prev = watchProgressMapRef.current;
-      const existing = prev[item.id];
+      const existing = findWatchProgressEntry(prev, item);
+      const resolvedImdb = item.imdbId || item.imdb_id || existing?.item?.imdbId || existing?.item?.imdb_id;
+      const canonicalKey = (resolvedImdb && resolvedImdb.startsWith('tt'))
+        ? resolvedImdb
+        : (getVodCanonicalKey(item, prev) || getVodCanonicalKey(existing, prev) || item.id);
       const epKey = `S${season}E${episode}`;
       const detailMatch =
         detailedMeta &&
-          (detailedMeta.id === item.id || activeVodItem?.id === item.id)
+          (detailedMeta.id === item.id ||
+            detailedMeta.imdbId === item.imdbId ||
+            activeVodItem?.id === item.id ||
+            areVodItemsSame(detailedMeta as any, item))
           ? {
             name: detailedMeta.name || item.name,
             nameOriginal: detailedMeta.nameOriginal || item.nameOriginal,
@@ -8870,6 +9385,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         ...existing?.item,
         ...item,
         ...detailMatch,
+        id: canonicalKey,
+        imdbId:
+          canonicalKey.startsWith('tt')
+            ? canonicalKey
+            : (item.imdbId || existing?.item.imdbId),
       };
       if (mergedItem.type === 'series') {
         mergedItem.name =
@@ -8898,7 +9418,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         updatedAt: Date.now(),
         deviceName: detectCurrentDeviceName(),
         deviceId: getOrCreateCurrentDeviceId(),
-        isPlayingNow: true,
+        isPlayingNow: typeof forcePlayingState === 'boolean' ? forcePlayingState : isPlayingVodRef.current,
         totalEpisodesInSeason:
           seasonEpsCount > 0
             ? seasonEpsCount
@@ -8918,15 +9438,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           },
         },
       };
-      const next = { ...prev, [item.id]: nextEntry };
-      watchProgressMapRef.current = next;
-      saveWatchProgressMap(next, activeProfileId);
+      const next: Record<string, VodWatchProgressEntry> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (!v || typeof v !== 'object') continue;
+        if (k !== canonicalKey && (k === item.id || areVodItemsSame(v.item, item))) {
+          continue; // prune duplicate alias
+        }
+        next[k] = v;
+      }
+      next[canonicalKey] = nextEntry;
+      const cleanMap = deduplicateProgressMap(next);
+      watchProgressMapRef.current = cleanMap;
+      saveWatchProgressMap(cleanMap, activeProfileId);
+      const isStillPlaying = typeof forcePlayingState === 'boolean' ? forcePlayingState : isPlayingVodRef.current;
       if (
+        !isStillPlaying ||
         !isPlayingVodRef.current ||
         isEpisodesDrawerOpenRef.current ||
         !existing?.isPlayingNow
       ) {
-        setWatchProgressMap(next);
+        setWatchProgressMap(cleanMap);
       }
     },
     [
@@ -8940,30 +9471,51 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ]
   );
 
+  const flushPlaybackOnClose = useCallback(() => {
+    if (activeVodItem && lastPlaybackTimeRef.current) {
+      const { cur, dur } = lastPlaybackTimeRef.current;
+      if (cur > 1) {
+        updateWatchProgress(
+          activeVodItem,
+          selectedSeason,
+          selectedEpisode,
+          cur,
+          dur,
+          false // forcePlayingState = false
+        );
+      }
+    }
+  }, [activeVodItem, selectedSeason, selectedEpisode, updateWatchProgress]);
+
   // Real-time Cross-Device Playback Heartbeat & Watch Progress Tracking while a video is playing on this device
   useEffect(() => {
     if (!isPlayingVod || !activeVodItem) return;
     if (activeVodItem.isAdultKlubnichka || activeVodItem.id.startsWith('klub_')) return;
-    const activeId = activeVodItem.id;
+    const activeId = getVodCanonicalKey(activeVodItem) || activeVodItem.id;
     const curDevName = detectCurrentDeviceName();
     const curDevId = getOrCreateCurrentDeviceId();
 
     // Ensure watch progress entry exists immediately when playback starts (e.g. searched shows like Comedy Club or any VOD)
     const initialSec = Math.max(5, Math.floor(resumeStartSeconds || 0));
     const estimatedDur = activeVodItem.type === 'series' ? 2700 : 5400;
-    if (!watchProgressMapRef.current[activeId]) {
+    if (!findWatchProgressEntry(watchProgressMapRef.current, activeVodItem)) {
       updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, initialSec, estimatedDur);
     }
 
     const isNativeHls = (activeServer === 'filelist_torrent' && resolvedFileListStream?.ok && resolvedFileListStream.streamUrl) ||
       Boolean(matchedOfflineVodItem) ||
-      Boolean(resolvedDirectStream?.ok && (resolvedDirectStream.dashUrl || resolvedDirectStream.hlsUrl));
+      Boolean(
+        resolvedDirectStream?.ok &&
+        (resolvedDirectStream.dashUrl ||
+          resolvedDirectStream.hlsUrl ||
+          resolvedDirectStream.proxyHlsUrl)
+      );
 
     let iframeElapsed = initialSec;
 
     const markPlayingState = (playing: boolean, fromHeartbeat = false) => {
       const latestMap = watchProgressMapRef.current;
-      const cur = latestMap[activeId];
+      const cur = findWatchProgressEntry(latestMap, activeVodItem);
       if (!cur) {
         if (playing) {
           updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, iframeElapsed, estimatedDur);
@@ -8983,20 +9535,31 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         updateWatchProgress(activeVodItem, selectedSeason, selectedEpisode, iframeElapsed, cur.duration || estimatedDur);
         return;
       }
-      const next: Record<string, VodWatchProgressEntry> = {
-        ...latestMap,
-        [activeId]: {
-          ...cur,
-          deviceName: curDevName,
-          deviceId: curDevId,
-          isPlayingNow: playing,
-          updatedAt: Date.now(),
-        },
+      const next: Record<string, VodWatchProgressEntry> = {};
+      for (const [k, v] of Object.entries(latestMap)) {
+        if (!v || typeof v !== 'object') continue;
+        if (k !== activeId && areVodItemsSame(v.item, activeVodItem)) {
+          continue;
+        }
+        next[k] = v;
+      }
+      const effCurTime =
+        lastPlaybackTimeRef.current?.cur && lastPlaybackTimeRef.current.cur > 1
+          ? Math.max(cur.currentTime || 0, lastPlaybackTimeRef.current.cur)
+          : cur.currentTime;
+      next[activeId] = {
+        ...cur,
+        currentTime: effCurTime,
+        deviceName: curDevName,
+        deviceId: curDevId,
+        isPlayingNow: playing,
+        updatedAt: Date.now(),
       };
-      watchProgressMapRef.current = next;
-      saveWatchProgressMap(next, activeProfileId);
+      const cleanNext = deduplicateProgressMap(next);
+      watchProgressMapRef.current = cleanNext;
+      saveWatchProgressMap(cleanNext, activeProfileId);
       if (!playing || !fromHeartbeat) {
-        setWatchProgressMap(next);
+        setWatchProgressMap(cleanNext);
       }
     };
 
@@ -9205,9 +9768,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   }, [
     activeProfileId,
     section === 'history' ||
-      section === 'saved' ||
-      section === 'home' ||
-      section === 'radio',
+    section === 'saved' ||
+    section === 'home' ||
+    section === 'radio',
     switchRadioFavoritesProfile,
     syncRadioFavoritesWithServer,
   ]);
@@ -9230,7 +9793,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const tSec = Number(params.get('t')) || 0;
     const mType = params.get('type') === 'series' ? 'series' : 'movie';
 
-    const existingEntry = watchProgressMap[resumeId];
+    const existingEntry = findWatchProgressEntry(watchProgressMap, resumeId);
     if (existingEntry?.item) {
       handleOpenVod(existingEntry.item, false);
       setSelectedSeason(sNum);
@@ -9271,18 +9834,87 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     });
   };
 
-  const historyList = useMemo(() => {
-    return Object.values(watchProgressMap)
+  const historyList = useMemo<VodWatchProgressEntry[]>(() => {
+    const isAdultAllowed = activeProfile?.id === 'p1' || (activeProfile as any)?.role === 'admin' || (activeProfile as any)?.allowAdult;
+    const cleanMap: Record<string, VodWatchProgressEntry> = deduplicateProgressMap(watchProgressMap);
+    return Object.values(cleanMap)
       .filter(
         (e) =>
           e &&
           e.item &&
           (e.currentTime > 0 ||
             (e.episodeProgressMap &&
-              Object.keys(e.episodeProgressMap).length > 0))
+              Object.keys(e.episodeProgressMap).length > 0)) &&
+          (isAdultAllowed ||
+            (!e.item?.isAdultKlubnichka &&
+              !e.item?.id?.startsWith('klub_') &&
+              !e.item?.genres?.includes('Adult') &&
+              !e.item?.genres?.includes('18+ Adult')))
       )
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  }, [watchProgressMap]);
+  }, [watchProgressMap, activeProfile]);
+
+  // Load suggestions from same theme/category when watching Klubnichka 18+
+  useEffect(() => {
+    if (!activeVodItem?.isAdultKlubnichka || !isPlayingVod) {
+      setIsKlubSuggestionsOpen(false);
+      return;
+    }
+
+    const currentRawId = activeVodItem.klubnichkaRawId;
+    const currentId = activeVodItem.id;
+    const cachedItems = (persistedKlubCache.items || []).filter(
+      (c) => c.id !== currentId && (!currentRawId || c.rawVideoId !== currentRawId)
+    );
+
+    if (cachedItems.length > 0) {
+      setKlubSuggestions(cachedItems.slice(0, 18));
+    }
+
+    let isCancelled = false;
+    const src = persistedKlubCache.selectedSource || 'pornhub';
+    const cat = persistedKlubCache.selectedCategory || 'trending';
+
+    fetchKlubnichkaCatalog({
+      source: src,
+      category: cat,
+      page: 1,
+    })
+      .then((res) => {
+        if (isCancelled || !res?.items || res.items.length === 0) return;
+        const filtered = res.items.filter(
+          (c) => c.id !== currentId && (!currentRawId || c.rawVideoId !== currentRawId)
+        );
+        if (filtered.length > 0) {
+          setKlubSuggestions(filtered.slice(0, 18));
+        }
+      })
+      .catch(() => { });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeVodItem?.id, activeVodItem?.isAdultKlubnichka, isPlayingVod]);
+
+  const nextKlubCard = useMemo<KlubnichkaVideoCard | null>(() => {
+    if (!activeVodItem?.isAdultKlubnichka) return null;
+    const allItems = persistedKlubCache.items || [];
+    const curIdx = allItems.findIndex(
+      (c) =>
+        c.id === activeVodItem.id ||
+        (activeVodItem.klubnichkaRawId && c.rawVideoId === activeVodItem.klubnichkaRawId)
+    );
+    if (curIdx >= 0 && curIdx + 1 < allItems.length) {
+      return allItems[curIdx + 1];
+    }
+    if (klubSuggestions.length > 0) {
+      return klubSuggestions[0];
+    }
+    if (allItems.length > 0 && allItems[0].id !== activeVodItem.id) {
+      return allItems[0];
+    }
+    return null;
+  }, [activeVodItem?.id, activeVodItem?.isAdultKlubnichka, klubSuggestions]);
 
   triggerHomeQuickPlayRef.current = () => {
     if (
@@ -9303,10 +9935,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ) {
       return false;
     }
-    const activeTag = (
-      document.activeElement as HTMLElement | null
-    )?.tagName?.toLowerCase();
+    const activeEl = document.activeElement as HTMLElement | null;
+    const activeTag = activeEl?.tagName?.toLowerCase();
     if (activeTag === 'input' || activeTag === 'textarea') {
+      return false;
+    }
+    if (activeEl?.closest('main')) {
       return false;
     }
     const fallbackHistory =
@@ -9449,6 +10083,91 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     searchResults,
     seriesEpStatsMap,
   ]);
+
+  const handleToggleWatchedStatus = useCallback(
+    (targetItem?: CinemetaItem | null, targetSeason?: number, targetEpisode?: number) => {
+      const item = targetItem || activeVodItem || lastFocusedVodItemRef.current;
+      if (!item) return;
+
+      const id = item.id;
+      const isSeries = item.type === 'series';
+
+      setWatchProgressMap((prev) => {
+        const existing = prev[id];
+        const now = Date.now();
+
+        if (isSeries) {
+          const s = targetSeason ?? selectedSeason ?? 1;
+          const ep = targetEpisode ?? selectedEpisode ?? 1;
+          const epKey = `S${s}E${ep}`;
+          const currentEpProg = existing?.episodeProgressMap?.[epKey];
+          const epDur = currentEpProg?.duration && currentEpProg.duration > 60 ? currentEpProg.duration : 2700;
+          const isCurrentlyWatched = Boolean(currentEpProg && currentEpProg.currentTime >= epDur * 0.85);
+          const newEpTime = isCurrentlyWatched ? 0 : epDur;
+
+          const updatedEpMap = {
+            ...(existing?.episodeProgressMap || {}),
+            [epKey]: {
+              currentTime: newEpTime,
+              duration: epDur,
+              updatedAt: now,
+            },
+          };
+
+          const nextEntry: VodWatchProgressEntry = {
+            ...(existing || {
+              item,
+              season: s,
+              episode: ep,
+              currentTime: 0,
+              duration: epDur,
+              server: activeServer,
+              subLang: preferredSubLang,
+              deviceName: detectCurrentDeviceName(),
+              deviceId: getOrCreateCurrentDeviceId(),
+            }),
+            item: existing?.item || item,
+            season: s,
+            episode: ep,
+            updatedAt: now,
+            episodeProgressMap: updatedEpMap,
+          };
+
+          const next = { ...prev, [id]: nextEntry };
+          watchProgressMapRef.current = next;
+          saveWatchProgressMap(next, activeProfileId);
+          return next;
+        } else {
+          // Movie
+          const movDur = existing?.duration && existing.duration > 60 ? existing.duration : 5400;
+          const isCurrentlyWatched = Boolean(existing && existing.currentTime >= movDur * 0.85);
+          const newTime = isCurrentlyWatched ? 0 : movDur;
+
+          const nextEntry: VodWatchProgressEntry = {
+            ...(existing || {
+              item,
+              season: 1,
+              episode: 1,
+              server: activeServer,
+              subLang: preferredSubLang,
+              deviceName: detectCurrentDeviceName(),
+              deviceId: getOrCreateCurrentDeviceId(),
+            }),
+            item: existing?.item || item,
+            currentTime: newTime,
+            duration: movDur,
+            updatedAt: now,
+          };
+
+          const next = { ...prev, [id]: nextEntry };
+          watchProgressMapRef.current = next;
+          saveWatchProgressMap(next, activeProfileId);
+          return next;
+        }
+      });
+    },
+    [activeVodItem, selectedSeason, selectedEpisode, activeServer, preferredSubLang, activeProfileId]
+  );
 
   const handleRemoveWatchProgressItem = useCallback(
     (vodId: string) => {
@@ -9815,10 +10534,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
             paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
           }}
-          className={`relative z-20 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-[#141414]'
-            }`}
+          className={`relative z-20 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-black'}`}
         >
-          <div className="h-14 sm:h-16 px-3 sm:px-7 w-full flex items-center justify-between gap-2 sm:gap-4">
+          <div className="h-12 sm:h-16 px-3 sm:px-7 w-full flex items-center justify-between gap-2 sm:gap-4">
             {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
             <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
               {activeVodItem && (
@@ -9928,6 +10646,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       id: 'movies',
                       label: tr('Filme', 'Movies', 'Фильмы'),
                       Icon: Clapperboard,
+                    },
+                    {
+                      id: 'imdb',
+                      label: tr('Top IMDb', 'Top IMDb', 'Топ IMDb'),
+                      Icon: Star,
                     },
                     {
                       id: 'series',
@@ -10298,69 +11021,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 <Settings className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
               </button>
 
-              {/* Mercedes GLE 1920x720 / CarPlay Ultra-Wide Car Mode Toggle */}
-              <button
-                type="button"
-                data-header-car-mode-btn="true"
-                aria-pressed={isCarMode}
-                aria-label={tr(
-                  isCarMode
-                    ? 'Ieșire din Mod Auto Widescreen (GLE)'
-                    : 'Activează Mod Auto Widescreen (GLE / CarPlay)',
-                  isCarMode
-                    ? 'Exit Car Widescreen Mode'
-                    : 'Enable Car Widescreen Mode',
-                  isCarMode
-                    ? 'Выйти из Авто-режима'
-                    : 'Включить Авто-режим (GLE)'
-                )}
-                title={tr(
-                  isCarMode
-                    ? 'Mod Auto GLE 8:3 Activ (Click pentru mod normal)'
-                    : 'Mod Auto Widescreen GLE 1920×720 / CarPlay (Fără margini)',
-                  isCarMode
-                    ? 'GLE 8:3 Car Mode Active (Click for standard mode)'
-                    : 'GLE 1920×720 Widescreen Car Mode (Edge-to-edge)',
-                  isCarMode
-                    ? 'Авто-режим GLE активен'
-                    : 'Авто-режим GLE 1920×720'
-                )}
-                onClick={handleToggleCarMode}
-                className={`hidden sm:flex ${isCarMode ? 'h-11 px-3 gap-1.5' : 'w-9 h-9'
-                  } rounded-full border items-center justify-center transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0 ${isCarMode
-                    ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(37,99,235,0.5)]'
-                    : 'bg-white/10 border-white/15 text-zinc-300 hover:text-white hover:bg-white/15'
-                  }`}
-              >
-                <Car className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" aria-hidden="true" />
-                {isCarMode && (
-                  <span className="text-xs font-extrabold tracking-wide uppercase">
-                    Auto
-                  </span>
-                )}
-              </button>
 
-              {/* Open in Dedicated Full App Window (No Chrome Tabs / Bookmarks Bar) */}
-              {!isStandaloneAppWindow && (
-                <button
-                  type="button"
-                  data-header-app-window-btn="true"
-                  aria-label={tr(
-                    'Deschide în Fereastră Full (fără tab-uri și bare browser)',
-                    'Open in Full App Window (without browser tabs)',
-                    'Открыть в отдельном полном окне'
-                  )}
-                  title={tr(
-                    'Deschide în Fereastră Full separată (fără tab-uri și bara de marcaje Chrome)',
-                    'Open in Separate Full Window (no Chrome tabs/bookmarks)',
-                    'Открыть в полном отдельном окне'
-                  )}
-                  onClick={handleOpenInFullAppWindow}
-                  className="hidden sm:flex w-9 h-9 rounded-full bg-white/10 border border-white/15 items-center justify-center text-sky-300 hover:text-white hover:bg-blue-600 hover:border-blue-400 focus:bg-white focus:text-zinc-950 focus:outline-none transition-all cursor-pointer shrink-0"
-                >
-                  <ExternalLink className="w-4 h-4 sm:w-[18px] sm:h-[18px]" aria-hidden="true" />
-                </button>
-              )}
 
               {/* Fullscreen Icon (100% Borderless Full Screen) */}
               <button
@@ -10392,15 +11053,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 )}
               </button>
 
-              {/* Reload Icon */}
+              {/* Reload / Refresh Button */}
               <button
                 type="button"
-                aria-label="Reîncarcă Aplicația TV"
+                data-header-refresh-btn="true"
+                aria-label={tr('Reîncarcă Aplicația TV', 'Reload TV App', 'Обновить')}
                 onClick={() => window.location.reload()}
-                title="Reîncarcă Aplicația TV"
+                title={tr('Reîncarcă Aplicația TV', 'Reload TV App', 'Обновить')}
                 className="hidden sm:flex w-9 h-9 rounded-full items-center justify-center text-zinc-300 hover:text-white hover:bg-white/10 focus:bg-white focus:text-zinc-950 focus:outline-none transition-colors cursor-pointer"
               >
-                <RefreshCw className="w-5 h-5" aria-hidden="true" />
+                <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
               </button>
 
               {/* Lampa 3-Dot Status Indicator */}
@@ -10466,6 +11128,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     id: 'movies',
                     label: tr('Filme', 'Movies', 'Фильмы'),
                     Icon: Clapperboard,
+                  },
+                  {
+                    id: 'imdb',
+                    label: tr('Top IMDb', 'Top IMDb', 'Топ IMDb'),
+                    Icon: Star,
                   },
                   {
                     id: 'series',
@@ -10804,23 +11471,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   </span>
                 </button>
 
-                <button
-                  type="button"
-                  data-sidebar-car-mode-btn="true"
-                  aria-pressed={isCarMode}
-                  onClick={handleToggleCarMode}
-                  className={`w-full min-h-[44px] px-4 py-2 rounded-full overflow-hidden flex items-center justify-start gap-3.5 text-[15px] transition-none focus:outline-none cursor-pointer ${isCarMode
-                    ? 'bg-blue-600 text-white font-bold shadow'
-                    : 'text-sky-300 hover:bg-white/10 hover:text-white focus:bg-white focus:text-[#141414] focus:font-semibold'
-                    }`}
-                >
-                  <Car className="w-5 h-5 shrink-0 stroke-[1.9]" aria-hidden="true" />
-                  <span className="inline truncate">
-                    {isCarMode
-                      ? tr('Ieșire Mod Auto', 'Exit Car Mode', 'Выход Авто')
-                      : tr('Mod Auto (GLE)', 'Car Mode (GLE)', 'Авто-режим (GLE)')}
-                  </span>
-                </button>
+
               </div>
             </nav>
 
@@ -11152,7 +11803,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           !(
                             resolvedDirectStream?.ok &&
                             (resolvedDirectStream.dashUrl ||
-                              resolvedDirectStream.hlsUrl)
+                              resolvedDirectStream.hlsUrl ||
+                              resolvedDirectStream.proxyHlsUrl)
                           )) ||
                         (!activeVodItem.id.startsWith('yt_') &&
                           activeServer === 'filelist_torrent' &&
@@ -11171,6 +11823,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         type="button"
                         data-vod-top-back-btn="true"
                         onClick={() => {
+                          flushPlaybackOnClose();
                           setIsMobileCustomFullscreen(false);
                           setIsPlayingVod(false);
                           if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
@@ -11373,57 +12026,53 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         <FilmioStartupLoader />
                       ) : resolvedFileListStream?.ok &&
                         resolvedFileListStream.streamUrl ? (
-                                              <VodNativeHlsPlayer
-                        key={`vod_fl_${activeVodItem.id}_${resolvedFileListStream.torrentId || 0}_${selectedSeason}_${selectedEpisode}`}
-                        hlsUrl={resolvedFileListStream.streamUrl}
-                        durationHintSec={(() => {
-                          if (
-                            resolvedFileListStream.durationSec &&
-                            resolvedFileListStream.durationSec > 60
-                          ) {
-                            return resolvedFileListStream.durationSec;
-                          }
-                          const rawRt = String(detailedMeta?.runtime || '');
-                          const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
-                          if (hmMatch) {
-                            return (
-                              Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60
-                            );
-                          }
-                          const minMatch = rawRt.match(/(\d+)\s*min/i) || rawRt.match(/^(\d+)$/);
-                          if (minMatch && Number(minMatch[1]) > 5) {
-                            return Number(minMatch[1]) * 60;
-                          }
-                          const savedDur =
-                            watchProgressMap[activeVodItem.id]?.duration;
-                          if (savedDur && savedDur > 60) return savedDur;
-                          return activeVodItem.type === 'series' ? 2700 : 7200;
-                        })()}
-                        audioTrackLabels={resolvedFileListStream.audioNames}
-                        initialAudioTrackIndex={
-                          selectedAudioTrackIdx >= 0 &&
-                          selectedAudioTrackIdx <
-                            (resolvedFileListStream.audioNames?.length || 1)
-                            ? selectedAudioTrackIdx
-                            : (resolvedFileListStream.audioNames?.length || 0) > 1
-                              ? resolveAudioTrackIndexByPreference(
+                        <VodNativeHlsPlayer
+                          key={`vod_fl_${activeVodItem.id}_${resolvedFileListStream.torrentId || 0}_${selectedSeason}_${selectedEpisode}`}
+                          hlsUrl={resolvedFileListStream.streamUrl}
+                          durationHintSec={(() => {
+                            if (
+                              resolvedFileListStream.durationSec &&
+                              resolvedFileListStream.durationSec > 60
+                            ) {
+                              return resolvedFileListStream.durationSec;
+                            }
+                            const rawRt = String(detailedMeta?.runtime || '');
+                            const hmMatch = rawRt.match(/^(\d{1,2}):(\d{2})$/);
+                            if (hmMatch) {
+                              return (
+                                Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60
+                              );
+                            }
+                            const minMatch = rawRt.match(/(\d+)\s*min/i) || rawRt.match(/^(\d+)$/);
+                            if (minMatch && Number(minMatch[1]) > 5) {
+                              return Number(minMatch[1]) * 60;
+                            }
+                            const savedDur =
+                              (findWatchProgressEntry(watchProgressMap, activeVodItem) ||
+                               findWatchProgressEntry(watchProgressMapRef.current, activeVodItem))?.duration;
+                            if (savedDur && savedDur > 60) return savedDur;
+                            return activeVodItem.type === 'series' ? 2700 : 7200;
+                          })()}
+                          audioTrackLabels={resolvedFileListStream.audioNames}
+                          initialAudioTrackIndex={
+                            selectedAudioTrackIdx >= 0 &&
+                              selectedAudioTrackIdx <
+                              (resolvedFileListStream.audioNames?.length || 1)
+                              ? selectedAudioTrackIdx
+                              : (resolvedFileListStream.audioNames?.length || 0) > 1
+                                ? resolveAudioTrackIndexByPreference(
                                   resolvedFileListStream.audioNames || [],
                                   effectiveVodAudioPref
                                 )
-                              : -1
-                        }
-                        isForeign={isCurrentVodForeign}
-                        preferredAudioLang={effectiveVodAudioPref}
-                        preferredQuality={tvSettings.defaultVideoQuality}
+                                : -1
+                          }
+                          isForeign={isCurrentVodForeign}
+                          preferredAudioLang={effectiveVodAudioPref}
+                          preferredQuality={tvSettings.defaultVideoQuality}
                           initialSubFontSize={tvSettings.defaultSubFontSize}
                           preferredSubLang={tvSettings.defaultSubLang}
                           startAtSeconds={resumeStartSeconds}
-                          poster={
-                            detailedMeta?.poster ||
-                            activeVodItem.poster ||
-                            detailedMeta?.background ||
-                            activeVodItem.background
-                          }
+                          poster={effectivePlayerPoster}
                           backdropUrl={
                             detailedMeta?.background ||
                             activeVodItem.background ||
@@ -11465,7 +12114,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           subtitleCues={activeSubCues}
                           isOsdVisible={isVodOsdVisible}
                           activeServerId={activeServer}
-                          serverOptions={VOD_SERVERS}
+                          serverOptions={currentServerOptions}
                           sourceQualityBadge={
                             resolvedFileListStream.selectedTorrent?.quality ||
                             activeVodItem.qualityBadge
@@ -11473,9 +12122,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           externalQualityOptions={flQualityOptions}
                           onStreamError={() => {
                             if (
+                              !isCurrentVodForeign &&
                               resolvedDirectStream?.ok &&
                               (resolvedDirectStream.dashUrl ||
-                                resolvedDirectStream.hlsUrl)
+                                resolvedDirectStream.hlsUrl ||
+                                resolvedDirectStream.proxyHlsUrl)
                             ) {
                               setActiveServer('kinogram_hls');
                             }
@@ -11484,6 +12135,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           onWakeOsd={wakeVodOsd}
                           onHideOsd={hideVodOsd}
                           onClosePlayer={() => {
+                            flushPlaybackOnClose();
                             setIsPlayingVod(false);
                             if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
                               setActiveVodItem(null);
@@ -11493,7 +12145,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             }
                           }}
                           prevEpisodeLabel={prevEpisodeInfo?.label}
-                          nextEpisodeLabel={nextEpisodeInfo?.label}
+                          nextEpisodeLabel={
+                            activeVodItem.isAdultKlubnichka
+                              ? (nextKlubCard ? tr(`Următorul: ${nextKlubCard.title.slice(0, 24)}...`, `Next: ${nextKlubCard.title.slice(0, 24)}...`, `Следующее: ${nextKlubCard.title.slice(0, 24)}...`) : undefined)
+                              : nextEpisodeInfo?.label
+                          }
                           onPrevEpisode={
                             prevEpisodeInfo
                               ? () => {
@@ -11507,16 +12163,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               : undefined
                           }
                           onNextEpisode={
-                            nextEpisodeInfo
-                              ? () => {
-                                userSelectedFlTorrentIdRef.current = null;
-                                if (nextEpisodeInfo.season !== selectedSeason) {
-                                  setSelectedSeason(nextEpisodeInfo.season);
+                            activeVodItem.isAdultKlubnichka
+                              ? (nextKlubCard
+                                ? () => {
+                                  const mapped = mapKlubCardToCinemetaItem(nextKlubCard);
+                                  persistedKlubCache.lastClickedCardId = nextKlubCard.id;
+                                  setIsKlubSuggestionsOpen(false);
+                                  handleOpenVod(mapped, true);
                                 }
-                                setSelectedEpisode(nextEpisodeInfo.episode);
-                                setResumeStartSeconds(0);
-                              }
-                              : undefined
+                                : undefined)
+                              : (nextEpisodeInfo
+                                ? () => {
+                                  userSelectedFlTorrentIdRef.current = null;
+                                  if (nextEpisodeInfo.season !== selectedSeason) {
+                                    setSelectedSeason(nextEpisodeInfo.season);
+                                  }
+                                  setSelectedEpisode(nextEpisodeInfo.episode);
+                                  setResumeStartSeconds(0);
+                                }
+                                : undefined)
                           }
                           onOpenEpisodesDrawer={
                             activeVodItem.type === 'series'
@@ -11588,13 +12253,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             setActiveSubCues([]);
                           }}
                           onTimeUpdate={(cur, dur) => {
-                            const prevEntry =
-                              watchProgressMapRef.current[activeVodItem.id];
+                            lastPlaybackTimeRef.current = { cur, dur };
+                            const prevEntry = findWatchProgressEntry(
+                              watchProgressMapRef.current,
+                              activeVodItem
+                            );
                             const prevCur = prevEntry?.currentTime || 0;
                             if (
-                              cur > 3 &&
+                              cur > 1 &&
                               (!prevEntry?.isPlayingNow ||
-                                Math.abs(cur - prevCur) >= 15)
+                                Math.abs(cur - prevCur) >= 4)
                             ) {
                               updateWatchProgress(
                                 activeVodItem,
@@ -11604,72 +12272,61 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 dur
                               );
                             }
+
+                            // Invisible Pre-buffering of next episode when < 120s remaining
+                            if (
+                              activeVodItem.type === 'series' &&
+                              nextEpisodeInfo &&
+                              dur > 120 &&
+                              (dur - cur) <= 120
+                            ) {
+                              const nextKey = `${activeVodItem.id}_s${nextEpisodeInfo.season}_e${nextEpisodeInfo.episode}`;
+                              if (hasPreloadedNextEpRef.current !== nextKey) {
+                                hasPreloadedNextEpRef.current = nextKey;
+                                const nextFlParams = new URLSearchParams({
+                                  name: activeVodItem.name,
+                                  type: 'series',
+                                  s: String(nextEpisodeInfo.season),
+                                  e: String(nextEpisodeInfo.episode),
+                                  ru: isCurrentVodForeign ? '0' : '1',
+                                });
+                                fetch(buildFileListApiUrl(`/api/filelist/resolve?${nextFlParams.toString()}`)).catch(() => { });
+                                const foundKpId = activeVodItem.kpId || (detailedMeta as any)?.kinopoiskId;
+                                const resolvedImdb = activeVodItem.imdbId || detailedMeta?.imdbId;
+                                resolveDirectVodStreamClient({
+                                  kp: foundKpId,
+                                  imdb: resolvedImdb,
+                                  title: detailedMeta?.nameOriginal || activeVodItem.name,
+                                  type: 'series',
+                                  season: nextEpisodeInfo.season,
+                                  episode: nextEpisodeInfo.episode,
+                                }).catch(() => { });
+                              }
+                            }
                           }}
                         />
                       ) : (
-                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center text-zinc-300">
-                          <p className="text-sm font-bold text-rose-400">
-                            {resolvedFileListStream?.error &&
-                              !/fetch failed/i.test(resolvedFileListStream.error)
-                              ? resolvedFileListStream.error
-                              : tr(
-                                'Nu s-a găsit un torrent FileList activ pentru acest titlu. Reîncearcă S1 sau comută pe S2 / S3!',
-                                'No active FileList torrent found for this title. Retry S1 or switch to S2 / S3!',
-                                'Торрент FileList не найден. Повторите S1 или переключите на S2 / S3!'
-                              )}
-                          </p>
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const fallbackTorId =
-                                  resolvedFileListStream?.torrents?.[0]?.id ||
-                                  activeVodItem.flTorrentId ||
-                                  0;
-                                if (fallbackTorId) {
-                                  handleSelectFileListTorrent(fallbackTorId, undefined, true);
-                                } else {
-                                  setIsFileListStreamLoading(true);
-                                  const q =
-                                    detailedMeta?.nameOriginal ||
-                                    activeVodItem.nameOriginal ||
-                                    activeVodItem.name ||
-                                    '';
-                                  const p = new URLSearchParams({
-                                    type: activeVodItem.type,
-                                    s: String(selectedSeason),
-                                    e: String(selectedEpisode),
-                                    q,
-                                  });
-                                  const curImdb = activeVodItem.id.startsWith('tt')
-                                    ? activeVodItem.id
-                                    : detailedMeta?.imdbId || '';
-                                  if (curImdb) p.set('imdb', curImdb);
-                                  fetch(buildFileListApiUrl(`/api/filelist/resolve?${p.toString()}`))
-                                    .then((r) => (r.ok ? r.json() : { ok: false }))
-                                    .then((d) => setResolvedFileListStream(normalizeFileListResolveData(d)))
-                                    .catch(() => { })
-                                    .finally(() => setIsFileListStreamLoading(false));
-                                }
-                              }}
-                              className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 font-extrabold text-xs cursor-pointer"
-                            >
-                              {tr('Reîncearcă S1: FileList.io', 'Retry S1: FileList.io', 'Повторить S1: FileList.io')}
-                            </button>
-                            {VOD_SERVERS.filter(
-                              (s) => s.id !== 'filelist_torrent'
-                            ).map((srv) => (
-                              <button
-                                key={srv.id}
-                                type="button"
-                                onClick={() => setActiveServer(srv.id)}
-                                className="h-10 px-4 rounded-xl bg-[#1e3a8a] text-white border border-[#3b82f6]/50 font-extrabold text-xs cursor-pointer"
-                              >
-                                {srv.label.split('(')[0]}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                        <iframe
+                          src={
+                            resolvedDirectStream?.embedUrl ||
+                            buildVodEmbedUrl(
+                              isCurrentVodForeign ? 'vidsrc_pm' : 'kinogram_embed',
+                              detailedMeta || activeVodItem,
+                              selectedSeason,
+                              selectedEpisode,
+                              preferredSubLang,
+                              resumeStartSeconds,
+                              detailedMeta?.imdbId ||
+                              resolvedFileListStream?.selectedTorrent?.imdbId
+                            )
+                          }
+                          title={activeVodItem.name}
+                          className="relative z-10 w-full h-full border-0"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                          allowFullScreen
+                        />
                       )
                     ) : activeServer === 'kinogram_hls' ||
                       Boolean(matchedOfflineVodItem) ||
@@ -11687,12 +12344,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       ) : matchedOfflineVodItem ||
                         (resolvedDirectStream?.ok &&
                           (resolvedDirectStream.dashUrl ||
-                            resolvedDirectStream.hlsUrl)) ? (
-                                              <VodNativeHlsPlayer
-                        key={`vod_direct_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${matchedOfflineVodItem?.id || resolvedDirectStream?.sourcePath || 'direct'}`}
-                        offlineItem={matchedOfflineVodItem}
-                        dashUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.dashUrl}
-                        hlsUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.hlsUrl}
+                            resolvedDirectStream.hlsUrl ||
+                            resolvedDirectStream.proxyHlsUrl)) ? (
+                        <VodNativeHlsPlayer
+                          key={`vod_direct_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${matchedOfflineVodItem?.id || resolvedDirectStream?.sourcePath || 'direct'}`}
+                          offlineItem={matchedOfflineVodItem}
+                          dashUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.dashUrl}
+                          hlsUrl={matchedOfflineVodItem ? undefined : resolvedDirectStream?.hlsUrl}
                           onStreamError={() => {
                             if (activeVodItem.isAdultKlubnichka && klubnichkaQualities.length > 1) {
                               const curIdx = klubnichkaQualities.findIndex(
@@ -11762,7 +12420,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               return Number(minMatch[1]) * 60;
                             }
                             const savedDur =
-                              watchProgressMap[activeVodItem.id]?.duration;
+                              (findWatchProgressEntry(watchProgressMap, activeVodItem) ||
+                               findWatchProgressEntry(watchProgressMapRef.current, activeVodItem))?.duration;
                             if (savedDur && savedDur > 60) return savedDur;
                             return activeVodItem.type === 'series' ? 2700 : 7200;
                           })()}
@@ -11774,18 +12433,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           initialAudioTrackIndex={
                             matchedOfflineVodItem ? 0 : effectiveAudioTrackIdx
                           }
-                        isForeign={isCurrentVodForeign}
-                        preferredAudioLang={effectiveVodAudioPref}
-                        preferredQuality={tvSettings.defaultVideoQuality}
+                          isForeign={isCurrentVodForeign}
+                          preferredAudioLang={effectiveVodAudioPref}
+                          preferredQuality={tvSettings.defaultVideoQuality}
                           initialSubFontSize={tvSettings.defaultSubFontSize}
                           preferredSubLang={tvSettings.defaultSubLang}
                           startAtSeconds={resumeStartSeconds}
-                          poster={
-                            detailedMeta?.poster ||
-                            activeVodItem.poster ||
-                            detailedMeta?.background ||
-                            activeVodItem.background
-                          }
+                          poster={effectivePlayerPoster}
                           backdropUrl={
                             detailedMeta?.background ||
                             activeVodItem.background ||
@@ -11835,13 +12489,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           }
                           isOsdVisible={isVodOsdVisible}
                           activeServerId={activeServer}
-                          serverOptions={matchedOfflineVodItem ? [] : VOD_SERVERS}
+                          serverOptions={matchedOfflineVodItem ? [] : currentServerOptions}
                           sourceQualityBadge={matchedOfflineVodItem?.qualityLabel}
                           externalQualityOptions={matchedOfflineVodItem ? [] : flQualityOptions}
                           onResolutionChange={setLiveVodResolution}
                           onWakeOsd={wakeVodOsd}
                           onHideOsd={hideVodOsd}
                           onClosePlayer={() => {
+                            flushPlaybackOnClose();
                             setIsPlayingVod(false);
                             if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
                               setActiveVodItem(null);
@@ -11851,7 +12506,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             }
                           }}
                           prevEpisodeLabel={prevEpisodeInfo?.label}
-                          nextEpisodeLabel={nextEpisodeInfo?.label}
+                          nextEpisodeLabel={
+                            activeVodItem.isAdultKlubnichka
+                              ? (nextKlubCard ? tr(`Următorul: ${nextKlubCard.title.slice(0, 24)}...`, `Next: ${nextKlubCard.title.slice(0, 24)}...`, `Следующее: ${nextKlubCard.title.slice(0, 24)}...`) : undefined)
+                              : nextEpisodeInfo?.label
+                          }
                           onPrevEpisode={
                             prevEpisodeInfo
                               ? () => {
@@ -11865,16 +12524,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               : undefined
                           }
                           onNextEpisode={
-                            nextEpisodeInfo
-                              ? () => {
-                                userSelectedFlTorrentIdRef.current = null;
-                                if (nextEpisodeInfo.season !== selectedSeason) {
-                                  setSelectedSeason(nextEpisodeInfo.season);
+                            activeVodItem.isAdultKlubnichka
+                              ? (nextKlubCard
+                                ? () => {
+                                  const mapped = mapKlubCardToCinemetaItem(nextKlubCard);
+                                  persistedKlubCache.lastClickedCardId = nextKlubCard.id;
+                                  setIsKlubSuggestionsOpen(false);
+                                  handleOpenVod(mapped, true);
                                 }
-                                setSelectedEpisode(nextEpisodeInfo.episode);
-                                setResumeStartSeconds(0);
-                              }
-                              : undefined
+                                : undefined)
+                              : (nextEpisodeInfo
+                                ? () => {
+                                  userSelectedFlTorrentIdRef.current = null;
+                                  if (nextEpisodeInfo.season !== selectedSeason) {
+                                    setSelectedSeason(nextEpisodeInfo.season);
+                                  }
+                                  setSelectedEpisode(nextEpisodeInfo.episode);
+                                  setResumeStartSeconds(0);
+                                }
+                                : undefined)
                           }
                           onOpenEpisodesDrawer={
                             activeVodItem.type === 'series'
@@ -11946,13 +12614,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             setActiveSubCues([]);
                           }}
                           onTimeUpdate={(cur, dur) => {
-                            const prevEntry =
-                              watchProgressMapRef.current[activeVodItem.id];
+                            lastPlaybackTimeRef.current = { cur, dur };
+                            const prevEntry = findWatchProgressEntry(
+                              watchProgressMapRef.current,
+                              activeVodItem
+                            );
                             const prevCur = prevEntry?.currentTime || 0;
                             if (
-                              cur > 3 &&
+                              cur > 1 &&
                               (!prevEntry?.isPlayingNow ||
-                                Math.abs(cur - prevCur) >= 15)
+                                Math.abs(cur - prevCur) >= 4)
                             ) {
                               updateWatchProgress(
                                 activeVodItem,
@@ -11961,6 +12632,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 cur,
                                 dur
                               );
+                            }
+
+                            // Invisible Pre-buffering of next episode when < 120s remaining
+                            if (
+                              activeVodItem.type === 'series' &&
+                              nextEpisodeInfo &&
+                              dur > 120 &&
+                              (dur - cur) <= 120
+                            ) {
+                              const nextKey = `${activeVodItem.id}_s${nextEpisodeInfo.season}_e${nextEpisodeInfo.episode}`;
+                              if (hasPreloadedNextEpRef.current !== nextKey) {
+                                hasPreloadedNextEpRef.current = nextKey;
+                                const nextFlParams = new URLSearchParams({
+                                  name: activeVodItem.name,
+                                  type: 'series',
+                                  s: String(nextEpisodeInfo.season),
+                                  e: String(nextEpisodeInfo.episode),
+                                  ru: isCurrentVodForeign ? '0' : '1',
+                                });
+                                fetch(buildFileListApiUrl(`/api/filelist/resolve?${nextFlParams.toString()}`)).catch(() => { });
+                                const foundKpId = activeVodItem.kpId || (detailedMeta as any)?.kinopoiskId;
+                                const resolvedImdb = activeVodItem.imdbId || detailedMeta?.imdbId;
+                                resolveDirectVodStreamClient({
+                                  kp: foundKpId,
+                                  imdb: resolvedImdb,
+                                  title: detailedMeta?.nameOriginal || activeVodItem.name,
+                                  type: 'series',
+                                  season: nextEpisodeInfo.season,
+                                  episode: nextEpisodeInfo.episode,
+                                }).catch(() => { });
+                              }
                             }
                           }}
                         />
@@ -12047,7 +12749,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </div>
                           </div>
                         </div>
-                      ) : isCurrentVodForeign && (isFileListStreamLoading || (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl)) ? (
+                      ) : (isCurrentVodForeign && (isFileListStreamLoading || (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl))) ||
+                        isDirectStreamLoading ||
+                        (!isCurrentVodForeign && isRussianTvShowItem(activeVodItem) && !(resolvedDirectStream?.ok && (resolvedDirectStream.dashUrl || resolvedDirectStream.hlsUrl || resolvedDirectStream.proxyHlsUrl))) ? (
                         <FilmioStartupLoader />
                       ) : (
                         <iframe
@@ -12165,7 +12869,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           activeServer === 'filelist_torrent') &&
                         resolvedDirectStream?.ok &&
                         (resolvedDirectStream.dashUrl ||
-                          resolvedDirectStream.hlsUrl)
+                          resolvedDirectStream.hlsUrl ||
+                          resolvedDirectStream.proxyHlsUrl)
                       ) &&
                       !isFileListStreamLoading &&
                       !isDirectStreamLoading && (
@@ -12235,7 +12940,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
                               <button
                                 type="button"
-                                data-vod-play-btn="true"
                                 data-vod-seek-back-15="true"
                                 onFocus={wakeVodOsd}
                                 onClick={() => {
@@ -12376,20 +13080,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   setIsEpisodesDrawerOpen(false);
                                   setIsInfoSheetOpen((v) => !v);
                                 }}
-                                title="Descriere (Butonul Galben)"
-                                aria-label="Descriere"
-                                className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#FFD60A]/18 hover:bg-[#FFD60A]/30 border border-[#FFD60A]/45 text-[#FFD60A] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(255,214,10,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#FFD60A] focus:text-zinc-950 cursor-pointer"
-                              >
-                                <SfInfoIcon className="w-[18px] h-[18px] max-sm:w-4 max-sm:h-4 shrink-0" />
-                              </button>
-                              <button
-                                type="button"
-                                onFocus={wakeVodOsd}
-                                onClick={() => {
-                                  wakeVodOsd();
-                                  setIsEpisodesDrawerOpen(false);
-                                  setIsInfoSheetOpen((v) => !v);
-                                }}
                                 title="Pistă Audio & Sursă (Butonul Albastru)"
                                 aria-label="Pistă Audio & Sursă"
                                 className="h-9 w-9 max-sm:h-8 max-sm:w-8 rounded-full bg-[#0A84FF]/18 hover:bg-[#0A84FF]/30 border border-[#0A84FF]/45 text-[#0A84FF] shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_14px_rgba(10,132,255,0.22)] backdrop-blur-2xl inline-flex items-center justify-center transition-all focus:outline-none focus:bg-[#0A84FF] focus:text-white cursor-pointer"
@@ -12452,6 +13142,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 (detailedMeta?.poster && !detailedMeta.poster.includes('pl.img.gg')
                                   ? detailedMeta.poster
                                   : activeVodItem.poster && !activeVodItem.poster.includes('pl.img.gg')
+
                                     ? activeVodItem.poster
                                     : detailedMeta?.poster || activeVodItem.poster) ||
                                 `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`
@@ -12739,7 +13430,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 /^S\d+E\d+$/i.test(epCleanName);
                               const epKey = `S${selectedSeason}E${ep.episode}`;
                               const epProg =
-                                watchProgressMap[activeVodItem.id]
+                                findWatchProgressEntry(watchProgressMap, activeVodItem)
                                   ?.episodeProgressMap?.[epKey];
                               const epDur =
                                 epProg?.duration && epProg.duration > 60
@@ -12787,6 +13478,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 <button
                                   key={ep.id || ep.episode}
                                   type="button"
+                                  data-episode-card="true"
+                                  data-episode-num={ep.episode}
+                                  data-season-num={selectedSeason}
                                   data-drawer-initial-focus={
                                     isCurrent ? 'true' : undefined
                                   }
@@ -12797,6 +13491,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       ? 'true'
                                       : undefined
                                   }
+                                  onFocus={() => {
+                                    setSelectedEpisode(ep.episode);
+                                  }}
+                                  onKeyDown={(e) => handleEpisodePlayKey(e, ep, selectedSeason)}
                                   onClick={() => {
                                     userSelectedFlTorrentIdRef.current = null;
                                     setSelectedEpisode(ep.episode);
@@ -13079,7 +13777,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2">
                           {/* Primary Play Pill (Compact) */}
                           {(() => {
-                            const savedProg = watchProgressMap[activeVodItem.id];
+                            const savedProg = findWatchProgressEntry(watchProgressMap, activeVodItem);
                             const epKey = `S${selectedSeason}E${selectedEpisode}`;
                             const epTime =
                               savedProg?.episodeProgressMap?.[epKey]?.currentTime;
@@ -13333,7 +14031,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
                         {/* Line 5: Single-Row Watch Progress Bar + Reluare de la 00:00 + Ștergere din istoric (EXACT same width as the icon row above) */}
                         {(() => {
-                          const prog = watchProgressMap[activeVodItem.id];
+                          const prog = findWatchProgressEntry(watchProgressMap, activeVodItem);
                           if (!prog) return null;
                           const epKeyForBox = `S${selectedSeason}E${selectedEpisode}`;
                           const epSavedForBox = prog.episodeProgressMap?.[epKeyForBox];
@@ -14408,7 +15106,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           const isCurrent = selectedEpisode === ep.episode;
                           const epKey = `S${selectedSeason}E${ep.episode}`;
                           const epProg =
-                            watchProgressMap[activeVodItem.id]
+                            findWatchProgressEntry(watchProgressMap, activeVodItem)
                               ?.episodeProgressMap?.[epKey];
                           const epDur =
                             epProg?.duration && epProg.duration > 60
@@ -14462,6 +15160,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             <button
                               key={ep.id || ep.episode}
                               type="button"
+                              data-episode-card="true"
+                              data-episode-num={ep.episode}
+                              data-season-num={selectedSeason}
+                              onFocus={() => {
+                                setSelectedEpisode(ep.episode);
+                              }}
+                              onKeyDown={(e) => handleEpisodePlayKey(e, ep, selectedSeason)}
                               onClick={() => {
                                 userSelectedFlTorrentIdRef.current = null;
                                 setSelectedEpisode(ep.episode);
@@ -14516,8 +15221,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   </span>
                                 )}
                                 <div className="absolute bottom-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2">
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/95 text-zinc-950 text-[11px] font-extrabold shadow">
-                                    <Play className="w-3 h-3 fill-current" />
+                                  <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-white/95 text-zinc-950 text-[11px] font-extrabold shadow">
                                     <span>
                                       {epProg &&
                                         epProg.currentTime > 10 &&
@@ -14842,11 +15546,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     <div className="flex flex-row items-center gap-2 sm:gap-3">
                                       <button
                                         type="button"
+                                        data-vod-card="true"
+                                        data-vod-id={heroItem.id}
                                         onFocus={() =>
                                           handleFocusVodItem(heroItem)
                                         }
                                         onMouseEnter={() =>
                                           handleFocusVodItem(heroItem)
+                                        }
+                                        onKeyDown={(e) =>
+                                          handleCardPlayKey(e, heroItem)
                                         }
                                         onClick={() =>
                                           handleOpenVod(heroItem, true)
@@ -14861,11 +15570,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
                                       <button
                                         type="button"
+                                        data-vod-card="true"
+                                        data-vod-id={heroItem.id}
                                         onFocus={() =>
                                           handleFocusVodItem(heroItem)
                                         }
                                         onMouseEnter={() =>
                                           handleFocusVodItem(heroItem)
+                                        }
+                                        onKeyDown={(e) =>
+                                          handleCardPlayKey(e, heroItem)
                                         }
                                         onClick={() =>
                                           handleOpenVod(heroItem, false)
@@ -14939,9 +15653,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 const isLiveCard = false;
                                 const devLabel =
                                   sanitizeDeviceName(entry.deviceName) || 'TV';
-                                const rawPosterUrl =
-                                  item.poster ||
-                                  `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                const isZvyozdyCard =
+                                  item.id === 'tt31712367' ||
+                                  item.id === 'kp_5508530' ||
+                                  String(item.kpId) === '5508530' ||
+                                  item.name?.toLowerCase().includes('zvyozdy') ||
+                                  item.name?.toLowerCase().includes('звёзд');
+                                const rawPosterUrl = isZvyozdyCard
+                                  ? '/posters/zvyozdy.jpg'
+                                  : (item.poster && !item.poster.includes('tt31712367')
+                                      ? item.poster
+                                      : item.background ||
+                                        (item.kpId ? `https://kinopoiskapiunofficial.tech/images/posters/kp/${item.kpId}.jpg` : '') ||
+                                        item.poster ||
+                                        `https://images.metahub.space/poster/medium/${item.id}/img`);
                                 const posterUrl = rawPosterUrl.replace(
                                   '/posters/kp_small/',
                                   '/posters/kp/'
@@ -14955,8 +15680,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       type="button"
                                       data-watched-poster-btn="true"
                                       data-vod-card="true"
+                                      data-vod-id={item.id}
                                       onFocus={() => handleFocusVodItem(item)}
                                       onMouseEnter={() => handleFocusVodItem(item)}
+                                      onKeyDown={(e) => handleCardPlayKey(e, item, entry.season, entry.episode)}
                                       onClick={() => handleOpenVod(item)}
                                       className="group w-full block text-left focus:outline-none cursor-pointer flex-1"
                                     >
@@ -14970,6 +15697,27 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           src={posterUrl}
                                           alt={item.name}
                                           loading="lazy"
+                                          onError={(e) => {
+                                            const target = e.currentTarget;
+                                            if (isZvyozdyCard) {
+                                              const cdn = 'https://avatars.mds.yandex.net/get-kinopoisk-image/4486454/c06e5be9-ca78-479e-bfae-0f24e43bb452/360';
+                                              if (!target.src.includes('avatars.mds.yandex.net')) {
+                                                target.src = cdn;
+                                              } else if (!target.src.includes('/posters/zvyozdy.jpg')) {
+                                                target.src = '/posters/zvyozdy.jpg';
+                                              }
+                                              return;
+                                            }
+                                            const fallback =
+                                              item.background && target.src !== item.background && !item.background.includes('tt31712367')
+                                                ? item.background
+                                                : item.kpId
+                                                  ? `https://kinopoiskapiunofficial.tech/images/posters/kp/${item.kpId}.jpg`
+                                                  : undefined;
+                                            if (fallback && target.src !== fallback) {
+                                              target.src = fallback;
+                                            }
+                                          }}
                                           className="absolute inset-0 w-full h-full object-cover"
                                         />
                                         {isLiveCard && (
@@ -15056,7 +15804,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               )}
                             </h2>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {homeShelves.watchingNowMix.map((item) => {
+                              {homeShelves.watchingNowMix.slice(0, 18).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15068,8 +15816,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_watch_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15108,11 +15858,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id], tr)}
                                       </div>
                                     </div>
@@ -15134,7 +15884,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               )}
                             </h2>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {homeShelves.newlyAddedMix.map((item) => {
+                              {homeShelves.newlyAddedMix.slice(0, 18).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15146,8 +15896,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_new_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15189,11 +15941,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id], tr)}
                                       </div>
                                     </div>
@@ -15228,7 +15980,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </button>
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {homeShelves.popularSeries.map((item) => {
+                              {homeShelves.popularSeries.slice(0, 18).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15240,8 +15992,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_ser_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15273,11 +16027,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id], tr)}
                                       </div>
                                     </div>
@@ -15312,7 +16066,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </button>
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {homeShelves.popularMovies.map((item) => {
+                              {homeShelves.popularMovies.slice(0, 18).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15324,8 +16078,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_mov_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15357,11 +16113,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id], tr)}
                                       </div>
                                     </div>
@@ -15396,7 +16152,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </button>
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {homeShelves.cartoons.map((item) => {
+                              {homeShelves.cartoons.slice(0, 18).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15408,8 +16164,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_cart_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15441,11 +16199,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {item.releaseInfo || '2026'} •{' '}
                                         {tr('Animație', 'Cartoon', 'Мультфильм')}
                                       </div>
@@ -15468,7 +16226,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               )}
                             </h2>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
-                              {vodItems.map((item) => {
+                              {vodItems.slice(0, 24).map((item) => {
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
@@ -15480,8 +16238,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     key={`home_rec_${item.id}`}
                                     type="button"
                                     data-vod-card="true"
+                                    data-vod-id={item.id}
                                     onFocus={() => handleFocusVodItem(item)}
                                     onMouseEnter={() => handleFocusVodItem(item)}
+                                    onKeyDown={(e) => handleCardPlayKey(e, item)}
                                     onClick={() => handleOpenVod(item)}
                                     className="group w-full block text-left focus:outline-none cursor-pointer"
                                   >
@@ -15520,11 +16280,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </span>
                                       )}
                                     </div>
-                                    <div className="mt-2.5 px-0.5">
-                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                    <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
+                                      <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
                                         {item.name}
                                       </div>
-                                      <div className="text-xs text-zinc-400 mt-0.5">
+                                      <div className="text-xs text-zinc-400 mt-0.5 h-[16px] truncate">
                                         {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id], tr)}
                                       </div>
                                     </div>
@@ -15980,6 +16740,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
                 <SmartTvCatalogSections
                   section={section}
+                  imdbMediaType={imdbMediaType}
+                  setImdbMediaType={setImdbMediaType}
+                  imdbYear={imdbYear}
+                  setImdbYear={setImdbYear}
+                  imdbGenre={imdbGenre}
+                  setImdbGenre={setImdbGenre}
+                  watchProgressMap={watchProgressMap}
                   platformMediaTab={platformMediaTab}
                   setPlatformMediaTab={setPlatformMediaTab}
                   tr={tr}
@@ -16088,13 +16855,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         <nav
           aria-label="Navigare Mobilă"
           style={{
-            paddingBottom: 'var(--safe-bottom, env(safe-area-inset-bottom, 0px))',
+            paddingBottom: 'max(0.35rem, env(safe-area-inset-bottom, 0px))',
             paddingLeft: 'max(0.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
             paddingRight: 'max(0.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
           }}
-          className="md:hidden relative z-30 bg-[#0d111a]/95 backdrop-blur-xl border-t border-white/10 shrink-0 select-none"
+          className="md:hidden relative z-30 bg-black/95 backdrop-blur-xl border-t border-white/10 shrink-0 select-none"
         >
-          <div className="h-14 w-full flex items-center justify-around">
+          <div className="h-12 w-full flex items-center justify-around pt-1">
           {(
             [
               {

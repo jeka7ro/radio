@@ -2085,38 +2085,40 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {/* Live HLS TV Video Player Modal (when a TV channel is clicked outside the dedicated TV Online section) */}
       {section !== 'tv' && <TvPlayerModal isSmartTvFullMode />}
 
-{/* LAMPA FULLSCREEN TRAILER PLAYER MODAL */}
+{/* LAMPA FULLSCREEN TRAILER PLAYER (EDGE-TO-EDGE 100% CINEMA DISPLAY) */}
       {isTrailerModalOpen && activeVodItem && (
         <div
-          className="fixed inset-0 z-[130] bg-black/95 backdrop-blur-xl flex flex-col"
+          data-trailer-fullscreen-box="true"
+          className="fixed inset-0 w-screen h-screen z-[260] bg-black flex flex-col overflow-hidden select-none"
           onClick={() => setIsTrailerModalOpen(false)}
         >
-          {/* Top Header Bar with Back/Close & Trailer Switcher */}
+          {/* Floating Cinema Top HUD */}
           <div
             style={{
               paddingTop: 'max(1rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
               paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
               paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
             }}
-            className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 bg-gradient-to-b from-black via-black/85 to-transparent z-10"
+            className="absolute top-0 inset-x-0 z-30 flex flex-wrap items-center justify-between gap-3 px-5 py-4 bg-gradient-to-b from-black/95 via-black/60 to-transparent pointer-events-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"
                 autoFocus
+                data-trailer-back="true"
                 onClick={() => setIsTrailerModalOpen(false)}
-                className="h-10 px-5 rounded-full bg-white text-[#141414] hover:brightness-95 font-bold text-xs sm:text-sm inline-flex items-center gap-2 shadow-lg shrink-0 cursor-pointer"
+                className="h-10 px-5 rounded-full bg-white text-[#141414] hover:bg-zinc-200 focus:bg-amber-400 focus:text-black font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-2xl shrink-0 cursor-pointer focus:outline-none focus:ring-4 focus:ring-white transition-all"
               >
                 <ArrowLeft className="w-4 h-4" />
-                <span>{tr('Înapoi / Închide Trailer', 'Back / Close Trailer', 'Назад / Закрыть трейлер')}</span>
+                <span>{tr('← Înapoi la Film', '← Back to Movie', '← Назад к фильму')}</span>
               </button>
               <div className="min-w-0">
-                <div className="text-sm sm:text-lg font-bold text-white truncate">
+                <div className="text-sm sm:text-lg font-bold text-white truncate drop-shadow-md">
                   {activeVodItem.name} — {tr('Trailer Oficial', 'Official Trailer', 'Официальный трейлер')}
                 </div>
                 {trailerList[activeTrailerIdx]?.title && (
-                  <div className="text-xs text-zinc-400 truncate">
+                  <div className="text-xs text-zinc-300 truncate drop-shadow">
                     {trailerList[activeTrailerIdx].title}
                   </div>
                 )}
@@ -2129,11 +2131,12 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   <button
                     key={trailerItem.id + idx}
                     type="button"
+                    data-trailer-pill="true"
                     onClick={() => setActiveTrailerIdx(idx)}
-                    className={`h-9 px-3.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${
+                    className={`h-9 px-4 rounded-full text-xs font-extrabold transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-white ${
                       activeTrailerIdx === idx
-                        ? 'bg-white text-[#141414] font-bold shadow'
-                        : 'bg-white/10 hover:bg-white/20 text-zinc-200'
+                        ? 'bg-amber-400 text-zinc-950 font-black shadow-lg scale-105'
+                        : 'bg-white/20 hover:bg-white/30 text-white backdrop-blur-md'
                     }`}
                   >
                     {trailerItem.title || tr(`Trailer #${idx + 1}`, `Trailer #${idx + 1}`, `Трейлер #${idx + 1}`)}
@@ -2143,28 +2146,57 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             )}
           </div>
 
-          {/* Center Trailer Video Player */}
+          {/* 100% Screen Edge-to-Edge Trailer Video Surface */}
           <div
-            className="flex-1 w-full h-full flex items-center justify-center p-3 sm:p-8"
+            className="relative w-full h-full flex-1 bg-black flex items-center justify-center overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {isLoadingTrailer ? (
-              <div className="flex flex-col items-center gap-3 text-zinc-300">
-                <Loader2 className="w-10 h-10 text-white animate-spin" />
-                <span className="text-sm font-semibold">
-                  {tr('Se încarcă trailerul...', 'Loading trailer...', 'Загрузка трейлера...')}
+              <div className="flex flex-col items-center gap-3 text-zinc-300 z-10">
+                <Loader2 className="w-12 h-12 text-white animate-spin" />
+                <span className="text-base font-bold">
+                  {tr('Se încarcă trailerul în ecran complet...', 'Loading fullscreen trailer...', 'Загрузка трейлера на полный экран...')}
                 </span>
               </div>
             ) : trailerList[activeTrailerIdx] ? (
-              <div className="w-full max-w-6xl aspect-video rounded-2xl overflow-hidden bg-black border border-white/15 shadow-2xl">
-                <iframe
-                  key={trailerList[activeTrailerIdx].embedUrl}
-                  src={trailerList[activeTrailerIdx].embedUrl}
-                  title={trailerList[activeTrailerIdx].title}
-                  className="w-full h-full border-0"
-                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                />
+              <div className="w-full h-full relative bg-black flex items-center justify-center">
+                {trailerList[activeTrailerIdx].streamUrl ? (
+                  <>
+                    <video
+                      key={`tr_stream_${trailerList[activeTrailerIdx].id}`}
+                      src={trailerList[activeTrailerIdx].streamUrl}
+                      autoPlay
+                      controls
+                      playsInline
+                      className="w-full h-full object-contain bg-black"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        target.style.display = 'none';
+                        const fallback = document.getElementById(`trailer-fallback-iframe-${trailerList[activeTrailerIdx].id}`);
+                        if (fallback) fallback.style.display = 'block';
+                      }}
+                    />
+                    <iframe
+                      id={`trailer-fallback-iframe-${trailerList[activeTrailerIdx].id}`}
+                      key={`tr_embed_${trailerList[activeTrailerIdx].id}`}
+                      src={trailerList[activeTrailerIdx].embedUrl}
+                      title={trailerList[activeTrailerIdx].title}
+                      style={{ display: 'none' }}
+                      className="w-full h-full border-0 absolute inset-0"
+                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </>
+                ) : (
+                  <iframe
+                    key={`tr_embed_${trailerList[activeTrailerIdx].id}`}
+                    src={trailerList[activeTrailerIdx].embedUrl}
+                    title={trailerList[activeTrailerIdx].title}
+                    className="w-full h-full border-0 absolute inset-0"
+                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                    allowFullScreen
+                  />
+                )}
               </div>
             ) : null}
           </div>

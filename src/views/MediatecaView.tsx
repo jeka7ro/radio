@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
+import { getVodCanonicalKey, areVodItemsSame, deduplicateProgressMap } from './smartTvLampaHelpers';
 import { TvChannel } from '../types/radio';
 import { parseM3uPlaylist } from '../services/tvApi';
 import {
@@ -963,7 +964,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
 
   // Sorted list of items in "Continuă vizionarea"
   const continueWatchingList = useMemo(() => {
-    return Object.values(watchProgressMap)
+    const rawList = Object.values(watchProgressMap)
       .filter(
         (entry) =>
           entry &&
@@ -972,8 +973,16 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
             (entry.episodeProgressMap &&
               Object.keys(entry.episodeProgressMap).length > 0))
       )
-      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-      .slice(0, 12);
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    const deduplicated: VodWatchProgressEntry[] = [];
+    for (const entry of rawList) {
+      const alreadyPresent = deduplicated.some((d) => areVodItemsSame(d.item, entry.item));
+      if (!alreadyPresent) {
+        deduplicated.push(entry);
+      }
+    }
+    return deduplicated.slice(0, 12);
   }, [watchProgressMap]);
 
   // Persist watch progress helper (records device name + syncs to shared profile server)

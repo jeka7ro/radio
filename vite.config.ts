@@ -1538,6 +1538,27 @@ function tvStreamProxyPlugin(): Plugin {
               delete cleanV.item.imdbId;
               delete cleanV.item.nameOriginal;
             }
+            const cStr = String(cleanV.item?.country || '');
+            const isRuCountry = /(Росси|СССР|Russia|USSR|Soviet|Беларус)/i.test(cStr);
+            const isZvyozdy =
+              k === 'tt31712367' ||
+              k === 'kp_5508530' ||
+              cleanV.item?.id === 'tt31712367' ||
+              cleanV.item?.id === 'kp_5508530' ||
+              String(cleanV.item?.kpId) === '5508530' ||
+              cleanV.item?.name?.toLowerCase().includes('zvyozdy') ||
+              cleanV.item?.name?.toLowerCase().includes('звёзд');
+            if (isZvyozdy) {
+              cleanV.item.poster = '/posters/zvyozdy.jpg';
+              cleanV.item.background = '/posters/zvyozdy.jpg';
+            }
+            if (k === 'kp_1435343' || (k.startsWith('kp_') && !isRuCountry && !isZvyozdy)) {
+              delete merged[k];
+              continue;
+            }
+            if (!isRuCountry && !isZvyozdy && (cleanV.item?.id?.startsWith('tt') || cleanV.item?.imdbId)) {
+              cleanV.server = 'filelist_torrent';
+            }
           }
           if (
             cleanV.episodeProgressMap &&
@@ -1599,7 +1620,117 @@ function tvStreamProxyPlugin(): Plugin {
             };
           }
         }
-        return merged;
+
+        // Canonical deduplication pass: merge duplicate entries for the same title/IMDb
+        const deduped: Record<string, any> = {};
+        const groups: any[][] = [];
+        for (const [k, entry] of Object.entries(merged)) {
+          if (!entry || typeof entry !== 'object' || !entry.item) {
+            deduped[k] = entry;
+            continue;
+          }
+          let foundGroup = false;
+          for (const g of groups) {
+            const sample = g[0];
+            const a = sample.item;
+            const b = entry.item;
+            const aType = a?.type;
+            const bType = b?.type;
+            if (aType && bType && aType !== bType) continue;
+
+            const aId = String(a?.id || '').trim();
+            const bId = String(b?.id || '').trim();
+            if (aId && bId && aId === bId) {
+              g.push(entry);
+              foundGroup = true;
+              break;
+            }
+
+            const aImdb = String(a?.imdbId || a?.imdb_id || (aId.startsWith('tt') ? aId : '')).trim();
+            const bImdb = String(b?.imdbId || b?.imdb_id || (bId.startsWith('tt') ? bId : '')).trim();
+            if (aImdb.startsWith('tt') && bImdb.startsWith('tt') && aImdb === bImdb) {
+              g.push(entry);
+              foundGroup = true;
+              break;
+            }
+
+            const aKp = String(a?.kpId || (aId.startsWith('kp_') ? aId.replace('kp_', '') : '')).trim();
+            const bKp = String(b?.kpId || (bId.startsWith('kp_') ? bId.replace('kp_', '') : '')).trim();
+            if (aKp && bKp && aKp === bKp) {
+              g.push(entry);
+              foundGroup = true;
+              break;
+            }
+
+            const aTitles = [a?.name, a?.title, a?.nameOriginal].filter(Boolean).map((s: any) => String(s).toLowerCase().trim());
+            const bTitles = [b?.name, b?.title, b?.nameOriginal].filter(Boolean).map((s: any) => String(s).toLowerCase().trim());
+            if (aTitles.some((t1: string) => bTitles.some((t2: string) => t1 === t2 && t1.length > 2))) {
+              g.push(entry);
+              foundGroup = true;
+              break;
+            }
+          }
+          if (!foundGroup) {
+            groups.push([entry]);
+          }
+        }
+
+        for (const g of groups) {
+          let finalEntry = g[0];
+          if (g.length > 1) {
+            for (let i = 1; i < g.length; i++) {
+              const other = g[i];
+              const fTime = finalEntry.updatedAt || 0;
+              const oTime = other.updatedAt || 0;
+              const primary = oTime >= fTime ? other : finalEntry;
+              const secondary = oTime >= fTime ? finalEntry : other;
+              const mergedEpMap = {
+                ...(secondary.episodeProgressMap || {}),
+                ...(primary.episodeProgressMap || {}),
+              };
+              const mergedItem = {
+                ...(secondary.item || {}),
+                ...(primary.item || {}),
+              };
+              const canonImdb =
+                primary.item?.imdbId ||
+                secondary.item?.imdbId ||
+                (String(primary.item?.id || '').startsWith('tt')
+                  ? primary.item.id
+                  : String(secondary.item?.id || '').startsWith('tt')
+                  ? secondary.item.id
+                  : undefined);
+              if (canonImdb) {
+                mergedItem.imdbId = canonImdb;
+                mergedItem.id = canonImdb;
+              }
+              finalEntry = {
+                ...secondary,
+                ...primary,
+                item: mergedItem,
+                episodeProgressMap: mergedEpMap,
+                currentTime:
+                  primary.season === secondary.season && primary.episode === secondary.episode
+                    ? Math.max(primary.currentTime || 0, secondary.currentTime || 0)
+                    : primary.currentTime,
+                updatedAt: Math.max(fTime, oTime),
+              };
+            }
+          }
+          const item = finalEntry.item;
+          const canonicalKey =
+            item?.imdbId && String(item.imdbId).startsWith('tt')
+              ? item.imdbId
+              : String(item?.id || '').startsWith('tt')
+              ? item.id
+              : item?.kpId
+              ? `kp_${item.kpId}`
+              : item?.id;
+          if (canonicalKey) {
+            deduped[canonicalKey] = finalEntry;
+          }
+        }
+        return deduped;
       };
 
       let lastCloudSyncAtByProf: Record<string, number> = {};
@@ -1924,6 +2055,114 @@ function tvStreamProxyPlugin(): Plugin {
         res.end(
           JSON.stringify(
             readDiskRadioFavs() || { updatedAt: 0, stations: [] }
+          )
+        );
+      });
+
+      const getTvChannelFavsFileForProfile = (profileId: string) => {
+        const cleanId =
+          (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        return path.resolve(__dirname, `.tv-channel-favs-${cleanId}.json`);
+      };
+
+      server.middlewares.use('/api/tv-channel-favorites', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const reqUrl = new URL(req.url || '', 'http://localhost');
+        const profileId = reqUrl.searchParams.get('profileId') || 'p1';
+        const targetFile = getTvChannelFavsFileForProfile(profileId);
+
+        const readDiskChannelFavs = (): {
+          updatedAt: number;
+          channels: unknown[];
+        } | null => {
+          try {
+            if (fs.existsSync(targetFile)) {
+              const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
+              if (
+                parsed &&
+                typeof parsed === 'object' &&
+                Array.isArray(parsed.channels)
+              ) {
+                return {
+                  updatedAt: Number(parsed.updatedAt) || 0,
+                  channels: parsed.channels,
+                };
+              }
+            }
+          } catch {
+            // ignore
+          }
+          return null;
+        };
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || 'null');
+              if (
+                incoming &&
+                typeof incoming === 'object' &&
+                Array.isArray(incoming.channels)
+              ) {
+                const existing = readDiskChannelFavs();
+                const incomingTs = Number(incoming.updatedAt) || Date.now();
+                const existingTs = Number(existing?.updatedAt) || 0;
+                if (!existing || incomingTs >= existingTs) {
+                  const nextPayload = {
+                    updatedAt: incomingTs,
+                    channels: incoming.channels.slice(0, 300),
+                  };
+                  fs.writeFileSync(
+                    targetFile,
+                    JSON.stringify(nextPayload),
+                    'utf-8'
+                  );
+                  fetch(
+                    `https://filmio.my/api/tv-channel-favorites?profileId=${encodeURIComponent(
+                      profileId
+                    )}`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(nextPayload),
+                    }
+                  ).catch(() => {});
+                }
+              }
+            } catch {
+              // ignore
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(
+              JSON.stringify(
+                readDiskChannelFavs() || { updatedAt: 0, channels: [] }
+              )
+            );
+          });
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+        });
+        res.end(
+          JSON.stringify(
+            readDiskChannelFavs() || { updatedAt: 0, channels: [] }
           )
         );
       });

@@ -57,8 +57,8 @@
 
 @media (orientation: portrait) {
   html.ios-pwa-standalone {
-    --safe-top: max(env(safe-area-inset-top, 0px), var(--ios-pwa-top-floor, 54px));
-    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ios-pwa-bottom-floor, 24px));
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--ios-pwa-top-floor, 48px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ios-pwa-bottom-floor, 16px));
     --safe-left: env(safe-area-inset-left, 0px);
     --safe-right: env(safe-area-inset-right, 0px);
   }
@@ -67,9 +67,9 @@
 @media (orientation: landscape) {
   html.ios-pwa-standalone {
     --safe-top: env(safe-area-inset-top, 0px);
-    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
-    --safe-left: max(env(safe-area-inset-left, 0px), var(--ios-pwa-side-floor, 48px));
-    --safe-right: max(env(safe-area-inset-right, 0px), var(--ios-pwa-side-floor, 48px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+    --safe-left: max(env(safe-area-inset-left, 0px), var(--ios-pwa-side-floor, 44px));
+    --safe-right: max(env(safe-area-inset-right, 0px), var(--ios-pwa-side-floor, 44px));
   }
 }
 
@@ -398,7 +398,7 @@ button.cast-person-card {
 }
 
 /* Prevent browser focus/scrollIntoView from scrolling inside top hero cards (Radio, TV, Music, Home) */
-[data-top-hero-card="true"] {
+[data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) {
   overflow: clip !important;
 }
 
@@ -539,6 +539,7 @@ html.smart-tv-mode [class*="backdrop-blur"] {
   -webkit-backdrop-filter: none !important;
 }
 
+
 /* Fallback for LG webOS / Tizen Smart TVs (Chromium < 84) without CSS Flexbox gap support */
 html.no-flex-gap .flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]),
 html.no-flex-gap .inline-flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]) {
@@ -594,6 +595,7 @@ html.no-flex-gap .flex.flex-col.gap-4 > *:not(:last-child):not([class*="mb-"]) {
 }
 
 html.smart-tv-mode button[data-vod-card="true"],
+html.smart-tv-mode button[data-klub-card="true"],
 html.smart-tv-mode button[data-watched-poster-btn="true"],
 html.smart-tv-mode button[data-tv-channel-card="true"] {
   transition-property: transform, opacity, border-color, background-color, color !important;
@@ -607,6 +609,7 @@ html.smart-tv-mode button {
 }
 
 html.smart-tv-mode button[data-vod-card="true"] img,
+html.smart-tv-mode button[data-klub-card="true"] img,
 html.smart-tv-mode button[data-watched-poster-btn="true"] img,
 html.smart-tv-mode button[data-tv-channel-card="true"] img {
   -webkit-backface-visibility: hidden;
@@ -904,7 +907,8 @@ html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
    leaving comfortable vertical space so movie shelves are visible immediately.
    LG webOS 77" OLED (1920x1080) retains its original full 1080p dimensions.
    ============================================================================ */
-html.smart-tv-sub1080 [data-top-hero-card="true"] {
+html.smart-tv-sub1080 [data-home-billboard="true"],
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) {
   min-height: 180px !important;
   max-height: 205px !important;
   height: 195px !important;
@@ -912,29 +916,38 @@ html.smart-tv-sub1080 [data-top-hero-card="true"] {
   border-radius: 18px !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] img[key*="hero_logo"],
-html.smart-tv-sub1080 [data-top-hero-card="true"] img[src*="logo/medium"] {
+html.smart-tv-sub1080 [data-home-billboard="true"] img[key*="hero_logo"],
+html.smart-tv-sub1080 [data-home-billboard="true"] img[src*="logo/medium"],
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) img[key*="hero_logo"],
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) img[src*="logo/medium"] {
   max-height: 28px !important;
   max-width: 190px !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] h2 {
+html.smart-tv-sub1080 [data-home-billboard="true"] h2,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) h2 {
   font-size: 1.35rem !important;
   line-height: 1.15 !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] .gap-3,
-html.smart-tv-sub1080 [data-top-hero-card="true"] .gap-4,
-html.smart-tv-sub1080 [data-top-hero-card="true"] .sm\:gap-4 {
+html.smart-tv-sub1080 [data-home-billboard="true"] .gap-3,
+html.smart-tv-sub1080 [data-home-billboard="true"] .gap-4,
+html.smart-tv-sub1080 [data-home-billboard="true"] .sm\:gap-4,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .gap-3,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .gap-4,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .sm\:gap-4 {
   gap: 0.35rem !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] .mt-5,
-html.smart-tv-sub1080 [data-top-hero-card="true"] .sm\:mt-12 {
+html.smart-tv-sub1080 [data-home-billboard="true"] .mt-5,
+html.smart-tv-sub1080 [data-home-billboard="true"] .sm\:mt-12,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .mt-5,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .sm\:mt-12 {
   margin-top: 0.35rem !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] p {
+html.smart-tv-sub1080 [data-home-billboard="true"] p,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) p {
   font-size: 0.95rem !important;
   line-height: 1.25 !important;
   max-width: 440px !important;
@@ -944,7 +957,8 @@ html.smart-tv-sub1080 [data-top-hero-card="true"] p {
   overflow: hidden !important;
 }
 
-html.smart-tv-sub1080 [data-top-hero-card="true"] button {
+html.smart-tv-sub1080 [data-home-billboard="true"] button,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) button {
   height: 28px !important;
   padding-left: 12px !important;
   padding-right: 12px !important;
@@ -957,47 +971,46 @@ html.smart-tv-sub1080 [data-top-hero-card="true"] button {
    By converting them to rem units that scale with root font-size (smart-tv-sub1080),
    the screen renders 8-10 cards per row identically to 1080p density.
    ============================================================================ */
-html.smart-tv-mode [class*="minmax(175px"],
-html.smart-tv-mode [class*="minmax(185px"],
 html.smart-tv-sub1080 [class*="minmax(175px"],
 html.smart-tv-sub1080 [class*="minmax(185px"] {
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)) !important;
   gap: 0.85rem !important;
 }
 
-html.smart-tv-mode [class*="minmax(240px"],
-html.smart-tv-mode [class*="minmax(260px"],
 html.smart-tv-sub1080 [class*="minmax(240px"],
 html.smart-tv-sub1080 [class*="minmax(260px"] {
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)) !important;
   gap: 0.85rem !important;
 }
 
-html.smart-tv-mode [data-vod-card="true"],
 html.smart-tv-sub1080 [data-vod-card="true"] {
   max-width: 14rem !important;
   width: 100% !important;
 }
 
 @media (max-width: 1400px) and (min-aspect-ratio: 16/10) {
-  html.smart-tv-mode [class*="minmax(175px"],
-  html.smart-tv-mode [class*="minmax(185px"],
   html.smart-tv-sub1080 [class*="minmax(175px"],
   html.smart-tv-sub1080 [class*="minmax(185px"] {
     grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
-  html.smart-tv-mode [class*="minmax(240px"],
-  html.smart-tv-mode [class*="minmax(260px"],
   html.smart-tv-sub1080 [class*="minmax(240px"],
   html.smart-tv-sub1080 [class*="minmax(260px"] {
     grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
-  html.smart-tv-mode [data-vod-card="true"],
   html.smart-tv-sub1080 [data-vod-card="true"] {
     max-width: 100% !important;
     width: 100% !important;
   }
+}
+
+/* Klubnichka 18+ 16:9 widescreen cards - always 100% width, never clamped by poster card constraints */
+[data-klub-card="true"],
+[data-klub-card-id],
+[data-klubnichka-root="true"] button[data-klub-card="true"],
+[data-klubnichka-root="true"] [data-klub-card="true"] {
+  max-width: none !important;
+  width: 100% !important;
 }
 

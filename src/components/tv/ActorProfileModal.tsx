@@ -352,6 +352,7 @@ export const RelatedVodSuggestionsSection: React.FC<
                 key={`sug_${item.id}_${idx}`}
                 type="button"
                 data-vod-card="true"
+                data-vod-id={item.id}
                 onFocus={(e) =>
                   e.currentTarget.scrollIntoView({
                     block: 'nearest',
@@ -359,6 +360,26 @@ export const RelatedVodSuggestionsSection: React.FC<
                     behavior: 'smooth',
                   })
                 }
+                onKeyDown={(e) => {
+                  if (
+                    e.keyCode === 415 ||
+                    e.keyCode === 179 ||
+                    e.keyCode === 250 ||
+                    e.keyCode === 10252 ||
+                    e.key === 'MediaPlay' ||
+                    e.key === 'MediaPlayPause' ||
+                    e.key === 'Play' ||
+                    ((e.key === 'p' || e.key === 'P') &&
+                      !(
+                        document.activeElement?.tagName === 'INPUT' ||
+                        document.activeElement?.tagName === 'TEXTAREA'
+                      ))
+                  ) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectVodItem(item);
+                  }
+                }}
                 onClick={() => onSelectVodItem(item)}
                 className="group w-full block text-left focus:outline-none cursor-pointer"
               >
@@ -514,6 +535,27 @@ export const ActorProfileModal: React.FC<ActorProfileModalProps> = ({
           key={`${badgeType}_${item.id}_${idx}`}
           type="button"
           data-vod-card="true"
+          data-vod-id={item.id}
+          onKeyDown={(e) => {
+            if (
+              e.keyCode === 415 ||
+              e.keyCode === 179 ||
+              e.keyCode === 250 ||
+              e.keyCode === 10252 ||
+              e.key === 'MediaPlay' ||
+              e.key === 'MediaPlayPause' ||
+              e.key === 'Play' ||
+              ((e.key === 'p' || e.key === 'P') &&
+                !(
+                  document.activeElement?.tagName === 'INPUT' ||
+                  document.activeElement?.tagName === 'TEXTAREA'
+                ))
+            ) {
+              e.preventDefault();
+              e.stopPropagation();
+              onSelectVodItem(item);
+            }
+          }}
           onClick={() => onSelectVodItem(item)}
           className="group w-full block text-left focus:outline-none cursor-pointer"
         >

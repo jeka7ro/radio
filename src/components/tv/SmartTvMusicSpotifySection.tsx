@@ -1175,11 +1175,7 @@ export const SmartTvMusicSpotifySection: React.FC<
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5">
           <button
             type="button"
-            data-vod-card={
-              activePlaylistId === 'pl_global_hits' && !isSearchMode
-                ? 'true'
-                : undefined
-            }
+            
             onClick={() => {
               setSearchQuery('');
               setActiveAlbumCard(null);
@@ -1197,7 +1193,6 @@ export const SmartTvMusicSpotifySection: React.FC<
           {isSearchMode && (
             <button
               type="button"
-              data-vod-card="true"
               onClick={() => {
                 setSearchQuery('');
                 setActivePlaylistId('pl_global_hits');
@@ -1218,7 +1213,7 @@ export const SmartTvMusicSpotifySection: React.FC<
               <button
                 key={`chip_${pl.id}`}
                 type="button"
-                data-vod-card={isSelected ? 'true' : undefined}
+                
                 onClick={() => {
                   setSearchQuery('');
                   setActiveAlbumCard(null);

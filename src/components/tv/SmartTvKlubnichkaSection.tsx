@@ -69,7 +69,7 @@ const SORT_MODES: Array<{
 ];
 
 // Persist Klubnichka state across video player open/close so Back returns instantly to the exact card & category
-const persistedKlubCache: {
+export const persistedKlubCache: {
   selectedSource: KlubnichkaSourceId;
   selectedCategory: KlubnichkaCategoryId;
   sortMode: KlubnichkaSortMode;
@@ -90,6 +90,48 @@ const persistedKlubCache: {
   loadedKey: '',
   lastClickedCardId: null,
 };
+
+export function mapKlubCardToCinemetaItem(card: KlubnichkaVideoCard): CinemetaItem {
+  if (card.sourceKind === 'filelist_xxx' && card.flTorrent) {
+    const tor = card.flTorrent;
+    return {
+      id: tor.imdbId || `fl_${tor.id}`,
+      flTorrentId: tor.id,
+      releaseTitle: tor.releaseTitle,
+      sizeFormatted: tor.sizeFormatted,
+      seeders: tor.seeders,
+      freeleech: tor.freeleech,
+      isRo: tor.isRo,
+      qualityBadge: tor.quality,
+      type: 'movie',
+      name: tor.name,
+      releaseInfo: tor.year || '2026',
+      poster: tor.poster,
+      genres: ['18+ Adult', 'FileList XXX'],
+      description: `FileList XXX Release: ${tor.releaseTitle} (${tor.sizeFormatted} • ▲ ${tor.seeders} seeders)`,
+      isAdultKlubnichka: true,
+    };
+  }
+
+  return {
+    id: card.id,
+    type: 'movie',
+    name: card.title,
+    releaseInfo: card.addedDate || '2026',
+    imdbRating: card.rating,
+    poster: card.poster,
+    background: card.poster,
+    runtime: card.durationText,
+    qualityBadge: card.qualityBadge,
+    genres: card.subtitle
+      ? card.subtitle.split('•').map((s) => s.trim()).filter(Boolean)
+      : ['Klubnichka 18+'],
+    description: `${card.title} • Durată: ${card.durationText} • ${card.viewsFormatted} • Calitate: ${card.qualityBadge}`,
+    klubnichkaRawId: card.rawVideoId,
+    klubnichkaEmbedUrl: card.embedUrl,
+    isAdultKlubnichka: true,
+  };
+}
 
 export const SmartTvKlubnichkaSection: React.FC<
   SmartTvKlubnichkaSectionProps
@@ -257,47 +299,7 @@ export const SmartTvKlubnichkaSection: React.FC<
     }
   };
 
-  const mapCardToCinemetaItem = (card: KlubnichkaVideoCard): CinemetaItem => {
-    if (card.sourceKind === 'filelist_xxx' && card.flTorrent) {
-      const tor = card.flTorrent;
-      return {
-        id: tor.imdbId || `fl_${tor.id}`,
-        flTorrentId: tor.id,
-        releaseTitle: tor.releaseTitle,
-        sizeFormatted: tor.sizeFormatted,
-        seeders: tor.seeders,
-        freeleech: tor.freeleech,
-        isRo: tor.isRo,
-        qualityBadge: tor.quality,
-        type: 'movie',
-        name: tor.name,
-        releaseInfo: tor.year || '2026',
-        poster: tor.poster,
-        genres: ['18+ Adult', 'FileList XXX'],
-        description: `FileList XXX Release: ${tor.releaseTitle} (${tor.sizeFormatted} • ▲ ${tor.seeders} seeders)`,
-        isAdultKlubnichka: true,
-      };
-    }
-
-    return {
-      id: card.id,
-      type: 'movie',
-      name: card.title,
-      releaseInfo: card.addedDate || '2026',
-      imdbRating: card.rating,
-      poster: card.poster,
-      background: card.poster,
-      runtime: card.durationText,
-      qualityBadge: card.qualityBadge,
-      genres: card.subtitle
-        ? card.subtitle.split('•').map((s) => s.trim()).filter(Boolean)
-        : ['Klubnichka 18+'],
-      description: `${card.title} • Durată: ${card.durationText} • ${card.viewsFormatted} • Calitate: ${card.qualityBadge}`,
-      klubnichkaRawId: card.rawVideoId,
-      klubnichkaEmbedUrl: card.embedUrl,
-      isAdultKlubnichka: true,
-    };
-  };
+  const mapCardToCinemetaItem = mapKlubCardToCinemetaItem;
 
   const currentSortObj =
     SORT_MODES.find((s) => s.id === sortMode) || SORT_MODES[0];
@@ -399,7 +401,7 @@ export const SmartTvKlubnichkaSection: React.FC<
         </span>
       </div>
 
-      {/* Row 2: Expanded Category Pills (20 Categories) */}
+      {/* Row 2: Expanded Category Pills (26 Categories) */}
       <div className="flex flex-wrap items-center gap-2">
         {KLUBNICHKA_CATEGORIES.map((cat) => {
           const active =
@@ -583,7 +585,7 @@ export const SmartTvKlubnichkaSection: React.FC<
                 <button
                   key={card.id}
                   type="button"
-                  data-vod-card="true"
+                  data-klub-card="true"
                   data-klub-card-id={card.id}
                   onFocus={() => {
                     setActivePreviewId(card.id);
@@ -606,6 +608,27 @@ export const SmartTvKlubnichkaSection: React.FC<
                   onClick={() => {
                     persistedKlubCache.lastClickedCardId = card.id;
                     onOpenVodItem(mappedVod, true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (
+                      e.keyCode === 415 ||
+                      e.keyCode === 179 ||
+                      e.keyCode === 250 ||
+                      e.keyCode === 10252 ||
+                      e.key === 'MediaPlay' ||
+                      e.key === 'MediaPlayPause' ||
+                      e.key === 'Play' ||
+                      ((e.key === 'p' || e.key === 'P') &&
+                        !(
+                          document.activeElement?.tagName === 'INPUT' ||
+                          document.activeElement?.tagName === 'TEXTAREA'
+                        ))
+                    ) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      persistedKlubCache.lastClickedCardId = card.id;
+                      onOpenVodItem(mappedVod, true);
+                    }
                   }}
                   className="group text-left focus:outline-none cursor-pointer"
                 >

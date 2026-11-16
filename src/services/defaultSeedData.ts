@@ -213,38 +213,6 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "totalEpisodesInSeason": 8,
       "totalSeasons": 2
     },
-    "kp_1435343": {
-      "item": {
-        "id": "kp_1435343",
-        "kpId": "1435343",
-        "type": "series",
-        "name": "The Gentlemen",
-        "releaseInfo": "2024",
-        "imdbRating": "8.1",
-        "poster": "https://images.metahub.space/poster/small/tt13210838/img",
-        "description": "Молодой человек по имени Эдди Холстед узнаёт, что полученное им большое наследство связано с наркоимперией Бобби Гласса.",
-        "nameOriginal": "The Gentlemen",
-        "background": "https://images.metahub.space/background/medium/tt13210838/img",
-        "imdbId": "tt13210838"
-      },
-      "season": 2,
-      "episode": 1,
-      "currentTime": 2811,
-      "duration": 3750,
-      "server": "filelist_torrent",
-      "subLang": "ro",
-      "updatedAt": 1793793826995,
-      "deviceName": "Mac / Laptop",
-      "totalEpisodesInSeason": 8,
-      "totalSeasons": 2,
-      "episodeProgressMap": {
-        "S2E1": {
-          "currentTime": 2811,
-          "duration": 3750,
-          "updatedAt": 1793793826995
-        }
-      }
-    },
     "tt11378946": {
       "item": {
         "id": "tt11378946",
@@ -959,37 +927,6 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "deviceName": "iPhone",
       "deviceId": "dev_mw42j8o4_1uh68",
       "isPlayingNow": false
-    },
-    "kp_4526286": {
-      "item": {
-        "id": "kp_4526286",
-        "kpId": "4526286",
-        "type": "series",
-        "name": "Dexter: New Blood",
-        "releaseInfo": "2021",
-        "imdbRating": "8.0",
-        "poster": "https://images.metahub.space/poster/small/tt14164730/img",
-        "description": "Декстер Морган живет под вымышленным именем в северной части штата Нью-Йорк. Он пытается забыть свое темное прошлое, но в городе происходит ряд загадочных похищений и убийств. Эти мрачные события заставляют Декстера снова вернуться к своему невеселому ремеслу.",
-        "nameOriginal": "Dexter: New Blood",
-        "background": "https://images.metahub.space/background/medium/tt14164730/img",
-        "imdbId": "tt14164730"
-      },
-      "season": 1,
-      "episode": 1,
-      "currentTime": 50,
-      "duration": 3431,
-      "server": "kinogram_hls",
-      "subLang": "ro",
-      "updatedAt": 1793729030290,
-      "totalEpisodesInSeason": 10,
-      "totalSeasons": 1,
-      "episodeProgressMap": {
-        "S1E1": {
-          "currentTime": 50,
-          "duration": 3431,
-          "updatedAt": 1793729030290
-        }
-      }
     },
     "tt13609648": {
       "item": {
@@ -1833,38 +1770,6 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       "isPlayingNow": false,
       "episodeProgressMap": {}
     },
-    "kp_6446910": {
-      "item": {
-        "id": "kp_6446910",
-        "kpId": "6446910",
-        "type": "movie",
-        "name": "Mayday",
-        "releaseInfo": "2026",
-        "imdbRating": "6.9",
-        "poster": "https://images.metahub.space/poster/medium/tt28014327/img",
-        "description": "1987 год, разгар Холодной войны. Лейтенант ВМС США Трой «Ассасин» Келли отправляется на секретное задание на территорию СССР, но операция срывается, и пилот оказывается один за линией врага. Его обнаруживает Николай Устинов, суровый бывший агент КГБ с неожиданной любовью к американской культуре. То, что начинается как смертельно опасная встреча, постепенно превращается в странный союз, способный изменить судьбу обоих.",
-        "nameOriginal": "Mayday",
-        "background": "https://kinopoiskapiunofficial.tech/images/posters/kp/6446910.jpg",
-        "imdbId": "tt28014327"
-      },
-      "season": 1,
-      "episode": 1,
-      "currentTime": 4846,
-      "duration": 6625,
-      "server": "filelist_torrent",
-      "subLang": "ro",
-      "updatedAt": 1794218561649,
-      "deviceName": "Mac / Laptop",
-      "deviceId": "dev_mw3n7ymh_blctm",
-      "isPlayingNow": false,
-      "episodeProgressMap": {
-        "S1E1": {
-          "currentTime": 4846,
-          "duration": 6625,
-          "updatedAt": 1794218560913
-        }
-      }
-    },
     "tt10466872": {
       "item": {
         "id": "tt10466872",
@@ -2128,8 +2033,8 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
         "type": "series",
         "name": "Zvyozdy",
         "releaseInfo": "2024",
-        "poster": "https://images.metahub.space/poster/medium/tt31712367/img",
-        "background": "https://images.metahub.space/background/medium/tt31712367/img",
+        "poster": "/posters/zvyozdy.jpg",
+        "background": "/posters/zvyozdy.jpg",
         "links": [],
         "behaviorHints": {
           "defaultVideoId": null,
@@ -2368,8 +2273,8 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
         "year": "2025",
         "ratingKinopoisk": "7.9",
         "imdbRating": "7.1",
-        "poster": "https://images.metahub.space/poster/medium/tt31712367/img",
-        "background": "https://kinopoiskapiunofficial.tech/images/posters/kp/5508530.jpg",
+        "poster": "/posters/zvyozdy.jpg",
+        "background": "/posters/zvyozdy.jpg",
         "description": "2-й сезон грандиозного юмористического проекта «Звёзды» на НТВ и VK Видео. Новые звёздные лидеры, дуэли команд и финал сезона.",
         "country": "Россия",
         "ageRating": "18+",
@@ -2404,245 +2309,7 @@ export const DEFAULT_SEED_PROGRESS_BY_PROFILE: Record<string, Record<string, any
       }
     }
   },
-  "p2": {
-    "tt23112594": {
-      "item": {
-        "imdb_id": "tt23112594",
-        "name": "VisionQuest",
-        "popularities": {
-          "trakt": 12866,
-          "moviedb": 261.0515,
-          "stremio": 8.701716666666666,
-          "stremio_lib": 0
-        },
-        "type": "series",
-        "cast": [
-          "Paul Bettany",
-          "James Spader",
-          "Ruaridh Mollica"
-        ],
-        "country": "United States, United Kingdom",
-        "description": "Vision is faced with many challenges while trying to regain his memory and humanity.",
-        "genre": [
-          "Action",
-          "Adventure",
-          "Drama"
-        ],
-        "imdbRating": "7.9",
-        "released": "2026-10-13T00:00:00.000Z",
-        "slug": "series/visionquest-23112594",
-        "year": "2026",
-        "moviedb_id": 213375,
-        "poster": "https://images.metahub.space/poster/small/tt23112594/img",
-        "trailers": [
-          {
-            "source": "sXKnmgmbkoE",
-            "type": "Trailer"
-          },
-          {
-            "source": "pM9HZ8Ovjdw",
-            "type": "Trailer"
-          },
-          {
-            "source": "oSVTAUKyrL8",
-            "type": "Trailer"
-          }
-        ],
-        "runtime": "51 min",
-        "status": "Continuing",
-        "tvdb_id": 426606,
-        "director": [],
-        "writer": [],
-        "background": "https://images.metahub.space/background/medium/tt23112594/img",
-        "logo": "https://images.metahub.space/logo/medium/tt23112594/img",
-        "popularity": 8.701716666666666,
-        "id": "tt23112594",
-        "videos": [
-          {
-            "name": "No Strings",
-            "season": 1,
-            "number": 1,
-            "firstAired": "2026-10-14T05:00:00.000Z",
-            "tvdb_id": 9493851,
-            "rating": 0,
-            "overview": "Vision embarks on a journey of self-discovery and finds himself hunted by a deadly force.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/1/w780.jpg",
-            "id": "tt23112594:1:1",
-            "released": "2026-10-14T05:00:00.000Z",
-            "episode": 1,
-            "description": "Vision embarks on a journey of self-discovery and finds himself hunted by a deadly force."
-          },
-          {
-            "name": "Theseus",
-            "season": 1,
-            "number": 2,
-            "firstAired": "2026-10-14T05:00:00.000Z",
-            "tvdb_id": 12023758,
-            "rating": 0,
-            "overview": "Vision comes face to face with his assailant while investigating whether Tommy Shepherd is his son.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/2/w780.jpg",
-            "id": "tt23112594:1:2",
-            "released": "2026-10-14T05:00:00.000Z",
-            "episode": 2,
-            "description": "Vision comes face to face with his assailant while investigating whether Tommy Shepherd is his son."
-          },
-          {
-            "name": "Reboot",
-            "season": 1,
-            "number": 3,
-            "firstAired": "2026-10-21T05:00:00.000Z",
-            "tvdb_id": 12023759,
-            "rating": 0,
-            "overview": "Vision and Tommy Shepherd join forces in order to survive while a terrifying killer strikes again.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/3/w780.jpg",
-            "id": "tt23112594:1:3",
-            "released": "2026-10-21T05:00:00.000Z",
-            "episode": 3,
-            "description": "Vision and Tommy Shepherd join forces in order to survive while a terrifying killer strikes again."
-          },
-          {
-            "name": "Malware",
-            "season": 1,
-            "number": 4,
-            "firstAired": "2026-10-21T05:00:00.000Z",
-            "tvdb_id": 12023760,
-            "rating": 0,
-            "overview": "As Vision confronts a new enemy, Ultron and Tommy Shepherd come face to face.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/4/w780.jpg",
-            "id": "tt23112594:1:4",
-            "released": "2026-10-21T05:00:00.000Z",
-            "episode": 4,
-            "description": "As Vision confronts a new enemy, Ultron and Tommy Shepherd come face to face."
-          },
-          {
-            "name": "Firewall",
-            "season": 1,
-            "number": 5,
-            "firstAired": "2026-10-28T05:00:00.000Z",
-            "tvdb_id": 12023761,
-            "rating": 0,
-            "overview": "Ultron and Jocasta join forces. Lisa comes to Vision's aid to help him evade capture.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/5/w780.jpg",
-            "id": "tt23112594:1:5",
-            "released": "2026-10-28T05:00:00.000Z",
-            "episode": 5,
-            "description": "Ultron and Jocasta join forces. Lisa comes to Vision's aid to help him evade capture."
-          },
-          {
-            "name": "Deadlock",
-            "season": 1,
-            "number": 6,
-            "firstAired": "2026-10-28T05:00:00.000Z",
-            "tvdb_id": 12023762,
-            "rating": 0,
-            "overview": "Vision and Paladin form an uneasy alliance as Thomas finally learns the truth about his past.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/6/w780.jpg",
-            "id": "tt23112594:1:6",
-            "released": "2026-10-28T05:00:00.000Z",
-            "episode": 6,
-            "description": "Vision and Paladin form an uneasy alliance as Thomas finally learns the truth about his past."
-          },
-          {
-            "name": "Immolation",
-            "season": 1,
-            "number": 7,
-            "firstAired": "2026-11-04T05:00:00.000Z",
-            "tvdb_id": 12023763,
-            "rating": 0,
-            "overview": "Vision and Ultron's twisted relationship comes undone.",
-            "thumbnail": "https://episodes.metahub.space/tt23112594/1/7/w780.jpg",
-            "id": "tt23112594:1:7",
-            "released": "2026-11-04T05:00:00.000Z",
-            "episode": 7,
-            "description": "Vision and Ultron's twisted relationship comes undone."
-          }
-        ],
-        "genres": [
-          "Action",
-          "Adventure",
-          "Drama"
-        ],
-        "releaseInfo": "2026",
-        "trailerStreams": [
-          {
-            "title": "VisionQuest",
-            "ytId": "sXKnmgmbkoE"
-          },
-          {
-            "title": "VisionQuest",
-            "ytId": "pM9HZ8Ovjdw"
-          },
-          {
-            "title": "VisionQuest",
-            "ytId": "oSVTAUKyrL8"
-          }
-        ],
-        "links": [
-          {
-            "name": "7.9",
-            "category": "imdb",
-            "url": "https://imdb.com/title/tt23112594"
-          },
-          {
-            "name": "VisionQuest",
-            "category": "share",
-            "url": "https://www.strem.io/s/series/visionquest-23112594"
-          },
-          {
-            "name": "Action",
-            "category": "Genres",
-            "url": "stremio:///discover/https%3A%2F%2Fv3-cinemeta.strem.io%2Fmanifest.json/series/top?genre=Action"
-          },
-          {
-            "name": "Adventure",
-            "category": "Genres",
-            "url": "stremio:///discover/https%3A%2F%2Fv3-cinemeta.strem.io%2Fmanifest.json/series/top?genre=Adventure"
-          },
-          {
-            "name": "Drama",
-            "category": "Genres",
-            "url": "stremio:///discover/https%3A%2F%2Fv3-cinemeta.strem.io%2Fmanifest.json/series/top?genre=Drama"
-          },
-          {
-            "name": "Paul Bettany",
-            "category": "Cast",
-            "url": "stremio:///search?search=Paul%20Bettany"
-          },
-          {
-            "name": "James Spader",
-            "category": "Cast",
-            "url": "stremio:///search?search=James%20Spader"
-          },
-          {
-            "name": "Ruaridh Mollica",
-            "category": "Cast",
-            "url": "stremio:///search?search=Ruaridh%20Mollica"
-          }
-        ],
-        "behaviorHints": {
-          "defaultVideoId": null,
-          "hasScheduledVideos": true
-        }
-      },
-      "season": 1,
-      "episode": 1,
-      "currentTime": 351,
-      "duration": 3060,
-      "server": "kinogram_hls",
-      "subLang": "ro",
-      "updatedAt": 1793878721822,
-      "deviceName": "Mac / Laptop",
-      "totalEpisodesInSeason": 8,
-      "totalSeasons": 1,
-      "episodeProgressMap": {
-        "S1E1": {
-          "currentTime": 351,
-          "duration": 3060,
-          "updatedAt": 1793878721822
-        }
-      }
-    }
-  }
+  "p2": {}
 };
 
 export const DEFAULT_SEED_SAVED_BY_PROFILE: Record<string, any[]> = {
@@ -3216,8 +2883,8 @@ export const DEFAULT_SEED_SAVED_BY_PROFILE: Record<string, any[]> = {
       "type": "series",
       "name": "Звёзды",
       "releaseInfo": "2024",
-      "poster": "https://kinopoiskapiunofficial.tech/images/posters/kp_small/5508530.jpg",
-      "background": "https://images.metahub.space/background/medium/tt31712367/img",
+      "poster": "/posters/zvyozdy.jpg",
+      "background": "/posters/zvyozdy.jpg",
       "links": [],
       "behaviorHints": {
         "defaultVideoId": null,

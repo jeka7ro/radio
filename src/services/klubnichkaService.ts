@@ -26,6 +26,7 @@ export type KlubnichkaSourceId =
 
 export type KlubnichkaCategoryId =
   | 'top_4k'
+  | 'erotic_movies'
   | 'latest_hd'
   | 'most_popular'
   | 'top_rated'
@@ -33,6 +34,12 @@ export type KlubnichkaCategoryId =
   | 'fps_60'
   | 'studio_premium'
   | 'russian_euro'
+  | 'russian'
+  | 'couples'
+  | 'nudists'
+  | 'swingers'
+  | 'orgies'
+  | 'fkk'
   | 'milf_mature'
   | 'teen_18'
   | 'anal_hd'
@@ -141,6 +148,14 @@ export const KLUBNICHKA_CATEGORIES: Array<{
     defaultOrder: 'top-weekly',
   },
   {
+    id: 'erotic_movies',
+    labelRo: 'Filme Erotice (Full)',
+    labelEn: 'Full Erotic Movies',
+    labelRu: 'Эротические фильмы (Full)',
+    defaultQuery: 'erotic movie full film sensual passion romance',
+    defaultOrder: 'longest',
+  },
+  {
     id: 'latest_hd',
     labelRo: 'Cele mai noi (HD)',
     labelEn: 'Latest Releases (HD)',
@@ -194,6 +209,54 @@ export const KLUBNICHKA_CATEGORIES: Array<{
     labelEn: 'Euro & RU',
     labelRu: 'Европа и RU',
     defaultQuery: 'russian european',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'russian',
+    labelRo: 'Rusești HD (Russian)',
+    labelEn: 'Russian HD',
+    labelRu: 'Русское HD',
+    defaultQuery: 'russian hd',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'couples',
+    labelRo: 'Cupluri HD (Couples)',
+    labelEn: 'Couples HD',
+    labelRu: 'Пары HD',
+    defaultQuery: 'real couple passionate hd',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'nudists',
+    labelRo: 'Nudiști (Nudists)',
+    labelEn: 'Nudists & Naturism',
+    labelRu: 'Нудисты и Натуризм',
+    defaultQuery: 'nudist beach naturist nude',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'swingers',
+    labelRo: 'Swingers (Cupluri Swap)',
+    labelEn: 'Swingers Party HD',
+    labelRu: 'Свингеры и Клуб',
+    defaultQuery: 'swinger swinger party couple swap',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'orgies',
+    labelRo: 'Orgie & Grup (Orgies)',
+    labelEn: 'Orgies & Group Sex HD',
+    labelRu: 'Оргии и Групповуха HD',
+    defaultQuery: 'orgy gangbang group sex hd',
+    defaultOrder: 'top-weekly',
+  },
+  {
+    id: 'fkk',
+    labelRo: 'FKK Nudism (Plajă)',
+    labelEn: 'FKK Naturism Beach',
+    labelRu: 'FKK Натуризм и Пляж',
+    defaultQuery: 'fkk naturism naturist nudist beach',
     defaultOrder: 'top-weekly',
   },
   {

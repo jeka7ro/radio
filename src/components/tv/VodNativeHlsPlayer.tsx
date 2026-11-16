@@ -76,6 +76,17 @@ export interface VodExternalQualityOption {
   onSelect: () => void;
 }
 
+export interface SeekHudData {
+  direction: 'fwd' | 'rew';
+  deltaLabel: string;
+  targetTimeStr: string;
+  targetSec: number;
+  totalTimeStr: string;
+  totalSec: number;
+  remainingTimeStr: string;
+  percent: number;
+}
+
 export interface VodResolutionReport {
   width: number;
   height: number;
@@ -912,6 +923,31 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   isOsdVisibleRef.current = isOsdVisible;
   const videoDurationSecRef = useRef<number>(videoDurationSec);
   videoDurationSecRef.current = videoDurationSec;
+  const onTimeUpdateRef = useRef(onTimeUpdate);
+  onTimeUpdateRef.current = onTimeUpdate;
+  const currentTimeSecRef = useRef<number>(currentTimeSec);
+  currentTimeSecRef.current = currentTimeSec;
+  const durationHintSecRef = useRef<number | undefined>(durationHintSec);
+  durationHintSecRef.current = durationHintSec;
+
+  // Flush final playback progress on unmount / player close
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      const effTime =
+        streamOffsetRef.current +
+        (v && Number.isFinite(v.currentTime) && v.currentTime > 0
+          ? v.currentTime
+          : currentTimeSecRef.current || 0);
+      const floorCur = Math.floor(effTime);
+      const totalDur = Math.floor(
+        videoDurationSecRef.current || durationHintSecRef.current || 2700
+      );
+      if (floorCur > 1) {
+        onTimeUpdateRef.current?.(floorCur, totalDur);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!hlsUrl || !hlsUrl.includes('/api/filelist/stream')) {
@@ -977,6 +1013,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   }, [hlsUrl]);
   const [seekToast, setSeekToast] = useState<string | null>(null);
   const seekToastTimerRef = useRef<number | null>(null);
+  const [seekHudData, setSeekHudData] = useState<SeekHudData | null>(null);
+  const seekHudTimerRef = useRef<number | null>(null);
+  const cumulativeSeekDeltaSecRef = useRef<number>(0);
+  const lastSeekTriggerWallMsRef = useRef<number>(0);
 
   const [audioTracks, setAudioTracks] = useState<
     Array<{ id: number; name: string }>
@@ -3314,9 +3354,32 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
   }, [mediaType, detectedSkipSegments, dismissedSegmentIds, displayTimeSec]);
 
-  // Auto-focus "Sari peste Intro / Recapitulare" whenever a segment becomes active and no menu is open
+  // Seamless Auto-Skip Intro & Recap (IntroDB Consensus)
+  const hasAutoSkippedSegmentRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isSkipIntroVisible || !activeSkipSegment || openMenu !== 'none') {
+    const profilePrefs = getActiveProfileMediaPrefs();
+    const shouldAutoSkip = profilePrefs.autoSkipIntro ?? true;
+    if (!shouldAutoSkip || !activeSkipSegment || openMenu !== 'none') return;
+    if (hasAutoSkippedSegmentRef.current === activeSkipSegment.id) return;
+    hasAutoSkippedSegmentRef.current = activeSkipSegment.id;
+
+    const targetSeg = activeSkipSegment;
+    const timer = window.setTimeout(() => {
+      setDismissedSegmentIds((prev) =>
+        prev.includes(targetSeg.id) ? prev : [...prev, targetSeg.id]
+      );
+      seekToAbsoluteSeconds(
+        targetSeg.endSec,
+        targetSeg.toastLabel || 'Intro Omis'
+      );
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [activeSkipSegment, openMenu]);
+
+  // Focus "Sari peste Intro / Recapitulare" only when auto-skip is disabled
+  useEffect(() => {
+    const shouldAutoSkip = getActiveProfileMediaPrefs().autoSkipIntro ?? true;
+    if (shouldAutoSkip || !isSkipIntroVisible || !activeSkipSegment || openMenu !== 'none') {
       return;
     }
     hasAutoFocusedSkipIntroRef.current = activeSkipSegment.id;
@@ -3485,7 +3548,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   // Propose Next Episode (Series) or End-of-Movie Actions (Movies) as soon as displayTimeSec >= resolvedOutroStartSec
   useEffect(() => {
     const canShowEndPrompt =
-      mediaType === 'series' ? Boolean(onNextEpisode) : true;
+      Boolean(onNextEpisode) || mediaType === 'movie';
     if (
       !canShowEndPrompt ||
       autoNextDismissed ||
@@ -3503,7 +3566,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         setShowNextEpisodePrompt(true);
       }
       if (
-        mediaType === 'series' &&
         onNextEpisode &&
         status === 'playing' &&
         watchedTicksInEpisodeRef.current >= 15 &&
@@ -3585,10 +3647,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     )
   );
 
-  const seekToAbsoluteSeconds = (targetSec: number, labelPrefix?: string) => {
+  const seekToAbsoluteSeconds = (
+    targetSec: number,
+    labelPrefix?: string,
+    explicitDirection?: 'fwd' | 'rew'
+  ) => {
     const v = videoRef.current;
     if (!v) return;
-    onWakeOsd?.();
 
     // Live Remuxed FileList Torrent or YouTube Premium Stream seeking via server-side -ss offset
     if (
@@ -3644,19 +3709,34 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             targetVideo,
             `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
           );
-        }, 140);
+        }, 120);
       }
 
       const remSec = Math.max(0, totalDur - nextSec);
-      setSeekToast(
-        `${labelPrefix ? `${labelPrefix}  •  ` : ''}${formatSeekTime(nextSec)} / ${formatSeekTime(totalDur)}  (-${formatSeekTime(remSec)})`
-      );
-      if (seekToastTimerRef.current) {
-        window.clearTimeout(seekToastTimerRef.current);
+      const dir: 'fwd' | 'rew' =
+        explicitDirection || (labelPrefix?.includes('-') ? 'rew' : 'fwd');
+      const pct =
+        totalDur > 0 ? Math.min(100, Math.max(0, (nextSec / totalDur) * 100)) : 0;
+
+      if (labelPrefix && labelPrefix !== 'Reluare') {
+        setSeekHudData({
+          direction: dir,
+          deltaLabel: labelPrefix,
+          targetTimeStr: formatSeekTime(nextSec),
+          targetSec: Math.floor(nextSec),
+          totalTimeStr: formatSeekTime(totalDur),
+          totalSec: Math.floor(totalDur),
+          remainingTimeStr: `-${formatSeekTime(remSec)}`,
+          percent: Math.round(pct),
+        });
+
+        if (seekHudTimerRef.current) {
+          window.clearTimeout(seekHudTimerRef.current);
+        }
+        seekHudTimerRef.current = window.setTimeout(() => {
+          setSeekHudData(null);
+        }, 1500);
       }
-      seekToastTimerRef.current = window.setTimeout(() => {
-        setSeekToast(null);
-      }, 1500);
       return;
     }
 
@@ -3675,18 +3755,42 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       onTimeUpdate?.(Math.floor(nextSec), Math.floor(totalDur));
     }
     const remSec = Math.max(0, totalDur - nextSec);
-    setSeekToast(
-      `${labelPrefix ? `${labelPrefix}  •  ` : ''}${formatSeekTime(nextSec)} / ${formatSeekTime(totalDur)}  (-${formatSeekTime(remSec)})`
-    );
-    if (seekToastTimerRef.current) {
-      window.clearTimeout(seekToastTimerRef.current);
+    const dir: 'fwd' | 'rew' =
+      explicitDirection || (labelPrefix?.includes('-') ? 'rew' : 'fwd');
+    const pct =
+      totalDur > 0 ? Math.min(100, Math.max(0, (nextSec / totalDur) * 100)) : 0;
+
+    if (labelPrefix && labelPrefix !== 'Reluare') {
+      setSeekHudData({
+        direction: dir,
+        deltaLabel: labelPrefix,
+        targetTimeStr: formatSeekTime(nextSec),
+        targetSec: Math.floor(nextSec),
+        totalTimeStr: formatSeekTime(totalDur),
+        totalSec: Math.floor(totalDur),
+        remainingTimeStr: `-${formatSeekTime(remSec)}`,
+        percent: Math.round(pct),
+      });
+
+      if (seekHudTimerRef.current) {
+        window.clearTimeout(seekHudTimerRef.current);
+      }
+      seekHudTimerRef.current = window.setTimeout(() => {
+        setSeekHudData(null);
+      }, 1500);
     }
-    seekToastTimerRef.current = window.setTimeout(() => {
-      setSeekToast(null);
-    }, 1300);
   };
 
+  const pendingSeekTargetSecRef = useRef<number | null>(null);
+  const pendingSeekTimerRef = useRef<number | null>(null);
+
   const triggerSeek = (deltaSec: number) => {
+    const now = Date.now();
+    if (now - lastSeekTriggerWallMsRef.current < 50) {
+      return; // Ignore duplicate event within 50ms
+    }
+    lastSeekTriggerWallMsRef.current = now;
+
     const v = videoRef.current;
     if (!v) return;
     const currentEff =
@@ -3697,8 +3801,39 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           ? streamOffsetRef.current
           : streamOffsetRef.current + (v.currentTime || 0)
         : v.currentTime || currentTimeSec;
-    const prefix = deltaSec > 0 ? `+${deltaSec}s` : `${deltaSec}s`;
-    seekToAbsoluteSeconds(currentEff + deltaSec, prefix);
+
+    const baseSec =
+      pendingSeekTargetSecRef.current !== null
+        ? pendingSeekTargetSecRef.current
+        : currentEff;
+    const targetSec = Math.max(0, baseSec + deltaSec);
+    pendingSeekTargetSecRef.current = targetSec;
+
+    const prevAccum = cumulativeSeekDeltaSecRef.current;
+    const newAccum =
+      (prevAccum > 0 && deltaSec > 0) || (prevAccum < 0 && deltaSec < 0)
+        ? prevAccum + deltaSec
+        : deltaSec;
+    cumulativeSeekDeltaSecRef.current = newAccum;
+
+    if (pendingSeekTimerRef.current) {
+      window.clearTimeout(pendingSeekTimerRef.current);
+    }
+    pendingSeekTimerRef.current = window.setTimeout(() => {
+      pendingSeekTargetSecRef.current = null;
+      cumulativeSeekDeltaSecRef.current = 0;
+    }, 1200);
+
+    const absAccum = Math.abs(newAccum);
+    const timeStr =
+      absAccum >= 60
+        ? absAccum % 60 === 0
+          ? `${Math.round(absAccum / 60)} min`
+          : `${Math.floor(absAccum / 60)}m ${absAccum % 60}s`
+        : `${absAccum}s`;
+    const prefix = newAccum >= 0 ? `+${timeStr}` : `-${timeStr}`;
+    const direction: 'fwd' | 'rew' = newAccum >= 0 ? 'fwd' : 'rew';
+    seekToAbsoluteSeconds(targetSec, prefix, direction);
   };
 
   const triggerSeekRef = useRef(triggerSeek);
@@ -3711,7 +3846,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
     seekToastTimerRef.current = window.setTimeout(() => {
       setSeekToast(null);
-    }, 1100);
+    }, 1400);
   };
 
   const resumeOrRecoverPlayback = (v: HTMLVideoElement, showToast = true) => {
@@ -3766,7 +3901,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         v.networkState === 3)
     ) {
       lastTimeUpdateWallMsRef.current = now;
-      seekToAbsoluteSeconds(currentEff, showToast ? '▶ Reluare' : undefined);
+      seekToAbsoluteSeconds(currentEff, showToast ? 'Reluare' : undefined);
       return;
     }
     if (isFileListStream) {
@@ -3782,12 +3917,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           ) {
             seekToAbsoluteSeconds(
               currentEff,
-              showToast ? '▶ Reluare' : undefined
+              showToast ? 'Reluare' : undefined
             );
           }
         });
       if (showToast) {
-        showTransportToast('▶ Redare');
+        showTransportToast('Redare');
       }
       return;
     }
@@ -3827,12 +3962,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       })
       .catch(() => {
         if (isFileListStream && currentEff > 5 && isMidMovie) {
-          seekToAbsoluteSeconds(currentEff, showToast ? '▶ Reluare' : undefined);
+          seekToAbsoluteSeconds(currentEff, showToast ? 'Reluare' : undefined);
         }
       });
 
     if (showToast) {
-      showTransportToast('▶ Redare');
+      showTransportToast('Redare');
     }
   };
 
@@ -4044,6 +4179,141 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const handleRemotePlayPauseRef = useRef(handleRemotePlayPause);
   handleRemotePlayPauseRef.current = handleRemotePlayPause;
 
+  const audioTracksRef = useRef(audioTracks);
+  audioTracksRef.current = audioTracks;
+  const activeAudioTrackRef = useRef(activeAudioTrack);
+  activeAudioTrackRef.current = activeAudioTrack;
+  const availableSubsRef = useRef(availableSubs);
+  availableSubsRef.current = availableSubs;
+  const subtitleVttUrlRef = useRef(subtitleVttUrl);
+  subtitleVttUrlRef.current = subtitleVttUrl;
+  const subtitleCuesRef = useRef(subtitleCues);
+  subtitleCuesRef.current = subtitleCues;
+  const onClearSubtitleRef = useRef(onClearSubtitle);
+  onClearSubtitleRef.current = onClearSubtitle;
+  const onApplyAutoSubtitleRef = useRef(onApplyAutoSubtitle);
+  onApplyAutoSubtitleRef.current = onApplyAutoSubtitle;
+  const onSelectAudioTrackIndexRef = useRef(onSelectAudioTrackIndex);
+  onSelectAudioTrackIndexRef.current = onSelectAudioTrackIndex;
+
+  const handleCycleAudioTrack = () => {
+    const list = audioTracksRef.current;
+    if (!list || list.length === 0) {
+      showTransportToast('Pistă unică');
+      return;
+    }
+    if (list.length === 1) {
+      showTransportToast(`Audio: ${list[0].name || 'Pistă unică'}`);
+      return;
+    }
+    const currentId = activeAudioTrackRef.current;
+    const curIdx = list.findIndex((t) => t.id === currentId);
+    const nextIdx = curIdx >= 0 ? (curIdx + 1) % list.length : 0;
+    const trk = list[nextIdx];
+    if (!trk) return;
+
+    const v = videoRef.current;
+    if (v && v.currentTime > 3) {
+      startAtSecondsRef.current = Math.floor(v.currentTime);
+      appliedStartRef.current = false;
+    }
+    setActiveAudioTrack(trk.id);
+    setForcedAudioIdx(nextIdx);
+    if (!isForeign) {
+      saveActiveProfileMediaPrefs({
+        defaultAudioPref: inferAudioPrefFromTrackName(trk.name),
+      });
+    }
+    onSelectAudioTrackIndexRef.current?.(nextIdx);
+    if (dashRef.current) {
+      const dashTracks = dashRef.current.getTracksFor('audio') || [];
+      if (dashTracks[trk.id]) {
+        dashRef.current.setCurrentTrack(dashTracks[trk.id]);
+      }
+    } else if (hlsRef.current && (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))) {
+      hlsRef.current.audioTrack = trk.id;
+    } else if (!hlsRef.current && (!hlsUrl || !hlsUrl.includes('/api/tv-proxy'))) {
+      const vAny = videoRef.current as any;
+      if (vAny?.audioTracks && vAny.audioTracks.length > 0) {
+        for (let i = 0; i < vAny.audioTracks.length; i++) {
+          if (vAny.audioTracks[i]) {
+            vAny.audioTracks[i].enabled = i === trk.id;
+          }
+        }
+      }
+    }
+    showTransportToast(`Audio: ${trk.name}`);
+  };
+
+  const handleToggleSubtitles = async () => {
+    const hasActive =
+      Boolean(subtitleVttUrlRef.current) ||
+      Boolean(subtitleCuesRef.current && subtitleCuesRef.current.length > 0);
+    if (hasActive) {
+      onClearSubtitleRef.current?.();
+      setActiveSubTrackId(null);
+      showTransportToast('Subtitrări: Oprite');
+      return;
+    }
+    const subs = availableSubsRef.current;
+    if (!subs || subs.length === 0) {
+      showTransportToast('Nicio subtitrare disponibilă');
+      return;
+    }
+    const roTrack = subs.find((t) => t.langCode2 === 'ro') || subs[0];
+    if (roTrack) {
+      try {
+        const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(roTrack.url);
+        setActiveSubTrackId(roTrack.id);
+        onApplyAutoSubtitleRef.current?.({
+          vttBlobUrl,
+          label: roTrack.langLabel,
+          cues,
+        });
+        showTransportToast(`Subtitrări: ${roTrack.langLabel || 'Română'}`);
+      } catch {
+        showTransportToast('Eroare la activarea subtitrării');
+      }
+    }
+  };
+
+  const handleCycleAudioTrackRef = useRef(handleCycleAudioTrack);
+  handleCycleAudioTrackRef.current = handleCycleAudioTrack;
+  const handleToggleSubtitlesRef = useRef(handleToggleSubtitles);
+  handleToggleSubtitlesRef.current = handleToggleSubtitles;
+
+  const lastKeySeekTimeRef = useRef<number>(0);
+  const keySeekCountRef = useRef<number>(0);
+  const lastKeySeekDirRef = useRef<number>(0);
+
+  const getSmartSeekStep = (dir: 1 | -1): number => {
+    const now = Date.now();
+    let count = 1;
+    if (lastKeySeekDirRef.current === dir && now - lastKeySeekTimeRef.current < 950) {
+      count = keySeekCountRef.current + 1;
+    } else {
+      count = 1;
+    }
+    lastKeySeekTimeRef.current = now;
+    lastKeySeekDirRef.current = dir;
+    keySeekCountRef.current = count;
+
+    // Pas smart derulare (înainte și înapoi):
+    // 1-a apăsare: 15 secunde
+    // a 2-a apăsare: încă 15 secunde
+    // a 3-a apăsare: pas de 30 secunde
+    // a 4-a apăsare și următoarele: câte 1 minut (60 secunde)
+    if (count === 1) return 15;
+    if (count === 2) return 15;
+    if (count === 3) return 30;
+    return 60;
+  };
+
+  const triggerSeekWithStep = (dir: 1 | -1) => {
+    const step = getSmartSeekStep(dir);
+    triggerSeekRef.current(dir * step);
+  };
+
   useEffect(() => {
     const onExternalSeek = (ev: Event) => {
       const customEv = ev as CustomEvent<{ deltaSec?: number }>;
@@ -4060,9 +4330,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (act === 'play' || act === 'pause' || act === 'toggle') {
         handleRemotePlayPauseRef.current(act);
       } else if (act === 'rw') {
-        triggerSeekRef.current(-15);
+        onHideOsd?.();
+        triggerSeekWithStep(-1);
       } else if (act === 'ff') {
-        triggerSeekRef.current(15);
+        onHideOsd?.();
+        triggerSeekWithStep(1);
       }
     };
     const onMediaKeyDown = (e: KeyboardEvent) => {
@@ -4071,6 +4343,22 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
       const kc = e.keyCode || e.which;
       const k = e.key;
+
+      // Remote ArrowLeft / ArrowRight -> Instant Seek during video playback when watching (not in button/input/menu)
+      if (
+        (k === 'ArrowLeft' || k === 'ArrowRight') &&
+        activeTag !== 'BUTTON' &&
+        activeTag !== 'INPUT' &&
+        activeTag !== 'SELECT' &&
+        activeTag !== 'TEXTAREA' &&
+        openMenu === 'none'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        onHideOsd?.();
+        triggerSeekWithStep(k === 'ArrowRight' ? 1 : -1);
+        return;
+      }
 
       // Play button on LG webOS / Samsung Tizen / Sony / Philips / Android TV remotes (415, 250, MediaPlay)
       if (
@@ -4127,7 +4415,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (kc === 412 || kc === 227 || k === 'MediaRewind') {
         e.preventDefault();
         e.stopPropagation();
-        triggerSeekRef.current(-15);
+        triggerSeekWithStep(-1);
         return;
       }
 
@@ -4135,7 +4423,54 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (kc === 417 || kc === 228 || k === 'MediaFastForward') {
         e.preventDefault();
         e.stopPropagation();
-        triggerSeekRef.current(15);
+        triggerSeekWithStep(1);
+        return;
+      }
+
+      // Hardware Color Buttons during video playback:
+      // Red button (403, F1, ColorF0Red, 'r') -> Sursă & Calitate Video (Pistă Video)
+      if (kc === 403 || k === 'F1' || k === 'ColorF0Red' || ((k === 'r' || k === 'R') && activeTag !== 'BUTTON')) {
+        e.preventDefault();
+        e.stopPropagation();
+        onWakeOsd?.();
+        const next = openMenu === 'quality' || openMenu === 'server' ? 'none' : 'quality';
+        setOpenMenu(next);
+        if (next === 'quality') {
+          const container = qualityBtnRef.current?.parentElement;
+          window.setTimeout(() => {
+            const activeBtn =
+              container?.querySelector<HTMLButtonElement>('[data-quality-opt-active="true"]') ||
+              container?.querySelector<HTMLButtonElement>('[data-quality-opt="true"]') ||
+              qualityBtnRef.current;
+            activeBtn?.focus();
+          }, 50);
+        } else {
+          qualityBtnRef.current?.focus();
+        }
+        return;
+      }
+
+      // Green button (404, F2, ColorF1Green, 'g') -> Cycle Audio Track
+      if (kc === 404 || k === 'F2' || k === 'ColorF1Green' || ((k === 'g' || k === 'G') && activeTag !== 'BUTTON')) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleCycleAudioTrackRef.current();
+        return;
+      }
+
+      // Blue button (406, F4, ColorF3Blue, 'b') -> Toggle Romanian Subtitles ON / OFF
+      if (kc === 406 || k === 'F4' || k === 'ColorF3Blue' || ((k === 'b' || k === 'B') && activeTag !== 'BUTTON')) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleToggleSubtitlesRef.current();
+        return;
+      }
+
+      // Yellow button (405, F3, ColorF2Yellow, 'y') -> Toggle Info Sheet (Synopsis & Cast)
+      if (kc === 405 || k === 'F3' || k === 'ColorF2Yellow' || ((k === 'y' || k === 'Y') && activeTag !== 'BUTTON')) {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpenInfoSheet?.();
         return;
       }
     };
@@ -4203,6 +4538,21 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         return next;
       });
     };
+
+    const onToggleAudioEv = () => {
+      handleCycleAudioTrackRef.current();
+    };
+    const onToggleSubEv = () => {
+      handleToggleSubtitlesRef.current();
+    };
+    const onToastEv = (ev: Event) => {
+      const customEv = ev as CustomEvent<{ message?: string }>;
+      const msg = customEv.detail?.message;
+      if (msg) {
+        showTransportToast(msg);
+      }
+    };
+
     window.addEventListener('aether:vod-seek', onExternalSeek);
     window.addEventListener('aether:vod-transport', onExternalTransport);
     window.addEventListener('keydown', onMediaKeyDown, true);
@@ -4213,6 +4563,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       onOpenQualityMenuEv
     );
     window.addEventListener('aether:vod-open-menu', onOpenMenuEv);
+    window.addEventListener('aether:vod-toggle-audio', onToggleAudioEv);
+    window.addEventListener('aether:vod-toggle-subtitle', onToggleSubEv);
+    window.addEventListener('aether:vod-toast', onToastEv);
     return () => {
       window.removeEventListener('aether:vod-seek', onExternalSeek);
       window.removeEventListener('aether:vod-transport', onExternalTransport);
@@ -4227,6 +4580,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         onOpenQualityMenuEv
       );
       window.removeEventListener('aether:vod-open-menu', onOpenMenuEv);
+      window.removeEventListener('aether:vod-toggle-audio', onToggleAudioEv);
+      window.removeEventListener('aether:vod-toggle-subtitle', onToggleSubEv);
+      window.removeEventListener('aether:vod-toast', onToastEv);
     };
   }, []);
 
@@ -4298,7 +4654,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           if (v) {
             v.play().catch(() => { });
             setIsPaused(false);
-            showTransportToast('▶ Redare');
+            showTransportToast('Redare');
           }
         },
         onPause: () => {
@@ -4740,8 +5096,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   // Ensure that whenever the OSD is visible, a button on the OSD has focus so the white highlight is always visible and ready for Left/Right arrows
   useEffect(() => {
-    if (!isOsdVisible || openMenu !== 'none') return;
+    if (!isOsdVisible || openMenu !== 'none' || pendingSeekTargetSecRef.current !== null) return;
     const timer = window.setTimeout(() => {
+      if (pendingSeekTargetSecRef.current !== null) return;
       const rootEl = playerRootRef.current;
       if (!rootEl) return;
       const skipBtn = rootEl.querySelector<HTMLButtonElement>(
@@ -4799,7 +5156,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           webkit-playsinline="true"
           {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
           autoPlay
-          poster={poster}
+          poster={
+            (title?.toLowerCase().includes('zvyozdy') ||
+              title?.toLowerCase().includes('звёзд') ||
+              poster?.includes('tt31712367') ||
+              poster?.includes('5508530'))
+              ? '/posters/zvyozdy.jpg'
+              : poster
+          }
           onTouchStart={(e) => {
             if (e.touches.length === 2) {
               const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -4853,17 +5217,28 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onPause={(e) => {
+            const vid = e.currentTarget;
             if (
               !userIntentionallyPausedRef.current &&
               isFileListStream &&
-              (e.currentTarget.ended || flMseReaderDoneRef.current) &&
+              (vid.ended || flMseReaderDoneRef.current) &&
               remainingTimeSec > 180 &&
               currentTimeSec > 5
             ) {
-              resumeOrRecoverPlayback(e.currentTarget, false);
+              resumeOrRecoverPlayback(vid, false);
               return;
             }
             setIsPaused(true);
+            const effTime = streamOffsetRef.current + (vid.currentTime || 0);
+            const floorCur = Math.floor(effTime);
+            const dur = Math.floor(
+              videoDurationSecRef.current ||
+              durationHintSecRef.current ||
+              2700
+            );
+            if (floorCur > 1) {
+              onTimeUpdateRef.current?.(floorCur, dur);
+            }
           }}
           onDurationChange={(e) => {
             if (isFileListStream) return;
@@ -5169,12 +5544,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               return;
             }
             if (
-              mediaType === 'series' &&
               onNextEpisode &&
               !autoNextDismissed &&
               !hasTriggeredAutoNextRef.current &&
-              watchedTicksInEpisodeRef.current >= 10 &&
-              currentTimeSec >= 300
+              (watchedTicksInEpisodeRef.current >= 4 || currentTimeSec >= 15)
             ) {
               hasTriggeredAutoNextRef.current = true;
               setShowNextEpisodePrompt(false);
@@ -5449,11 +5822,75 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             </div>
           )}
 
-        {/* Lampa Seek Toast (-15s / +15s) */}
-        {seekToast && (
+        {/* Lampa Refined Capsule Seek HUD (Finuț, discret, Apple tvOS style, zero emoji, exact pe centrul ecranului) */}
+        {seekHudData && (
+          <div
+            data-vod-seek-hud="true"
+            className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center animate-in fade-in zoom-in-95 duration-150 transition-all"
+          >
+            <div className="w-auto min-w-[220px] max-w-[90vw] sm:max-w-md px-4 sm:px-5 py-2 rounded-full bg-zinc-950/90 backdrop-blur-2xl border border-white/20 shadow-[0_20px_50px_rgba(0,0,0,0.9)] flex flex-col gap-1.5 text-center">
+              {/* Row 1: Finuț icon (16px) + Delta Pill + Timestamp & Remaining */}
+              <div className="flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {seekHudData.direction === 'fwd' ? (
+                    <RotateCw
+                      className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400 shrink-0"
+                      strokeWidth={2.2}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <RotateCcw
+                      className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-400 shrink-0"
+                      strokeWidth={2.2}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[11px] sm:text-xs font-extrabold tracking-wide tabular-nums border ${
+                      seekHudData.direction === 'fwd'
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/35'
+                        : 'bg-sky-500/20 text-sky-300 border-sky-400/35'
+                    }`}
+                  >
+                    {seekHudData.deltaLabel}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1 text-xs sm:text-[13px] font-bold text-white tabular-nums">
+                  <span>{seekHudData.targetTimeStr}</span>
+                  <span className="text-white/30 font-normal">/</span>
+                  <span className="text-white/60 font-normal">{seekHudData.totalTimeStr}</span>
+                  <span className="ml-1 px-1.5 py-0.5 rounded-md bg-white/10 text-[10px] font-semibold text-white/80 tabular-nums">
+                    {seekHudData.remainingTimeStr}
+                  </span>
+                </div>
+              </div>
+
+              {/* Row 2: Hairline smooth progress bar */}
+              <div className="w-full h-1 bg-white/15 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-150 ${
+                    seekHudData.direction === 'fwd'
+                      ? 'bg-gradient-to-r from-emerald-500 to-emerald-300'
+                      : 'bg-gradient-to-r from-sky-500 to-sky-300'
+                  }`}
+                  style={{ width: `${Math.max(2, seekHudData.percent)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Generic Transport Toast (Redare / Pauză / Audio Track) - only when seekHudData is not active */}
+        {!seekHudData && seekToast && (
           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center">
-            <div className="px-6 py-3 rounded-2xl bg-black/80 border border-white/15 text-white text-xl sm:text-2xl font-extrabold shadow-2xl backdrop-blur-md">
-              {seekToast}
+            <div className="px-6 py-3 rounded-2xl bg-black/85 border border-white/20 text-white text-xl sm:text-2xl font-extrabold shadow-2xl backdrop-blur-md flex items-center gap-3">
+              {seekToast.includes('Redare') ? (
+                <Play className="w-6 h-6 text-white fill-current shrink-0" />
+              ) : seekToast.includes('Pauză') ? (
+                <Pause className="w-6 h-6 text-white fill-current shrink-0" />
+              ) : null}
+              <span>{seekToast.replace(/^[▶️⏸️⏩⏪⏭️⏮️\s]+/, '')}</span>
             </div>
           </div>
         )}
@@ -5576,11 +6013,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               right:
                 'max(10px, var(--safe-right, env(safe-area-inset-right, 0px)))',
             }}
-            className={`absolute z-30 flex items-center gap-1.5 transition-all duration-300 ${
-              (isOsdVisible && status !== 'loading') || openMenu !== 'none'
-                ? 'opacity-100 translate-y-0 pointer-events-auto visible'
-                : 'opacity-0 -translate-y-2 pointer-events-none invisible'
-            }`}
+            className={`absolute z-30 flex items-center gap-1.5 transition-all duration-300 ${(isOsdVisible && status !== 'loading') || openMenu !== 'none'
+              ? 'opacity-100 translate-y-0 pointer-events-auto visible'
+              : 'opacity-0 -translate-y-2 pointer-events-none invisible'
+              }`}
           >
             <button
               type="button"
@@ -5640,10 +6076,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           className={`absolute ${isMobilePhone
             ? 'inset-x-2.5 rounded-2xl px-2.5 py-1.5 gap-1'
             : 'inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 rounded-2xl sm:rounded-[28px] px-3 sm:px-6 py-2 sm:py-4 gap-1.5 sm:gap-3'
-            } z-30 overflow-visible tahoe-emerald-osd flex flex-col transition-all duration-300 ${
-              (isOsdVisible && status !== 'loading') || openMenu !== 'none'
-                ? 'opacity-100 translate-y-0 pointer-events-auto visible'
-                : 'opacity-0 translate-y-2 pointer-events-none invisible'
+            } z-30 overflow-visible tahoe-emerald-osd flex flex-col transition-all duration-300 ${(isOsdVisible && status !== 'loading') || openMenu !== 'none'
+              ? 'opacity-100 translate-y-0 pointer-events-auto visible'
+              : 'opacity-0 translate-y-2 pointer-events-none invisible'
             }`}
         >
           {/* ROW 1: POSTER & TITLE + APPLE LIQUID GLASS TIMELINE SCRUBBER */}
@@ -5657,8 +6092,39 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 {poster ? (
                   <div className="relative w-20 h-28 sm:w-24 sm:h-36 -mt-12 sm:-mt-16 mr-4 sm:mr-5 mb-1 rounded-2xl overflow-hidden border border-white/25 shadow-[0_22px_54px_rgba(0,0,0,0.9)] shrink-0 bg-zinc-900">
                     <img
-                      src={poster}
+                      src={
+                        (title?.toLowerCase().includes('zvyozdy') ||
+                          title?.toLowerCase().includes('звёзд') ||
+                          poster?.includes('tt31712367') ||
+                          poster?.includes('5508530'))
+                          ? '/posters/zvyozdy.jpg'
+                          : poster
+                      }
                       alt={title || ''}
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        const zvyozdyCdn = 'https://avatars.mds.yandex.net/get-kinopoisk-image/4486454/c06e5be9-ca78-479e-bfae-0f24e43bb452/360';
+                        const isZv = title?.toLowerCase().includes('zvyozdy') || title?.toLowerCase().includes('звёзд') || poster?.includes('tt31712367') || poster?.includes('5508530');
+                        if (isZv) {
+                          if (!target.src.includes('avatars.mds.yandex.net')) {
+                            target.src = zvyozdyCdn;
+                            return;
+                          } else if (!target.src.includes('/posters/zvyozdy.jpg')) {
+                            target.src = '/posters/zvyozdy.jpg';
+                            return;
+                          }
+                        }
+                        if (
+                          backdropUrl &&
+                          target.src !== backdropUrl &&
+                          !backdropUrl.includes('tt31712367') &&
+                          !backdropUrl.includes('5508530')
+                        ) {
+                          target.src = backdropUrl;
+                        } else if (!target.src.includes('/posters/zvyozdy.jpg')) {
+                          target.src = '/posters/zvyozdy.jpg';
+                        }
+                      }}
                       className="w-full h-full object-cover"
                     />
                   </div>
