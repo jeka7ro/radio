@@ -145,6 +145,7 @@ import {
   VodExternalQualityOption,
 } from '../components/tv/VodNativeHlsPlayer';
 import { OnlineSubtitleFinderModal } from '../components/tv/OnlineSubtitleFinderModal';
+import { HomeHeroBillboard } from '../components/tv/HomeHeroBillboard';
 import {
   ActorProfileModal,
   CastCardsSection,
@@ -176,6 +177,7 @@ import {
 import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModal';
 import { TvPlayerModal } from '../components/tv/TvPlayerModal';
 import { FilmioStartupLoader } from '../components/common/FilmioStartupLoader';
+import { VodCardProducerBadge } from '../components/common/VodCardProducerBadge';
 import { setActiveTvPlaylistContext } from '../components/tv/TvOsdChannelList';
 import { RadioPipPlayer } from '../components/player/RadioPipPlayer';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -277,6 +279,7 @@ import {
   formatSeriesCardSubtitleText,
   isRussianVodItem,
   isRussianTvShowItem,
+  isRomanianVodItem,
   isVkDirectSourcePath,
   getVodCardRatingInfo,
   deduplicateVodItems,
@@ -472,7 +475,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         const raw = localStorage.getItem('sc_spotify_liked_tracks_v1');
         if (raw) {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed.map((t) => {
+              let nextCover = t.cover;
+              if (
+                nextCover &&
+                nextCover.includes('6f6d73f3-f166-28a1-6e2b-905337f91065')
+              ) {
+                nextCover =
+                  'https://cdn-images.dzcdn.net/images/cover/fd00ebd6d30d7253f813dba3bb1c66a9/500x500-000000-80-0-0.jpg';
+              }
+              if (
+                nextCover &&
+                nextCover.includes('e261f8c1-73db-9a7a-c89e-1068f19d70e0')
+              ) {
+                nextCover =
+                  'https://cdn-images.dzcdn.net/images/cover/134778e4c4f19ea71c82408300925a9a/500x500-000000-80-0-0.jpg';
+              }
+              return { ...t, cover: nextCover };
+            });
+          }
         }
       } catch {
         // ignore
@@ -526,14 +548,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
       const audioEl = musicAudioRef.current;
       if (audioEl) {
-        audioEl.src = track.fullAudioUrl;
+        const targetSrc = track.fullAudioUrl || track.previewUrl || '';
+        audioEl.src = targetSrc;
         audioEl.volume = isMusicMuted ? 0 : musicVolume;
-        audioEl.play().catch(() => {
-          if (track.previewUrl && audioEl.src !== track.previewUrl) {
-            audioEl.src = track.previewUrl;
-            audioEl.play().catch(() => { });
-          }
-        });
+        const playPromise = audioEl.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {
+            if (track.previewUrl && audioEl.src !== track.previewUrl) {
+              audioEl.src = track.previewUrl;
+              audioEl.play().catch(() => {});
+            }
+          });
+        }
       }
     },
     [stopRadio, currentTvChannel, closeTvPlayer, isMusicMuted, musicVolume]
@@ -1079,7 +1105,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     description?: string;
     backdrop?: string;
   } | null>(null);
-  const [homeHeroIdx, setHomeHeroIdx] = useState<number>(0);
   // 2.5-day (60h) content rotation epoch so the Hero Banner refreshes its featured lineup every 2–3 days
   const [heroRotationEpoch, setHeroRotationEpoch] = useState<number>(() =>
     Math.floor(Date.now() / (2.5 * 24 * 60 * 60 * 1000))
@@ -2564,32 +2589,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section]);
 
-  // Auto-rotate Hero Billboard Banner every 10 seconds on Home Page
-  useEffect(() => {
-    if (
-      section !== 'home' ||
-      Boolean(activeVodItem) ||
-      isPlayingVod ||
-      heroBillboardItems.length <= 1
-    ) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setHomeHeroIdx((prev) => (prev + 1) % heroBillboardItems.length);
-    }, 10000);
-    return () => window.clearInterval(timer);
-  }, [section, activeVodItem, isPlayingVod, heroBillboardItems.length]);
+  // Auto-rotate Hero Billboard Banner is now encapsulated inside <HomeHeroBillboard />
+  // with smooth crossfade and zero page re-renders!
 
-  // Pre-load description & metadata for the currently displayed Hero Banner slide
-  useEffect(() => {
-    if (section !== 'home' || Boolean(activeVodItem) || heroBillboardItems.length === 0) {
-      return;
-    }
-    const curHero = heroBillboardItems[homeHeroIdx % heroBillboardItems.length];
-    if (curHero) {
-      handleFocusVodItem(curHero, true);
-    }
-  }, [section, activeVodItem, homeHeroIdx, heroBillboardItems, handleFocusVodItem]);
+// Hero banner metadata is served directly from pre-cached heroBillboardItems (zero re-render cascade)
+
 
   // Refresh the Hero Banner rotation epoch every 2–3 days (and periodically check for newly released titles)
   useEffect(() => {
@@ -4007,12 +4011,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             const mainRect = mainEl.getBoundingClientRect();
             const offsetInMain = r.top - mainRect.top + mainEl.scrollTop;
             const isTopHeroOrPlayer =
-              offsetInMain < 450 ||
               Boolean(targetEl.closest('[data-top-hero-card="true"]')) ||
               Boolean(targetEl.getAttribute('data-top-pill') === 'true');
 
             if (isTopHeroOrPlayer) {
-              if (mainEl.scrollTop > 0) {
+              if (mainEl.scrollTop > 0 && mainEl.scrollTop < 120) {
                 mainEl.scrollTop = 0;
               }
             } else if (r.top < mainRect.top + 36) {
@@ -6187,6 +6190,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ]
   );
 
+  const toggleSaveVodItemRef = useRef<(item: CinemetaItem) => void>(() => {});
+
   const handleCardPlayKey = useCallback(
     (
       e: React.KeyboardEvent,
@@ -6194,6 +6199,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       explicitSeason?: number,
       explicitEpisode?: number
     ) => {
+      const isRedButton =
+        e.keyCode === 403 ||
+        e.key === 'ColorF0Red' ||
+        e.key === 'Red' ||
+        e.code === 'ColorF0Red';
+      const isFavKey =
+        (e.key === 'f' || e.key === 'F' || e.key === 'r' || e.key === 'R') &&
+        !(
+          document.activeElement?.tagName === 'INPUT' ||
+          document.activeElement?.tagName === 'TEXTAREA'
+        );
+
+      if (isRedButton || isFavKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleSaveVodItemRef.current(item);
+        return;
+      }
+
       if (
         e.keyCode === 415 ||
         e.keyCode === 179 ||
@@ -7574,8 +7598,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
     }
 
-    let isForeignVod = !isRussianVodItem(activeVodItem);
-    let isRuTvShow = isRussianTvShowItem(activeVodItem);
+    const isRoVod = isRomanianVodItem(activeVodItem);
+    let isForeignVod = !isRoVod && !isRussianVodItem(activeVodItem);
+    let isRuTvShow = !isRoVod && isRussianTvShowItem(activeVodItem);
     let directResolvedOk = false;
     let directIsVk = false;
     let directFinished = false;
@@ -7594,6 +7619,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         isLocalHomeServer() &&
         (tvSettings.defaultVodServer === 'auto_best' ||
           tvSettings.defaultVodServer === 'filelist_torrent');
+
+      if (isRoVod) {
+        // Romanian TV Shows & Movies: 1) România Cloud HD (Vidmoly direct) -> 2) FileList.io RO Torrent (never Russian providers)
+        if (directResolvedOk) {
+          setActiveServer('kinogram_hls');
+          return;
+        }
+        if (canUseLocalTorrent && (flResolvedOk || !flFinished)) {
+          setActiveServer('filelist_torrent');
+          return;
+        }
+        setActiveServer('kinogram_hls');
+        return;
+      }
 
       if (isRuTvShow) {
         // Russian TV Shows: 1) VK Видео Direct (4K/1080p) -> 2) Kinozal VIP Torrent -> 3) iEdem MediaLibrary
@@ -8225,7 +8264,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     // Resolve Kinozal (for Russian VOD) + FileList.io Live Torrents in parallel (Only on Local Home Server)
     if (isLocalHomeServer()) {
-      const isRuVod = !isForeignVod || isRussianVodItem(activeVodItem);
+      const isRuVod = !isRoVod && (!isForeignVod || isRussianVodItem(activeVodItem));
       const rawFlQuery = isRuVod
         ? activeVodItem.name ||
         detailedMeta?.name ||
@@ -8349,11 +8388,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     localBridgeTick,
   ]);
 
-  // Auto-clamp stale/polluted saved season or episode numbers on series (e.g. bogus S2:E6 on a 1-season series)
+  // Auto-clamp stale/polluted saved season or episode numbers on series (guarded against active stream discovery)
   useEffect(() => {
     if (!activeVodItem || activeVodItem.type !== 'series') return;
-    if (isRussianTvShowItem(activeVodItem)) return;
-    if (isFileListStreamLoading) return;
+    if (isRussianTvShowItem(activeVodItem) || isRussianVodItem(activeVodItem)) return;
+    if (isFileListStreamLoading || isDirectStreamLoading) return;
     if (resolvedFileListStream?.ok && resolvedFileListStream.streamUrl) return;
 
     const metaVideos = Array.isArray(detailedMeta?.videos)
@@ -8375,6 +8414,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           : [];
 
     if (validSeasons.length === 0) return;
+
+    // Never reset to S1 if selectedSeason already exists in discovered seasons
+    if (validSeasons.includes(selectedSeason)) return;
 
     if (!validSeasons.includes(selectedSeason)) {
       setSelectedSeason(validSeasons[0]);
@@ -9196,12 +9238,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     [seasonsMap, selectedSeason, availableSeasons]
   );
 
+  // Episodes are ALWAYS strictly ascending from left to right (1, 2, 3...)
   const displayedEpisodesForSeason = useMemo(
+    () => [...episodesForSeason].sort((a, b) => a.episode - b.episode),
+    [episodesForSeason]
+  );
+
+  const displayedSeasons = useMemo(
     () =>
       episodesSortDesc
-        ? [...episodesForSeason].sort((a, b) => b.episode - a.episode)
-        : episodesForSeason,
-    [episodesForSeason, episodesSortDesc]
+        ? [...availableSeasons].sort((a, b) => b - a)
+        : [...availableSeasons].sort((a, b) => a - b),
+    [availableSeasons, episodesSortDesc]
   );
 
   const nextEpisodeInfo = useMemo((): {
@@ -9210,45 +9258,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     label: string;
   } | null => {
     if (!activeVodItem || activeVodItem.type !== 'series') return null;
-    if (episodesSortDesc) {
-      const descList = [...episodesForSeason].sort(
-        (a, b) => b.episode - a.episode
-      );
-      const nextDescInSeason = descList.find(
-        (ep) => ep.episode < selectedEpisode
-      );
-      if (nextDescInSeason) {
-        return {
-          season: selectedSeason,
-          episode: nextDescInSeason.episode,
-          label: `Ep. ${nextDescInSeason.episode}`,
-        };
-      }
-      if (episodesForSeason.length === 0 && selectedEpisode > 1) {
-        return {
-          season: selectedSeason,
-          episode: selectedEpisode - 1,
-          label: `Ep. ${selectedEpisode - 1}`,
-        };
-      }
-      const prevSeason = [...availableSeasons]
-        .sort((a, b) => b - a)
-        .find((s) => s < selectedSeason);
-      if (prevSeason) {
-        const prevSeasonEps = seasonsMap.get(prevSeason) || [];
-        const highestEp =
-          prevSeasonEps.length > 0
-            ? Math.max(...prevSeasonEps.map((e) => e.episode))
-            : 1;
-        return {
-          season: prevSeason,
-          episode: highestEp,
-          label: `Sezonul ${prevSeason} · Ep. ${highestEp}`,
-        };
-      }
-      return null;
-    }
-
+    // Always advance chronologically forward in story (1 -> 2 -> 3)
     const ascList = [...episodesForSeason].sort(
       (a, b) => a.episode - b.episode
     );
@@ -9299,20 +9309,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     label: string;
   } | null => {
     if (!activeVodItem || activeVodItem.type !== 'series') return null;
-    if (episodesSortDesc) {
-      const ascList = [...episodesForSeason].sort(
-        (a, b) => a.episode - b.episode
-      );
-      const prevInDesc = ascList.find((ep) => ep.episode > selectedEpisode);
-      if (prevInDesc) {
-        return {
-          season: selectedSeason,
-          episode: prevInDesc.episode,
-          label: `Ep. ${prevInDesc.episode}`,
-        };
-      }
-      return null;
-    }
     if (selectedEpisode > 1) {
       const descList = [...episodesForSeason].sort(
         (a, b) => b.episode - a.episode
@@ -9823,16 +9819,43 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }
   }, [activeProfileId, handleOpenVod, handleSelectProfile, watchProgressMap]);
 
-  const toggleSaveVodItem = (item: CinemetaItem) => {
+  const [favToast, setFavToast] = useState<{ message: string; isFav: boolean } | null>(null);
+  const favToastTimerRef = useRef<number | null>(null);
+
+  const toggleSaveVodItem = useCallback((item: CinemetaItem) => {
     setSavedVodItems((prev) => {
       const exists = prev.some((x) => x.id === item.id);
       const next = exists
         ? prev.filter((x) => x.id !== item.id)
         : [item, ...prev];
       saveSavedVodItems(next, activeProfileId);
+
+      if (favToastTimerRef.current) {
+        window.clearTimeout(favToastTimerRef.current);
+      }
+      setFavToast({
+        message: exists
+          ? tr(
+              `Eliminat din Favorite: ${item.name}`,
+              `Removed from Favorites: ${item.name}`,
+              `Удалено из избранного: ${item.name}`
+            )
+          : tr(
+              `Adăugat la Favorite: ${item.name}`,
+              `Added to Favorites: ${item.name}`,
+              `Добавлено в избранное: ${item.name}`
+            ),
+        isFav: !exists,
+      });
+      favToastTimerRef.current = window.setTimeout(() => {
+        setFavToast(null);
+      }, 2500);
+
       return next;
     });
-  };
+  }, [activeProfileId, tr]);
+
+  toggleSaveVodItemRef.current = toggleSaveVodItem;
 
   const historyList = useMemo<VodWatchProgressEntry[]>(() => {
     const isAdultAllowed = activeProfile?.id === 'p1' || (activeProfile as any)?.role === 'admin' || (activeProfile as any)?.allowAdult;
@@ -10790,6 +10813,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     onClick={() => {
                       setActiveVodItem(null);
                       setSection('music');
+                      window.dispatchEvent(
+                        new CustomEvent('filmio:open-music-song-view')
+                      );
                       rootContainerRef.current
                         ?.querySelector('main')
                         ?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -13360,7 +13386,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               <span className="text-xs font-extrabold uppercase tracking-wider text-zinc-400 mr-2">
                                 Sezoane:
                               </span>
-                              {availableSeasons.map((sNum) => (
+                              {displayedSeasons.map((sNum) => (
                                 <button
                                   key={sNum}
                                   type="button"
@@ -15043,7 +15069,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             'Сезоны и серии:'
                           )}
                         </span>
-                        {availableSeasons.map((sNum) => (
+                        {displayedSeasons.map((sNum) => (
                           <button
                             key={sNum}
                             type="button"
@@ -15343,312 +15369,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       </div>
                     ) : (
                       <>
-                        {/* NETFLIX-STYLE WIDESCREEN HERO BILLBOARD BANNER (Newest 2025–2026 Release with Very High IMDb Rating) */}
-                        {heroBillboardItems.length > 0 &&
-                          (() => {
-                            const safeIdx =
-                              homeHeroIdx % heroBillboardItems.length;
-                            const heroItem =
-                              heroBillboardItems[safeIdx] ||
-                              heroBillboardItems[0];
-                            const heroBackdrop =
-                              heroItem.background ||
-                              `https://images.metahub.space/background/medium/${heroItem.id}/img`;
-                            const heroLogoUrl = `https://images.metahub.space/logo/medium/${heroItem.id}/img`;
-                            const heroYear =
-                              extractVodProductionYear(heroItem) || 2026;
-                            const cachedHeroMeta =
-                              spotlightMetaCacheRef.current[
-                              `${heroItem.id}_${uiLang}`
-                              ];
+                        {/* NETFLIX-STYLE WIDESCREEN HERO BILLBOARD BANNER (Zero-flicker crossfade, strict height containment & zero page re-renders) */}
+                        {heroBillboardItems.length > 0 && (
+                          <HomeHeroBillboard
+                            heroBillboardItems={heroBillboardItems}
+                            isCarMode={isCarMode}
+                            uiLang={uiLang}
+                            tr={tr}
+                            handleFocusVodItem={handleFocusVodItem}
+                            handleCardPlayKey={handleCardPlayKey}
+                            handleOpenVod={handleOpenVod}
+                            spotlightMetaCacheRef={spotlightMetaCacheRef}
+                          />
+                        )}
 
-                            return (
-                              <div
-                                data-top-hero-card="true"
-                                className={`relative w-full ${
-                                  isCarMode
-                                    ? 'min-h-[160px] sm:min-h-[190px] max-h-[220px] p-3 sm:px-6 sm:py-3'
-                                    : 'min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] p-3 sm:p-5 lg:p-8'
-                                } rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between`}
-                              >
-                                {/* Full-Bleed Widescreen Backdrop */}
-                                <img
-                                  key={`hero_bg_${heroItem.id}`}
-                                  src={heroBackdrop}
-                                  alt={heroItem.name}
-                                  onError={(e) => {
-                                    const fallback =
-                                      heroItem.poster ||
-                                      `https://images.metahub.space/poster/medium/${heroItem.id}/img`;
-                                    if (e.currentTarget.src !== fallback) {
-                                      e.currentTarget.src = fallback;
-                                    }
-                                  }}
-                                  className="pointer-events-none absolute inset-0 w-full h-full object-cover object-center scale-[1.01] transition-all duration-700"
-                                />
-                                {/* Netflix Vignette Gradients (Left & Bottom) */}
-                                <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/95 via-black/55 to-transparent" />
-                                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-black/20" />
-
-                                {/* Top Row: Brand Emblem + Top Spotlight Selector Dots */}
-                                <div className="relative z-10 flex items-center justify-between gap-3">
-                                  {(() => {
-                                    const heroPlatId =
-                                      lookupPlatformByImdbId(heroItem.id) ||
-                                      detectStreamingPlatformFromTexts([
-                                        heroItem.releaseTitle,
-                                      ]) ||
-                                      'netflix';
-                                    const heroPlatLabel =
-                                      STREAMING_PLATFORMS.find(
-                                        (p) => p.id === heroPlatId
-                                      )?.label || 'Netflix';
-                                    return (
-                                      <div className="flex items-center gap-2.5">
-                                        <StreamingPlatformLogo
-                                          platformId={heroPlatId}
-                                          size="sm"
-                                        />
-                                        <span className="text-[11px] sm:text-xs font-black uppercase tracking-[0.22em] text-zinc-200 drop-shadow">
-                                          {heroPlatLabel} •{' '}
-                                          {heroItem.type === 'series'
-                                            ? tr(
-                                              'SERIAL RECOMANDAT',
-                                              'FEATURED SERIES',
-                                              'СЕРИАЛ • ПРЕМЬЕРА'
-                                            )
-                                            : tr(
-                                              'FILM RECOMANDAT',
-                                              'FEATURED MOVIE',
-                                              'ФИЛЬМ • ПРЕМЬЕРА'
-                                            )}
-                                        </span>
-                                      </div>
-                                    );
-                                  })()}
-
-                                  {heroBillboardItems.length > 1 && (
-                                    <div className="flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15">
-                                      {heroBillboardItems.map((hItem, idx) => {
-                                        const isCurrentHero = idx === safeIdx;
-                                        return (
-                                          <button
-                                            key={`hero_dot_${hItem.id}`}
-                                            type="button"
-                                            title={`${hItem.name} (${hItem.imdbRating || '8.5'})`}
-                                            onClick={() => {
-                                              setHomeHeroIdx(idx);
-                                              handleFocusVodItem(hItem);
-                                            }}
-                                            className={`h-2.5 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${isCurrentHero
-                                              ? 'w-7 bg-[#E50914]'
-                                              : 'w-2.5 bg-white/35 hover:bg-white/70'
-                                              }`}
-                                          />
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-
-                                {/* Middle & Bottom: Display Title/Logo + Metadata + Play & More Info + Bottom-Right Badges */}
-                                <div
-                                  className={`relative z-10 ${
-                                    isCarMode
-                                      ? 'mt-2 sm:mt-3 gap-2'
-                                      : 'mt-5 sm:mt-12 gap-3 sm:gap-4'
-                                  } flex flex-col`}
-                                >
-                                  <div
-                                    className={`max-w-2xl ${
-                                      isCarMode
-                                        ? 'space-y-1'
-                                        : 'space-y-2 sm:space-y-2.5'
-                                    }`}
-                                  >
-                                    {!failedHeroLogoIds[heroItem.id] ? (
-                                      <img
-                                        key={`hero_logo_${heroItem.id}`}
-                                        src={heroLogoUrl}
-                                        alt={heroItem.name}
-                                        onError={() =>
-                                          setFailedHeroLogoIds((prev) => ({
-                                            ...prev,
-                                            [heroItem.id]: true,
-                                          }))
-                                        }
-                                        className={`${
-                                          isCarMode
-                                            ? 'max-h-10 sm:max-h-12 max-w-[260px]'
-                                            : 'max-h-12 sm:max-h-24 max-w-[220px] sm:max-w-[420px]'
-                                        } w-auto object-contain object-left drop-shadow-[0_8px_24px_rgba(0,0,0,0.95)]`}
-                                      />
-                                    ) : (
-                                      <h2 className="text-2xl sm:text-5xl font-black uppercase tracking-tight text-white leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.95)] line-clamp-2">
-                                        {heroItem.name}
-                                      </h2>
-                                    )}
-
-                                    {/* Metadata Line: Movie/Series • Genres • Year • IMDb Rating • 16+ • 4K */}
-                                    <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm font-bold text-zinc-200 drop-shadow">
-                                      <span className="text-white font-extrabold">
-                                        {heroItem.type === 'series'
-                                          ? tr('Serial', 'Series', 'Сериал')
-                                          : tr('Film', 'Movie', 'Фильм')}
-                                      </span>
-                                      {heroItem.genres &&
-                                        heroItem.genres.length > 0 && (
-                                          <>
-                                            <span className="text-zinc-500">
-                                              •
-                                            </span>
-                                            <span>
-                                              {heroItem.genres
-                                                .slice(0, 2)
-                                                .join(' • ')}
-                                            </span>
-                                          </>
-                                        )}
-                                      <span className="text-zinc-500">•</span>
-                                      <span className="text-white font-extrabold">
-                                        {heroItem.releaseInfo || heroYear}
-                                      </span>
-                                      {heroItem.imdbRating && (
-                                        <>
-                                          <span className="text-zinc-500">
-                                            •
-                                          </span>
-                                          <span className="px-2 py-0.5 rounded-md bg-amber-400 text-zinc-950 text-xs font-black shadow">
-                                            IMDb {heroItem.imdbRating}
-                                          </span>
-                                        </>
-                                      )}
-                                      <span className="text-zinc-500">•</span>
-                                      <span className="px-2 py-0.5 rounded-md bg-white/15 border border-white/25 text-[11px] font-extrabold text-white">
-                                        4K UHD
-                                      </span>
-                                      <span className="px-1.5 py-0.5 rounded bg-white/10 text-[11px] font-bold text-zinc-300">
-                                        16+
-                                      </span>
-                                    </div>
-
-                                    {(cachedHeroMeta?.description ||
-                                      heroItem.description) && (
-                                        <p className="text-xs sm:text-sm text-zinc-200/90 line-clamp-2 max-w-xl leading-relaxed drop-shadow">
-                                          {cachedHeroMeta?.description ||
-                                            heroItem.description}
-                                        </p>
-                                      )}
-                                  </div>
-
-                                  {/* Bottom Action Bar: Left (Play + More Info) & Right (Recently Added + TOP 10 #1) */}
-                                  <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 pt-1">
-                                    <div className="flex flex-row items-center gap-2 sm:gap-3">
-                                      <button
-                                        type="button"
-                                        data-vod-card="true"
-                                        data-vod-id={heroItem.id}
-                                        onFocus={() =>
-                                          handleFocusVodItem(heroItem)
-                                        }
-                                        onMouseEnter={() =>
-                                          handleFocusVodItem(heroItem)
-                                        }
-                                        onKeyDown={(e) =>
-                                          handleCardPlayKey(e, heroItem)
-                                        }
-                                        onClick={() =>
-                                          handleOpenVod(heroItem, true)
-                                        }
-                                        className="group/heroplay w-auto shrink-0 h-10 sm:h-12 px-5 sm:px-8 rounded-full bg-white hover:bg-zinc-200 focus:bg-[#1e3a8a] text-[#081220] hover:text-[#081220] focus:text-white border border-white/80 focus:border-[#3b82f6]/50 text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 sm:gap-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all focus:outline-none focus:ring-4 focus:ring-white focus:scale-105 cursor-pointer whitespace-nowrap"
-                                      >
-                                        <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-current text-[#081220] group-focus/heroplay:text-white shrink-0" />
-                                        <span className="text-[#081220] group-focus/heroplay:text-white font-extrabold">
-                                          {tr('Redă', 'Play', 'Смотреть')}
-                                        </span>
-                                      </button>
-
-                                      <button
-                                        type="button"
-                                        data-vod-card="true"
-                                        data-vod-id={heroItem.id}
-                                        onFocus={() =>
-                                          handleFocusVodItem(heroItem)
-                                        }
-                                        onMouseEnter={() =>
-                                          handleFocusVodItem(heroItem)
-                                        }
-                                        onKeyDown={(e) =>
-                                          handleCardPlayKey(e, heroItem)
-                                        }
-                                        onClick={() =>
-                                          handleOpenVod(heroItem, false)
-                                        }
-                                        className="w-auto shrink-0 h-10 sm:h-12 px-4 sm:px-7 rounded-full bg-zinc-700/75 hover:bg-zinc-600/85 focus:bg-white focus:text-[#141414] backdrop-blur-xl border border-white/25 text-white text-xs sm:text-base font-extrabold inline-flex flex-row items-center justify-center gap-2 shadow-lg transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer whitespace-nowrap"
-                                      >
-                                        <span>
-                                          {tr(
-                                            'Mai multe detalii',
-                                            'More Info',
-                                            'Подробнее'
-                                          )}
-                                        </span>
-                                      </button>
-                                    </div>
-
-                                    <div className="hidden sm:flex flex-wrap items-center gap-2.5">
-                                      <span className="h-9 px-3.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white inline-flex items-center gap-2 shadow-lg">
-                                        <Flame className="w-4 h-4 text-[#E50914] fill-[#E50914]" />
-                                        <span>
-                                          {tr(
-                                            'Adăugat Recent',
-                                            'Recently Added',
-                                            'Недавно добавлено'
-                                          )}
-                                        </span>
-                                      </span>
-
-                                      <span className="h-9 px-3.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white inline-flex items-center gap-2 shadow-lg">
-                                        <span className="px-1.5 py-0.5 rounded bg-[#E50914] text-white text-[9px] font-black leading-none uppercase">
-                                          TOP 10
-                                        </span>
-                                        <span>
-                                          #{safeIdx + 1}{' '}
-                                          {heroItem.type === 'series'
-                                            ? tr(
-                                              'în Seriale',
-                                              'in Series',
-                                              'в Сериалах'
-                                            )
-                                            : tr(
-                                              'în Filme',
-                                              'in Movies',
-                                              'в Фильмах'
-                                            )}{' '}
-                                          {heroItem.imdbRating
-                                            ? `(${heroItem.imdbRating})`
-                                            : ''}
-                                        </span>
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                        {/* Optional Shelf 0: Продолжить просмотр (Continue Watching Movies & Series — Standard 8-per-row Grid matching all other shelves on Home Page) */}
+                        {/* Optional Shelf 0: Continuă vizionarea (Toate intrările din istoric, derulare orizontală continuă cu săgeți) */}
                         {historyList.length > 0 && (
                           <div className="space-y-3.5">
                             <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
                               {tr(
-                                `Continuă vizionarea — ${activeProfile.name}`,
-                                `Continue Watching for ${activeProfile.name}`,
-                                `Продолжить просмотр — ${activeProfile.name}`
+                                `Continuă vizionarea — ${activeProfile.name} (${historyList.length})`,
+                                `Continue Watching for ${activeProfile.name} (${historyList.length})`,
+                                `Продолжить просмотр — ${activeProfile.name} (${historyList.length})`
                               )}
                             </h2>
-                            <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
-                              {historyList.slice(0, 8).map((entry) => {
+                            <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pb-4 pt-1 no-scrollbar scroll-smooth">
+                              {historyList.map((entry) => {
                                 const item = entry.item;
                                 const isLiveCard = false;
                                 const devLabel =
@@ -15674,17 +15420,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 return (
                                   <div
                                     key={`home_hist_${item.id}`}
-                                    className="flex w-full flex-col gap-2"
+                                    className="flex w-[145px] sm:w-[175px] md:w-[195px] shrink-0 flex-col gap-2"
                                   >
                                     <button
                                       type="button"
                                       data-watched-poster-btn="true"
                                       data-vod-card="true"
                                       data-vod-id={item.id}
-                                      onFocus={() => handleFocusVodItem(item)}
+                                      onFocus={(e) => {
+                                        handleFocusVodItem(item);
+                                        const container = e.currentTarget.closest('.overflow-x-auto') as HTMLElement | null;
+                                        if (container) {
+                                          const cardRect = e.currentTarget.getBoundingClientRect();
+                                          const contRect = container.getBoundingClientRect();
+                                          const targetScroll = container.scrollLeft + (cardRect.left - contRect.left) - (contRect.width / 2 - cardRect.width / 2);
+                                          container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
+                                        }
+                                      }}
                                       onMouseEnter={() => handleFocusVodItem(item)}
                                       onKeyDown={(e) => handleCardPlayKey(e, item, entry.season, entry.episode)}
-                                      onClick={() => handleOpenVod(item)}
+                                      onClick={() => handleOpenVod(item, false, entry.season, entry.episode)}
                                       className="group w-full block text-left focus:outline-none cursor-pointer flex-1"
                                     >
                                       <div
@@ -15720,6 +15475,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           }}
                                           className="absolute inset-0 w-full h-full object-cover"
                                         />
+                                        {!isLiveCard && (
+                                          <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                            <VodCardProducerBadge item={item} />
+                                          </div>
+                                        )}
                                         {isLiveCard && (
                                           <div className="absolute top-2.5 left-2.5 z-10 px-2 py-0.5 rounded-md bg-zinc-950/90 border border-blue-400/75 backdrop-blur-md shadow-[0_2px_12px_rgba(0,0,0,0.7)] inline-flex items-center gap-1.5 max-w-[66%]">
                                             <span className="relative flex h-2 w-2 shrink-0">
@@ -15853,10 +15613,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggleSaveVodItem(item);
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -16022,10 +15802,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggleSaveVodItem(item);
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -16108,10 +15908,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggleSaveVodItem(item);
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -16194,10 +16014,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggleSaveVodItem(item);
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -16275,10 +16115,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          toggleSaveVodItem(item);
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -16362,6 +16222,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     isMuted={isMusicMuted}
                     isShuffle={isMusicShuffle}
                     isRepeat={isMusicRepeat}
+                    queue={musicQueue}
+                    onUpdateQueue={setMusicQueue}
                     likedTracks={likedMusicTracks}
                     externalSearchRequest={pendingMusicQuery}
                     onPlayTrack={handlePlayMusicTrack}
@@ -16753,6 +16615,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   isVodLoading={isVodLoading}
                   vodItems={vodItems}
                   savedVodItems={savedVodItems}
+                  toggleSaveVodItem={toggleSaveVodItem}
                   handleFocusVodItem={handleFocusVodItem}
                   handleOpenVod={handleOpenVod}
                   hasMoreVod={hasMoreVod}
@@ -17111,6 +16974,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }}
         className="hidden"
       />
+
+      {/* Toast Notification for Favorite Toggle (Remote Red button / PC Heart / iPad tap) */}
+      {favToast && (
+        <div className="fixed top-6 right-6 z-[9999] pointer-events-none transition-all duration-300 animate-in fade-in slide-in-from-top-3">
+          <div
+            className={`px-4 py-2.5 rounded-2xl backdrop-blur-xl border shadow-2xl flex items-center gap-3 ${
+              favToast.isFav
+                ? 'bg-rose-950/90 border-rose-500/60 text-white shadow-[0_4px_24px_rgba(244,63,94,0.35)]'
+                : 'bg-zinc-900/90 border-white/20 text-zinc-100 shadow-[0_4px_24px_rgba(0,0,0,0.7)]'
+            }`}
+          >
+            <span
+              className={`p-1.5 rounded-xl ${
+                favToast.isFav ? 'bg-rose-600 text-white' : 'bg-white/10 text-zinc-300'
+              }`}
+            >
+              <Heart className={`w-4 h-4 ${favToast.isFav ? 'fill-current' : ''}`} />
+            </span>
+            <div>
+              <div className="text-sm font-bold leading-tight">{favToast.message}</div>
+              <div className="text-[10px] text-zinc-400 mt-0.5">
+                {tr(
+                  '🔴 Telecomandă • [F] Tastatură',
+                  '🔴 Remote • [F] Keyboard',
+                  '🔴 Пульт • [F] Клавиатура'
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Picture-in-Picture Radio Player (outside the browser page) */}
       <RadioPipPlayer />

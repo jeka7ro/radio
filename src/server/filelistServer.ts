@@ -2598,10 +2598,28 @@ export async function handleFileListRequest(
       const idParam = parsedUrl.searchParams.get('id') || '';
       const imdbParam = parsedUrl.searchParams.get('imdb') || '';
       const rawQueryParam = parsedUrl.searchParams.get('q') || '';
-      const typeParam = parsedUrl.searchParams.get('type') || 'movie';
+      let typeParam = parsedUrl.searchParams.get('type') || 'movie';
+      const season = parseInt(parsedUrl.searchParams.get('s') || '0', 10) || undefined;
+      const episode = parseInt(parsedUrl.searchParams.get('e') || '0', 10) || undefined;
+      if (season || episode) {
+        typeParam = 'series';
+      }
+
+      // STRICT RULE: Kinozal is ONLY for Russian TV Shows & Russian movies/series!
+      // Romanian content (Asia Express, Insula Iubirii, Clanul, etc.) is NEVER Russian!
+      const isRomanianQuery =
+        (imdbParam && (
+          imdbParam === 'tt10295772' || imdbParam === 'tt26254014' || imdbParam === 'tt28504410' ||
+          imdbParam === 'tt35405683' || imdbParam === 'tt13093364' || imdbParam === 'tt1745739' ||
+          imdbParam === 'tt21603982' || imdbParam === 'tt33088572' || imdbParam === 'tt34192055' ||
+          imdbParam === 'tt28803286'
+        )) ||
+        (rawQueryParam && /\b(asia\s*express|america\s*express|insula\s*iubirii|power\s*couple|chefi\s*la\s*cutite|las\s*fierbinti|survivor\s*romania|clanul|tatutu|camera\s*609|scara\s*b|burlacul|vocea\s*romaniei|romanii\s*au\s*talent|te\s*cunosc\s*de\s*undeva|bravo\s*ai\s*stil|sunt\s*celebru|visuri\s*la\s*cheie|iubire\s*cu\s*parfum\s*de\s*lavanda)\b/i.test(rawQueryParam));
+
       const ruExplicit = parsedUrl.searchParams.get('ru');
-      const isRussianParam =
-        ruExplicit === '1'
+      const isRussianParam = isRomanianQuery
+        ? false
+        : ruExplicit === '1'
           ? true
           : ruExplicit === '0'
             ? false
@@ -2615,8 +2633,6 @@ export async function handleFileListRequest(
               .replace(/\s{2,}/g, ' ')
               .trim() || rawQueryParam.trim()
           : rawQueryParam.trim();
-      const season = parseInt(parsedUrl.searchParams.get('s') || '0', 10) || undefined;
-      const episode = parseInt(parsedUrl.searchParams.get('e') || '0', 10) || undefined;
       const requestedFileIdx = parsedUrl.searchParams.get('fileIdx');
 
       let matchingTorrents: FileListTorrentCard[] = [];

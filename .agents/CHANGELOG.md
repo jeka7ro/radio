@@ -6,6 +6,58 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-16 19:05 — Experiență Premium Muzică (Pagini Dinamice, Artist / Album / Piesă, Generator Radio Piesă & Versuri Live Sincronizate) (`spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`, `youtubeServer.ts`, `youtube.mjs`, `SmartTvLampaViewCore.tsx`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Navigare Dinamică fără Clutter (`MusicViewMode` + `navHistory`):**
+     - S-a înlocuit afișarea simultană a cardurilor Home cu o mașină de stări dedicată (`'home' | 'playlist' | 'search' | 'artist' | 'album' | 'song' | 'radio'`) și stivă de întoarcere `← Înapoi`.
+     - La selectarea **Melodii îndrăgite** sau a oricărui playlist/card/pill, secțiunile *Home* (*Quick Picks*, *Ascultate recent*, *Posturi recomandate*, *Mixurile tale de top*) sunt ascunse imediat, iar playlistul selectat se deschide sus, cu filtru rapid de căutare în playlist, durată totală și buton `Radio Mix`.
+     - Acasă (`'home'`) afișează carduri dinamice reale: *Melodii îndrăgite* cu contor live, *Ascultate recent* salvat în `localStorage` (`sc_spotify_recent_tracks_v1`) și *Posturi recomandate* personalizate automat din artiștii ascultați/apreciați.
+  2. **Endpointuri Backend Dedicate (`youtubeServer.ts` & `netlify/functions/youtube.mjs`):**
+     - `GET /api/youtube/artist-profile`: Rezolvă artistul canonic sortat după numărul real de fani (`nb_fan`) și returnează portret HD, top 15 piese, discografie (Albume + Single/EP) și 10 artiști similari.
+     - `GET /api/youtube/album-details`: Returnează tracklist-ul complet al albumului, data lansării, label-ul, durata totală și alte lansări ale artistului.
+     - `GET /api/youtube/song-radio`: Generează mix inteligent de 35–40 piese similare pornind de la o piesă/artist (intercalare cu max 2 piese consecutive per artist) + nume de artiști similari.
+     - `GET /api/youtube/lyrics`: Versuri sincronizate karaoke (`.lrc`) și text simplu via `lrclib.net`.
+     - `GET /api/youtube/music-catalog` îmbogățit cu rezultate paralele `artists` și `albums` + `artistId` / `albumId`.
+  3. **Experiență Completă Piesă / Artist / Album / Radio & Studio Player (`spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`):**
+     - **Căutare extinsă:** Sub-taburi (`Toate | Melodii | Artiști | Albume`), card *Rezultat de top* compact cu butoane directe (`▶ Redă`, `👤 Artist`, `💿 Album`, `📻 Radio Piesă`, `🎤 Versuri`), plus rafturi dedicate pentru *Artiști* și *Albume*.
+     - **Pagini dedicate Artist, Album & Radio Piesă:** Deschise direct din orice piesă, căutare, bara de jos, player fullscreen sau meniul contextual `•••` (`TrackQuickActionsDialog` cu `<dialog closedby="any">` și fallback click-outside pentru Safari).
+     - **Player Studio (Inline `'song'` + Modal Fullscreen):** 3 taburi (`Studio` cu copertă HD / mod **Vinil Rotativ** și bare egalizator live, `Versuri Live` cu highlight sincronizat și seek pe click, `Coadă` cu gestionare live a cozii de redare).
+     - **Integrare Top Header & Coadă (`SmartTvLampaViewCore.tsx`):** Transmite `queue` / `onUpdateQueue` și deschide pagina *Song Studio* la apăsarea pastilei de redare din bara de sus.
+- **De ce:** Utilizatorul a cerut explicit ascunderea celorlalte carduri la selectarea unui playlist/favorite (carduri și pagini mai dinamice), navigare separată spre piesă / artist / album din căutare și player, generare instantanee de playlist Radio după o piesă, și o experiență maximă de player premium.
+- **Fișiere modificate/create:** `src/components/tv/spotifyMusicPremiumViews.tsx` (nou), `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/server/youtubeServer.ts`, `netlify/functions/youtube.mjs`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-16 18:05 — Revizie Totală Muzică Spotify pe iPhone & Desktop: Căutare Multi-Tier, Full-Screen Player, Auto-Healing Imagini & Redare Audio Instant (`SmartTvMusicSpotifySection.tsx`, `SmartTvLampaViewCore.tsx`, `youtube.mjs`, `netlify.toml`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Rezoluție Completă Rutare Netlify pentru Catalog & Audio (`netlify.toml`, `youtube.mjs`):**
+     - S-a extins regula de redirect din `netlify.toml` de la `/api/youtube/search` la `/api/youtube/*` -> `/.netlify/functions/youtube`, eliminând blocajul în care apelurile la `/api/youtube/music-catalog` și `/api/youtube/audio` returnau `index.html` (SPA catch-all) și generau eroare `SyntaxError: Unexpected token '<'` în frontend.
+     - Handlerul serverless `netlify/functions/youtube.mjs` suportă `/api/youtube/music-catalog` (Deezer + iTunes multi-tier cu deduplicare) și `/api/youtube/audio` (InnerTube iOS client direct audio AAC cu redirect 302 și fallback Deezer preview).
+  2. **Interfață de Căutare Spotify-Grade cu Shimmer Skeleton & Rezultat de Top (`SmartTvMusicSpotifySection.tsx`):**
+     - S-a decuplat starea `searchResults` de playlist-ul curent; la tastare sau căutare, utilizatorul vede skeleton-ul animat Spotify, cardul etalon „Rezultat de top” (`searchResults[0]`) cu badge „Potrivire exactă”, buton mare verde de Play, secțiunea „Melodii” (Top 5) și lista completă de piese.
+     - Resetare curată la căutare: apăsarea butonului Acasă, a butonului „X” din bara de căutare sau din chip-ul verde resetează instantaneu termenul, rezultatele și revine la playlist.
+  3. **Player Full-Screen Mobil Spotify (`isFullScreenPlayerOpen`):**
+     - La tap pe mini-player-ul de jos pe iPhone (copertă, titlu, artist), se deschide ecranul complet Now Playing identic cu aplicația Spotify pe iOS:
+       - Buton dismiss cu săgeată în jos (`ChevronDown`), antet cu sursa piesei și badge audio HiFi / MAX FLAC.
+       - Copertă pătrată mare de înaltă rezoluție cu umbră dinamică și halo ambient blurat în fundal.
+       - Titlu piesă, artist, buton de inimă (Liked Songs) cu umplere verde.
+       - Bară de scrub progresiv cu afișare timp scurs și durată totală.
+       - Butoane standard Spotify: Amestecare (Shuffle), Piesă anterioară, Buton central mare alb Play/Pause, Piesă următoare, Repetare (Repeat).
+       - Comutator pentru Videoclip HD oficial și afișare eșantionare audio (HiFi / MAX 24-bit).
+       - Pe desktop/TV s-a adăugat buton dedicat de extindere (`Maximize2`).
+  4. **Eliminare Completă Icoane Albastre Semnul Întrebării `[?]` pe iPhone:**
+     - S-au înlocuit toate URL-urile expirate Apple CDN (`is1-ssl.mzstatic.com/...`) din `INITIAL_SPOTIFY_TRACKS` cu coperți permanente Deezer CDN (`cdn-images.dzcdn.net`) și preview-uri audio MP3 reale.
+     - Funcția `proxyMusicCover` auto-vindecă vechile hash-uri corupte și încarcă direct coperțile HTTPS fără latența serverului de proxy.
+     - Toate tagurile `<img>` din secțiunea de muzică au handler `onError` care comută instantaneu pe `FALLBACK_MUSIC_COVER`.
+  5. **Reziliență Audio pe Mobil (`SmartTvLampaViewCore.tsx`):**
+     - `handlePlayMusicTrack` pornește imediat `fullAudioUrl` sau `previewUrl`; la orice eșec sau întârziere pe rețele mobile 4G/5G, comută automat pe stream-ul de rezervă fără întrerupere sau blocaj silențios.
+- **De ce:** Utilizatorul a reclamat funcționarea căutării, coperțile sparte `[?]` pe iPhone, lipsa playerului Spotify pe ecran complet și erorile de redare („serahce pe muzica pe ihpen este o proacirr... CA LA SPOTIFUY! fa chiar aucm si sair funcitonal... cap caodreviziuit muzica. si totl si lista cu prefernti si tot. acum. numegre nimic”).
+- **Fișiere modificate:** `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `netlify.toml`, `netlify/functions/youtube.mjs`, `.agents/CHANGELOG.md`.
+
+---
+
 ### 2026-11-16 11:58 — Corectare Layout iPhone Home Screen PWA (Eliminare Spațiu Excesiv Jos, Clarificare Header Sus & Fallback CDN Poster Zvyozdy)
 - **Autor:** Antigravity
 - **Ce s-a făcut:**

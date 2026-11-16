@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import Hls from 'hls.js';
 import * as dashjs from 'dashjs';
 import {
@@ -333,6 +333,48 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const startAtSecondsRef = useRef<number>(startAtSeconds);
   const hasNotifiedInitialPlayOsdRef = useRef<boolean>(false);
   const hasRenderedFirstFrameRef = useRef<boolean>(false);
+  const frozenFrameCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isFrozenFrameVisible, setIsFrozenFrameVisible] = useState<boolean>(false);
+  const frozenFrameFadeTimerRef = useRef<number | null>(null);
+
+  const captureFrozenFrame = useCallback(() => {
+    const v = videoRef.current;
+    if (!v || v.readyState < 2) return;
+    const canvas = frozenFrameCanvasRef.current;
+    if (!canvas) return;
+    const w = v.videoWidth || v.clientWidth || 1920;
+    const h = v.videoHeight || v.clientHeight || 1080;
+    if (w > 0 && h > 0) {
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        try {
+          ctx.drawImage(v, 0, 0, w, h);
+          setIsFrozenFrameVisible(true);
+          if (frozenFrameFadeTimerRef.current) {
+            window.clearTimeout(frozenFrameFadeTimerRef.current);
+          }
+          // Safety timeout: never leave frozen frame stuck longer than 4.5 seconds
+          frozenFrameFadeTimerRef.current = window.setTimeout(() => {
+            setIsFrozenFrameVisible(false);
+          }, 4500);
+        } catch {
+          // ignore cross-origin taint
+        }
+      }
+    }
+  }, []);
+
+  const hideFrozenFrame = useCallback(() => {
+    if (frozenFrameFadeTimerRef.current) {
+      window.clearTimeout(frozenFrameFadeTimerRef.current);
+      frozenFrameFadeTimerRef.current = null;
+    }
+    setIsFrozenFrameVisible(false);
+  }, []);
   const nativeHlsFallbackTimerRef = useRef<number | null>(null);
   const watchedTicksInEpisodeRef = useRef<number>(0);
   const activeEpisodeMediaKeyRef = useRef<string>(
@@ -1303,6 +1345,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const onStreamPlaying = () => {
         hasFiredPlaying = true;
         isSeekingFileListRef.current = false;
+        hideFrozenFrame();
       };
       video.addEventListener('playing', onStreamPlaying, { once: true });
 
@@ -3354,12 +3397,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
   }, [mediaType, detectedSkipSegments, dismissedSegmentIds, displayTimeSec]);
 
-  // Seamless Auto-Skip Intro & Recap (IntroDB Consensus)
+  // Seamless Auto-Skip Intro & Recap (Only for verified IntroDB consensus or subtitle markers, NEVER on synthetic guesses)
   const hasAutoSkippedSegmentRef = useRef<string | null>(null);
   useEffect(() => {
     const profilePrefs = getActiveProfileMediaPrefs();
     const shouldAutoSkip = profilePrefs.autoSkipIntro ?? true;
-    if (!shouldAutoSkip || !activeSkipSegment || openMenu !== 'none') return;
+    if (
+      !shouldAutoSkip ||
+      !activeSkipSegment ||
+      openMenu !== 'none' ||
+      activeSkipSegment.id.startsWith('fallback_')
+    ) {
+      return;
+    }
     if (hasAutoSkippedSegmentRef.current === activeSkipSegment.id) return;
     hasAutoSkippedSegmentRef.current = activeSkipSegment.id;
 
@@ -3680,9 +3730,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       setScrubPreviewSec(null);
       onTimeUpdate?.(Math.floor(nextSec), Math.floor(totalDur));
 
-      // Abort previous MSE fetch immediately so old ffmpeg stops competing for P2P bandwidth
-      cleanupFileListMse();
-
       const cleanBase = hlsUrl
         .replace(/([?&])start=\d+/g, '')
         .replace(/([?&])audio=\d+/g, '');
@@ -3694,23 +3741,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const isInstantJump = Boolean(
         labelPrefix && /intro|recap|reluare/i.test(labelPrefix)
       );
-      if (isInstantJump) {
+      captureFrozenFrame();
+      if (flSeekDebounceRef.current) {
+        window.clearTimeout(flSeekDebounceRef.current);
         flSeekDebounceRef.current = null;
-        loadFileListStreamIntoVideo(
-          v,
-          `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
-        );
-      } else {
-        flSeekDebounceRef.current = window.setTimeout(() => {
-          flSeekDebounceRef.current = null;
-          const targetVideo = videoRef.current;
-          if (!targetVideo) return;
-          loadFileListStreamIntoVideo(
-            targetVideo,
-            `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
-          );
-        }, 120);
       }
+      cleanupFileListMse();
+      loadFileListStreamIntoVideo(
+        v,
+        `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
+      );
 
       const remSec = Math.max(0, totalDur - nextSec);
       const dir: 'fwd' | 'rew' =
@@ -3744,6 +3784,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       ? v.duration
       : effectiveDurationSec;
     const nextSec = Math.max(0, Math.min(totalDur, targetSec));
+    captureFrozenFrame();
     try {
       v.currentTime = nextSec;
     } catch {
@@ -3793,6 +3834,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
     const v = videoRef.current;
     if (!v) return;
+
+    // Freeze current video frame on screen so image NEVER goes black or gets interrupted during seeking
+    captureFrozenFrame();
     const currentEff =
       hlsUrl &&
         (hlsUrl.includes('/api/filelist/stream') ||
@@ -3816,14 +3860,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         : deltaSec;
     cumulativeSeekDeltaSecRef.current = newAccum;
 
-    if (pendingSeekTimerRef.current) {
-      window.clearTimeout(pendingSeekTimerRef.current);
-    }
-    pendingSeekTimerRef.current = window.setTimeout(() => {
-      pendingSeekTargetSecRef.current = null;
-      cumulativeSeekDeltaSecRef.current = 0;
-    }, 1200);
-
     const absAccum = Math.abs(newAccum);
     const timeStr =
       absAccum >= 60
@@ -3833,7 +3869,48 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         : `${absAccum}s`;
     const prefix = newAccum >= 0 ? `+${timeStr}` : `-${timeStr}`;
     const direction: 'fwd' | 'rew' = newAccum >= 0 ? 'fwd' : 'rew';
-    seekToAbsoluteSeconds(targetSec, prefix, direction);
+
+    // 1. Instant 60 FPS Visual Feedback on Timeline Bubble & Seek HUD
+    const totalDur = hasVerifiedDuration
+      ? effectiveDurationSec
+      : (v.duration && Number.isFinite(v.duration) && v.duration > 10 ? v.duration : effectiveDurationSec);
+    const remSec = Math.max(0, totalDur - targetSec);
+    const pct = totalDur > 0 ? Math.min(100, Math.max(0, (targetSec / totalDur) * 100)) : 0;
+
+    setScrubPreviewSec(targetSec);
+    setSeekHudData({
+      direction,
+      deltaLabel: prefix,
+      targetTimeStr: formatSeekTime(targetSec),
+      targetSec: Math.floor(targetSec),
+      totalTimeStr: formatSeekTime(totalDur),
+      totalSec: Math.floor(totalDur),
+      remainingTimeStr: `-${formatSeekTime(remSec)}`,
+      percent: Math.round(pct),
+    });
+
+    if (seekHudTimerRef.current) {
+      window.clearTimeout(seekHudTimerRef.current);
+    }
+    seekHudTimerRef.current = window.setTimeout(() => {
+      setSeekHudData(null);
+    }, 1500);
+
+    // 2. Debounced Seek Commit: Keep current video frame rendering smoothly without freezing or stopping playback on every arrow tap
+    if (pendingSeekTimerRef.current) {
+      window.clearTimeout(pendingSeekTimerRef.current);
+    }
+    pendingSeekTimerRef.current = window.setTimeout(() => {
+      pendingSeekTimerRef.current = null;
+      const finalTarget = pendingSeekTargetSecRef.current;
+      pendingSeekTargetSecRef.current = null;
+      cumulativeSeekDeltaSecRef.current = 0;
+      keySeekCountRef.current = 0;
+      lastKeySeekDirRef.current = 0;
+      if (typeof finalTarget === 'number') {
+        seekToAbsoluteSeconds(finalTarget, prefix, direction);
+      }
+    }, 400);
   };
 
   const triggerSeekRef = useRef(triggerSeek);
@@ -4285,11 +4362,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const lastKeySeekTimeRef = useRef<number>(0);
   const keySeekCountRef = useRef<number>(0);
   const lastKeySeekDirRef = useRef<number>(0);
+  const seekHoldTimerRef = useRef<number | null>(null);
+  const seekHoldIntervalRef = useRef<number | null>(null);
+  const isHoldingSeekRef = useRef<boolean>(false);
+  const hasHandledPointerSeekRef = useRef<boolean>(false);
 
   const getSmartSeekStep = (dir: 1 | -1): number => {
     const now = Date.now();
     let count = 1;
-    if (lastKeySeekDirRef.current === dir && now - lastKeySeekTimeRef.current < 950) {
+    if (lastKeySeekDirRef.current === dir && now - lastKeySeekTimeRef.current < 1100) {
       count = keySeekCountRef.current + 1;
     } else {
       count = 1;
@@ -4298,20 +4379,76 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     lastKeySeekDirRef.current = dir;
     keySeekCountRef.current = count;
 
-    // Pas smart derulare (înainte și înapoi):
-    // 1-a apăsare: 15 secunde
-    // a 2-a apăsare: încă 15 secunde
-    // a 3-a apăsare: pas de 30 secunde
-    // a 4-a apăsare și următoarele: câte 1 minut (60 secunde)
+    // Pas smart derulare accelerat (la apăsare repetată sau ținut apăsat continuu):
+    // 1-ul pas: 15 secunde (total: 15s)
+    // al 2-lea pas: încă 15 secunde (total: 30s)
+    // al 3-lea pas: pas de 30 secunde (total: 60s / 1 min)
+    // al 4-lea pas și următoarele: câte 1 minut (60 secunde) per pas continuu
     if (count === 1) return 15;
     if (count === 2) return 15;
     if (count === 3) return 30;
     return 60;
   };
 
+  const handleSingleSeekTap = (dir: 1 | -1) => {
+    triggerSeekRef.current(dir * 15);
+  };
+
+  const startSmartSeekHold = (dir: 1 | -1) => {
+    // 1. Execută primul tick instantaneu la apăsare (+15s sau -15s)
+    keySeekCountRef.current = 1;
+    lastKeySeekDirRef.current = dir;
+    triggerSeekRef.current(dir * 15);
+    isHoldingSeekRef.current = true;
+
+    if (seekHoldTimerRef.current !== null) {
+      window.clearTimeout(seekHoldTimerRef.current);
+      seekHoldTimerRef.current = null;
+    }
+    if (seekHoldIntervalRef.current !== null) {
+      window.clearInterval(seekHoldIntervalRef.current);
+      seekHoldIntervalRef.current = null;
+    }
+
+    // 2. După 400ms de menținere apăsat (hold delay), execută al 2-lea pas (+15s -> total 30s)
+    seekHoldTimerRef.current = window.setTimeout(() => {
+      seekHoldTimerRef.current = null;
+      if (!isHoldingSeekRef.current) return;
+
+      keySeekCountRef.current = 2;
+      triggerSeekRef.current(dir * 15);
+
+      // 3. Apoi la fiecare 350ms execută pașii următori: pas de 30s (total 1 min), apoi câte 60s (1 min) continuu
+      seekHoldIntervalRef.current = window.setInterval(() => {
+        if (!isHoldingSeekRef.current) {
+          if (seekHoldIntervalRef.current !== null) {
+            window.clearInterval(seekHoldIntervalRef.current);
+            seekHoldIntervalRef.current = null;
+          }
+          return;
+        }
+        keySeekCountRef.current = Math.min(20, (keySeekCountRef.current || 2) + 1);
+        const count = keySeekCountRef.current;
+        const step = count === 3 ? 30 : 60;
+        triggerSeekRef.current(dir * step);
+      }, 350);
+    }, 400);
+  };
+
+  const stopSmartSeekHold = () => {
+    isHoldingSeekRef.current = false;
+    if (seekHoldTimerRef.current !== null) {
+      window.clearTimeout(seekHoldTimerRef.current);
+      seekHoldTimerRef.current = null;
+    }
+    if (seekHoldIntervalRef.current !== null) {
+      window.clearInterval(seekHoldIntervalRef.current);
+      seekHoldIntervalRef.current = null;
+    }
+  };
+
   const triggerSeekWithStep = (dir: 1 | -1) => {
-    const step = getSmartSeekStep(dir);
-    triggerSeekRef.current(dir * step);
+    handleSingleSeekTap(dir);
   };
 
   useEffect(() => {
@@ -4344,10 +4481,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const kc = e.keyCode || e.which;
       const k = e.key;
 
-      // Remote ArrowLeft / ArrowRight -> Instant Seek during video playback when watching (not in button/input/menu)
+      // Remote ArrowLeft / ArrowRight -> Instant Smart Seek during video playback when watching
+      const isSeekBtn =
+        activeTag === 'BUTTON' &&
+        Boolean(
+          (document.activeElement as HTMLElement | null)?.closest(
+            '[data-vod-seek-back-15="true"], [data-vod-seek-fwd-15="true"], [data-vod-seek-fwd-60="true"]'
+          )
+        );
+
       if (
         (k === 'ArrowLeft' || k === 'ArrowRight') &&
-        activeTag !== 'BUTTON' &&
+        (activeTag !== 'BUTTON' || isSeekBtn) &&
         activeTag !== 'INPUT' &&
         activeTag !== 'SELECT' &&
         activeTag !== 'TEXTAREA' &&
@@ -4356,7 +4501,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         e.preventDefault();
         e.stopPropagation();
         onHideOsd?.();
-        triggerSeekWithStep(k === 'ArrowRight' ? 1 : -1);
+        const dir = k === 'ArrowRight' ? 1 : -1;
+        if (!e.repeat) {
+          startSmartSeekHold(dir);
+        }
         return;
       }
 
@@ -4415,7 +4563,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (kc === 412 || kc === 227 || k === 'MediaRewind') {
         e.preventDefault();
         e.stopPropagation();
-        triggerSeekWithStep(-1);
+        onHideOsd?.();
+        if (!e.repeat) {
+          startSmartSeekHold(-1);
+        }
         return;
       }
 
@@ -4423,7 +4574,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       if (kc === 417 || kc === 228 || k === 'MediaFastForward') {
         e.preventDefault();
         e.stopPropagation();
-        triggerSeekWithStep(1);
+        onHideOsd?.();
+        if (!e.repeat) {
+          startSmartSeekHold(1);
+        }
         return;
       }
 
@@ -4553,9 +4707,28 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
     };
 
+    const onMediaKeyUp = (e: KeyboardEvent) => {
+      const k = e.key;
+      const kc = e.keyCode || e.which;
+      if (
+        k === 'ArrowLeft' ||
+        k === 'ArrowRight' ||
+        kc === 412 ||
+        kc === 227 ||
+        k === 'MediaRewind' ||
+        kc === 417 ||
+        kc === 228 ||
+        k === 'MediaFastForward'
+      ) {
+        stopSmartSeekHold();
+      }
+    };
+
     window.addEventListener('aether:vod-seek', onExternalSeek);
     window.addEventListener('aether:vod-transport', onExternalTransport);
     window.addEventListener('keydown', onMediaKeyDown, true);
+    window.addEventListener('keyup', onMediaKeyUp, true);
+    window.addEventListener('blur', stopSmartSeekHold);
     window.addEventListener('aether:vod-close-menu', onCloseMenu);
     window.addEventListener('aether:vod-select-quality', onSelectQualityEv);
     window.addEventListener(
@@ -4567,9 +4740,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     window.addEventListener('aether:vod-toggle-subtitle', onToggleSubEv);
     window.addEventListener('aether:vod-toast', onToastEv);
     return () => {
+      stopSmartSeekHold();
       window.removeEventListener('aether:vod-seek', onExternalSeek);
       window.removeEventListener('aether:vod-transport', onExternalTransport);
       window.removeEventListener('keydown', onMediaKeyDown, true);
+      window.removeEventListener('keyup', onMediaKeyUp, true);
+      window.removeEventListener('blur', stopSmartSeekHold);
       window.removeEventListener('aether:vod-close-menu', onCloseMenu);
       window.removeEventListener(
         'aether:vod-select-quality',
@@ -5262,6 +5438,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               // ignore
             }
           }}
+          onSeeked={() => {
+            hideFrozenFrame();
+          }}
           onResize={(e) => {
             syncVideoDims(e.currentTarget);
           }}
@@ -5337,6 +5516,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }}
           onPlaying={(e) => {
+            hideFrozenFrame();
             if (nativeHlsFallbackTimerRef.current !== null) {
               window.clearTimeout(nativeHlsFallbackTimerRef.current);
               nativeHlsFallbackTimerRef.current = null;
@@ -5581,6 +5761,21 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             />
           )}
         </video>
+        {/* Seamless Freeze-Frame Canvas Overlay: Keeps the exact video frame rendering during seeking so image NEVER cuts off to black */}
+        <canvas
+          ref={frozenFrameCanvasRef}
+          aria-hidden="true"
+          className={`absolute inset-0 z-15 w-full h-full pointer-events-none transition-opacity duration-300 ${
+            isFrozenFrameVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          } ${videoFitMode === 'cover'
+            ? isMobilePhone && !isLandscapeMobile
+              ? 'object-cover object-center'
+              : 'object-cover object-[50%_28%]'
+            : videoFitMode === 'cinema'
+              ? resolveCinemaFitClass(liveVideoDims.width, liveVideoDims.height)
+              : 'object-contain'
+          }`}
+        />
         {!isIosNativeFullscreen && (
           <style>{`
             video::-webkit-media-text-track-container,
@@ -6170,6 +6365,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               aria-label="Derulare video (Săgeți Stânga/Dreapta -15s / +15s)"
               onFocus={() => onWakeOsd?.()}
               onPointerDown={(e) => {
+                captureFrozenFrame();
                 onWakeOsd?.();
                 const el = e.currentTarget;
                 el.setPointerCapture?.(e.pointerId);
@@ -6391,10 +6587,50 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 type="button"
                 data-vod-seek-back-15="true"
                 onFocus={() => onWakeOsd?.()}
-                onClick={() => triggerSeek(-15)}
-                title="Înapoi cu 15 secunde (-15s)"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  hasHandledPointerSeekRef.current = true;
+                  startSmartSeekHold(-1);
+                }}
+                onPointerUp={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onPointerLeave={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onPointerCancel={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    if (!e.repeat) startSmartSeekHold(-1);
+                  }
+                }}
+                onKeyUp={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    stopSmartSeekHold();
+                  }
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (hasHandledPointerSeekRef.current) return;
+                  handleSingleSeekTap(-1);
+                }}
+                title="Înapoi (Smart Seek: 15s -> 15s -> 30s -> 1 min)"
                 aria-label="Înapoi cu 15 secunde"
-                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none"
               >
                 <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden="true" />
                 <span>15s</span>
@@ -6404,10 +6640,50 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 type="button"
                 data-vod-seek-fwd-15="true"
                 onFocus={() => onWakeOsd?.()}
-                onClick={() => triggerSeek(15)}
-                title="Înainte cu 15 secunde (+15s)"
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  hasHandledPointerSeekRef.current = true;
+                  startSmartSeekHold(1);
+                }}
+                onPointerUp={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onPointerLeave={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onPointerCancel={() => {
+                  stopSmartSeekHold();
+                  window.setTimeout(() => {
+                    hasHandledPointerSeekRef.current = false;
+                  }, 250);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    if (!e.repeat) startSmartSeekHold(1);
+                  }
+                }}
+                onKeyUp={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    stopSmartSeekHold();
+                  }
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (hasHandledPointerSeekRef.current) return;
+                  handleSingleSeekTap(1);
+                }}
+                title="Înainte (Smart Seek: 15s -> 15s -> 30s -> 1 min)"
                 aria-label="Înainte cu 15 secunde"
-                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none"
               >
                 <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden="true" />
                 <span>{isNarrowPortraitMobile ? '15s' : '+15s'}</span>

@@ -238,6 +238,8 @@ async function refreshVkSignedTargetUrl(
   return entry.maxMp4Url || entry.hlsUrl || null;
 }
 
+const vkMetaCache = new Map();
+
 export default async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
@@ -315,85 +317,95 @@ export default async (req) => {
     if (isVkThrottledBinary) {
       try {
         const accelCtrl = new AbortController();
-        const headTimer = setTimeout(() => accelCtrl.abort(), 5000);
-        let headRes = await fetch(targetUrl, {
-          method: 'HEAD',
-          headers: {
-            'User-Agent': effectiveUa,
-            Referer: refererHeader,
-            Origin: originHeader,
-            Accept: '*/*',
-          },
-          redirect: 'follow',
-          signal: accelCtrl.signal,
-        });
-        clearTimeout(headTimer);
-
-        if (
-          !headRes.ok &&
-          vkParam &&
-          (headRes.status === 400 ||
-            headRes.status === 403 ||
-            headRes.status === 410)
-        ) {
-          const healedUrl = await refreshVkSignedTargetUrl(
-            vkParam,
-            vkQualityParam,
-            targetUrl,
-            effectiveUa,
-            true
-          );
-          if (healedUrl && healedUrl !== targetUrl) {
-            targetUrl = healedUrl;
-            parsedTarget = new URL(targetUrl);
-            headRes = await fetch(targetUrl, {
-              method: 'HEAD',
-              headers: {
-                'User-Agent': effectiveUa,
-                Referer: refererHeader,
-                Origin: originHeader,
-                Accept: '*/*',
-              },
-              redirect: 'follow',
-            });
-          }
-        }
-
-        let headCt = (headRes.headers.get('content-type') || '').toLowerCase();
-        let totalBytes = Number(headRes.headers.get('content-length') || 0);
-        let resolvedMediaUrl = headRes.url || targetUrl;
-
-        if ((!headRes.ok || totalBytes <= 0) && headRes.status !== 404) {
-          const probeRes = await fetch(targetUrl, {
-            method: 'GET',
+        let meta = vkMetaCache.get(targetUrl);
+        if (!meta || Date.now() - meta.ts > 10 * 60 * 1000) {
+          const headTimer = setTimeout(() => accelCtrl.abort(), 6500);
+          let headRes = await fetch(targetUrl, {
+            method: 'HEAD',
             headers: {
               'User-Agent': effectiveUa,
               Referer: refererHeader,
               Origin: originHeader,
               Accept: '*/*',
-              Range: 'bytes=0-0',
             },
             redirect: 'follow',
+            signal: accelCtrl.signal,
           });
-          const cr = probeRes.headers.get('content-range') || '';
-          const crMatch = cr.match(/\/(\d+)\s*$/);
-          if (probeRes.status === 206 && crMatch) {
-            totalBytes = Number(crMatch[1]);
-            headCt = (probeRes.headers.get('content-type') || '').toLowerCase();
-            resolvedMediaUrl = probeRes.url || targetUrl;
+          clearTimeout(headTimer);
+
+          if (
+            !headRes.ok &&
+            vkParam &&
+            (headRes.status === 400 ||
+              headRes.status === 403 ||
+              headRes.status === 410)
+          ) {
+            const healedUrl = await refreshVkSignedTargetUrl(
+              vkParam,
+              vkQualityParam,
+              targetUrl,
+              effectiveUa,
+              true
+            );
+            if (healedUrl && healedUrl !== targetUrl) {
+              targetUrl = healedUrl;
+              parsedTarget = new URL(targetUrl);
+              headRes = await fetch(targetUrl, {
+                method: 'HEAD',
+                headers: {
+                  'User-Agent': effectiveUa,
+                  Referer: refererHeader,
+                  Origin: originHeader,
+                  Accept: '*/*',
+                },
+                redirect: 'follow',
+              });
+            }
           }
-          try {
-            probeRes.body?.cancel();
-          } catch {
-            // ignore
+
+          let headCt = (headRes.headers.get('content-type') || '').toLowerCase();
+          let totalBytes = Number(headRes.headers.get('content-length') || 0);
+          let resolvedMediaUrl = headRes.url || targetUrl;
+
+          if ((!headRes.ok || totalBytes <= 0) && headRes.status !== 404) {
+            const probeRes = await fetch(targetUrl, {
+              method: 'GET',
+              headers: {
+                'User-Agent': effectiveUa,
+                Referer: refererHeader,
+                Origin: originHeader,
+                Accept: '*/*',
+                Range: 'bytes=0-0',
+              },
+              redirect: 'follow',
+            });
+            const cr = probeRes.headers.get('content-range') || '';
+            const crMatch = cr.match(/\/(\d+)\s*$/);
+            if (probeRes.status === 206 && crMatch) {
+              totalBytes = Number(crMatch[1]);
+              headCt = (probeRes.headers.get('content-type') || '').toLowerCase();
+              resolvedMediaUrl = probeRes.url || targetUrl;
+            }
+            try {
+              probeRes.body?.cancel();
+            } catch {
+              // ignore
+            }
+          }
+
+          if (totalBytes > 0 && !headCt.includes('mpegurl') && !headCt.includes('m3u')) {
+            meta = {
+              totalBytes,
+              contentType: headCt || 'video/mp4',
+              resolvedMediaUrl,
+              ts: Date.now(),
+            };
+            vkMetaCache.set(targetUrl, meta);
           }
         }
 
-        if (
-          totalBytes > 0 &&
-          !headCt.includes('mpegurl') &&
-          !headCt.includes('m3u')
-        ) {
+        if (meta && meta.totalBytes > 0) {
+          const { totalBytes, contentType: headCt, resolvedMediaUrl } = meta;
           const isTsSeg =
             /\.(ts|m4s|aac)(\?|$)/i.test(parsedTarget.pathname) ||
             headCt.includes('mp2t');
@@ -413,25 +425,38 @@ export default async (req) => {
           }
 
           const fetchClampedSlice = async (s, e) => {
-            for (let attempt = 0; attempt < 2; attempt++) {
+            for (let attempt = 0; attempt < 3; attempt++) {
               if (streamAbort.signal.aborted) {
                 throw new Error('Client aborted');
               }
-              const sr = await fetch(resolvedMediaUrl, {
-                method: 'GET',
-                headers: {
-                  'User-Agent': effectiveUa,
-                  Referer: refererHeader,
-                  Origin: originHeader,
-                  Accept: '*/*',
-                  Range: `bytes=${s}-${e}`,
-                },
-                redirect: 'follow',
-                signal: streamAbort.signal,
-              });
-              if (sr.ok || sr.status === 206) {
-                const u8 = new Uint8Array(await sr.arrayBuffer());
-                if (u8.byteLength === e - s + 1) return u8;
+              const sliceCtrl = new AbortController();
+              const sliceTimer = setTimeout(() => sliceCtrl.abort(), 4500);
+              const onAbort = () => sliceCtrl.abort();
+              streamAbort.signal.addEventListener('abort', onAbort, { once: true });
+              try {
+                const sr = await fetch(resolvedMediaUrl, {
+                  method: 'GET',
+                  headers: {
+                    'User-Agent': effectiveUa,
+                    Referer: refererHeader,
+                    Origin: originHeader,
+                    Accept: '*/*',
+                    Range: `bytes=${s}-${e}`,
+                  },
+                  redirect: 'follow',
+                  signal: sliceCtrl.signal,
+                });
+                clearTimeout(sliceTimer);
+                streamAbort.signal.removeEventListener('abort', onAbort);
+                if (sr.ok || sr.status === 206) {
+                  const u8 = new Uint8Array(await sr.arrayBuffer());
+                  if (u8.byteLength === e - s + 1) return u8;
+                }
+              } catch {
+                clearTimeout(sliceTimer);
+                streamAbort.signal.removeEventListener('abort', onAbort);
+                if (streamAbort.signal.aborted) throw new Error('Client aborted');
+                await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
               }
             }
             throw new Error('VK slice mismatch');
@@ -445,7 +470,7 @@ export default async (req) => {
               slices.push([cursor, firstEnd]);
               cursor = firstEnd + 1;
             }
-            const step = isTsSeg ? 262144 : 524288;
+            const step = isTsSeg ? 262144 : 393216; // 384 KB for MP4
             while (cursor <= toByte) {
               slices.push([cursor, Math.min(cursor + step - 1, toByte)]);
               cursor += step;
@@ -453,7 +478,7 @@ export default async (req) => {
             return slices;
           };
 
-          const createSlidingWindowStream = async (slices, maxConc = 16) => {
+          const createSlidingWindowStream = async (slices, maxConc = 5) => {
             const slots = slices.map(() => {
               let resolve;
               let reject;
@@ -524,21 +549,57 @@ export default async (req) => {
             });
           };
 
-          const concatUint8 = (arrays) => {
-            const sum = arrays.reduce((acc, a) => acc + a.byteLength, 0);
-            const merged = new Uint8Array(sum);
-            let offset = 0;
-            for (const a of arrays) {
-              merged.set(a, offset);
-              offset += a.byteLength;
+          // Small explicit range (e.g. Chrome metadata probing, bytes=0-1000, or <= 512KB):
+          // Single direct range fetch with zero slice overhead
+          if (rangeMatch && rangeMatch[2]) {
+            const s = Number(rangeMatch[1]);
+            const e = Number(rangeMatch[2]);
+            if (e >= s && e - s + 1 <= 512 * 1024) {
+              clearTimeout(timeoutId);
+              const singleCtrl = new AbortController();
+              const singleTimer = setTimeout(() => singleCtrl.abort(), 8000);
+              try {
+                const sr = await fetch(resolvedMediaUrl, {
+                  method: 'GET',
+                  headers: {
+                    'User-Agent': effectiveUa,
+                    Referer: refererHeader,
+                    Origin: originHeader,
+                    Accept: '*/*',
+                    Range: `bytes=${s}-${e}`,
+                  },
+                  redirect: 'follow',
+                  signal: singleCtrl.signal,
+                });
+                clearTimeout(singleTimer);
+                if (sr.ok || sr.status === 206) {
+                  return new Response(sr.body, {
+                    status: 206,
+                    headers: {
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Private-Network': 'true',
+                      'Access-Control-Expose-Headers':
+                        'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                      'Content-Type': isTsSeg
+                        ? headCt || 'video/mp2t'
+                        : headCt || 'video/mp4',
+                      'Content-Range': `bytes ${s}-${e}/${totalBytes}`,
+                      'Content-Length': String(e - s + 1),
+                      'Accept-Ranges': 'bytes',
+                      'Cache-Control': 'public, max-age=60',
+                    },
+                  });
+                }
+              } catch {
+                clearTimeout(singleTimer);
+              }
             }
-            return merged;
-          };
+          }
 
           if (isTsSeg && !rangeMatch && totalBytes <= 25 * 1024 * 1024) {
             clearTimeout(timeoutId);
             const slices = buildSlicesForRange(0, totalBytes - 1, true);
-            const stream = await createSlidingWindowStream(slices, 16);
+            const stream = await createSlidingWindowStream(slices, 5);
             return new Response(stream, {
               status: 200,
               headers: {
@@ -554,8 +615,8 @@ export default async (req) => {
             });
           }
 
-          // Progressive MP4 / WebM or explicit Range request (supports instant-TTFB ReadableStream for iOS AVPlayer .ts ranges)
-          const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 4 * 1024 * 1024;
+          // Progressive MP4 / WebM or explicit Range request: stream chunks via instant-TTFB ReadableStream
+          const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 2 * 1024 * 1024;
           const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
           if (startByte >= totalBytes) {
             return new Response(null, {
@@ -576,54 +637,21 @@ export default async (req) => {
             totalBytes - 1
           );
           const rangeLen = endByte - startByte + 1;
-          if (isTsSeg && rangeLen > 65536) {
-            clearTimeout(timeoutId);
-            const slices = buildSlicesForRange(startByte, endByte, true);
-            const stream = await createSlidingWindowStream(slices, 16);
-            return new Response(stream, {
-              status: 206,
-              headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Private-Network': 'true',
-                'Access-Control-Expose-Headers':
-                  'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-                'Content-Type': headCt || 'video/mp2t',
-                'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
-                'Content-Length': String(rangeLen),
-                'Accept-Ranges': 'bytes',
-                'Cache-Control': 'public, max-age=60',
-              },
-            });
-          }
-          const slices = buildSlicesForRange(startByte, endByte, false);
-          const maxConc = 12;
-          const out = new Array(slices.length);
-          try {
-            for (let i = 0; i < slices.length; i += maxConc) {
-              const batch = slices.slice(i, i + maxConc);
-              const resBatch = await Promise.all(
-                batch.map(([s, e]) => fetchClampedSlice(s, e))
-              );
-              resBatch.forEach((b, idx) => {
-                out[i + idx] = b;
-              });
-            }
-          } catch (batchErr) {
-            streamAbort.abort();
-            throw batchErr;
-          }
-          const windowBuf = concatUint8(out);
-          return new Response(windowBuf, {
+          clearTimeout(timeoutId);
+          const slices = buildSlicesForRange(startByte, endByte, true);
+          const stream = await createSlidingWindowStream(slices, 5);
+          return new Response(stream, {
             status: 206,
             headers: {
               'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Private-Network': 'true',
               'Access-Control-Expose-Headers':
                 'Content-Length, Content-Range, Accept-Ranges, Content-Type',
               'Content-Type': isTsSeg
                 ? headCt || 'video/mp2t'
                 : headCt || 'video/mp4',
               'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
-              'Content-Length': String(windowBuf.byteLength),
+              'Content-Length': String(rangeLen),
               'Accept-Ranges': 'bytes',
               'Cache-Control': 'public, max-age=60',
             },

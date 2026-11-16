@@ -46,7 +46,7 @@
   force = true
 
 [[redirects]]
-  from = "/api/youtube/search"
+  from = "/api/youtube/*"
   to = "/.netlify/functions/youtube"
   status = 200
   force = true

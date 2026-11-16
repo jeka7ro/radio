@@ -30,6 +30,8 @@ import { StationAvatar } from "../common/StationAvatar";
 import { FilmioStartupLoader } from "../common/FilmioStartupLoader";
 import { toggleRadioPip } from "../player/RadioPipPlayer";
 import { StreamingPlatformLogo } from "../common/StreamingPlatformLogo";
+import { VodCardProducerBadge } from "../common/VodCardProducerBadge";
+import { StreamingPlatformView } from "./StreamingPlatformView";
 import {
   getCountryFlagEmoji,
   getLocalizedCountryName,
@@ -168,6 +170,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   handleToggleMusicPlayPause,
   handleToggleLikeMusicTrack,
   seriesEpStatsMap = {},
+  toggleSaveVodItem,
 }: Record<string, any> & {
   vodItems: any[];
   savedVodItems: any[];
@@ -198,6 +201,27 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     explicitSeason?: number,
     explicitEpisode?: number
   ) => {
+    const isRedButton =
+      e.keyCode === 403 ||
+      e.key === "ColorF0Red" ||
+      e.key === "Red" ||
+      e.code === "ColorF0Red";
+    const isFavKey =
+      (e.key === "f" || e.key === "F" || e.key === "r" || e.key === "R") &&
+      !(
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      );
+
+    if (isRedButton || isFavKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (toggleSaveVodItem) {
+        toggleSaveVodItem(item);
+      }
+      return;
+    }
+
     if (
       e.keyCode === 415 ||
       e.keyCode === 179 ||
@@ -728,11 +752,31 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
   return (
     <>
-                {/* SECTION 0B: LAMPA CATEGORY & STREAMING PLATFORM VIEWS ("Фильмы", "Мультфильмы", "Сериалы", Netflix, HBO Max, Apple TV+, Disney+, Prime Video, SkyShowtime) */}
+                {/* SECTION 0A: AUTHENTIC STREAMING PLATFORM EXPERIENCES (Netflix, Apple TV+, Max, Prime Video, Disney+, SkyShowtime) */}
+                {isStreamingPlatformSection(section) && (
+                  <StreamingPlatformView
+                    section={section}
+                    vodItems={vodItems}
+                    isVodLoading={isVodLoading}
+                    savedVodItems={savedVodItems}
+                    watchProgressMap={watchProgressMap}
+                    seriesEpStatsMap={seriesEpStatsMap}
+                    uhdSeriesEpStats={uhdSeriesEpStats}
+                    platformMediaTab={platformMediaTab}
+                    setPlatformMediaTab={setPlatformMediaTab}
+                    setSection={setSection}
+                    handleFocusVodItem={handleFocusVodItem}
+                    handleOpenVod={handleOpenVod}
+                    handleCardPlayKey={handleCardPlayKey}
+                    toggleSaveVodItem={toggleSaveVodItem}
+                    tr={tr}
+                  />
+                )}
+
+                {/* SECTION 0B: LAMPA CATEGORY VIEWS ("Фильмы", "Мультфильмы", "Сериалы") */}
                 {(section === 'movies' ||
                   section === 'cartoons' ||
-                  section === 'series' ||
-                  isStreamingPlatformSection(section)) && (
+                  section === 'series') && (
                     <div className="space-y-6 pb-16">
                       {/* MOBILE-ONLY SEGMENTED SWITCHER FOR UNIFIED "FILME & SERIALE" TAB (< 768px) */}
                       {(section === 'movies' || section === 'series') && (
@@ -762,127 +806,6 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                         </div>
                       )}
 
-                      {isStreamingPlatformSection(section) && (() => {
-                        const activePlat =
-                          STREAMING_PLATFORMS.find((p) => p.id === section) ||
-                          STREAMING_PLATFORMS[0];
-                        return (
-                          <div className="space-y-3.5">
-                            {/* Horizontal Platform Switcher Dock (All Streaming Platforms + YouTube Premium in one sleek top bar) */}
-                            <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
-                              {STREAMING_PLATFORMS.map((plat) => {
-                                const isActivePlat = section === plat.id;
-                                return (
-                                  <button
-                                    key={plat.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setPlatformMediaTab('series');
-                                      setSection(plat.id);
-                                    }}
-                                    className={`h-10 pl-2 pr-4 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2.5 shrink-0 transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer ${
-                                      isActivePlat
-                                        ? 'bg-white text-[#141414] shadow-lg scale-[1.02]'
-                                        : 'bg-white/[0.06] hover:bg-white/[0.14] text-zinc-200 border border-white/15'
-                                    }`}
-                                  >
-                                    <StreamingPlatformLogo
-                                      platformId={plat.id}
-                                      size="sm"
-                                    />
-                                    <span>{plat.label}</span>
-                                  </button>
-                                );
-                              })}
-                              <button
-                                type="button"
-                                onClick={() => setSection('youtube')}
-                                className="h-10 pl-2 pr-4 rounded-full text-xs sm:text-sm font-extrabold inline-flex items-center gap-2.5 shrink-0 transition-all bg-white/[0.06] hover:bg-white/[0.14] text-zinc-200 border border-white/15 focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
-                              >
-                                <StreamingPlatformLogo
-                                  platformId="youtube"
-                                  size="sm"
-                                />
-                                <span>YouTube Premium</span>
-                              </button>
-                            </div>
-
-                            <div
-                              className={`p-4 sm:p-5 rounded-3xl bg-gradient-to-r ${activePlat.accentGradient} border border-white/15 flex flex-wrap items-center justify-between gap-4 shadow-xl`}
-                            >
-                            <div className="flex items-center gap-3.5">
-                              <StreamingPlatformLogo
-                                platformId={activePlat.id}
-                                size="lg"
-                              />
-                              <div>
-                                <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-                                  {activePlat.label} —{' '}
-                                  {platformMediaTab === 'series'
-                                    ? tr(
-                                      'Seriale Originale & În Tendințe',
-                                      'Original & Trending Series',
-                                      'Оригинальные и популярные сериалы'
-                                    )
-                                    : platformMediaTab === 'movie'
-                                      ? tr(
-                                        'Filme pe Platformă',
-                                        'Platform Movies',
-                                        'Фильмы на платформе'
-                                      )
-                                      : tr(
-                                        'Seriale & Filme Complete',
-                                        'All Series & Movies',
-                                        'Все сериалы и фильмы'
-                                      )}
-                                </h2>
-                                <p className="text-xs text-zinc-300 mt-0.5">
-                                  {tr(
-                                    'Apasă OK pe orice serial pentru a alege sezonul, episodul și a-l reda direct (Server 1 Full HD / FileList / Subtitrare RO).',
-                                    'Press OK on any series to pick season, episode and play immediately.',
-                                    'Нажмите OK на любом сериале для выбора сезона, серии и просмотра.'
-                                  )}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              {(
-                                [
-                                  {
-                                    id: 'series',
-                                    label: tr('Seriale', 'TV Series', 'Сериалы'),
-                                  },
-                                  {
-                                    id: 'movie',
-                                    label: tr('Filme', 'Movies', 'Фильмы'),
-                                  },
-                                  {
-                                    id: 'all',
-                                    label: tr('Toate', 'All', 'Все'),
-                                  },
-                                ] as const
-                              ).map((tab) => {
-                                const isTabActive = platformMediaTab === tab.id;
-                                return (
-                                  <button
-                                    key={tab.id}
-                                    type="button"
-                                    onClick={() => setPlatformMediaTab(tab.id)}
-                                    className={`h-10 px-4 rounded-full text-xs sm:text-sm font-extrabold transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer ${isTabActive
-                                        ? 'bg-white text-[#141414] shadow-md'
-                                        : 'bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/15 focus:bg-white focus:text-[#141414]'
-                                      }`}
-                                  >
-                                    {tab.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
 
                       {isVodLoading ? (
                         <div className="py-20 flex flex-col items-center justify-center gap-3 text-zinc-400">
@@ -910,17 +833,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           {/* Shelf 1: Сейчас смотрят / Seriale Originale & Hituri */}
                           <div className="space-y-3.5">
                             <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
-                              {isStreamingPlatformSection(section)
-                                ? tr(
-                                  `Originale & Hituri ${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''}`,
-                                  `${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''} Originals & Hits`,
-                                  `Хиты и оригиналы ${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''}`
-                                )
-                                : tr(
-                                  'În tendințe acum',
-                                  'Trending Now',
-                                  'Сейчас смотрят'
-                                )}
+                              {tr('În tendințe acum', 'Trending Now', 'Сейчас смотрят')}
                             </h2>
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-3 sm:gap-4">
                               {vodItems.slice(0, 12).map((item) => {
@@ -977,10 +890,32 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                          </span>
-                                      )}
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        data-fav-btn="true"
+                                        title={
+                                          isFav
+                                            ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                            : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                        }
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          if (toggleSaveVodItem) {
+                                            toggleSaveVodItem(item);
+                                          }
+                                        }}
+                                        className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                          isFav
+                                            ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                            : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                        }`}
+                                      >
+                                        <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                      </button>
                                     </div>
                                     <div className="mt-2.5 px-0.5">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -1000,17 +935,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           {vodItems.length > 12 && (
                             <div className="space-y-3.5 pt-2">
                               <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
-                                {isStreamingPlatformSection(section)
-                                  ? tr(
-                                    `Catalog ${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''} (${vodItems.length - 12})`,
-                                    `More on ${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''} (${vodItems.length - 12})`,
-                                    `Каталог ${STREAMING_PLATFORMS.find((p) => p.id === section)?.label || ''} (${vodItems.length - 12})`
-                                  )
-                                  : tr(
-                                    'Recomandate pentru tine',
-                                    'Recommended for You',
-                                    'Рекомендуем посмотреть'
-                                  )}
+                                {tr('Recomandate pentru tine', 'Recommended for You', 'Рекомендуем посмотреть')}
                               </h2>
                               <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                                 {vodItems.slice(12).map((item) => {
@@ -1067,10 +992,32 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                             </div>
                                           );
                                         })()}
-                                        {isFav && (
-                                          <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                            </span>
-                                        )}
+                                        <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                          <VodCardProducerBadge item={item} />
+                                        </div>
+                                        <button
+                                          type="button"
+                                          data-fav-btn="true"
+                                          title={
+                                            isFav
+                                              ? tr('Elimină din favorite (🔴 / F)', 'Remove from favorites (🔴 / F)', 'Удалить из избранного (🔴 / F)')
+                                              : tr('Adaugă la favorite (🔴 / F)', 'Add to favorites (🔴 / F)', 'Добавить в избранное (🔴 / F)')
+                                          }
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            if (toggleSaveVodItem) {
+                                              toggleSaveVodItem(item);
+                                            }
+                                          }}
+                                          className={`absolute bottom-2.5 right-2.5 z-20 p-2 rounded-full backdrop-blur-md border transition-all cursor-pointer shadow-lg ${
+                                            isFav
+                                              ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-400 opacity-100 scale-100'
+                                              : 'bg-black/60 hover:bg-black/90 text-zinc-300 hover:text-white border-white/20 opacity-0 group-hover:opacity-100 group-focus:opacity-100 focus:opacity-100 max-md:opacity-85'
+                                          }`}
+                                        >
+                                          <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
+                                        </button>
                                       </div>
                                       <div className="mt-2.5 px-0.5">
                                         <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -1441,10 +1388,14 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           </div>
                                         );
                                       })()}
-                                      {isFav && (
-                                        <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
+                                      <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                        <VodCardProducerBadge item={item} />
+                                        {isFav && (
+                                          <span className="p-1 rounded-md bg-black/75 backdrop-blur-sm border border-white/10 text-rose-500 shadow">
+                                            <Heart className="w-3 h-3 fill-rose-500" />
                                           </span>
-                                      )}
+                                        )}
+                                      </div>
                                     </div>
                                     <div className="mt-2.5 px-0.5">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -3246,13 +3197,14 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       {item.name}
                                     </span>
                                   </div>
-                                  {showKzBadge && (
-                                    <div className="absolute top-2.5 left-2.5 z-10 pointer-events-none">
+                                  <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                    <VodCardProducerBadge item={item} />
+                                    {showKzBadge && (
                                       <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-[#1e3a8a]/95 text-[#93c5fd] border border-[#60a5fa]/60 shadow">
                                         KINOZAL
                                       </span>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
                                   <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1 pointer-events-none">
                                     <span className="px-1.5 py-0.5 rounded-md bg-black/85 backdrop-blur-sm border border-white/15 text-white text-[10px] font-extrabold tracking-tight shadow inline-flex items-center gap-1">
                                       <span
@@ -4383,8 +4335,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     loading="lazy"
                                     className="w-full h-full object-cover"
                                   />
-                                  <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
-                                    </span>
+                                  <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
+                                    <VodCardProducerBadge item={item} />
+                                  </div>
                                   {(() => {
                                     const rInfo = getVodCardRatingInfo(item);
                                     return (

@@ -168,7 +168,8 @@ async function extractVkVideoStreams(oid, vid, vkHash = '') {
       .sort((a, b) => b.height - a.height);
 
     if (qualities.length === 0 && !hlsUrl) return null;
-    const bestMp4 = qualities[0];
+    const pref1080 = qualities.find((q) => q.height === 1080);
+    const bestMp4 = pref1080 || qualities[0];
     const detectedMaxHeight =
       qualities[0]?.height || (rawMaxMp4Height > 0 ? rawMaxMp4Height : 1080);
     const vkIdToken = cleanHash ? `${oid}_${vid}_${cleanHash}` : `${oid}_${vid}`;
@@ -185,8 +186,8 @@ async function extractVkVideoStreams(oid, vid, vkHash = '') {
         )
       : '';
     return {
-      bestUrl: proxiedHls || proxiedBestMp4,
-      hlsUrl: proxiedHls || proxiedBestMp4,
+      bestUrl: proxiedBestMp4 || proxiedHls,
+      hlsUrl: proxiedBestMp4 || proxiedHls,
       rawHlsUrl: hlsUrl || bestMp4?.url,
       duration: durationSec,
       maxHeight: detectedMaxHeight,
@@ -2543,26 +2544,6 @@ async function resolveFromRomanianCloudVod({
     }
   }
 
-  const vkCandidates = [];
-  const seenVk = new Set();
-  for (const m of postHtml.matchAll(
-    /https?:\/\/(?:www\.)?(?:vkvideo\.ru|vk\.ru|vk\.com)\/video_ext\.php\?[^"'\s<>]+/gi
-  )) {
-    try {
-      const u = new URL(m[0]);
-      const oid = (u.searchParams.get('oid') || '').trim();
-      const vid = (u.searchParams.get('id') || '').trim();
-      const hash = (u.searchParams.get('hash') || '').trim();
-      if (!oid || !vid) continue;
-      const key = `${oid}_${vid}`;
-      if (seenVk.has(key)) continue;
-      seenVk.add(key);
-      vkCandidates.push({ oid, vid, hash });
-    } catch {
-      // ignore malformed URL
-    }
-  }
-
   const vmIds = [
     ...new Set(
       [
@@ -2578,22 +2559,19 @@ async function resolveFromRomanianCloudVod({
     ),
   ];
 
-  const [vkStreamsRaw, vmHlsUrl, rumbleHlsUrl, catSeasonsFinal] = await Promise.all([
-    Promise.all(
-      vkCandidates
-        .slice(0, 3)
-        .map((c) => extractVkVideoStreams(c.oid, c.vid, c.hash))
-    ),
+  // STRICT RULE: Romanian shows (Asia Express, Insula Iubirii, etc.) use 100% Romanian Cloud sources (Vidmoly HD, Rumble) or FileList.io!
+  // VK Video is NEVER used or scraped for Romanian TV shows!
+  const [vmHlsUrl, rumbleHlsUrl, catSeasonsFinal] = await Promise.all([
     vmIds[0]
       ? Promise.race([
           extractVidmolyDirectHls(vmIds[0], effectiveUa),
-          new Promise((r) => setTimeout(() => r(null), vkCandidates.length > 0 ? 4000 : 5500)),
+          new Promise((r) => setTimeout(() => r(null), 5500)),
         ])
       : Promise.resolve(null),
     rumbleIds[0]
       ? Promise.race([
           extractRumbleDirectHls(rumbleIds[0], effectiveUa),
-          new Promise((r) => setTimeout(() => r(null), vkCandidates.length > 0 ? 2200 : 5500)),
+          new Promise((r) => setTimeout(() => r(null), 5500)),
         ])
       : Promise.resolve(null),
     builtSeasonsCatalog
@@ -2607,33 +2585,9 @@ async function resolveFromRomanianCloudVod({
     builtSeasonsCatalog = buildCatalogFromRaw(catSeasonsFinal);
   }
 
-  const validVkStreams = vkStreamsRaw
-    .filter((s) => s && s.bestUrl)
-    .sort((a, b) => {
-      // Always prefer full integral episodes (>= 85 min) over split parts
-      const aFull = (a.duration || 0) >= 5100 ? 1 : 0;
-      const bFull = (b.duration || 0) >= 5100 ? 1 : 0;
-      if (aFull !== bFull) return bFull - aFull;
-      if ((b.maxHeight || 0) !== (a.maxHeight || 0)) {
-        return (b.maxHeight || 0) - (a.maxHeight || 0);
-      }
-      return (b.duration || 0) - (a.duration || 0);
-    });
-
-  const bestVk = validVkStreams[0] || null;
   const orderedStreams = [];
-  if (bestVk?.bestUrl) {
-    const vkMaxH = Number(bestVk.maxHeight) || 720;
-    orderedStreams.push({
-      url: bestVk.bestUrl,
-      rawUrl: bestVk.rawHlsUrl || bestVk.bestUrl,
-      sourcePath: `România Cloud HD (${vkMaxH >= 1080 ? '1080p Full HD' : vkMaxH >= 720 ? '720p HD' : '480p SD'})`,
-      duration: bestVk.duration || 0,
-      maxHeight: vkMaxH,
-      priorityRank: 1,
-      vkQualities: bestVk.qualities,
-    });
-  }
+
+  // Vidmoly is rock-solid for Romanian series (valid for 12h, no IP lock, 720p/1080p direct HLS).
   if (vmHlsUrl) {
     const decVm = decodeURIComponent(vmHlsUrl);
     const vmMaxH = /_[a-z,]*x[a-z,]*\.urlset/i.test(decVm)
@@ -2649,30 +2603,32 @@ async function resolveFromRomanianCloudVod({
       url: vmHlsUrl,
       rawUrl: vmHlsUrl,
       sourcePath: `România Cloud HD (Vidmoly ${vmMaxH >= 1080 ? '1080p Full HD' : '720p HD'})`,
-      duration: bestVk?.duration || 0,
+      duration: 0,
       maxHeight: vmMaxH,
-      priorityRank: 2,
+      priorityRank: 1,
     });
   }
+
   if (rumbleHlsUrl) {
     orderedStreams.push({
       url: rumbleHlsUrl,
       rawUrl: rumbleHlsUrl,
       sourcePath: 'România Cloud HD (Rumble Direct)',
-      duration: bestVk?.duration || 0,
+      duration: 0,
       maxHeight: 480,
-      priorityRank: 3,
+      priorityRank: 2,
     });
   }
-  // Always prioritize HD (>= 720p) over SD (< 720p), and higher resolution first (with VK preferred on equal HD height)
+
+  // Always honor priorityRank first (Vidmoly verified > Rumble), then resolution HD over SD
   orderedStreams.sort((a, b) => {
+    if ((a.priorityRank || 9) !== (b.priorityRank || 9)) {
+      return (a.priorityRank || 9) - (b.priorityRank || 9);
+    }
     const aHd = (a.maxHeight || 0) >= 720 ? 1 : 0;
     const bHd = (b.maxHeight || 0) >= 720 ? 1 : 0;
     if (aHd !== bHd) return bHd - aHd;
-    if ((b.maxHeight || 0) !== (a.maxHeight || 0)) {
-      return (b.maxHeight || 0) - (a.maxHeight || 0);
-    }
-    return (a.priorityRank || 9) - (b.priorityRank || 9);
+    return (b.maxHeight || 0) - (a.maxHeight || 0);
   });
 
   if (orderedStreams.length === 0) {
@@ -2708,7 +2664,6 @@ async function resolveFromRomanianCloudVod({
     proxyHlsUrl: primary.url,
     rawHlsUrl: primary.rawUrl,
     backupHlsUrls: backupHlsUrls.length > 0 ? backupHlsUrls : undefined,
-    vkQualities: primary.vkQualities,
     userAgent: effectiveUa,
     ...(builtSeasonsCatalog ? { seasons: builtSeasonsCatalog } : {}),
   };
@@ -2741,7 +2696,8 @@ export async function resolveVodStreamData({
   let fallbackSeasonsCatalog = undefined;
 
   // 0. Check Romanian Cloud TV Shows & Series first (Asia Express, Insula Iubirii, Power Couple, Las Fierbinti, Chefi la Cutite, Clanul, Tatutu, etc.)
-  if (mediaType !== 'movie' && detectRomanianShowDescriptor(imdb, cleanTitle)) {
+  const isRomanianShow = Boolean(detectRomanianShowDescriptor(imdb, cleanTitle));
+  if (mediaType !== 'movie' && isRomanianShow) {
     const roRes = await resolveFromRomanianCloudVod({
       imdb,
       title: cleanTitle,
@@ -2761,11 +2717,20 @@ export async function resolveVodStreamData({
         ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
       };
     }
+
+    // STRICT RULE: Romanian shows (Asia Express, etc.) are 100% Romanian.
+    // They MUST NEVER fall through to Russian providers (VK Video, Rutube, Kinozal, Alloha).
+    return {
+      ok: false,
+      type: 'series',
+      error: 'Episodul nu a fost găsit pe Cloud RO. Disponibil prin torenți FileList.io HD.',
+      ...(fallbackSeasonsCatalog ? { seasons: fallbackSeasonsCatalog } : {}),
+    };
   }
 
-  // 1. Check Official VK Video Curated Playlists & Verified Communities first (Russian TV Shows ONLY — never foreign!)
+  // 1. Check Official VK Video Curated Playlists & Verified Communities first (Russian TV Shows ONLY — never foreign or Romanian!)
   const cleanImdb = String(imdb || '').trim();
-  const matchedVkShow = !forceForeign
+  const matchedVkShow = !forceForeign && !isRomanianShow
     ? VK_CURATED_SHOWS.find(
         (s) =>
           (cleanKp && s.kpIds.includes(cleanKp)) ||
@@ -2848,7 +2813,7 @@ export async function resolveVodStreamData({
 
   // 2. Check Official RUTUBE Gazprom-Media TV Catalog (ТНТ, Пятница!, PREMIER, СТС — Russian TV Shows ONLY!)
   let rutubeFallbackRes = null;
-  const matchedRutubeShow = !forceForeign
+  const matchedRutubeShow = !forceForeign && !isRomanianShow
     ? RUTUBE_CURATED_SHOWS.find(
         (s) =>
           (cleanKp && s.kpIds.includes(cleanKp)) ||
@@ -2882,6 +2847,7 @@ export async function resolveVodStreamData({
 
   const isRuTvShowQuery =
     !forceForeign &&
+    !isRomanianShow &&
     (Boolean(matchedVkShow || matchedRutubeShow) ||
       (Number(cleanKp) >= 9001000 && Number(cleanKp) <= 9001999) ||
       /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
@@ -2889,6 +2855,7 @@ export async function resolveVodStreamData({
       ));
   const isRussianNativeQuery =
     !forceForeign &&
+    !isRomanianShow &&
     Boolean(
       isRuTvShowQuery ||
         /[а-яА-ЯёЁ]/.test(cleanTitle) ||

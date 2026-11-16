@@ -54,7 +54,7 @@ export const BottomNav: React.FC = () => {
   return (
     <nav
       aria-label={t.nav.mobileAria}
-      className="lg:hidden w-full bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] px-1 pb-[env(safe-area-inset-bottom,0px)]"
+      className="lg:hidden w-full bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] px-1 pb-[env(safe-area-inset-bottom,0px)] select-none touch-none"
     >
       <div className="grid grid-cols-6 gap-0.5 max-w-lg mx-auto">
         {navItems.map((item) => {

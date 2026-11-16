@@ -443,10 +443,63 @@ const CURATED_RU_TV_SHOW_KP_IDS = new Set<number>([
   5189047, 5320550, 5618003, 4374613, 573840, 1344492, 5190505,
 ]);
 
+export function isRomanianVodItem(
+  item: Partial<CinemetaItem> | null | undefined
+): boolean {
+  if (!item) return false;
+  const idStr = String(item.id || '');
+  const imdbStr = String(item.imdbId || '');
+  if (
+    idStr === 'tt10295772' ||
+    imdbStr === 'tt10295772' ||
+    idStr === 'tt26254014' ||
+    imdbStr === 'tt26254014' ||
+    idStr === 'tt28504410' ||
+    imdbStr === 'tt28504410' ||
+    idStr === 'tt35405683' ||
+    imdbStr === 'tt35405683' ||
+    idStr === 'tt13093364' ||
+    imdbStr === 'tt13093364' ||
+    idStr === 'tt1745739' ||
+    imdbStr === 'tt1745739' ||
+    idStr === 'tt21603982' ||
+    imdbStr === 'tt21603982' ||
+    idStr === 'tt33088572' ||
+    imdbStr === 'tt33088572' ||
+    idStr === 'tt34192055' ||
+    imdbStr === 'tt34192055' ||
+    idStr === 'tt28803286' ||
+    imdbStr === 'tt28803286'
+  ) {
+    return true;
+  }
+  if (item.country && /(Romania|România|Румыния)/i.test(item.country)) {
+    return true;
+  }
+  const title = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`;
+  return /\b(asia\s*express|america\s*express|insula\s*iubirii|power\s*couple|chefi\s*la\s*cutite|las\s*fierbinti|survivor\s*romania|clanul|tatutu|camera\s*609|scara\s*b|burlacul|vocea\s*romaniei|romanii\s*au\s*talent|te\s*cunosc\s*de\s*undeva|bravo\s*ai\s*stil|sunt\s*celebru|visuri\s*la\s*cheie|iubire\s*cu\s*parfum\s*de\s*lavanda|poftiti\s*pe\s*la\s*noi|jocul\s*cuvintelor)\b/i.test(
+    title
+  );
+}
+
 export function isRussianVodItem(
   item: Partial<CinemetaItem> | null | undefined
 ): boolean {
   if (!item) return false;
+  if (isRomanianVodItem(item)) return false;
+
+  const idStr = String(item.id || '');
+  const imdbStr = String(item.imdbId || '');
+  if (
+    idStr === 'tt31712367' ||
+    imdbStr === 'tt31712367' ||
+    idStr === 'kp_5508530' ||
+    item.kpId === '5508530' ||
+    String(item.kpId) === '5508530' ||
+    /zvyozdy|зв[её]зды/i.test(item.name || '')
+  ) {
+    return true;
+  }
 
   // 1. Check explicit country first
   if (item.country) {
@@ -515,6 +568,21 @@ export function isRussianTvShowItem(
   item: Partial<CinemetaItem> | null | undefined
 ): boolean {
   if (!item) return false;
+  if (isRomanianVodItem(item)) return false;
+
+  const idStr = String(item.id || '');
+  const imdbStr = String(item.imdbId || '');
+  if (
+    idStr === 'tt31712367' ||
+    imdbStr === 'tt31712367' ||
+    idStr === 'kp_5508530' ||
+    item.kpId === '5508530' ||
+    String(item.kpId) === '5508530' ||
+    /zvyozdy|зв[её]зды/i.test(item.name || '')
+  ) {
+    return true;
+  }
+
   const rawKpIdNum = Number(
     item.kpId ||
     (String(item.id || '').startsWith('kp_')
