@@ -783,7 +783,7 @@ export const ViewBackBar: React.FC<{
     <button
       type="button"
       onClick={onBack}
-      className="h-8 pl-2.5 pr-3.5 rounded-full bg-white/[0.08] hover:bg-white/[0.16] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer focus:outline-none"
+      className="min-h-[44px] sm:min-h-[36px] h-11 sm:h-9 pl-3 pr-4 sm:pl-2.5 sm:pr-3.5 rounded-full bg-white/[0.08] hover:bg-white/[0.16] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer touch-manipulation focus:outline-none"
     >
       <ArrowLeft className="w-3.5 h-3.5" />
       <span>{tr('Înapoi', 'Back', 'Назад')}</span>
@@ -1064,7 +1064,7 @@ export const ArtistProfileView: React.FC<{
   const popularSlice = showAllPopular ? topTracks : topTracks.slice(0, 5);
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Compact Horizontal Artist Hero Card */}
       <div className="rounded-xl bg-gradient-to-br from-[#172554]/55 via-[#111622] to-[#0c101b] border border-white/[0.08] p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
@@ -1439,7 +1439,7 @@ export const AlbumDetailView: React.FC<{
   if (!album) return null;
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Compact Horizontal Album Hero Card */}
       <div className="rounded-xl tahoe-glass p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
@@ -1704,7 +1704,7 @@ export const SongRadioView: React.FC<{
     Boolean(currentTrack) && tracks.some((t) => t.id === currentTrack?.id);
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Compact Horizontal Radio Hero Card */}
       <div className="rounded-xl bg-gradient-to-br from-[#1e3a8a]/45 via-[#111827] to-[#0c101b] border border-[#3b82f6]/25 p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
@@ -2017,7 +2017,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
             e.currentTarget.releasePointerCapture(e.pointerId);
           }
         }}
-        className="relative h-4 flex items-center cursor-pointer group focus:outline-none"
+        className="relative h-4 flex items-center cursor-pointer group focus:outline-none touch-none select-none"
       >
         <div className="relative w-full h-1.5 rounded-full bg-white/20 overflow-hidden">
           <div
@@ -2026,8 +2026,10 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
           />
         </div>
         <div
-          className="pointer-events-none absolute w-3.5 h-3.5 rounded-full bg-white shadow -ml-1.5 opacity-90 group-hover:opacity-100 transition-opacity"
-          style={{ left: `${isThisTrackCurrent ? progressPct : 0}%` }}
+          className="pointer-events-none absolute w-3.5 h-3.5 rounded-full bg-white shadow opacity-90 group-hover:opacity-100 transition-opacity"
+          style={{
+            left: `clamp(0px, calc(${isThisTrackCurrent ? progressPct : 0}% - 7px), calc(100% - 14px))`,
+          }}
         />
       </div>
       <div className="flex items-center justify-between text-xs text-[#94a3b8] tabular-nums font-medium">
@@ -2123,7 +2125,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
 
   return (
     <div
-      className={`flex flex-col w-full min-h-0 gap-3.5 ${
+      className={`flex flex-col w-full max-w-full min-w-0 overflow-x-hidden min-h-0 gap-3.5 ${
         compact ? (activeTab === 'studio' ? 'my-auto' : 'flex-1 h-full') : ''
       }`}
     >
@@ -2131,7 +2133,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
       <div
         role="tablist"
         aria-label={tr('Moduri Player Muzică', 'Music Player Modes', 'Режимы плеера')}
-        className="flex items-center justify-center gap-1 p-1 rounded-full bg-white/[0.08] border border-white/10 w-fit mx-auto shrink-0"
+        className="flex items-center justify-between sm:justify-center gap-0.5 sm:gap-1 p-1 rounded-full bg-white/[0.08] border border-white/10 w-full max-w-full sm:w-fit mx-auto shrink-0 overflow-x-auto no-scrollbar"
       >
         {(
           [
@@ -2149,13 +2151,13 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
               role="tab"
               aria-selected={selected}
               onClick={() => setActiveTab(id)}
-              className={`h-8 px-3.5 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer focus:outline-none ${
+              className={`h-8 px-2 sm:px-3.5 rounded-full text-[11px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap flex-1 sm:flex-initial min-w-0 shrink-0 transition-all cursor-pointer focus:outline-none ${
                 selected
                   ? 'bg-white text-black shadow'
                   : 'text-white/80 hover:text-white'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="hidden min-[390px]:block w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
               <span>{label}</span>
             </button>
           );
@@ -2166,7 +2168,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
       {activeTab === 'studio' && (
         <div
           role="tabpanel"
-          className="max-w-[420px] mx-auto w-full flex flex-col gap-3.5 min-h-0"
+          className="max-w-[420px] mx-auto w-full min-w-0 overflow-x-hidden flex flex-col gap-3.5 min-h-0"
         >
           {/* Artwork / Spinning Vinyl */}
           <div className="flex flex-col items-center justify-center gap-2.5">
@@ -2244,11 +2246,11 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                 <h2 className="text-lg sm:text-xl font-extrabold text-white truncate tracking-tight">
                   {track.title}
                 </h2>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium text-[#94a3b8]">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium text-[#94a3b8] min-w-0 max-w-full">
                   <button
                     type="button"
                     onClick={() => onOpenArtist(track.artist, track.artistId)}
-                    className="font-semibold text-white hover:text-[#93c5fd] hover:underline truncate cursor-pointer text-left"
+                    className="font-semibold text-white hover:text-[#93c5fd] hover:underline truncate max-w-full cursor-pointer text-left"
                   >
                     {track.artist}
                   </button>
@@ -2260,7 +2262,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                         onClick={() =>
                           onOpenAlbum(track.album, track.artist, track.albumId, track)
                         }
-                        className="hover:text-white hover:underline truncate cursor-pointer text-left"
+                        className="hover:text-white hover:underline truncate max-w-full cursor-pointer text-left"
                       >
                         {track.album}
                       </button>
@@ -2368,7 +2370,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
 
           <div
             ref={lyricsContainerRef}
-            className={`flex-1 overflow-y-auto rounded-xl bg-gradient-to-b from-[#0f1d3a]/65 via-[#111622] to-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-3 ${
+            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-gradient-to-b from-[#0f1d3a]/65 via-[#111622] to-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-3 ${
               compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
             }`}
           >
@@ -2440,7 +2442,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
           className="flex-1 flex flex-col min-h-0 space-y-3"
         >
           <div
-            className={`flex-1 overflow-y-auto rounded-xl bg-[#0e121b]/95 border border-white/10 p-4 sm:p-5 space-y-4 ${
+            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-4 sm:p-5 space-y-4 ${
               compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
             }`}
           >
@@ -2551,7 +2553,7 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
           </div>
 
           <div
-            className={`flex-1 overflow-y-auto rounded-xl bg-[#0e121b]/95 border border-white/10 p-2 space-y-1 ${
+            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-2 space-y-1 ${
               compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
             }`}
           >
@@ -2680,7 +2682,7 @@ export const SongStudioDetailView: React.FC<
   const activeStoryText = encyclopedia?.songStory || encyclopedia?.albumStory || '';
 
   return (
-    <div className="space-y-5 pb-8">
+    <div className="space-y-5 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-semibold text-[#60a5fa]">
@@ -2985,32 +2987,40 @@ export const PremiumFullscreenPlayerModal: React.FC<
       role="dialog"
       aria-modal="true"
       aria-label="Spotify Now Playing Studio Fullscreen"
-      className="fixed inset-0 z-50 bg-[#080b12] flex flex-col justify-start overflow-y-auto animate-in fade-in slide-in-from-bottom duration-300 select-none"
+      className="fixed inset-0 z-50 w-full max-w-[100vw] bg-[#080b12] flex flex-col justify-start overflow-y-auto overflow-x-hidden overscroll-x-none touch-pan-y animate-in fade-in slide-in-from-bottom duration-300 select-none"
       style={{
-        paddingTop: 'max(14px, env(safe-area-inset-top, 14px))',
-        paddingBottom: 'max(20px, env(safe-area-inset-bottom, 20px))',
+        height: 'var(--ios-pwa-app-height, 100%)',
+        paddingTop: 'max(14px, var(--safe-top, env(safe-area-inset-top, 14px)))',
+        paddingBottom: 'var(--ios-pwa-nav-pb, max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.3)))',
+        paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
+        paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
       }}
     >
       <div
-        className="absolute inset-0 pointer-events-none opacity-40 blur-3xl scale-125 transition-all duration-700 -z-10"
-        style={{
-          backgroundImage: `radial-gradient(circle at 50% 32%, #1e3a8a 0%, #0b0f19 68%)`,
-        }}
-      />
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 overflow-hidden -z-10"
+      >
+        <div
+          className="absolute inset-0 opacity-40 blur-3xl transition-all duration-700"
+          style={{
+            backgroundImage: `radial-gradient(circle at 50% 32%, #1e3a8a 0%, #0b0f19 68%)`,
+          }}
+        />
+      </div>
 
       {/* Top Header */}
-      <div className="w-full max-w-2xl mx-auto flex items-center justify-between px-4 sm:px-8 pt-1 pb-2 shrink-0">
+      <div className="w-full max-w-2xl min-w-0 overflow-hidden mx-auto flex items-center justify-between px-4 sm:px-8 pt-1 pb-2 shrink-0">
         <button
           type="button"
           onClick={onClose}
-          className="w-10 h-10 rounded-full inline-flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer focus:outline-none"
+          className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full inline-flex items-center justify-center shrink-0 text-white/85 hover:text-white hover:bg-white/10 active:scale-95 transition-all cursor-pointer touch-manipulation focus:outline-none"
           aria-label={tr('Minimizează', 'Minimize', 'Свернуть')}
         >
           <ChevronDown className="w-6 h-6" />
         </button>
 
         <div className="flex flex-col items-center text-center px-3 min-w-0">
-          <span className="text-xs font-medium text-[#94a3b8] truncate max-w-[220px]">
+          <span className="text-xs font-medium text-[#94a3b8] truncate max-w-[58vw] sm:max-w-xs">
             {sourceLabel}
           </span>
           <button
@@ -3019,13 +3029,13 @@ export const PremiumFullscreenPlayerModal: React.FC<
               onClose();
               props.onOpenAlbum(track.album || track.title, track.artist, track.albumId, track);
             }}
-            className="text-[13px] font-semibold text-white hover:underline truncate max-w-[220px] sm:max-w-xs cursor-pointer"
+            className="text-[13px] font-semibold text-white hover:underline truncate max-w-[58vw] sm:max-w-xs cursor-pointer"
           >
             {track.album || track.artist}
           </button>
         </div>
 
-        <div className="w-10 flex items-center justify-end">
+        <div className="min-w-[2.5rem] shrink-0 flex items-center justify-end">
           {track.qualityTier && (
             <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white/15 text-[#60a5fa]">
               {track.qualityTier}
@@ -3035,7 +3045,7 @@ export const PremiumFullscreenPlayerModal: React.FC<
       </div>
 
       {/* Main Studio Body */}
-      <div className="flex-1 w-full max-w-xl mx-auto px-4 sm:px-6 py-1 sm:py-2 min-h-0 flex flex-col">
+      <div className="flex-1 w-full max-w-xl min-w-0 mx-auto px-3 sm:px-6 py-1 sm:py-2 min-h-0 overflow-x-hidden flex flex-col">
         <SongStudioCore
           {...props}
           compact

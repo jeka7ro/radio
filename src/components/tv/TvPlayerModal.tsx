@@ -409,7 +409,20 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   inlineEmbeddedMode = false,
 }) => {
   const { t, language, format } = useTranslation();
-  const isMobilePhone = isMobilePhoneDevice();
+  const [isMobilePhone, setIsMobilePhone] = useState(() =>
+    isMobilePhoneDevice()
+  );
+  useEffect(() => {
+    const syncMob = () => setIsMobilePhone(isMobilePhoneDevice());
+    window.addEventListener('resize', syncMob);
+    window.addEventListener('orientationchange', syncMob);
+    return () => {
+      window.removeEventListener('resize', syncMob);
+      window.removeEventListener('orientationchange', syncMob);
+    };
+  }, []);
+  const tvBackTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const tvFullBackBtnAtRef = useRef<number>(0);
   const [isFullModeExpanded, setIsFullModeExpanded] = useState(
     () => !isMobilePhone && isSmartTvFullMode
   );
@@ -650,6 +663,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   };
 
   const exitTvFullMode = () => {
+    const now = Date.now();
+    if (now - tvFullBackBtnAtRef.current < 380) return;
+    tvFullBackBtnAtRef.current = now;
     setIsFullModeExpanded(false);
     setIsSplitFullscreen(false);
     setIsSidePanelOpen(true);
@@ -1963,6 +1979,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       onMouseMove={() => {
         if (effectiveTvFullMode) wakeTvOsd();
       }}
+      onTouchStart={() => {
+        if (effectiveTvFullMode) wakeTvOsd();
+      }}
       onKeyDown={() => {
         if (effectiveTvFullMode) wakeTvOsd();
       }}
@@ -1990,7 +2009,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
             : inlineEmbeddedMode
               ? 'relative w-full h-[calc(100dvh-7.75rem)] md:h-[calc(100dvh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
-              : 'fixed inset-0 z-[190] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-0 sm:p-3 overflow-y-auto no-scrollbar'
+              : 'fixed inset-0 z-[190] w-full max-w-[100vw] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-0 sm:p-3 overflow-y-auto overflow-x-hidden overscroll-x-none no-scrollbar'
       }
     >
       <div
@@ -2134,7 +2153,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 onClick={() => {
                   if (
                     typeof window !== 'undefined' &&
-                    (window.innerWidth < 640 ||
+                    (isMobilePhone ||
+                      window.innerWidth < 640 ||
                       /iPhone|iPad|iPod/i.test(navigator.userAgent))
                   ) {
                     handleFullscreen();
@@ -2147,7 +2167,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 }}
                 aria-label="Full Mode TV"
                 title="Ecran Complet (Player Nativ pe Mobil / Full Mode pe TV)"
-                className="min-w-[34px] min-h-[34px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/80 hover:text-white hover:bg-blue-600 transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer"
+                className="min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/80 hover:text-white hover:bg-blue-600 transition-all focus:outline-none focus:ring-4 focus:ring-white cursor-pointer touch-manipulation"
               >
                 <Maximize className="w-4 h-4 sm:w-5 sm:h-5" aria-hidden="true" />
               </button>
@@ -2157,7 +2177,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                   type="button"
                   onClick={closeTvPlayer}
                   aria-label={t.tv.closeTvPlayer}
-                  className="min-w-[34px] min-h-[34px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/90 hover:text-white hover:bg-rose-600 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-rose-600"
+                  className="min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] flex items-center justify-center rounded-full text-zinc-200 bg-zinc-800/90 hover:text-white hover:bg-rose-600 transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-rose-600 touch-manipulation"
                 >
                   <X className="w-5 h-5 sm:w-6 sm:h-6" aria-hidden="true" />
                 </button>
@@ -2428,6 +2448,29 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                     </button>
                     <button
                       type="button"
+                      onTouchStart={(e) => {
+                        wakeTvOsd();
+                        const pt = e.touches?.[0];
+                        if (pt) {
+                          tvBackTouchRef.current = { x: pt.clientX, y: pt.clientY };
+                        }
+                      }}
+                      onTouchEnd={(e) => {
+                        const start = tvBackTouchRef.current;
+                        tvBackTouchRef.current = null;
+                        const pt = e.changedTouches?.[0];
+                        if (
+                          start &&
+                          pt &&
+                          (Math.abs(pt.clientX - start.x) > 20 ||
+                            Math.abs(pt.clientY - start.y) > 20)
+                        ) {
+                          return;
+                        }
+                        e.preventDefault();
+                        e.stopPropagation();
+                        exitTvFullMode();
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         exitTvFullMode();
@@ -2436,7 +2479,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                         backgroundColor: 'rgba(10, 15, 28, 0.88)',
                         border: '1px solid rgba(148, 163, 184, 0.28)',
                       }}
-                      className="min-h-[40px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold text-zinc-100 hover:text-white hover:bg-slate-800/95 backdrop-blur-xl shadow-2xl inline-flex items-center gap-2 cursor-pointer transition-colors"
+                      className="min-h-[44px] min-w-[44px] px-4 py-2 rounded-full text-xs sm:text-sm font-bold text-zinc-100 hover:text-white hover:bg-slate-800/95 backdrop-blur-xl shadow-2xl inline-flex items-center gap-2 cursor-pointer touch-manipulation transition-colors"
                     >
                       <span>← Înapoi</span>
                     </button>

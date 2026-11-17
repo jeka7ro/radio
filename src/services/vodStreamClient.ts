@@ -134,7 +134,7 @@ export async function resolveDirectVodStreamClient(params: {
           const mustUseProxy =
             isLocalLan ||
             Boolean(bridgeOrigin) ||
-            /interkh\.com|bl\.rutube\.ru|jmeekos\.com|vidmoly/i.test(rawCandidate) ||
+            /interkh\.com|bl\.rutube\.ru|jmeekos\.com|vidmoly|vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud/i.test(rawCandidate) ||
             String(safeData.hlsUrl || '').startsWith('/api/tv-proxy');
           const effectiveHls =
             safeData.proxyHlsUrl && mustUseProxy

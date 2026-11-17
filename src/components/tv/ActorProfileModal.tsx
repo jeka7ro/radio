@@ -633,13 +633,20 @@ export const ActorProfileModal: React.FC<ActorProfileModalProps> = ({
       className="fixed inset-0 z-[185] bg-[#121212]/98 backdrop-blur-2xl flex flex-col overflow-hidden text-zinc-100"
     >
       {/* Top Sticky Bar */}
-      <div className="shrink-0 px-5 sm:px-8 py-4 bg-[#181818] border-b border-white/10 flex flex-wrap items-center justify-between gap-3">
+      <div
+        style={{
+          paddingTop: 'max(0.75rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.35rem))',
+          paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+          paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+        }}
+        className="shrink-0 px-5 sm:px-8 py-4 bg-[#181818] border-b border-white/10 flex flex-wrap items-center justify-between gap-3"
+      >
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
             autoFocus
             onClick={onClose}
-            className="h-10 px-4 rounded-full bg-white/10 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:outline-none border border-white/15 text-white font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors shrink-0 cursor-pointer"
+            className="min-h-[44px] min-w-[44px] h-11 px-4 rounded-full bg-white/10 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:outline-none border border-white/15 text-white font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors shrink-0 cursor-pointer touch-manipulation"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>{tr('Înapoi', 'Back', 'Назад')}</span>
@@ -714,7 +721,7 @@ export const ActorProfileModal: React.FC<ActorProfileModalProps> = ({
       </div>
 
       {/* Main Scrollable Content */}
-      <div className="flex-1 overflow-y-auto px-5 sm:px-8 py-6 space-y-8">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-5 sm:px-8 py-6 space-y-8">
         {/* Actor Hero Biography Card */}
         <div className="p-5 sm:p-7 rounded-3xl bg-[#1b1b1b] border border-white/15 shadow-2xl flex flex-col md:flex-row items-start gap-6">
           {/* Portrait */}

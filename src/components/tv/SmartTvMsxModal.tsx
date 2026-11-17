@@ -58,7 +58,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl max-h-[92dvh] overflow-y-auto rounded-[28px] bg-zinc-900 border border-white/15 text-zinc-100 shadow-2xl p-4 sm:p-6 space-y-5"
+        className="w-full max-w-3xl max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-[28px] bg-zinc-900 border border-white/15 text-zinc-100 shadow-2xl p-4 sm:p-6 space-y-5"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

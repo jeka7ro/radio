@@ -176,6 +176,7 @@ import {
   saveSharedProfiles,
   saveSharedActiveProfileId,
   syncSharedProfilesFromServer,
+  loadDeletedProfileIds,
   markProfileDeleted,
   unmarkProfileDeleted,
   normalizeProfile,
@@ -996,9 +997,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [isCarMode, setIsCarMode] = useState<boolean>(() =>
     isAutomotiveWidescreenMode()
   );
+  const [isMobileChromeHidden, setIsMobileChromeHidden] = useState<boolean>(false);
+  const isMobileChromeHiddenRef = useRef<boolean>(false);
+  const lastMainScrollTopRef = useRef<number>(0);
+  const scrollDeltaAccumRef = useRef<number>(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
-    if (isAutomotiveWidescreenMode()) return false;
+    if (isAutomotiveWidescreenMode() || isMobilePhoneDevice()) return false;
     return window.innerWidth >= 768;
   });
 
@@ -1018,7 +1023,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsCarMode(enabled);
       if (enabled) {
         setIsSidebarOpen(false);
-      } else if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+      } else if (
+        typeof window !== 'undefined' &&
+        !isMobilePhoneDevice() &&
+        window.innerWidth >= 768
+      ) {
         setIsSidebarOpen(true);
       }
     };
@@ -1053,7 +1062,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       ) {
         document.documentElement.requestFullscreen().catch(() => { });
       }
-    } else if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+    } else if (
+      typeof window !== 'undefined' &&
+      !isMobilePhoneDevice() &&
+      window.innerWidth >= 768
+    ) {
       setIsSidebarOpen(true);
     }
   }, [isCarMode]);
@@ -1098,25 +1111,48 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const applyLatestProfiles = (candidate?: SmartTvProfile[]) => {
       if (!active) return;
-      const latest =
+      const baseList =
         Array.isArray(candidate) && candidate.length > 0
           ? candidate
           : loadTvProfiles();
-      if (!Array.isArray(latest) || latest.length === 0) return;
-      setTvProfiles(latest);
+      if (!Array.isArray(baseList) || baseList.length === 0) return;
       const storedActive = loadActiveProfileId();
+      const deletedSet = loadDeletedProfileIds();
+      let effectiveList = baseList;
+      if (
+        storedActive &&
+        storedActive !== 'p1' &&
+        !deletedSet.has(storedActive) &&
+        !baseList.some((p) => p.id === storedActive)
+      ) {
+        const preserved = loadTvProfiles().find((p) => p.id === storedActive);
+        if (preserved) {
+          effectiveList = [...baseList, preserved];
+        }
+      }
+      setTvProfiles(effectiveList);
       const fallbackId =
-        latest.find((p) => p.id === storedActive)?.id ||
-        latest.find((p) => p.id === 'p1')?.id ||
-        latest[0].id;
-      setActiveProfileId((prev) =>
-        latest.some((p) => p.id === prev) ? prev : fallbackId
-      );
+        effectiveList.find((p) => p.id === storedActive)?.id ||
+        effectiveList.find((p) => p.id === 'p1')?.id ||
+        effectiveList[0].id;
+      setActiveProfileId((prev) => {
+        if (effectiveList.some((p) => p.id === prev)) return prev;
+        if (prev && prev !== 'p1' && !deletedSet.has(prev)) {
+          const prevStored = loadTvProfiles().find((p) => p.id === prev);
+          if (prevStored) {
+            setTvProfiles((curr) =>
+              curr.some((p) => p.id === prev) ? curr : [...curr, prevStored]
+            );
+            return prev;
+          }
+        }
+        return fallbackId;
+      });
     };
 
     const runAuthoritativeProfileSync = (force = false) => {
       const now = Date.now();
-      if (!force && now - lastSyncAt < 60_000) return;
+      if (!force && now - lastSyncAt < 15_000) return;
       lastSyncAt = now;
       syncSharedProfilesFromServer()
         .then((authoritative) => {
@@ -1126,6 +1162,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
 
     runAuthoritativeProfileSync(true);
+
+    const pollInterval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        runAuthoritativeProfileSync(false);
+      }
+    }, 25_000);
 
     const onProfilesUpdated = () => {
       applyLatestProfiles();
@@ -1162,6 +1204,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       active = false;
+      window.clearInterval(pollInterval);
       window.removeEventListener('aether:profiles-updated', onProfilesUpdated);
       window.removeEventListener('aether:active-profile-changed', onActiveProfileChanged);
       window.removeEventListener('storage', onStorage);
@@ -1769,6 +1812,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       switchRadioFavoritesProfile(cleanId);
       setEditingProfileId(null);
       setIsProfilePickerOpen(false);
+      setIsHandoffModalOpen(false);
     },
     [tvProfiles, switchRadioFavoritesProfile, currentTvChannel]
   );
@@ -2328,6 +2372,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const osdTimerRef = useRef<number | null>(null);
   const lastBackHandledAtRef = useRef<number>(0);
   const lastBackHideOsdAtRef = useRef<number>(0);
+  const vodBackTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const headerBackTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const lastVodPlayerBackAtRef = useRef<number>(0);
+  const lastHeaderCatalogBackAtRef = useRef<number>(0);
   const triggerHomeQuickPlayRef = useRef<() => boolean>(() => false);
   const lastHomeQuickPlayAtRef = useRef<number>(0);
 
@@ -2369,7 +2417,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       return;
     }
     const timeoutMs = isMobileTouch
-      ? 3000
+      ? 4500
       : Math.max(8, tvSettings.osdAutoHideSec) * 1000;
     const runAutoHideCheck = () => {
       const hasOpenOverlay = Boolean(
@@ -2739,16 +2787,31 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setIsPortraitViewport(h > w);
       setIsMobilePhone(isMobilePhoneDevice());
     };
+    let orientT1: number | null = null;
+    let orientT2: number | null = null;
+    const syncOrientationDelayed = () => {
+      syncViewportFlags();
+      if (orientT1 !== null) window.clearTimeout(orientT1);
+      if (orientT2 !== null) window.clearTimeout(orientT2);
+      orientT1 = window.setTimeout(syncViewportFlags, 80);
+      orientT2 = window.setTimeout(syncViewportFlags, 280);
+    };
     const onOpenHandoff = () => setIsHandoffModalOpen(true);
     syncViewportFlags();
     window.addEventListener('resize', syncViewportFlags);
-    window.addEventListener('orientationchange', syncViewportFlags);
+    window.addEventListener('orientationchange', syncOrientationDelayed);
+    document.addEventListener('fullscreenchange', syncOrientationDelayed);
+    document.addEventListener('webkitfullscreenchange', syncOrientationDelayed);
     window.visualViewport?.addEventListener('resize', syncViewportFlags);
     window.visualViewport?.addEventListener('scroll', syncViewportFlags);
     window.addEventListener('aether:open-handoff-modal', onOpenHandoff);
     return () => {
+      if (orientT1 !== null) window.clearTimeout(orientT1);
+      if (orientT2 !== null) window.clearTimeout(orientT2);
       window.removeEventListener('resize', syncViewportFlags);
-      window.removeEventListener('orientationchange', syncViewportFlags);
+      window.removeEventListener('orientationchange', syncOrientationDelayed);
+      document.removeEventListener('fullscreenchange', syncOrientationDelayed);
+      document.removeEventListener('webkitfullscreenchange', syncOrientationDelayed);
       window.visualViewport?.removeEventListener('resize', syncViewportFlags);
       window.visualViewport?.removeEventListener('scroll', syncViewportFlags);
       window.removeEventListener('aether:open-handoff-modal', onOpenHandoff);
@@ -2758,6 +2821,119 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   useEffect(() => {
     setIsMobileCustomFullscreen(false);
   }, [isPlayingVod]);
+
+  useEffect(() => {
+    isMobileChromeHiddenRef.current = false;
+    lastMainScrollTopRef.current = 0;
+    scrollDeltaAccumRef.current = 0;
+    setIsMobileChromeHidden(false);
+  }, [
+    section,
+    activeVodItem,
+    isPlayingVod,
+    isPortraitViewport,
+    isSidebarOpen,
+    isSettingsDrawerOpen,
+    isFilterDrawerOpen,
+    isCatalogDrawerOpen,
+  ]);
+
+  const handleMobileMainScroll = useCallback(
+    (el: HTMLElement) => {
+      if (typeof window === 'undefined') return;
+      if (
+        (!isMobilePhone && window.innerWidth >= 768) ||
+        document.documentElement.classList.contains('smart-tv-mode')
+      ) {
+        if (isMobileChromeHiddenRef.current) {
+          isMobileChromeHiddenRef.current = false;
+          setIsMobileChromeHidden(false);
+        }
+        return;
+      }
+      if (
+        isSidebarOpen ||
+        isSettingsDrawerOpen ||
+        isFilterDrawerOpen ||
+        isCatalogDrawerOpen
+      ) {
+        if (isMobileChromeHiddenRef.current) {
+          isMobileChromeHiddenRef.current = false;
+          setIsMobileChromeHidden(false);
+        }
+        lastMainScrollTopRef.current = Math.max(0, el.scrollTop);
+        scrollDeltaAccumRef.current = 0;
+        return;
+      }
+      const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
+        lastMainScrollTopRef.current = Math.max(0, el.scrollTop);
+        return;
+      }
+
+      const curTop = Math.max(0, el.scrollTop);
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (curTop <= 20) {
+        if (isMobileChromeHiddenRef.current) {
+          isMobileChromeHiddenRef.current = false;
+          setIsMobileChromeHidden(false);
+        }
+        lastMainScrollTopRef.current = curTop;
+        scrollDeltaAccumRef.current = 0;
+        return;
+      }
+      if (curTop >= maxScroll - 16 && curTop > lastMainScrollTopRef.current) {
+        lastMainScrollTopRef.current = curTop;
+        return;
+      }
+
+      const delta = curTop - lastMainScrollTopRef.current;
+      lastMainScrollTopRef.current = curTop;
+      if (Math.abs(delta) < 1.5) return;
+
+      if (
+        (delta > 0 && scrollDeltaAccumRef.current < 0) ||
+        (delta < 0 && scrollDeltaAccumRef.current > 0)
+      ) {
+        scrollDeltaAccumRef.current = 0;
+      }
+      scrollDeltaAccumRef.current += delta;
+
+      if (
+        scrollDeltaAccumRef.current > 18 &&
+        curTop > 44 &&
+        !isMobileChromeHiddenRef.current
+      ) {
+        isMobileChromeHiddenRef.current = true;
+        setIsMobileChromeHidden(true);
+        scrollDeltaAccumRef.current = 0;
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (
+          activeEl &&
+          (activeEl.closest('header') ||
+            activeEl.closest('nav[aria-label="Navigare Mobilă"]'))
+        ) {
+          activeEl.blur?.();
+          el.focus?.({ preventScroll: true });
+        }
+      } else if (
+        scrollDeltaAccumRef.current < -10 &&
+        isMobileChromeHiddenRef.current
+      ) {
+        isMobileChromeHiddenRef.current = false;
+        setIsMobileChromeHidden(false);
+        scrollDeltaAccumRef.current = 0;
+      }
+    },
+    [
+      isMobilePhone,
+      isSidebarOpen,
+      isSettingsDrawerOpen,
+      isFilterDrawerOpen,
+      isCatalogDrawerOpen,
+    ]
+  );
+
 
   useEffect(() => {
     const onCustomFsToggle = (ev: Event) => {
@@ -3027,6 +3203,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
       lastBackHandledAtRef.current = Date.now();
 
+      if (isHandoffModalOpen && !isPinLockRequired) {
+        setIsHandoffModalOpen(false);
+        return;
+      }
       if (isProfilePickerOpen) {
         if (editingProfileId) {
           setEditingProfileId(null);
@@ -3160,6 +3340,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, [
+    isHandoffModalOpen,
+    isPinLockRequired,
     isProfilePickerOpen,
     editingProfileId,
     selectedActor,
@@ -4405,12 +4587,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
             const mainRect = mainEl.getBoundingClientRect();
             const offsetInMain = r.top - mainRect.top + mainEl.scrollTop;
+            const isHeroBillboard = Boolean(targetEl.closest('[data-home-billboard="true"]'));
             const isTopHeroOrPlayer =
+              isHeroBillboard ||
               Boolean(targetEl.closest('[data-top-hero-card="true"]')) ||
               Boolean(targetEl.closest('[data-music-top-bar="true"]')) ||
               Boolean(targetEl.getAttribute('data-top-pill') === 'true');
 
-            if (isTopHeroOrPlayer) {
+            if (isHeroBillboard) {
+              if (mainEl.scrollTop > 0) {
+                mainEl.scrollTop = 0;
+              }
+            } else if (isTopHeroOrPlayer) {
               if (mainEl.scrollTop > 0 && mainEl.scrollTop < 120) {
                 mainEl.scrollTop = 0;
               }
@@ -4519,9 +4707,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               }
             }
             if (mainEl) {
-              const preferredCard = mainEl.querySelector<HTMLElement>(
-                '[data-vod-card="true"]'
-              );
+              const preferredCard =
+                mainEl.querySelector<HTMLElement>('[data-watched-poster-btn="true"]') ||
+                mainEl.querySelector<HTMLElement>(
+                  '[data-vod-card="true"]:not([data-home-billboard="true"] *)'
+                ) ||
+                mainEl.querySelector<HTMLElement>('[data-vod-card="true"]');
               if (preferredCard) {
                 focusTvTarget(preferredCard);
                 return;
@@ -4598,9 +4789,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             ) {
               mainEl.scrollTop = 0;
             }
-            const firstPrimaryCard = mainEl.querySelector<HTMLElement>(
-              '[data-watched-poster-btn="true"], [data-osd-channel-row="true"][aria-selected="true"], [data-osd-channel-row="true"], [data-tv-channel-card="true"], [data-vod-card="true"]'
-            );
+            const firstPrimaryCard =
+              (section === 'home' && !activeVodItem
+                ? mainEl.querySelector<HTMLElement>('[data-watched-poster-btn="true"]') ||
+                  mainEl.querySelector<HTMLElement>(
+                    '[data-vod-card="true"]:not([data-home-billboard="true"] *)'
+                  )
+                : null) ||
+              mainEl.querySelector<HTMLElement>('[data-watched-poster-btn="true"]') ||
+              mainEl.querySelector<HTMLElement>(
+                '[data-osd-channel-row="true"][aria-selected="true"]'
+              ) ||
+              mainEl.querySelector<HTMLElement>('[data-osd-channel-row="true"]') ||
+              mainEl.querySelector<HTMLElement>('[data-tv-channel-card="true"]') ||
+              mainEl.querySelector<HTMLElement>(
+                '[data-vod-card="true"]:not([data-home-billboard="true"] *)'
+              ) ||
+              mainEl.querySelector<HTMLElement>('[data-vod-card="true"]');
             if (firstPrimaryCard) {
               e.preventDefault();
               focusTvTarget(firstPrimaryCard);
@@ -6457,8 +6662,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ? 'kinogram_hls'
           : isRoShow
             ? (canUseLocalFl &&
-              (isExplicitTorrentCardOpen || isFileListExclusiveRomanianTitle(normalizedItem)) &&
-              normalizedItem.flTorrentId
+              (savedSrv === 'filelist_torrent' ||
+                ((isExplicitTorrentCardOpen || isFileListExclusiveRomanianTitle(normalizedItem)) &&
+                  normalizedItem.flTorrentId))
                 ? 'filelist_torrent'
                 : 'kinogram_hls')
             : isRuTvShow
@@ -8131,6 +8337,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     let isForeignVod = !isRoVod && !isRussianVodItem(activeVodItem);
     let isRuTvShow = !isRoVod && isRussianTvShowItem(activeVodItem);
     let directResolvedOk = false;
+    let directResolvedSourcePath = '';
     let directIsVk = false;
     let directFinished = false;
     let flResolvedOk = false;
@@ -8149,7 +8356,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           tvSettings.defaultVodServer === 'filelist_torrent');
 
       if (isRoVod) {
-        // Romanian TV Shows & Movies: 1) România Cloud HD (Vidmoly direct) -> 2) FileList.io RO Torrent (only after Cloud RO finishes if unavailable)
+        const directIsFullHdPlus = /1080p|2160p|4k|uhd/i.test(
+          directResolvedSourcePath
+        );
+        const preferFlOnLan =
+          canUseLocalTorrent &&
+          flResolvedOk &&
+          (watchProgressMap[itemKey]?.server === 'filelist_torrent' ||
+            !directResolvedOk ||
+            !directIsFullHdPlus);
+        if (preferFlOnLan) {
+          setActiveServer('filelist_torrent');
+          return;
+        }
+        // Fallback/Cloud: 1) România Cloud HD (Vidmoly direct) -> 2) FileList.io RO Torrent
         if (directResolvedOk) {
           setActiveServer('kinogram_hls');
           return;
@@ -8755,6 +8975,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             mergedData.hlsUrl ||
             mergedData.proxyHlsUrl)
         );
+        directResolvedSourcePath = directResolvedOk
+          ? String(mergedData?.sourcePath || '')
+          : '';
         directIsVk = Boolean(
           directResolvedOk && isVkDirectSourcePath(mergedData.sourcePath)
         );
@@ -8803,6 +9026,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       .catch(() => {
         if (!cancelled) {
           directFinished = true;
+          directResolvedOk = false;
+          directResolvedSourcePath = '';
           directIsVk = false;
           const keptSeasons =
             cachedSeriesSeasonsRef.current.itemKey === itemKey &&
@@ -10238,6 +10463,49 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }
   }, [activeVodItem, selectedSeason, selectedEpisode, updateWatchProgress]);
 
+  const handleCloseVodPlayerBack = useCallback(() => {
+    const now = Date.now();
+    if (now - lastVodPlayerBackAtRef.current < 420) return;
+    lastVodPlayerBackAtRef.current = now;
+    flushPlaybackOnClose();
+    exitNativeDocumentFullscreen();
+    window.dispatchEvent(
+      new CustomEvent('aether:vod-custom-fullscreen-toggle', {
+        detail: { force: false },
+      })
+    );
+    setIsMobileCustomFullscreen(false);
+    setIsEpisodesDrawerOpen(false);
+    setIsInfoSheetOpen(false);
+    setIsPlayingVod(false);
+    if (activeVodItem?.id.startsWith('yt_') || activeVodItem?.isAdultKlubnichka) {
+      setActiveVodItem(null);
+      if (!activeVodItem?.isAdultKlubnichka && !isMobilePhone) {
+        setIsSidebarOpen(true);
+      }
+    }
+  }, [activeVodItem, flushPlaybackOnClose, isMobilePhone]);
+
+  const handleHeaderCatalogBack = useCallback(() => {
+    const now = Date.now();
+    if (now - lastHeaderCatalogBackAtRef.current < 420) return;
+    lastHeaderCatalogBackAtRef.current = now;
+    isMobileChromeHiddenRef.current = false;
+    scrollDeltaAccumRef.current = 0;
+    lastMainScrollTopRef.current = 0;
+    setIsMobileChromeHidden(false);
+    setIsPlayingVod(false);
+    setIsInfoSheetOpen(false);
+    setActiveVodItem(null);
+    if (
+      !isCarMode &&
+      !isMobilePhone &&
+      (typeof window === 'undefined' || window.innerWidth >= 768)
+    ) {
+      setIsSidebarOpen(true);
+    }
+  }, [isCarMode, isMobilePhone]);
+
   // Real-time Cross-Device Playback Heartbeat & Watch Progress Tracking while a video is playing on this device
   useEffect(() => {
     if (!isPlayingVod || !activeVodItem) return;
@@ -11643,6 +11911,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   return (
     <div
       ref={rootContainerRef}
+      data-lampa-root="true"
+      data-mobile-chrome-hidden={isMobileChromeHidden ? 'true' : 'false'}
       data-tv-theme={tvSettings.tvTheme || 'dark'}
       onScroll={(e) => {
         if (e.currentTarget === e.target) {
@@ -11650,7 +11920,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           if (e.currentTarget.scrollLeft !== 0) e.currentTarget.scrollLeft = 0;
         }
       }}
-      className="fixed inset-0 z-40 bg-[#080b12] text-slate-100 flex flex-col overflow-hidden select-none transition-colors duration-300"
+      className="fixed inset-0 z-40 w-full max-w-[100vw] bg-[#080b12] text-slate-100 flex flex-col overflow-hidden select-none transition-colors duration-300"
     >
       {/* Full-Bleed Sharp Lampa Movie Backdrop when viewing Movie Content Page */}
       {(activeVodItem?.background ||
@@ -11688,14 +11958,37 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
             paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
           }}
-          className={`relative z-20 shrink-0 ${activeVodItem ? 'bg-transparent' : 'bg-black'}`}
+          className={`${
+            isMobilePhone
+              ? 'fixed top-0 inset-x-0 z-30'
+              : 'fixed top-0 inset-x-0 md:relative z-30 md:z-20'
+          } shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+            activeVodItem
+              ? isMobilePhone
+                ? 'bg-[#080b12]/85'
+                : 'bg-[#080b12]/80 md:bg-transparent'
+              : isMobilePhone
+                ? 'bg-[#080b12]/95'
+                : 'bg-[#080b12]/95 md:bg-black'
+          } ${
+            isMobileChromeHidden &&
+            !isSidebarOpen &&
+            !isSettingsDrawerOpen &&
+            !isFilterDrawerOpen &&
+            !isCatalogDrawerOpen
+              ? isMobilePhone
+                ? '-translate-y-full pointer-events-none'
+                : '-translate-y-full pointer-events-none md:translate-y-0 md:pointer-events-auto'
+              : 'translate-y-0'
+          }`}
         >
-          <div className="h-12 sm:h-16 px-3 sm:px-7 w-full flex items-center justify-between gap-2 sm:gap-4">
+          <div className={`${isMobilePhone && !isPortraitViewport ? 'h-11 px-3' : 'h-12 sm:h-16 px-3 sm:px-7'} w-full flex items-center justify-between gap-2 sm:gap-4`}>
             {/* Left: < Back (when viewing movie/series) + Menu + Section Name */}
             <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
               {activeVodItem && (
                 <button
                   type="button"
+                  data-header-back-btn="true"
                   aria-label={tr(
                     'Înapoi la catalog',
                     'Back to catalog',
@@ -11706,20 +11999,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     'Back to catalog',
                     'Назад к списку'
                   )}
-                  onClick={() => {
-                    setIsPlayingVod(false);
-                    setIsInfoSheetOpen(false);
-                    setActiveVodItem(null);
-                    if (
-                      !isCarMode &&
-                      (typeof window === 'undefined' || window.innerWidth >= 768)
-                    ) {
-                      setIsSidebarOpen(true);
+                  onTouchStart={(e) => {
+                    const t = e.touches?.[0];
+                    if (t) {
+                      headerBackTouchStartRef.current = { x: t.clientX, y: t.clientY };
                     }
                   }}
-                  className={`w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
+                  onTouchEnd={(e) => {
+                    const start = headerBackTouchStartRef.current;
+                    headerBackTouchStartRef.current = null;
+                    const t = e.changedTouches?.[0];
+                    if (
+                      start &&
+                      t &&
+                      (Math.abs(t.clientX - start.x) > 18 ||
+                        Math.abs(t.clientY - start.y) > 18)
+                    ) {
+                      return;
+                    }
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleHeaderCatalogBack();
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleHeaderCatalogBack();
+                  }}
+                  className={`w-11 h-11 min-w-[44px] min-h-[44px] ${isMobilePhone ? '' : 'sm:w-10 sm:h-10'} rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 touch-manipulation select-none relative z-20 ${
                     isMobilePhone
-                      ? 'bg-zinc-900/90 border border-white/20 text-white shadow-lg'
+                      ? 'bg-zinc-900/90 border border-white/20 text-white shadow-lg active:scale-95'
                       : 'text-zinc-100 hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414]'
                   }`}
                 >
@@ -12364,7 +12672,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         {!isAnyFullModePlayer && isSidebarOpen && (
           <div
             onClick={() => setIsSidebarOpen(false)}
-            className={`${isCarMode ? 'block' : 'md:hidden'
+            className={`${isCarMode || isMobilePhone ? 'block' : 'md:hidden'
               } absolute inset-0 z-30 bg-black/70 backdrop-blur-xs`}
           />
         )}
@@ -12373,8 +12681,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         {!isAnyFullModePlayer && isSidebarOpen && (
           <aside
             aria-label="Meniu Principal Smart TV Lampa"
-            className={`absolute ${isCarMode ? '' : 'md:static md:my-2 md:ml-3 md:shadow-none'
-              } top-2 bottom-2 left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 md:w-56 py-2.5 px-3 rounded-[28px] overflow-y-auto shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl ${activeVodItem
+            className={`absolute ${isCarMode || isMobilePhone
+              ? isMobilePhone && !isPortraitViewport
+                ? 'top-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-2'
+                : 'top-[calc(3.25rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-[4.75rem]'
+              : 'md:static md:my-2 md:ml-3 md:shadow-none top-[calc(3.25rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-[4.75rem] md:top-2 md:bottom-2'
+              } left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 ${isMobilePhone ? '' : 'md:w-56'} py-2.5 px-3 rounded-[28px] overflow-y-auto overflow-x-hidden shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl ${activeVodItem
                 ? 'z-40'
                 : ''
               }`}
@@ -12494,6 +12806,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         setActiveVodItem(null);
                         if (
                           isCarMode ||
+                          isMobilePhone ||
                           (typeof window !== 'undefined' && window.innerWidth < 768)
                         ) {
                           setIsSidebarOpen(false);
@@ -12692,8 +13005,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 onClick={() => {
                                   setActiveVodItem(null);
                                   if (
-                                    typeof window !== 'undefined' &&
-                                    window.innerWidth < 768
+                                    isMobilePhone ||
+                                    (typeof window !== 'undefined' && window.innerWidth < 768)
                                   ) {
                                     setIsSidebarOpen(false);
                                   } else {
@@ -12726,8 +13039,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             onClick={() => {
                               setActiveVodItem(null);
                               if (
-                                typeof window !== 'undefined' &&
-                                window.innerWidth < 768
+                                isMobilePhone ||
+                                (typeof window !== 'undefined' && window.innerWidth < 768)
                               ) {
                                 setIsSidebarOpen(false);
                               } else {
@@ -12758,7 +13071,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    if (isMobilePhone || (typeof window !== 'undefined' && window.innerWidth < 768)) {
                       setIsSidebarOpen(false);
                     }
                     setIsFilterDrawerOpen(false);
@@ -12784,7 +13097,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   }
                   onClick={() => {
                     setActiveVodItem(null);
-                    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                    if (isMobilePhone || (typeof window !== 'undefined' && window.innerWidth < 768)) {
                       setIsSidebarOpen(false);
                     } else {
                       setIsSidebarOpen(true);
@@ -12964,18 +13277,39 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
           {/* MAIN SCROLLABLE CONTENT AREA */}
           <main
+            tabIndex={-1}
+            onScroll={(e) => {
+              if (e.currentTarget.scrollLeft !== 0) {
+                e.currentTarget.scrollLeft = 0;
+              }
+              handleMobileMainScroll(e.currentTarget);
+            }}
+            style={
+              !isPlayingVod && isMobilePhone && !isPortraitViewport
+                ? {
+                  paddingLeft:
+                    'max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                  paddingRight:
+                    'max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                }
+                : undefined
+            }
             className={
               isPlayingVod
                 ? 'flex-1 min-h-0 overflow-hidden p-0 m-0'
                 : section === 'tv' && !activeVodItem
                   ? isCarMode
-                    ? 'flex-1 min-h-0 overflow-y-auto px-2 sm:px-3 pt-1 pb-2 space-y-2'
-                    : 'flex-1 min-h-0 overflow-y-auto px-2 sm:px-6 pt-1.5 pb-2 sm:pb-4 space-y-3'
+                    ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 sm:px-3 pt-1 pb-2 space-y-2 outline-none'
+                    : isMobilePhone
+                      ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 ${!isPortraitViewport ? 'pt-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-20' : 'pt-[calc(3.35rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-24'} space-y-3 outline-none`
+                      : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 sm:px-6 max-md:pt-[calc(3.35rem+var(--safe-top,env(safe-area-inset-top,0px)))] pt-1.5 max-md:pb-24 pb-2 sm:pb-4 space-y-3 outline-none'
                   : section === 'music' && !activeVodItem
-                    ? 'flex-1 min-h-0 overflow-y-auto p-0 m-0 flex flex-col'
+                    ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none p-0 m-0 flex flex-col outline-none'
                     : isCarMode
-                      ? 'flex-1 min-h-0 overflow-y-auto px-2.5 sm:px-4 pt-1.5 pb-3 space-y-3'
-                      : 'flex-1 min-h-0 overflow-y-auto px-3 sm:px-8 pt-3.5 pb-5 space-y-5 sm:space-y-6'
+                      ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2.5 sm:px-4 pt-1.5 pb-3 space-y-3 outline-none'
+                      : isMobilePhone
+                        ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 ${!isPortraitViewport ? 'pt-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-20' : 'pt-[calc(3.45rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-24'} space-y-5 outline-none`
+                        : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 sm:px-8 max-md:pt-[calc(3.45rem+var(--safe-top,env(safe-area-inset-top,0px)))] pt-3.5 max-md:pb-24 pb-5 space-y-5 sm:space-y-6 outline-none'
             }
           >
             {/* 1A. ACTIVE MOVIE / SERIES 100% FULL MODE CINEMA PLAYER (WHEN PLAYING) */}
@@ -13080,12 +13414,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       : isMobilePhone
                         ? {
                           position: 'fixed',
-                          top: `${vvRect.offsetTop}px`,
-                          left: `${vvRect.offsetLeft}px`,
-                          width: `${vvRect.width}px`,
-                          height: `${vvRect.height}px`,
-                          maxWidth: `${vvRect.width}px`,
-                          maxHeight: `${vvRect.height}px`,
+                          inset: 0,
+                          width: '100%',
+                          height: '100dvh',
+                          maxWidth: '100vw',
+                          maxHeight: '100dvh',
                           zIndex: 9999,
                         }
                         : {
@@ -13106,28 +13439,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       isMobilePhone
                         ? isMobileCustomFullscreen && isPortraitViewport
                           ? {
-                            top: '10px',
-                            left: 'max(16px, var(--safe-top, env(safe-area-inset-top, 16px)))',
+                            top: '14px',
+                            left: 'max(52px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 12px))',
                             right:
-                              'max(16px, var(--safe-bottom, env(safe-area-inset-bottom, 16px)))',
+                              'max(28px, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 12px))',
                           }
-                          : {
-                            top: 'max(8px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px))',
-                            left: 'max(10px, var(--safe-left, env(safe-area-inset-left, 0px)))',
-                            right:
-                              'max(10px, var(--safe-right, env(safe-area-inset-right, 0px)))',
-                          }
+                          : !isPortraitViewport
+                            ? {
+                              top: 'max(12px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 8px))',
+                              left: 'max(18px, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                              right:
+                                'max(18px, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                            }
+                            : {
+                              top: 'max(8px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 6px))',
+                              left: 'max(12px, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                              right:
+                                'max(12px, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                            }
                         : undefined
                     }
                     data-vod-top-bar="true"
-                    className={`absolute ${isMobilePhone
+                    className={`group/vodtopbar absolute ${isMobilePhone
                       ? 'top-2 inset-x-3'
                       : 'top-3 sm:top-5 inset-x-3 sm:inset-x-7'
-                      } z-[70] flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible ||
+                      } z-[150] flex items-center justify-between gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible ||
                         isEpisodesDrawerOpen ||
                         isInfoSheetOpen ||
                         isDirectStreamLoading ||
                         isFileListStreamLoading ||
+                        (activeVodItem.id.startsWith('yt_') && ytUseEmbedFallback) ||
                         (!activeVodItem.id.startsWith('yt_') &&
                           activeServer !== 'kinogram_hls' &&
                           activeServer !== 'filelist_torrent') ||
@@ -13145,30 +13486,52 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             resolvedFileListStream?.ok &&
                             resolvedFileListStream.streamUrl
                           ))
-                        ? 'opacity-100 translate-y-0 pointer-events-auto'
+                        ? 'opacity-100 translate-y-0 pointer-events-none visible'
                         : 'opacity-0 -translate-y-2 pointer-events-none invisible'
                       }`}
                   >
                     {/* Left: Clean Floating Back Button + Mobile Title */}
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={() => {
+                        if (isMobilePhone) wakeVodOsd();
+                      }}
+                      className="flex items-center gap-2 min-w-0 pointer-events-auto group-[.invisible]/vodtopbar:pointer-events-none"
+                    >
                       <button
                         type="button"
                         data-vod-top-back-btn="true"
-                        onClick={() => {
-                          flushPlaybackOnClose();
-                          setIsMobileCustomFullscreen(false);
-                          setIsPlayingVod(false);
-                          if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                            setActiveVodItem(null);
-                            if (!activeVodItem.isAdultKlubnichka) {
-                              setIsSidebarOpen(true);
-                            }
+                        onTouchStart={(e) => {
+                          wakeVodOsd();
+                          const t = e.touches?.[0];
+                          if (t) {
+                            vodBackTouchStartRef.current = { x: t.clientX, y: t.clientY };
                           }
                         }}
+                        onTouchEnd={(e) => {
+                          const start = vodBackTouchStartRef.current;
+                          vodBackTouchStartRef.current = null;
+                          const t = e.changedTouches?.[0];
+                          if (
+                            start &&
+                            t &&
+                            (Math.abs(t.clientX - start.x) > 20 ||
+                              Math.abs(t.clientY - start.y) > 20)
+                          ) {
+                            return;
+                          }
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleCloseVodPlayerBack();
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCloseVodPlayerBack();
+                        }}
                         className={`${isMobilePhone
-                          ? 'min-h-[40px] h-10 px-3.5 text-xs gap-1.5'
+                          ? 'min-h-[44px] min-w-[44px] h-11 px-4 text-xs gap-1.5'
                           : 'h-9 sm:h-11 px-3.5 sm:px-5 text-xs sm:text-sm gap-1.5 sm:gap-2'
-                          } rounded-full bg-zinc-950/90 hover:bg-zinc-900 border border-white/25 text-white shadow-[0_8px_24px_rgba(0,0,0,0.85)] focus:outline-none focus:ring-4 focus:ring-[#60a5fa] font-extrabold inline-flex items-center transition-all shrink-0 cursor-pointer group`}
+                          } rounded-full bg-zinc-950/92 hover:bg-zinc-900 active:scale-95 border border-white/25 text-white shadow-[0_8px_24px_rgba(0,0,0,0.85)] focus:outline-none focus:ring-4 focus:ring-[#60a5fa] font-extrabold inline-flex items-center transition-all shrink-0 cursor-pointer touch-manipulation select-none group`}
                       >
                         <ArrowLeft className="w-4 h-4 text-[#60a5fa] shrink-0" />
                         <span>
@@ -13190,7 +13553,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     </div>
 
                     {/* Right: Minimal Utility Pills */}
-                    <div className="flex items-center gap-2 shrink-0 pointer-events-auto">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={() => {
+                        if (isMobilePhone) wakeVodOsd();
+                      }}
+                      className="flex items-center gap-2 shrink-0 pointer-events-auto group-[.invisible]/vodtopbar:pointer-events-none"
+                    >
                       {pendingResumePromptSec !== null &&
                         pendingResumePromptSec > 10 && (
                           <button
@@ -13337,6 +13706,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             onResolutionChange={setLiveVodResolution}
                             onWakeOsd={wakeVodOsd}
                             onHideOsd={hideVodOsd}
+                            onClosePlayer={handleCloseVodPlayerBack}
                             prevEpisodeLabel={prevYt ? '◀ Clip Anterior' : undefined}
                             nextEpisodeLabel={nextYt ? 'Clip Următor ▶' : undefined}
                             onPrevEpisode={
@@ -13480,16 +13850,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           onResolutionChange={setLiveVodResolution}
                           onWakeOsd={wakeVodOsd}
                           onHideOsd={hideVodOsd}
-                          onClosePlayer={() => {
-                            flushPlaybackOnClose();
-                            setIsPlayingVod(false);
-                            if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                              setActiveVodItem(null);
-                              if (!activeVodItem.isAdultKlubnichka) {
-                                setIsSidebarOpen(true);
-                              }
-                            }
-                          }}
+                          onClosePlayer={handleCloseVodPlayerBack}
                           prevEpisodeLabel={prevEpisodeInfo?.label}
                           nextEpisodeLabel={
                             activeVodItem.isAdultKlubnichka
@@ -13858,16 +14219,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           onResolutionChange={setLiveVodResolution}
                           onWakeOsd={wakeVodOsd}
                           onHideOsd={hideVodOsd}
-                          onClosePlayer={() => {
-                            flushPlaybackOnClose();
-                            setIsPlayingVod(false);
-                            if (activeVodItem.id.startsWith('yt_') || activeVodItem.isAdultKlubnichka) {
-                              setActiveVodItem(null);
-                              if (!activeVodItem.isAdultKlubnichka) {
-                                setIsSidebarOpen(true);
-                              }
-                            }
-                          }}
+                          onClosePlayer={handleCloseVodPlayerBack}
                           prevEpisodeLabel={prevEpisodeInfo?.label}
                           nextEpisodeLabel={
                             activeVodItem.isAdultKlubnichka
@@ -14375,7 +14727,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     {isInfoSheetOpen && (
                       <div
                         data-vod-sheet-open="true"
-                        className="absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto p-6 sm:p-8 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300"
+                        className="absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto overflow-x-hidden p-6 sm:p-8 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300"
                       >
                         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start gap-6 sm:gap-8">
                           {/* Left Poster Photo — Clean Apple TV+ Proportions */}
@@ -14587,7 +14939,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               }
                               : undefined
                           }
-                          className="absolute top-14 sm:top-16 inset-x-4 sm:inset-x-8 z-40 max-h-[calc(100%-5rem)] overflow-y-auto p-5 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] space-y-4"
+                          className="absolute top-14 sm:top-16 inset-x-4 sm:inset-x-8 z-40 max-h-[calc(100%-5rem)] overflow-y-auto overflow-x-hidden p-5 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] space-y-4"
                         >
                           {(() => {
                             const drawerSavedProg = findWatchProgressEntry(
@@ -15516,7 +15868,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </div>
 
                               {/* Compact Scrollable Body: 1. Quality -> 2. Audio/Sub -> 3. Season & Episodes */}
-                              <div className="p-3.5 sm:p-4 overflow-y-auto space-y-3">
+                              <div className="p-3.5 sm:p-4 overflow-y-auto overflow-x-hidden space-y-3">
                                 {/* 1. VIDEO QUALITY (Compact Single-Line 4-Column Row) */}
                                 <div className="space-y-1.5">
                                   <span className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400 block">
@@ -17957,7 +18309,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 onClick={() => setSelectedOfflineSeriesId(null)}
                                 title={tr('Înapoi', 'Back', 'Назад')}
                                 aria-label={tr('Înapoi', 'Back', 'Назад')}
-                                className="h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer shrink-0"
+                                className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer touch-manipulation shrink-0"
                               >
                                 <ArrowLeft className="w-4 h-4 text-blue-400" />
                               </button>
@@ -18244,108 +18596,119 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         </div>
       </div>
 
-      {/* MOBILE BOTTOM NAVIGATION BAR (Clean 1-tap switching on phones < 768px, safe-area aware for iPhone Home Screen PWA) */}
+      {/* MOBILE FLOATING FACEBOOK-STYLE CAPSULE NAVIGATION BAR (Auto-hides on scroll down, reappears on scroll up) */}
       {!isAnyFullModePlayer && (
         <nav
           aria-label="Navigare Mobilă"
           style={{
-            paddingBottom: 'clamp(0.35rem, calc(env(safe-area-inset-bottom, 0px) * 0.55), 1.15rem)',
-            paddingLeft: 'max(0.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
-            paddingRight: 'max(0.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+            bottom: 'max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.32))',
           }}
-          className="md:hidden relative z-30 bg-black/95 backdrop-blur-xl border-t border-white/10 shrink-0 select-none"
+          className={`${isMobilePhone ? 'block' : 'md:hidden'} fixed left-3 right-3 ${isMobilePhone && !isPortraitViewport ? 'max-w-sm' : 'max-w-md'} mx-auto z-40 select-none transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+            isMobileChromeHidden && !isSidebarOpen
+              ? 'translate-y-[calc(100%+24px)] opacity-0 pointer-events-none'
+              : 'translate-y-0 opacity-100 pointer-events-auto'
+          }`}
         >
-          <div className="h-12 w-full flex items-center justify-around pt-1">
-          {(
-            [
-              {
-                id: 'home',
-                label: tr('Acasă', 'Home', 'Главная'),
-                Icon: Home,
-              },
-              {
-                id: 'tv',
-                label: tr('TV Live', 'Live TV', 'ТВ'),
-                Icon: Monitor,
-              },
-              {
-                id: 'movies',
-                label: tr('Filme/Seriale', 'Movies/Series', 'Кино/Сериалы'),
-                Icon: Clapperboard,
-              },
-              {
-                id: 'radio',
-                label: tr('Radio', 'Radio', 'Радио'),
-                Icon: Radio,
-              },
-              {
-                id: 'music',
-                label: tr('Muzică', 'Music', 'Музыка'),
-                Icon: Music,
-              },
-            ] as const
-          ).map(({ id, label, Icon }) => {
-            const isActive =
-              (id === 'movies'
-                ? section === 'movies' || section === 'series'
-                : section === id) &&
-              !activeVodItem &&
-              !isSidebarOpen;
-            return (
-              <button
-                key={`mob_nav_${id}`}
-                type="button"
-                onClick={() => {
-                  setActiveVodItem(null);
-                  setIsSidebarOpen(false);
-                  setIsFilterDrawerOpen(false);
-                  setIsCatalogDrawerOpen(false);
-                  if (id === 'movies') {
-                    setSection(section === 'series' ? 'series' : 'movies');
-                  } else {
-                    setSection(id);
-                  }
-                  const mainEl =
-                    rootContainerRef.current?.querySelector<HTMLElement>('main');
-                  if (mainEl) {
-                    mainEl.scrollTop = 0;
-                  }
-                  if (id === 'tv') {
-                    setTvRegionId('FAV');
-                    setTvCategoryId('ALL');
-                  } else if (id === 'radio') {
-                    setRadioCountry('FAV');
-                  }
-                }}
-                className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer ${
-                  isActive
-                    ? 'text-sky-400 font-extrabold'
-                    : 'text-zinc-400 hover:text-zinc-200 font-semibold'
-                }`}
-              >
-                <Icon className="w-5 h-5 stroke-[2]" />
-                <span className="text-[10px] leading-none truncate max-w-[60px]">
-                  {label}
-                </span>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            aria-label={tr('Meniu', 'Menu', 'Меню')}
-            aria-expanded={isSidebarOpen}
-            onClick={() => setIsSidebarOpen((prev) => !prev)}
-            className={`flex-1 h-full flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer ${
-              isSidebarOpen
-                ? 'text-sky-400 font-extrabold'
-                : 'text-zinc-400 hover:text-zinc-200 font-semibold'
-            }`}
-          >
-            <Menu className="w-5 h-5 stroke-[2]" aria-hidden="true" />
-            <span className="text-[10px] leading-none truncate max-w-[60px]">
-              {tr('Meniu', 'Menu', 'Меню')}
-            </span>
-          </button>
+          <div className={`${isMobilePhone && !isPortraitViewport ? 'h-[50px] p-[3px]' : 'h-[54px] p-1.5'} w-full rounded-full bg-[#1c1e24]/95 border border-white/[0.14] shadow-[0_12px_36px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.1)] flex items-center justify-between gap-1`}>
+            {(
+              [
+                {
+                  id: 'home',
+                  label: tr('Acasă', 'Home', 'Главная'),
+                  Icon: Home,
+                },
+                {
+                  id: 'tv',
+                  label: tr('TV Live', 'Live TV', 'ТВ'),
+                  Icon: Monitor,
+                },
+                {
+                  id: 'movies',
+                  label: tr('Filme/Seriale', 'Movies/Series', 'Кино/Сериалы'),
+                  Icon: Clapperboard,
+                },
+                {
+                  id: 'radio',
+                  label: tr('Radio', 'Radio', 'Радио'),
+                  Icon: Radio,
+                },
+                {
+                  id: 'music',
+                  label: tr('Muzică', 'Music', 'Музыка'),
+                  Icon: Music,
+                },
+              ] as const
+            ).map(({ id, label, Icon }) => {
+              const isActive =
+                (id === 'movies'
+                  ? section === 'movies' || section === 'series'
+                  : section === id) &&
+                !activeVodItem &&
+                !isSidebarOpen;
+              return (
+                <button
+                  key={`mob_nav_${id}`}
+                  type="button"
+                  aria-label={label}
+                  title={label}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => {
+                    isMobileChromeHiddenRef.current = false;
+                    scrollDeltaAccumRef.current = 0;
+                    lastMainScrollTopRef.current = 0;
+                    setIsMobileChromeHidden(false);
+                    setActiveVodItem(null);
+                    setIsSidebarOpen(false);
+                    setIsFilterDrawerOpen(false);
+                    setIsCatalogDrawerOpen(false);
+                    if (id === 'movies') {
+                      setSection(section === 'series' ? 'series' : 'movies');
+                    } else {
+                      setSection(id);
+                    }
+                    const mainEl =
+                      rootContainerRef.current?.querySelector<HTMLElement>('main');
+                    if (mainEl) {
+                      mainEl.scrollTop = 0;
+                    }
+                    if (id === 'tv') {
+                      setTvRegionId('FAV');
+                      setTvCategoryId('ALL');
+                    } else if (id === 'radio') {
+                      setRadioCountry('FAV');
+                    }
+                  }}
+                  className={`flex-1 min-h-[44px] h-[44px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
+                    isActive
+                      ? 'bg-[#32353e] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]'
+                      : 'text-[#cfd4dc] hover:text-white active:scale-95'
+                  }`}
+                >
+                  <Icon className={isActive ? 'w-[22px] h-[22px] stroke-[2.3]' : 'w-[21px] h-[21px] stroke-[2]'} />
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              aria-label={tr('Meniu', 'Menu', 'Меню')}
+              title={tr('Meniu', 'Menu', 'Меню')}
+              aria-expanded={isSidebarOpen}
+              onClick={() => {
+                isMobileChromeHiddenRef.current = false;
+                setIsMobileChromeHidden(false);
+                setIsSidebarOpen((prev) => !prev);
+              }}
+              className={`flex-1 min-h-[44px] h-[44px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
+                isSidebarOpen
+                  ? 'bg-[#32353e] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]'
+                  : 'text-[#cfd4dc] hover:text-white active:scale-95'
+              }`}
+            >
+              <Menu
+                className={isSidebarOpen ? 'w-[22px] h-[22px] stroke-[2.3]' : 'w-[21px] h-[21px] stroke-[2]'}
+                aria-hidden="true"
+              />
+            </button>
           </div>
         </nav>
       )}

@@ -1181,7 +1181,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           onClick={() => setActiveItem(null)}
         >
           <div
-            className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
+            className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
             <button

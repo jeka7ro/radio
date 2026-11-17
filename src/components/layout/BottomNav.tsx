@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Home, Tv, Film, Globe, Heart, Settings } from 'lucide-react';
 import { useRadioStore } from '../../store/useRadioStore';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -11,6 +11,34 @@ export const BottomNav: React.FC = () => {
   const favoritesCount = useRadioStore(
     (state) => state.favorites.length + state.favoriteTvChannels.length
   );
+  const [hiddenOnScroll, setHiddenOnScroll] = useState(false);
+  const lastYRef = useRef(0);
+
+  useEffect(() => {
+    setHiddenOnScroll(false);
+    lastYRef.current = typeof window !== 'undefined' ? window.scrollY : 0;
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onScroll = () => {
+      const y = Math.max(0, window.scrollY || 0);
+      if (y <= 20) {
+        setHiddenOnScroll(false);
+        lastYRef.current = y;
+        return;
+      }
+      const delta = y - lastYRef.current;
+      lastYRef.current = y;
+      if (delta > 10 && y > 48) {
+        setHiddenOnScroll(true);
+      } else if (delta < -8) {
+        setHiddenOnScroll(false);
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   const navItems: {
     id: NavigationTab;
@@ -21,65 +49,76 @@ export const BottomNav: React.FC = () => {
     {
       id: 'home',
       label: t.nav.home,
-      icon: <Home className="w-5 h-5" aria-hidden="true" />,
+      icon: <Home className="w-[21px] h-[21px]" aria-hidden="true" />,
     },
     {
       id: 'tv',
       label: t.nav.tv,
-      icon: <Tv className="w-5 h-5" aria-hidden="true" />,
+      icon: <Tv className="w-[21px] h-[21px]" aria-hidden="true" />,
     },
     {
       id: 'mediateca',
       label: t.nav.mediateca,
-      icon: <Film className="w-5 h-5" aria-hidden="true" />,
+      icon: <Film className="w-[21px] h-[21px]" aria-hidden="true" />,
     },
     {
       id: 'countries',
       label: t.nav.countries,
-      icon: <Globe className="w-5 h-5" aria-hidden="true" />,
+      icon: <Globe className="w-[21px] h-[21px]" aria-hidden="true" />,
     },
     {
       id: 'favorites',
       label: t.nav.favorites,
-      icon: <Heart className="w-5 h-5" aria-hidden="true" />,
+      icon: <Heart className="w-[21px] h-[21px]" aria-hidden="true" />,
       badge: favoritesCount > 0 ? favoritesCount : undefined,
     },
     {
       id: 'settings',
       label: t.nav.settings,
-      icon: <Settings className="w-5 h-5" aria-hidden="true" />,
+      icon: <Settings className="w-[21px] h-[21px]" aria-hidden="true" />,
     },
   ];
 
   return (
     <nav
       aria-label={t.nav.mobileAria}
-      className="lg:hidden w-full bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] px-1 pb-[env(safe-area-inset-bottom,0px)] select-none touch-none"
+      style={{
+        marginBottom: 'max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.32))',
+      }}
+      className={`lg:hidden mx-3 max-w-md sm:mx-auto select-none touch-none transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        hiddenOnScroll
+          ? 'translate-y-[calc(100%+24px)] opacity-0 pointer-events-none'
+          : 'translate-y-0 opacity-100 pointer-events-auto'
+      }`}
     >
-      <div className="grid grid-cols-6 gap-0.5 max-w-lg mx-auto">
+      <div className="h-[54px] w-full rounded-full bg-[#1c1e24]/95 border border-white/[0.14] shadow-[0_12px_36px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.1)] p-1.5 flex items-center justify-between gap-1">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button
               key={item.id}
               type="button"
-              onClick={() => setActiveTab(item.id)}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => {
+                setHiddenOnScroll(false);
+                setActiveTab(item.id);
+              }}
               aria-current={isActive ? 'page' : undefined}
-              className={`relative h-[52px] flex flex-col items-center justify-center py-1 rounded-full text-[11px] sm:text-xs font-medium transition-colors min-w-0 ${
+              className={`relative flex-1 h-[42px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer min-w-0 ${
                 isActive
-                  ? 'text-brand-700 dark:text-brand-400 font-semibold'
-                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
+                  ? 'bg-[#32353e] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]'
+                  : 'text-[#cfd4dc] hover:text-white active:scale-95'
               }`}
             >
-              <div className="relative">
+              <div className="relative flex items-center justify-center">
                 {item.icon}
                 {item.badge !== undefined && (
-                  <span className="absolute -top-1.5 -right-3 px-1.5 py-0.5 min-w-[18px] text-[10px] font-bold rounded-full bg-brand-700 text-white text-center leading-none">
+                  <span className="absolute -top-1.5 -right-2.5 px-1.5 py-0.5 min-w-[16px] text-[9px] font-bold rounded-full bg-rose-500 text-white text-center leading-none">
                     {item.badge}
                   </span>
                 )}
               </div>
-              <span className="mt-0.5 truncate max-w-full px-0.5">{item.label}</span>
             </button>
           );
         })}

@@ -432,7 +432,9 @@ export default async (req) => {
     // 2) On Netlify serverless, different Lambda containers can have different outbound NAT IPs; if okcdn.ru returns 400/403, refreshVkSignedTargetUrl re-signs for THIS container's IP.
     // 3) vkuser.net & rossteleccom.net/iedem.com throttle single HTTP connections to ~0.6-1.7 Mbps; parallel clamped Range slices + ReadableStream deliver 12-25+ Mbps for segments of any size.
     const isIedemThrottledSeg =
-      /(rossteleccom\.net|iedem\.com|jmeekos\.com)/i.test(targetUrl) ||
+      /(rossteleccom\.net|iedem\.com|jmeekos\.com|vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly)/i.test(
+        targetUrl
+      ) ||
       /\/iptv\/[A-Za-z0-9_-]+\/\d+\/[^/?#]+\.(?:ts|m4s|mp4|aac)$/i.test(
         parsedTarget.pathname
       );
@@ -1095,7 +1097,7 @@ export default async (req) => {
           try {
             const resolvedSegUrl = new URL(trimmed, finalUrl).toString();
             const requiresSignedProxy =
-              /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|rtbcdn\.ru|rutube\.ru|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly|srcAg|srcIp|asn=)/i.test(
+              /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|rtbcdn\.ru|rutube\.ru|vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly|srcAg|srcIp|asn=)/i.test(
                 resolvedSegUrl
               );
             if (resolvedSegUrl.startsWith('https://') && !requiresSignedProxy) {
@@ -1191,7 +1193,7 @@ export default async (req) => {
 
     // Pipe plain HTTP streams (Mixed Content) AND signed-IP/CORS-restricted CDNs (vkuser.net / okcdn.ru / vmpx.online); other HTTPS streams use 302 redirect.
     const mustPipeSignedHttps =
-      /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|vmpx\.online|vidmoly|srcAg=|srcIp=|asn=)/i.test(
+      /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly|srcAg=|srcIp=|asn=)/i.test(
         finalUrl
       );
     if (finalUrl.startsWith('http://') || mustPipeSignedHttps) {

@@ -1385,7 +1385,7 @@ export const SmartTvMusicSpotifySection: React.FC<
     return (
       <div
         data-music-root="true"
-        className="min-h-full flex-1 flex flex-col bg-[#080b12] text-white relative select-none"
+        className="min-h-full w-full max-w-full min-w-0 overflow-x-hidden flex-1 flex flex-col bg-[#080b12] text-white relative select-none"
       >
         {/* Subtle Spotify Top Ambient Gradient */}
         <div
@@ -1404,6 +1404,10 @@ export const SmartTvMusicSpotifySection: React.FC<
          ==================================================================== */}
         <div
           data-music-top-bar="true"
+          style={{
+            paddingLeft: 'max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+            paddingRight: 'max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+          }}
           className="sticky top-0 z-30 w-full px-3 sm:px-5 py-2.5 tahoe-glass !border-x-0 !border-t-0 border-b border-white/[0.12] space-y-2"
         >
           {/* Optional Official HD Music Video Clip Player inside Top Bar */}
@@ -1436,7 +1440,7 @@ export const SmartTvMusicSpotifySection: React.FC<
               <button
                 type="button"
                 onClick={handleGoBack}
-                className="h-10 px-3.5 rounded-full bg-[#141926] hover:bg-[#1c2436] text-white text-[13px] font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer focus:outline-none"
+                className="min-h-[44px] sm:min-h-[40px] h-11 sm:h-10 px-3.5 rounded-full bg-[#141926] hover:bg-[#1c2436] text-white text-[13px] font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer touch-manipulation focus:outline-none"
               >
                 <ArrowLeft className="w-4 h-4 shrink-0" />
                 <span>{tr('Înapoi', 'Back', 'Назад')}</span>
@@ -1676,7 +1680,7 @@ export const SmartTvMusicSpotifySection: React.FC<
         {/* ====================================================================
           2. DYNAMIC PAGE ROUTER (ONLY ACTIVE VIEW IS RENDERED AT TOP!)
          ==================================================================== */}
-        <div className="relative z-10 flex-1 px-3 sm:px-5 pt-4 pb-6">
+        <div className="relative z-10 flex-1 w-full max-w-full min-w-0 overflow-x-hidden px-3 sm:px-5 pt-4 pb-6">
           {/* VIEW 1: ARTIST PROFILE PAGE */}
           {viewMode === 'artist' && (
             <ArtistProfileView

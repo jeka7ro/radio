@@ -2390,12 +2390,71 @@ function tvStreamProxyPlugin(): Plugin {
       });
 
       const tvProfilesFile = path.resolve(__dirname, '.tv-profiles.json');
+      const inMemoryExtraProfiles = new Map<string, Record<string, unknown>>();
+      const inMemoryDeletedMap: Record<string, number> = {};
+      const normalizeLanProfileName = (name: unknown): string =>
+        String(name || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLowerCase();
+      const mergeLanAndCloudProfiles = (
+        lists: Array<Array<Record<string, unknown>> | null | undefined>
+      ): Array<Record<string, unknown>> => {
+        const byId = new Map<string, Record<string, unknown>>();
+        const idByNormName = new Map<string, string>();
+        for (const list of lists) {
+          if (!Array.isArray(list)) continue;
+          for (const p of list) {
+            const id = typeof p?.id === 'string' ? p.id : '';
+            if (!id) continue;
+            if (id === 'p1' && p.name === 'Eugeniu' && !p.pin) continue;
+            const pTs = typeof p?.updatedAt === 'number' ? p.updatedAt : 0;
+            const delTs = id !== 'p1' ? Number(inMemoryDeletedMap[id]) || 0 : 0;
+            if (delTs > 0 && pTs <= delTs) continue;
+            const prev = byId.get(id);
+            if (!prev) {
+              const normName = normalizeLanProfileName(p?.name);
+              if (normName && idByNormName.has(normName) && idByNormName.get(normName) !== id) {
+                continue;
+              }
+              byId.set(id, p);
+              if (normName) {
+                idByNormName.set(normName, id);
+              }
+              continue;
+            }
+            const prevTs =
+              typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
+            const nextMerged = pTs >= prevTs ? { ...prev, ...p } : { ...p, ...prev };
+            const mergedNormName = normalizeLanProfileName(nextMerged.name);
+            const ownerId = mergedNormName ? idByNormName.get(mergedNormName) : undefined;
+            if (ownerId && ownerId !== id) {
+              nextMerged.name = prev.name;
+            } else {
+              const prevNormName = normalizeLanProfileName(prev.name);
+              if (prevNormName && prevNormName !== mergedNormName && idByNormName.get(prevNormName) === id) {
+                idByNormName.delete(prevNormName);
+              }
+              if (mergedNormName) {
+                idByNormName.set(mergedNormName, id);
+              }
+            }
+            byId.set(id, nextMerged);
+          }
+        }
+        return Array.from(byId.values()).slice(0, 32);
+      };
+
       server.middlewares.use('/api/tv-profiles', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader(
           'Access-Control-Allow-Headers',
           'Content-Type, X-Deleted-Profile-Ids, X-Replace-Profiles'
+        );
+        res.setHeader(
+          'Access-Control-Expose-Headers',
+          'X-Server-Deleted-Ids, X-Persistent-Store'
         );
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
@@ -2419,11 +2478,13 @@ function tvStreamProxyPlugin(): Plugin {
             body += chunk;
           });
           req.on('end', () => {
+            let finalMerged = mergeLanAndCloudProfiles([
+              readProfiles(),
+              Array.from(inMemoryExtraProfiles.values()),
+            ]);
             try {
               const incoming = JSON.parse(body || 'null');
               if (Array.isArray(incoming) && incoming.length > 0) {
-                const replaceMode =
-                  String(req.headers['x-replace-profiles'] || '') === '1';
                 const deletedHeader = String(
                   req.headers['x-deleted-profile-ids'] || '[]'
                 );
@@ -2432,44 +2493,49 @@ function tvStreamProxyPlugin(): Plugin {
                   const parsedDel = JSON.parse(deletedHeader);
                   if (Array.isArray(parsedDel)) {
                     deletedIds = new Set(
-                      parsedDel.filter((x) => typeof x === 'string')
+                      parsedDel.filter((x) => typeof x === 'string' && x)
                     );
                   }
                 } catch {
                   // ignore
                 }
-                const existing = readProfiles() || [];
-                const byId = new Map<string, Record<string, unknown>>();
-                if (replaceMode) {
-                  const existingAdmin = existing.find((p) => p?.id === 'p1');
-                  if (existingAdmin) {
-                    byId.set('p1', existingAdmin);
+                const now = Date.now();
+                for (const delId of deletedIds) {
+                  if (delId !== 'p1') {
+                    inMemoryDeletedMap[delId] = Math.max(
+                      Number(inMemoryDeletedMap[delId]) || 0,
+                      now
+                    );
+                    inMemoryExtraProfiles.delete(delId);
                   }
-                } else {
-                  for (const p of existing) {
-                    const id = typeof p?.id === 'string' ? p.id : '';
-                    if (id && (!deletedIds.has(id) || id === 'p1')) {
-                      byId.set(id, p);
+                }
+                const sanitizedIncoming = incoming.filter((p) => {
+                  const id = typeof p?.id === 'string' ? p.id : '';
+                  if (!id || (id !== 'p1' && deletedIds.has(id))) return false;
+                  const ts = typeof p?.updatedAt === 'number' ? p.updatedAt : 0;
+                  if (id !== 'p1' && inMemoryDeletedMap[id]) {
+                    if (ts > inMemoryDeletedMap[id]) {
+                      delete inMemoryDeletedMap[id];
+                    } else {
+                      return false;
                     }
                   }
-                }
-                for (const p of incoming) {
-                  const id = typeof p?.id === 'string' ? p.id : '';
-                  if (!id || (id !== 'p1' && deletedIds.has(id))) continue;
-                  const prev = byId.get(id);
-                  const prevTs =
-                    typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
-                  const nextTs =
-                    typeof p?.updatedAt === 'number' ? p.updatedAt : 0;
-                  if (!prev || nextTs >= prevTs) {
-                    byId.set(id, p);
+                  return true;
+                });
+                finalMerged = mergeLanAndCloudProfiles([
+                  readProfiles(),
+                  Array.from(inMemoryExtraProfiles.values()),
+                  sanitizedIncoming,
+                ]);
+                for (const p of finalMerged) {
+                  if (typeof p?.id === 'string') {
+                    inMemoryExtraProfiles.set(p.id, p);
                   }
                 }
-                const merged = Array.from(byId.values());
-                if (merged.length > 0) {
+                if (finalMerged.length > 0) {
                   fs.writeFileSync(
                     tvProfilesFile,
-                    JSON.stringify(merged),
+                    JSON.stringify(finalMerged),
                     'utf-8'
                   );
                   fetch('https://filmio.my/api/tv-profiles', {
@@ -2477,28 +2543,115 @@ function tvStreamProxyPlugin(): Plugin {
                     headers: {
                       'Content-Type': 'application/json',
                       'X-Deleted-Profile-Ids': deletedHeader,
-                      'X-Replace-Profiles': replaceMode ? '1' : '0',
                     },
-                    body: JSON.stringify(merged),
+                    body: JSON.stringify(finalMerged),
                   }).catch(() => { });
                 }
               }
             } catch {
               // ignore
             }
+            const deletedList = Object.keys(inMemoryDeletedMap).filter(
+              (id) => id !== 'p1' && !finalMerged.some((p) => p?.id === id)
+            );
             res.writeHead(200, {
               'Content-Type': 'application/json; charset=utf-8',
               'Cache-Control': 'no-cache, no-store',
+              'X-Server-Deleted-Ids': JSON.stringify(deletedList),
+              'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
             });
-            res.end(JSON.stringify(readProfiles()));
+            res.end(JSON.stringify(finalMerged));
           });
           return;
         }
-        res.writeHead(200, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-cache, no-store',
-        });
-        res.end(JSON.stringify(readProfiles()));
+        const diskProfiles = readProfiles() || [];
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3000);
+        fetch('https://filmio.my/api/tv-profiles', {
+          cache: 'no-store',
+          signal: ctrl.signal,
+        })
+          .then(async (r) => {
+            const rawDel = r.headers.get('x-server-deleted-ids');
+            if (rawDel) {
+              try {
+                const parsedDel = JSON.parse(rawDel);
+                if (Array.isArray(parsedDel)) {
+                  const now = Date.now();
+                  for (const id of parsedDel) {
+                    if (typeof id === 'string' && id && id !== 'p1') {
+                      inMemoryDeletedMap[id] = Math.max(
+                        Number(inMemoryDeletedMap[id]) || 0,
+                        now
+                      );
+                      inMemoryExtraProfiles.delete(id);
+                    }
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+            return r.ok ? r.json() : null;
+          })
+          .then((cloudProfiles) => {
+            clearTimeout(timer);
+            const cloudArr = Array.isArray(cloudProfiles) ? cloudProfiles : [];
+            const merged = mergeLanAndCloudProfiles([
+              diskProfiles,
+              Array.from(inMemoryExtraProfiles.values()),
+              cloudArr,
+            ]);
+            for (const p of merged) {
+              if (typeof p?.id === 'string') {
+                inMemoryExtraProfiles.set(p.id, p);
+              }
+            }
+            const cloudIds = new Set(
+              cloudArr.map((p: Record<string, unknown>) => p?.id).filter(Boolean)
+            );
+            if (
+              merged.some(
+                (p) => typeof p?.id === 'string' && !cloudIds.has(p.id)
+              )
+            ) {
+              fetch('https://filmio.my/api/tv-profiles', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Deleted-Profile-Ids': JSON.stringify(Object.keys(inMemoryDeletedMap)),
+                },
+                body: JSON.stringify(merged),
+              }).catch(() => { });
+            }
+            const deletedList = Object.keys(inMemoryDeletedMap).filter(
+              (id) => id !== 'p1' && !merged.some((p) => p?.id === id)
+            );
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+              'X-Server-Deleted-Ids': JSON.stringify(deletedList),
+              'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
+            });
+            res.end(JSON.stringify(merged));
+          })
+          .catch(() => {
+            clearTimeout(timer);
+            const fallback = mergeLanAndCloudProfiles([
+              diskProfiles,
+              Array.from(inMemoryExtraProfiles.values()),
+            ]);
+            const deletedList = Object.keys(inMemoryDeletedMap).filter(
+              (id) => id !== 'p1' && !fallback.some((p) => p?.id === id)
+            );
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+              'X-Server-Deleted-Ids': JSON.stringify(deletedList),
+              'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
+            });
+            res.end(JSON.stringify(fallback));
+          });
       });
 
       // FileList.io Live Torrent Catalog, Resolver & Remux Streaming Engine
@@ -2951,6 +3104,14 @@ function tvStreamProxyPlugin(): Plugin {
       >();
       const transcodedTsCache = new Map<string, { buf: Buffer; ts: number }>();
       const transcodedTsInFlight = new Map<string, Promise<Buffer>>();
+      const vodAcceleratedSegCache = new Map<
+        string,
+        { buf: Buffer; contentType: string; ts: number }
+      >();
+      const vodAcceleratedSegInFlight = new Map<
+        string,
+        Promise<{ buf: Buffer; contentType: string } | null>
+      >();
       const vkHttpsAgent = new https.Agent({
         keepAlive: true,
         maxSockets: 64,
@@ -3077,6 +3238,168 @@ function tvStreamProxyPlugin(): Plugin {
           });
         });
 
+      const fetchParallelSegmentBuffer = async (
+        mediaUrl: string,
+        totalBytesVal: number,
+        hdrs: Record<string, string>,
+        workersCount: number,
+        signal?: AbortSignal
+      ): Promise<Buffer> => {
+        const tsSliceStep = 262144; // 256 KB
+        const tsRanges: Array<[number, number]> = [];
+        for (let b = 0; b < totalBytesVal; b += tsSliceStep) {
+          tsRanges.push([b, Math.min(b + tsSliceStep - 1, totalBytesVal - 1)]);
+        }
+        const results: Buffer[] = new Array(tsRanges.length);
+        let cursor = 0;
+        const runWorker = async () => {
+          while (!signal?.aborted) {
+            const idx = cursor++;
+            if (idx >= tsRanges.length) return;
+            const [s, e] = tsRanges[idx];
+            let lastErr: unknown = null;
+            for (let attempt = 0; attempt < 2; attempt++) {
+              try {
+                const sr = await fetchVkRangeHttp1(
+                  mediaUrl,
+                  s,
+                  e,
+                  hdrs,
+                  9500,
+                  signal
+                );
+                if (
+                  (sr.status === 200 || sr.status === 206) &&
+                  sr.body.length === e - s + 1
+                ) {
+                  results[idx] = sr.body;
+                  lastErr = null;
+                  break;
+                }
+              } catch (err) {
+                lastErr = err;
+                if (signal?.aborted) throw err;
+                await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+              }
+            }
+            if (lastErr || !results[idx]) {
+              throw lastErr || new Error('Segment slice failed');
+            }
+          }
+        };
+        const workers = Array.from(
+          { length: Math.min(workersCount, tsRanges.length) },
+          () => runWorker()
+        );
+        await Promise.all(workers);
+        return Buffer.concat(results);
+      };
+
+      const prewarmVidmolySegment = async (
+        segUrl: string,
+        refHdr: string,
+        originHdr: string,
+        uaStr: string
+      ): Promise<{ buf: Buffer; contentType: string } | null> => {
+        const nowTs = Date.now();
+        const cached = vodAcceleratedSegCache.get(segUrl);
+        if (cached && nowTs - cached.ts < 90_000) {
+          return { buf: cached.buf, contentType: cached.contentType };
+        }
+        vodAcceleratedSegCache.delete(segUrl);
+
+        const existing = vodAcceleratedSegInFlight.get(segUrl);
+        if (existing) {
+          return existing;
+        }
+
+        const job = (async (): Promise<{
+          buf: Buffer;
+          contentType: string;
+        } | null> => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 22000);
+          try {
+            const probeRes = await fetchVkRangeHttp1(
+              segUrl,
+              0,
+              1,
+              {
+                'User-Agent': uaStr,
+                Referer: refHdr,
+                Origin: originHdr,
+                Accept: '*/*',
+              },
+              6000,
+              ctrl.signal
+            );
+            const ctRaw = String(probeRes.headers['content-type'] || '').toLowerCase();
+            const crMatch = String(probeRes.headers['content-range'] || '').match(
+              /\/(\d+)$/
+            );
+            const totalBytes = crMatch
+              ? Number(crMatch[1]) || 0
+              : probeRes.status === 200
+                ? Number(probeRes.headers['content-length'] || 0)
+                : 0;
+            const resolvedUrl = probeRes.finalUrl || segUrl;
+            const ok =
+              (probeRes.status === 200 || probeRes.status === 206) &&
+              totalBytes > 0 &&
+              !ctRaw.includes('mpegurl') &&
+              !ctRaw.includes('m3u');
+            if (!ok) return null;
+
+            const contentTypeOut = ctRaw || 'video/mp2t';
+            vkMetaCache.set(segUrl, {
+              totalBytes,
+              contentType: contentTypeOut,
+              resolvedUrl,
+              ts: Date.now(),
+            });
+
+            const buf = await fetchParallelSegmentBuffer(
+              resolvedUrl,
+              totalBytes,
+              {
+                'User-Agent': uaStr,
+                Referer: refHdr,
+                Origin: originHdr,
+                Accept: '*/*',
+              },
+              14,
+              ctrl.signal
+            );
+            const storeTs = Date.now();
+            for (const [k, v] of vodAcceleratedSegCache) {
+              if (storeTs - v.ts >= 90_000) {
+                vodAcceleratedSegCache.delete(k);
+              }
+            }
+            while (vodAcceleratedSegCache.size >= 8) {
+              const oldestKey = vodAcceleratedSegCache.keys().next().value;
+              if (!oldestKey) break;
+              vodAcceleratedSegCache.delete(oldestKey);
+            }
+            vodAcceleratedSegCache.set(segUrl, {
+              buf,
+              contentType: contentTypeOut,
+              ts: storeTs,
+            });
+            return { buf, contentType: contentTypeOut };
+          } catch {
+            return null;
+          } finally {
+            clearTimeout(timer);
+            vodAcceleratedSegInFlight.delete(segUrl);
+          }
+        })();
+
+        job.catch(() => { });
+        vodAcceleratedSegInFlight.set(segUrl, job);
+        return job;
+      };
+
       server.middlewares.use('/api/tv-proxy', async (req, res) => {
         if (req.method === 'OPTIONS') {
           res.writeHead(204, {
@@ -3180,8 +3503,13 @@ function tvStreamProxyPlugin(): Plugin {
           // vkuser.net / okcdn.ru / rossteleccom.net / iedem.com throttle individual HTTP connections to ~0.6-1.76 Mbps,
           // causing HD/4K segments to stall. Sliding-window parallel Range slices boost throughput to 12-25+ Mbps
           // while strictly honoring HTTP 200 (no Range) & full HTTP 206 Range semantics (no premature truncation on Smart TV / Safari).
+          const isVidmolyThrottledSeg =
+            /(vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly)/i.test(
+              targetUrl
+            ) && /\.(?:ts|m4s|mp4|aac)(\?|$)/i.test(parsedTarget.pathname);
           const isIedemThrottledSeg =
             /(rossteleccom\.net|iedem\.com|jmeekos\.com)/i.test(targetUrl) ||
+            isVidmolyThrottledSeg ||
             /\/iptv\/[A-Za-z0-9_-]+\/\d+\/[^/?#]+\.(?:ts|m4s|mp4|aac)$/i.test(
               parsedTarget.pathname
             );
@@ -3192,6 +3520,55 @@ function tvStreamProxyPlugin(): Plugin {
               isIedemThrottledSeg) &&
             !/\.(m3u8?|pls)(\?|$)/i.test(parsedTarget.pathname) &&
             !/\/video\/?$/i.test(parsedTarget.pathname);
+
+          if (isVidmolyThrottledSeg && !rangeHeader && req.method === 'GET' && !rawMode) {
+            const segMatch = targetUrl.match(
+              /\/seg-(\d+)((?:-v\d+-a\d+)?\.ts)(\?.*)?$/i
+            );
+            if (segMatch) {
+              const segIdx = Number(segMatch[1]);
+              const suffix = segMatch[2] || '.ts';
+              const queryPart = segMatch[3] || '';
+              for (const nextIdx of [segIdx + 1, segIdx + 2]) {
+                const nextUrl = targetUrl.replace(
+                  /\/seg-\d+(?:-v\d+-a\d+)?\.ts(\?.*)?$/i,
+                  `/seg-${nextIdx}${suffix}${queryPart}`
+                );
+                if (nextUrl && nextUrl !== targetUrl) {
+                  void prewarmVidmolySegment(
+                    nextUrl,
+                    refererHeader,
+                    originHeader,
+                    effectiveUa
+                  );
+                }
+              }
+            }
+            const segHit = await prewarmVidmolySegment(
+              targetUrl,
+              refererHeader,
+              originHeader,
+              effectiveUa
+            );
+            if (segHit && segHit.buf.length > 0) {
+              clearTimeout(timeoutId);
+              if (res.writableEnded || res.destroyed || req.aborted) {
+                return;
+              }
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Access-Control-Expose-Headers':
+                  'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                'Content-Type': segHit.contentType || 'video/mp2t',
+                'Content-Length': String(segHit.buf.length),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=60',
+              });
+              res.end(segHit.buf);
+              return;
+            }
+          }
 
           if (isVkThrottledBinary) {
             const accelCtrl = new AbortController();

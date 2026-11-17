@@ -321,6 +321,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   }, []);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const lastHlsFragActivityMsRef = useRef<number>(0);
   const dashRef = useRef<dashjs.MediaPlayerClass | null>(null);
   const flStreamAbortRef = useRef<AbortController | null>(null);
   const flMediaSourceRef = useRef<MediaSource | null>(null);
@@ -1414,7 +1415,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               }
             };
 
-            const first = await readChunkWithTimeout(16000);
+            const first = await readChunkWithTimeout(32000);
             if (first.done || !first.value) {
               if (!controller.signal.aborted) {
                 isSeekingFileListRef.current = false;
@@ -1657,8 +1658,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               const contigAhead = getContigAheadSec();
               const readTimeoutMs =
                 contigAhead < 3.0 && !userIntentionallyPausedRef.current
-                  ? 9500
-                  : 30000;
+                  ? 24000
+                  : 45000;
               const { done, value } = await readChunkWithTimeout(readTimeoutMs);
               if (done || !value) {
                 flMseReaderDoneRef.current = true;
@@ -1710,7 +1711,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               (video.currentTime || 0)
                             )
                           );
-                          if (flStallStrikeRef.current >= 1 && onStreamError) {
+                          if (flStallStrikeRef.current >= 2 && onStreamError) {
                             hideFrozenFrame();
                             onStreamError();
                           } else if (resumeAt > 5) {
@@ -1852,7 +1853,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 onTimeUpdate?.(resumeAt, Math.floor(durReport));
               }
               if (isStallTimeout && !userIntentionallyPausedRef.current) {
-                if (flStallStrikeRef.current < 1 && videoRef.current === video) {
+                if (flStallStrikeRef.current < 2 && videoRef.current === video) {
                   flStallStrikeRef.current += 1;
                   const cleanBase = flStreamUrl
                     .replace(/([?&])start=\d+/g, '')
@@ -2164,7 +2165,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           if (!video.seeking && video.readyState >= 2) {
             appliedStartRef.current = true;
           }
-        } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
+        } else if (
+          Date.now() - lastSeekAttemptMsRef.current >=
+          (hlsRef.current ? 16000 : 2500)
+        ) {
           lastSeekAttemptMsRef.current = Date.now();
           try {
             video.currentTime = clampedTarget;
@@ -2445,8 +2449,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           enableIMSC1: false,
           startPosition:
             startAtSecondsRef.current > 5 ? startAtSecondsRef.current : -1,
-          maxBufferLength: isHardwareSmartTv ? 25 : 45,
-          maxMaxBufferLength: isHardwareSmartTv ? 50 : 90,
+          maxBufferLength: isHardwareSmartTv ? 45 : 75,
+          maxMaxBufferLength: isHardwareSmartTv ? 90 : 150,
+          maxBufferSize: isHardwareSmartTv ? 60 * 1000 * 1000 : 100 * 1000 * 1000,
+          backBufferLength: isHardwareSmartTv ? 30 : 60,
         };
         if (offlineItem) {
           hlsConfig.loader = createOfflineAwareHlsLoader();
@@ -2483,7 +2489,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           }, 18000);
         }
 
+        hls.on(Hls.Events.FRAG_LOADING, () => {
+          lastHlsFragActivityMsRef.current = Date.now();
+        });
+
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+          lastHlsFragActivityMsRef.current = Date.now();
+        });
+
         hls.on(Hls.Events.FRAG_BUFFERED, () => {
+          lastHlsFragActivityMsRef.current = Date.now();
           if (nativeHlsFallbackTimerRef.current !== null) {
             window.clearTimeout(nativeHlsFallbackTimerRef.current);
             nativeHlsFallbackTimerRef.current = null;
@@ -2623,9 +2638,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
           }
 
-          if (startAtSecondsRef.current > 5) {
-            lastSeekAttemptMsRef.current = Date.now();
-          }
+          lastSeekAttemptMsRef.current = Date.now();
+          lastHlsFragActivityMsRef.current = Date.now();
           hls.startLoad(
             startAtSecondsRef.current > 5 ? startAtSecondsRef.current : -1
           );
@@ -2684,7 +2698,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
           // Re-lock highest video level after switching audio track so hls.js never resets to 270p/360p
           if (highestLevelIndexRef.current >= 0) {
-            hls.currentLevel = highestLevelIndexRef.current;
+            if (
+              hls.levels.length > 1 &&
+              hls.currentLevel !== highestLevelIndexRef.current
+            ) {
+              hls.currentLevel = highestLevelIndexRef.current;
+            }
             hls.nextLevel = highestLevelIndexRef.current;
             hls.loadLevel = highestLevelIndexRef.current;
             hls.nextLoadLevel = highestLevelIndexRef.current;
@@ -2702,7 +2721,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               data.details === Hls.ErrorDetails.BUFFER_NUDGE_ON_STALL)
           ) {
             try {
-              hls.startLoad();
+              const sc = (
+                hls as unknown as {
+                  streamController?: { state?: string; fragCurrent?: unknown };
+                }
+              ).streamController;
+              const isActivelyLoadingFrag =
+                Boolean(sc?.fragCurrent) ||
+                sc?.state === 'FRAG_LOADING' ||
+                sc?.state === 'PARSING' ||
+                Date.now() - lastHlsFragActivityMsRef.current < 16000;
+              if (!isActivelyLoadingFrag) {
+                hls.startLoad();
+              }
               if (video && !userIntentionallyPausedRef.current) {
                 video.play().catch(() => { });
               }
@@ -3177,7 +3208,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       !isFl &&
       startAtSeconds > 5 &&
       !appliedStartRef.current &&
-      Math.abs(video.currentTime + streamOffsetSec - startAtSeconds) > 15
+      Math.abs(video.currentTime + streamOffsetSec - startAtSeconds) > 15 &&
+      Date.now() - lastSeekAttemptMsRef.current >=
+        (hlsRef.current ? 16000 : 2500)
     ) {
       lastSeekAttemptMsRef.current = Date.now();
       try {
@@ -4171,6 +4204,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
     if (hlsRef.current && (v.ended || isStalledLong)) {
       lastTimeUpdateWallMsRef.current = now;
+      lastHlsFragActivityMsRef.current = now;
       try {
         hlsRef.current.startLoad(currentEff);
         if (v.readyState < 2) {
@@ -4360,10 +4394,27 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         }
         return;
       }
-      const stallThresholdMs = hasRenderedFirstFrameRef.current ? 6500 : 20000;
+      const stallThresholdMs = hasRenderedFirstFrameRef.current ? 18000 : 26000;
+      const activeHls = hlsRef.current as
+        | (Hls & {
+            streamController?: { state?: string; fragCurrent?: unknown };
+          })
+        | null;
+      const isHlsActivelyLoadingFrag = Boolean(
+        activeHls &&
+          (activeHls.streamController?.fragCurrent ||
+            activeHls.streamController?.state === 'FRAG_LOADING' ||
+            now - lastHlsFragActivityMsRef.current < 22000)
+      );
+      if (isHlsActivelyLoadingFrag) {
+        if (v.paused && v.readyState >= 2) {
+          v.play().catch(() => { });
+        }
+        return;
+      }
       if (
         stalledMs >= stallThresholdMs &&
-        now - lastAutoRecoverWallMsRef.current >= 8000
+        now - lastAutoRecoverWallMsRef.current >= 16000
       ) {
         lastAutoRecoverWallMsRef.current = now;
         resumeOrRecoverPlaybackRef.current(v, false);
@@ -5120,6 +5171,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     const syncOrientation = () => {
       setIsLandscapeMobile(window.innerWidth > window.innerHeight);
     };
+    let orientT1: number | null = null;
+    let orientT2: number | null = null;
+    const syncOrientationDelayed = () => {
+      syncOrientation();
+      if (orientT1 !== null) window.clearTimeout(orientT1);
+      if (orientT2 !== null) window.clearTimeout(orientT2);
+      orientT1 = window.setTimeout(syncOrientation, 80);
+      orientT2 = window.setTimeout(syncOrientation, 280);
+    };
     const onCustomFs = (ev: Event) => {
       const customEv = ev as CustomEvent<{ force?: boolean }>;
       if (typeof customEv.detail?.force === 'boolean') {
@@ -5132,15 +5192,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       const doc = document as Document & { webkitFullscreenElement?: Element | null };
       const inFs = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
       setIsCustomFullscreen(inFs);
+      syncOrientationDelayed();
     };
     window.addEventListener('resize', syncOrientation);
-    window.addEventListener('orientationchange', syncOrientation);
+    window.addEventListener('orientationchange', syncOrientationDelayed);
     window.addEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
     document.addEventListener('fullscreenchange', onNativeFsChange);
     document.addEventListener('webkitfullscreenchange', onNativeFsChange);
     return () => {
+      if (orientT1 !== null) window.clearTimeout(orientT1);
+      if (orientT2 !== null) window.clearTimeout(orientT2);
       window.removeEventListener('resize', syncOrientation);
-      window.removeEventListener('orientationchange', syncOrientation);
+      window.removeEventListener('orientationchange', syncOrientationDelayed);
       window.removeEventListener('aether:vod-custom-fullscreen-toggle', onCustomFs);
       document.removeEventListener('fullscreenchange', onNativeFsChange);
       document.removeEventListener('webkitfullscreenchange', onNativeFsChange);
@@ -5637,7 +5700,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 if (!v.seeking && v.readyState >= 2) {
                   appliedStartRef.current = true;
                 }
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= (hlsRef.current ? 16000 : 2500)) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -5671,7 +5734,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 if (!v.seeking && v.readyState >= 2) {
                   appliedStartRef.current = true;
                 }
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= (hlsRef.current ? 16000 : 2500)) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -5713,7 +5776,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 if (!v.seeking && v.readyState >= 2) {
                   appliedStartRef.current = true;
                 }
-              } else if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
+              } else if (Date.now() - lastSeekAttemptMsRef.current >= (hlsRef.current ? 16000 : 2500)) {
                 lastSeekAttemptMsRef.current = Date.now();
                 try {
                   v.currentTime = clampedTarget;
@@ -5786,7 +5849,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     return;
                   }
                 } else {
-                  if (Date.now() - lastSeekAttemptMsRef.current >= 2500) {
+                  if (Date.now() - lastSeekAttemptMsRef.current >= (hlsRef.current ? 16000 : 2500)) {
                     lastSeekAttemptMsRef.current = Date.now();
                     try {
                       vid.currentTime = clampedTarget;
@@ -6137,7 +6200,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     setShowNextEpisodePrompt(false);
                     onClosePlayer();
                   }}
-                  className="relative overflow-hidden h-11 sm:h-12 px-5 sm:px-6 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md ring-4 ring-[#2563eb] focus:outline-none focus:ring-4 focus:ring-[#3b82f6] scale-[1.03] focus:scale-105 transition-transform cursor-pointer"
+                  className="relative overflow-hidden min-h-[44px] h-11 sm:h-12 px-5 sm:px-6 rounded-full bg-zinc-400/70 hover:bg-zinc-300/85 text-zinc-950 font-extrabold text-xs sm:text-sm inline-flex items-center shadow-[0_14px_38px_rgba(0,0,0,0.88)] backdrop-blur-md ring-4 ring-[#2563eb] focus:outline-none focus:ring-4 focus:ring-[#3b82f6] scale-[1.03] focus:scale-105 transition-transform cursor-pointer touch-manipulation"
                 >
                   <span
                     aria-hidden="true"
@@ -6424,18 +6487,26 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             isMobilePhone
               ? isCustomFullscreen && !isLandscapeMobile
                 ? {
-                  bottom: '10px',
-                  left: 'max(16px, var(--safe-top, env(safe-area-inset-top, 16px)))',
+                  bottom: '12px',
+                  left: 'max(52px, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 12px))',
                   right:
-                    'max(16px, var(--safe-bottom, env(safe-area-inset-bottom, 16px)))',
+                    'max(28px, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 12px))',
                 }
-                : {
-                  bottom:
-                    'max(8px, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))',
-                  left: 'max(10px, var(--safe-left, env(safe-area-inset-left, 0px)))',
-                  right:
-                    'max(10px, var(--safe-right, env(safe-area-inset-right, 0px)))',
-                }
+                : isLandscapeMobile
+                  ? {
+                    bottom:
+                      'max(10px, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))',
+                    left: 'max(18px, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                    right:
+                      'max(18px, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                  }
+                  : {
+                    bottom:
+                      'max(8px, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))',
+                    left: 'max(10px, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                    right:
+                      'max(10px, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                  }
               : undefined
           }
           className={`absolute ${isMobilePhone
@@ -7765,8 +7836,8 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     ? 'Ieșire din Ecran Complet'
                     : 'Ecran Complet'
                 }
-                className={`${isMobilePhone ? 'h-8 w-8' : 'h-8 w-8 sm:h-9 sm:w-9'
-                  } rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white border border-blue-400/50 inline-flex items-center justify-center shrink-0 shadow-md transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer`}
+                className={`${isMobilePhone ? 'h-9 w-9 min-h-[36px] min-w-[36px]' : 'h-8 w-8 sm:h-9 sm:w-9'
+                  } rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white border border-blue-400/50 inline-flex items-center justify-center shrink-0 shadow-md transition-all focus:outline-none focus:bg-white focus:text-zinc-950 cursor-pointer touch-manipulation`}
               >
                 {isCustomFullscreen ? (
                   <Minimize2

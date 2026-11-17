@@ -2496,7 +2496,77 @@ function ensureTorrentSwarmAlive(
   }
 }
 
-const RANGE_SERVER_VERSION = 2;
+function restrictTorrentSelectionToFile(
+  entry: ActiveTorrentEngine,
+  targetFileIdx: number
+): void {
+  try {
+    const files = entry.engine?.files;
+    if (!Array.isArray(files) || files.length <= 1) return;
+    files.forEach((f: any, idx: number) => {
+      if (idx !== targetFileIdx && typeof f?.deselect === 'function') {
+        try {
+          f.deselect();
+        } catch {
+          // ignore
+        }
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
+function attachRollingPieceReadahead(
+  entry: ActiveTorrentEngine,
+  streamObj: any,
+  rawFileOffset: number,
+  startByte: number,
+  totalFileBytes: number
+): void {
+  try {
+    const pieceLen = Number(entry.engine?.torrent?.pieceLength || 4 * 1024 * 1024);
+    const focusCount = Math.max(
+      3,
+      Math.min(8, Math.ceil((48 * 1024 * 1024) / pieceLen))
+    );
+    const initPiece =
+      typeof streamObj?.startPiece === 'number'
+        ? streamObj.startPiece
+        : Math.max(0, Math.floor((rawFileOffset + startByte) / pieceLen));
+    let lastFocusedPiece = initPiece;
+    ensureTorrentSwarmAlive(entry, initPiece);
+    if (
+      startByte > 512 * 1024 &&
+      startByte < totalFileBytes - 4 * 1024 * 1024 &&
+      typeof entry.engine.resetCriticalAndFocus === 'function'
+    ) {
+      entry.engine.resetCriticalAndFocus(initPiece, focusCount);
+    } else {
+      entry.engine.critical?.(initPiece, focusCount);
+    }
+    let bytesRead = 0;
+    streamObj?.on?.('data', (chunk: Buffer) => {
+      bytesRead += chunk?.length || 0;
+      const curPiece = Math.floor(
+        (rawFileOffset + startByte + bytesRead) / pieceLen
+      );
+      if (curPiece > lastFocusedPiece) {
+        lastFocusedPiece = curPiece;
+        try {
+          entry.engine.critical?.(curPiece, focusCount);
+          ensureTorrentSwarmAlive(entry, curPiece);
+        } catch {
+          // ignore
+        }
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
+const RANGE_SERVER_VERSION = 3;
 
 function ensureInternalRangeServer(): Promise<number> {
   if (
@@ -2509,7 +2579,7 @@ function ensureInternalRangeServer(): Promise<number> {
   if (inFlightRangeServerPromise) {
     return inFlightRangeServerPromise;
   }
-  inFlightRangeServerPromise = new Promise((resolve) => {
+  const p = new Promise<number>((resolve) => {
     const srv = http.createServer(async (req, res) => {
       try {
         const u = new URL(req.url || '/', 'http://127.0.0.1');
@@ -2581,28 +2651,15 @@ function ensureInternalRangeServer(): Promise<number> {
           return;
         }
 
+        restrictTorrentSelectionToFile(entry, fileIdx);
         const s = videoFile.createReadStream({ start, end });
-        const pieceLen = Number(entry.engine?.torrent?.pieceLength || 4 * 1024 * 1024);
-        const focusCount = Math.max(2, Math.min(6, Math.ceil((24 * 1024 * 1024) / pieceLen)));
-        ensureTorrentSwarmAlive(
+        attachRollingPieceReadahead(
           entry,
-          typeof s.startPiece === 'number' ? s.startPiece : undefined
+          s,
+          Number(videoFile?.offset || 0),
+          start,
+          total
         );
-        try {
-          if (typeof s.startPiece === 'number') {
-            if (start > 512 * 1024 && start < total - 4 * 1024 * 1024) {
-              if (typeof entry.engine.resetCriticalAndFocus === 'function') {
-                entry.engine.resetCriticalAndFocus(s.startPiece, focusCount);
-              } else {
-                entry.engine.critical?.(s.startPiece, focusCount);
-              }
-            } else {
-              entry.engine.critical?.(s.startPiece, 2);
-            }
-          }
-        } catch {
-          // ignore
-        }
 
         let closed = false;
         const closeStream = () => {
@@ -2640,6 +2697,8 @@ function ensureInternalRangeServer(): Promise<number> {
       resolve(gState.internalRangeServerPort);
     });
   });
+  inFlightRangeServerPromise = p;
+  return p;
 }
 
 function torrentExplicitlyMismatchesEpisode(
@@ -3465,6 +3524,7 @@ export async function handleFileListRequest(
 
       const selectedFile =
         entry.files.find((f) => f.index === selectedFileIdx) || entry.files[0];
+      restrictTorrentSelectionToFile(entry, selectedFileIdx);
 
       const relOrFile = `${selectedFile?.name || ''} ${selectedTorrentMeta.releaseTitle || ''}`;
       if (
@@ -3678,6 +3738,7 @@ export async function handleFileListRequest(
         res.end('Video file not found in torrent');
         return true;
       }
+      restrictTorrentSelectionToFile(entry, fileIdx);
 
       let cachedProbe = entry.probeCache.get(fileIdx);
       if (cachedProbe && !cachedProbe.durationSec) {
@@ -3689,6 +3750,10 @@ export async function handleFileListRequest(
         /\b(dual|multi|rus|ukr|dub|mvo|avo|dvo)\b|[а-яё]/i.test(
           rawFile.name || ''
         );
+      const isSimpleSingleAudioH264 =
+        !looksMultiOrDualAudio &&
+        /\b(x264|h\.?264|avc)\b/i.test(rawFile.name || '') &&
+        /\baac2?\.?0?\b/i.test(rawFile.name || '');
       if (!cachedProbe) {
         if (verifiedDiskPath) {
           try {
@@ -3696,6 +3761,8 @@ export async function handleFileListRequest(
           } catch {
             // ignore
           }
+        } else if (isSimpleSingleAudioH264) {
+          probeTorrentVideoFile(entry, fileIdx).catch(() => {});
         } else if (wantOrigAudio) {
           try {
             cachedProbe = await Promise.race([
@@ -3973,15 +4040,13 @@ export async function handleFileListRequest(
       let directReadStream: any = null;
       if (useDirectPipe) {
         directReadStream = rawFile.createReadStream();
-        try {
-          if (typeof directReadStream.startPiece === 'number') {
-            const pLen = Number(entry.engine?.torrent?.pieceLength || 4 * 1024 * 1024);
-            const directFocus = Math.max(2, Math.min(6, Math.ceil((24 * 1024 * 1024) / pLen)));
-            entry.engine.critical?.(directReadStream.startPiece, directFocus);
-          }
-        } catch {
-          // ignore
-        }
+        attachRollingPieceReadahead(
+          entry,
+          directReadStream,
+          Number(rawFile?.offset || 0),
+          0,
+          Number(rawFile?.length || 0)
+        );
         const closeDirect = () => {
           try {
             directReadStream?.destroy();
@@ -3996,7 +4061,15 @@ export async function handleFileListRequest(
       }
 
       let patchedFtyp = false;
+      let bytesEmitted = 0;
+      let ffStderrTail = '';
+      ff.stderr?.on('data', (d: Buffer) => {
+        if (ffStderrTail.length < 800) {
+          ffStderrTail += d.toString();
+        }
+      });
       ff.stdout.on('data', (chunk: Buffer) => {
+        bytesEmitted += chunk.length;
         let outChunk = chunk;
         if (!patchedFtyp && chunk.length >= 32) {
           patchedFtyp = true;
@@ -4025,6 +4098,11 @@ export async function handleFileListRequest(
         }
       });
       ff.stdout.on('end', () => {
+        if (bytesEmitted === 0 && ffStderrTail.trim()) {
+          console.warn(
+            `[FileList-Stream-0Bytes] id=${id} fileIdx=${fileIdx} start=${startSec}: ${ffStderrTail.trim()}`
+          );
+        }
         if (!res.writableEnded) {
           res.end();
         }

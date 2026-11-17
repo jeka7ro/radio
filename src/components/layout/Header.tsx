@@ -105,6 +105,7 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
     }
     setActiveProfileId(id);
     saveSharedActiveProfileId(id);
+    setIsHandoffModalOpen(false);
   };
 
   const showCountrySelector =
@@ -263,9 +264,7 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
         isOpen={Boolean(isHandoffModalOpen || isPinLockRequired)}
         isPinLockRequired={Boolean(isPinLockRequired)}
         onClose={() => {
-          if (!isPinLockRequired) {
-            setIsHandoffModalOpen(false);
-          }
+          setIsHandoffModalOpen(false);
         }}
         profiles={profiles}
         activeProfileId={activeProfileId}

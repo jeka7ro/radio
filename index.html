@@ -152,46 +152,186 @@
         var uaStr = navigator.userAgent || '';
         var isIosPhone = /iPhone|iPod/i.test(uaStr);
         var isPwaStandalone = !!(window.navigator && window.navigator.standalone) || !!(window.matchMedia && (window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches));
+        if (isIosPhone) {
+          var syncIosNotchFloor = function () {
+            try {
+              var iosScrMax = Math.max(
+                window.screen ? (window.screen.width || 0) : 0,
+                window.screen ? (window.screen.height || 0) : 0,
+                window.innerWidth || 0,
+                window.innerHeight || 0
+              );
+              document.documentElement.style.setProperty(
+                '--ios-notch-side-floor',
+                iosScrMax >= 874 ? '50px' : iosScrMax >= 852 ? '48px' : iosScrMax >= 812 ? '44px' : '0px'
+              );
+            } catch (errNotch) {}
+          };
+          syncIosNotchFloor();
+          window.addEventListener('orientationchange', function () {
+            setTimeout(syncIosNotchFloor, 80);
+          }, { passive: true });
+        }
         if (isIosPhone && isPwaStandalone) {
           document.documentElement.classList.add('ios-pwa-standalone');
-          var screenMax = Math.max(window.screen ? window.screen.height : 0, window.screen ? window.screen.width : 0, window.innerHeight || 0, window.innerWidth || 0);
-          var curVh = Math.max(window.innerHeight || 0, window.innerWidth || 0);
-          var isFullBleedTranslucent = screenMax > 0 && Math.abs(screenMax - curVh) <= 18;
-          document.documentElement.style.setProperty(
-            '--ios-pwa-top-floor',
-            !isFullBleedTranslucent
-              ? '0px'
-              : screenMax >= 874
-                ? '54px'
-                : screenMax >= 852
-                  ? '52px'
-                  : screenMax >= 812
-                    ? '46px'
-                    : '20px'
-          );
-          document.documentElement.style.setProperty('--ios-pwa-bottom-floor', screenMax >= 812 ? '16px' : '0px');
-          document.documentElement.style.setProperty('--ios-pwa-side-floor', screenMax >= 874 ? '50px' : screenMax >= 852 ? '48px' : screenMax >= 812 ? '44px' : '0px');
+          document.documentElement.style.backgroundColor = '#080b12';
+          var syncIosPwaGeometry = function () {
+            try {
+              var ae = document.activeElement;
+              var isInputFocused = !!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT'));
+              var envTop = 0;
+              var envBottom = 0;
+              var vhH = 0;
+              try {
+                var probe = document.createElement('div');
+                probe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:100vh;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);pointer-events:none;visibility:hidden;z-index:-1;';
+                document.documentElement.appendChild(probe);
+                if (window.getComputedStyle) {
+                  var pCs = window.getComputedStyle(probe);
+                  envTop = parseFloat(pCs.paddingTop) || 0;
+                  envBottom = parseFloat(pCs.paddingBottom) || 0;
+                }
+                vhH = probe.getBoundingClientRect ? (probe.getBoundingClientRect().height || 0) : 0;
+                document.documentElement.removeChild(probe);
+              } catch (probeErr) {}
+
+              var innerW = window.innerWidth || 0;
+              var innerH = window.innerHeight || 0;
+              var isPortrait = innerH >= innerW;
+              var scrW = window.screen ? (window.screen.width || 0) : 0;
+              var scrH = window.screen ? (window.screen.height || 0) : 0;
+              var screenPortraitH = Math.max(scrW, scrH);
+              var screenLandscapeH = Math.min(scrW, scrH);
+              var screenMax = Math.max(screenPortraitH, innerH, innerW);
+              var baseH = Math.max(innerH, Math.round(vhH));
+              var appH = baseH;
+
+              if (isPortrait) {
+                if (screenPortraitH > 0 && (screenPortraitH - baseH) >= 20 && (screenPortraitH - baseH) <= 42 && (envTop >= 20 || envBottom >= 20)) {
+                  appH = screenPortraitH;
+                } else if (screenPortraitH > 0 && (screenPortraitH - baseH) >= 74 && (screenPortraitH - baseH) <= 108 && envBottom >= 20) {
+                  appH = baseH + Math.round(envBottom);
+                } else {
+                  appH = baseH;
+                }
+              } else {
+                if (screenLandscapeH > 0 && envBottom >= 15 && Math.abs((baseH + envBottom) - screenLandscapeH) <= 6) {
+                  appH = screenLandscapeH;
+                } else {
+                  appH = baseH;
+                }
+              }
+
+              var rootStyle = document.documentElement.style;
+              if (appH > 0 && (!isInputFocused || !rootStyle.getPropertyValue('--ios-pwa-app-height'))) {
+                rootStyle.setProperty('--ios-pwa-app-height', appH + 'px');
+              }
+
+              var effectiveAppH = parseFloat(rootStyle.getPropertyValue('--ios-pwa-app-height')) || appH;
+              var isTopFullBleed = isPortrait && (envTop >= 20 || (screenPortraitH > 0 && Math.abs(screenPortraitH - effectiveAppH) <= 12));
+              rootStyle.setProperty(
+                '--ios-pwa-top-floor',
+                !isTopFullBleed
+                  ? '0px'
+                  : screenMax >= 874
+                    ? '54px'
+                    : screenMax >= 852
+                      ? '52px'
+                      : screenMax >= 812
+                        ? '46px'
+                        : '20px'
+              );
+              var isBottomInsettedByOs = isPortrait && envBottom < 2 && screenPortraitH >= 812 && (screenPortraitH - effectiveAppH) >= 74;
+              rootStyle.setProperty(
+                '--ios-pwa-nav-pb',
+                screenMax < 812 || isBottomInsettedByOs ? '0px' : isPortrait ? '6px' : '4px'
+              );
+              rootStyle.setProperty(
+                '--ios-pwa-bottom-floor',
+                screenMax < 812 || isBottomInsettedByOs ? '0px' : '8px'
+              );
+              rootStyle.setProperty(
+                '--ios-pwa-side-floor',
+                screenMax >= 874 ? '50px' : screenMax >= 852 ? '48px' : screenMax >= 812 ? '44px' : '0px'
+              );
+              rootStyle.backgroundColor = '#080b12';
+            } catch (geomErr) {}
+          };
+          syncIosPwaGeometry();
+          if (document.addEventListener) {
+            document.addEventListener('DOMContentLoaded', syncIosPwaGeometry, { passive: true });
+          }
+          window.addEventListener('load', syncIosPwaGeometry, { passive: true });
+          window.addEventListener('pageshow', syncIosPwaGeometry, { passive: true });
+          window.addEventListener('resize', syncIosPwaGeometry, { passive: true });
+          window.addEventListener('orientationchange', function () {
+            setTimeout(syncIosPwaGeometry, 60);
+            setTimeout(syncIosPwaGeometry, 250);
+          }, { passive: true });
+          setTimeout(syncIosPwaGeometry, 120);
+          setTimeout(syncIosPwaGeometry, 450);
         }
 
-        // Prevent iOS standalone viewport rubber-banding / bounce when gestures start on non-scrollable chrome (nav, header, fixed cards)
+        // Prevent iOS standalone viewport rubber-banding / bounce & horizontal sideways wobble when gestures start on vertical pages or non-scrollable chrome
+        var _touchStartX = 0;
+        var _touchStartY = 0;
+        document.addEventListener('touchstart', function (e) {
+          if (e.touches && e.touches.length === 1) {
+            _touchStartX = e.touches[0].clientX;
+            _touchStartY = e.touches[0].clientY;
+          }
+        }, { passive: true });
         document.addEventListener('touchmove', function (e) {
-          var el = e.target;
+          if (!e.touches || e.touches.length !== 1) return;
+          var targetEl = e.target;
+          if (targetEl && targetEl.closest && (targetEl.closest('[role="slider"]') || targetEl.closest('input[type="range"]') || targetEl.closest('[data-vod-timeline-slider="true"]'))) {
+            return;
+          }
+          var dx = Math.abs(e.touches[0].clientX - _touchStartX);
+          var dy = Math.abs(e.touches[0].clientY - _touchStartY);
+          // Never cancel slight finger tremor during button taps (otherwise WebKit suppresses synthesized click in landscape)
+          if (dx < 10 && dy < 10) {
+            return;
+          }
+          if (targetEl && targetEl.closest && targetEl.closest('button, a, input, select, textarea, [role="button"]') && dx < 16 && dy < 16) {
+            return;
+          }
+          var isPredominantlyHorizontal = (window.innerWidth < 768 || window.innerHeight <= 540) && dx > dy + 4 && dx > 8;
+          var el = targetEl;
+          var allowVertical = false;
+          var allowHorizontal = false;
           while (el && el !== document.body && el !== document.documentElement) {
             var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
             var overflowY = cs ? cs.overflowY : '';
             var overflowX = cs ? cs.overflowX : '';
+            var isMainOrDialog = el.tagName === 'MAIN' || (el.getAttribute && el.getAttribute('role') === 'dialog');
             if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
-              return;
+              allowVertical = true;
             }
-            if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth) {
+            if (!isMainOrDialog && (overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 2) {
+              allowHorizontal = true;
+            }
+            if (isPredominantlyHorizontal ? allowHorizontal : allowVertical) {
               return;
             }
             el = el.parentElement;
+          }
+          if (isPredominantlyHorizontal && !allowHorizontal) {
+            if (e.cancelable) e.preventDefault();
+            return;
+          }
+          if (!isPredominantlyHorizontal && (allowVertical || allowHorizontal)) {
+            return;
           }
           if (e.cancelable) {
             e.preventDefault();
           }
         }, { passive: false });
+        window.addEventListener('scroll', function () {
+          if (window.scrollX !== 0) {
+            window.scrollTo(0, window.scrollY || 0);
+          }
+        }, { passive: true });
       } catch (e) {
         document.documentElement.classList.add('dark');
       }
@@ -199,7 +339,7 @@
         if ('caches' in window) {
           caches.keys().then(function(keys) {
             for (var i = 0; i < keys.length; i++) {
-              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v45') {
+              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v53') {
                 caches.delete(keys[i]);
               }
             }
@@ -219,16 +359,16 @@
         } catch (e) {}
       });
     </script>
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#080b12" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#080b12" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#080b12" />
     <meta
       name="description"
       content="Filmio — Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web."
     />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Filmio" />
     <meta name="application-name" content="Filmio" />
     <meta property="og:title" content="Filmio" />

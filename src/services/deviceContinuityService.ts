@@ -1071,12 +1071,20 @@ export function reconcileAuthoritativeProfiles(
   return reconciled;
 }
 
+export function normalizeProfileUniqueName(name?: string | null): string {
+  return String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
 export function mergeSharedProfiles(
   localProfiles: SharedTvProfile[],
   remoteProfiles: SharedTvProfile[]
 ): SharedTvProfile[] {
   const deletedIds = loadDeletedProfileIds();
   const byId = new Map<string, SharedTvProfile>();
+  const idByNormName = new Map<string, string>();
 
   const addOrMerge = (p: Partial<SharedTvProfile>, idx: number, isLocal: boolean) => {
     const norm = normalizeProfile(p, idx);
@@ -1085,17 +1093,37 @@ export function mergeSharedProfiles(
       return;
     }
     const existing = byId.get(norm.id);
+    const normName = normalizeProfileUniqueName(norm.name);
     if (!existing) {
+      if (normName && idByNormName.has(normName) && idByNormName.get(normName) !== norm.id) {
+        return;
+      }
       byId.set(norm.id, norm);
+      if (normName) {
+        idByNormName.set(normName, norm.id);
+      }
       return;
     }
     const existingTs = existing.updatedAt || 0;
     const incomingTs = norm.updatedAt || 0;
-    if (incomingTs > existingTs || (isLocal && incomingTs >= existingTs)) {
-      byId.set(norm.id, mergeMatchingProfileFields(existing, norm));
+    const nextMerged =
+      incomingTs > existingTs || (isLocal && incomingTs >= existingTs)
+        ? mergeMatchingProfileFields(existing, norm)
+        : mergeMatchingProfileFields(norm, existing);
+    const mergedNormName = normalizeProfileUniqueName(nextMerged.name);
+    const ownerId = mergedNormName ? idByNormName.get(mergedNormName) : undefined;
+    if (ownerId && ownerId !== norm.id) {
+      nextMerged.name = existing.name;
     } else {
-      byId.set(norm.id, mergeMatchingProfileFields(norm, existing));
+      const prevNormName = normalizeProfileUniqueName(existing.name);
+      if (prevNormName && prevNormName !== mergedNormName && idByNormName.get(prevNormName) === norm.id) {
+        idByNormName.delete(prevNormName);
+      }
+      if (mergedNormName) {
+        idByNormName.set(mergedNormName, norm.id);
+      }
     }
+    byId.set(norm.id, nextMerged);
   };
 
   remoteProfiles.forEach((p, idx) => addOrMerge(p, idx, false));
@@ -1150,7 +1178,7 @@ export function saveSharedProfiles(
   } catch {
     // ignore
   }
-  if (isLocalHomeServer()) {
+  if (isDirectLocalHost()) {
     try {
       requests.push(
         fetch('https://filmio.my/api/tv-profiles', {
@@ -1163,6 +1191,25 @@ export function saveSharedProfiles(
           body: payload,
         }).catch(() => {})
       );
+    } catch {
+      // ignore
+    }
+  } else if (localBridgeAvailable) {
+    try {
+      const bridgeOrigin = getFileListServerBase();
+      if (bridgeOrigin) {
+        requests.push(
+          fetch(`${bridgeOrigin}/api/tv-profiles`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Deleted-Profile-Ids': deletedHeader,
+              'X-Replace-Profiles': replaceHeader,
+            },
+            body: payload,
+          }).catch(() => {})
+        );
+      }
     } catch {
       // ignore
     }
@@ -1189,10 +1236,50 @@ export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]>
     }
     const epochAtFetchStart = profileSaveEpoch;
     const local = loadSharedProfiles();
-    const res = await fetch('/api/tv-profiles', { cache: 'no-store' });
-    if (!res.ok) return local;
-    const remote = await res.json();
-    if (!Array.isArray(remote) || remote.length === 0) return local;
+    const fetchEndpoint = async (url: string, timeoutMs = 4500) => {
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+      try {
+        const res = await fetch(url, {
+          cache: 'no-store',
+          signal: ctrl?.signal,
+        });
+        if (timer) clearTimeout(timer);
+        if (!res.ok) return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
+        let serverDel: string[] = [];
+        const rawDel = res.headers.get('x-server-deleted-ids');
+        if (rawDel) {
+          try {
+            const parsed = JSON.parse(rawDel);
+            if (Array.isArray(parsed)) {
+              serverDel = parsed.filter((x): x is string => typeof x === 'string' && x !== 'p1');
+            }
+          } catch {
+            // ignore
+          }
+        }
+        const data = await res.json().catch(() => null);
+        return {
+          profiles: Array.isArray(data) ? (data as SharedTvProfile[]) : null,
+          deletedIds: serverDel,
+        };
+      } catch {
+        if (timer) clearTimeout(timer);
+        return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
+      }
+    };
+
+    const peerPromise = isDirectLocalHost()
+      ? fetchEndpoint('https://filmio.my/api/tv-profiles', 3500)
+      : localBridgeAvailable && getFileListServerBase()
+        ? fetchEndpoint(`${getFileListServerBase()}/api/tv-profiles`, 2000)
+        : Promise.resolve({ profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] });
+
+    const [primaryRes, peerRes] = await Promise.all([
+      fetchEndpoint('/api/tv-profiles', 4500),
+      peerPromise,
+    ]);
+
     if (profileSaveEpoch !== epochAtFetchStart || inFlightProfileSavePromise) {
       if (inFlightProfileSavePromise) {
         await inFlightProfileSavePromise.catch(() => {});
@@ -1200,21 +1287,48 @@ export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]>
       return loadSharedProfiles();
     }
 
-    const authoritative = reconcileAuthoritativeProfiles(local, remote);
+    const combinedRemote: SharedTvProfile[] = [
+      ...(Array.isArray(primaryRes.profiles) ? primaryRes.profiles : []),
+      ...(Array.isArray(peerRes.profiles) ? peerRes.profiles : []),
+    ];
+    if (combinedRemote.length === 0) return local;
+
+    const serverDeletedSet = new Set<string>([
+      ...primaryRes.deletedIds,
+      ...peerRes.deletedIds,
+    ]);
+    const localMap = new Map(local.map((p) => [p.id, p]));
+    const remoteTimestamps = new Map<string, number>();
+    for (const p of combinedRemote) {
+      if (p?.id) {
+        remoteTimestamps.set(
+          p.id,
+          Math.max(remoteTimestamps.get(p.id) || 0, Number(p.updatedAt) || 0)
+        );
+      }
+    }
+    for (const delId of serverDeletedSet) {
+      const localMatch = localMap.get(delId);
+      // Do not tombstone if local created/updated a fresh profile record cleanly
+      if (!localMatch || !localMatch.updatedAt) {
+        markProfileDeleted(delId);
+      }
+    }
+
+    const filteredLocal = local.filter((p) => !serverDeletedSet.has(p.id) || p.id === 'p1');
+    const authoritative = mergeSharedProfiles(filteredLocal, combinedRemote);
     const authoritativeIds = new Set(authoritative.map((p) => p.id));
 
-    for (const ghost of local) {
-      if (!ghost?.id || ghost.id === 'p1' || authoritativeIds.has(ghost.id)) {
-        continue;
-      }
-      forgetProfileOnDevice(ghost.id);
+    for (const delId of loadDeletedProfileIds()) {
+      if (delId === 'p1' || authoritativeIds.has(delId)) continue;
+      forgetProfileOnDevice(delId);
       try {
-        localStorage.removeItem(`${WATCH_PROGRESS_PREFIX}${ghost.id}`);
-        localStorage.removeItem(`${SAVED_VOD_PREFIX}${ghost.id}`);
-        localStorage.removeItem(`aether_radio_favorites_v2_${ghost.id}`);
-        localStorage.removeItem(`aether_tv_channel_favorites_v2_${ghost.id}`);
-        localStorage.removeItem(`filmio_seed_progress_v3_${ghost.id}`);
-        localStorage.removeItem(`filmio_seed_saved_v3_${ghost.id}`);
+        localStorage.removeItem(`${WATCH_PROGRESS_PREFIX}${delId}`);
+        localStorage.removeItem(`${SAVED_VOD_PREFIX}${delId}`);
+        localStorage.removeItem(`aether_radio_favorites_v2_${delId}`);
+        localStorage.removeItem(`aether_tv_channel_favorites_v2_${delId}`);
+        localStorage.removeItem(`filmio_seed_progress_v3_${delId}`);
+        localStorage.removeItem(`filmio_seed_saved_v3_${delId}`);
       } catch {
         // ignore
       }
@@ -1224,6 +1338,46 @@ export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]>
       localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(authoritative));
     } catch {
       // ignore
+    }
+
+    // Self-healing push: if primary or peer server missed any valid local/merged profile, heal it immediately!
+    const primaryIds = new Set(
+      (primaryRes.profiles || []).map((p) => p?.id).filter(Boolean)
+    );
+    const peerIds = new Set(
+      (peerRes.profiles || []).map((p) => p?.id).filter(Boolean)
+    );
+    const missingOnPrimary = authoritative.some((p) => !primaryIds.has(p.id));
+    const missingOnPeer =
+      peerRes.profiles !== null && authoritative.some((p) => !peerIds.has(p.id));
+    if (missingOnPrimary || missingOnPeer) {
+      const healBody = JSON.stringify(authoritative);
+      const healDelHeader = JSON.stringify(Array.from(loadDeletedProfileIds()));
+      if (missingOnPrimary) {
+        fetch('/api/tv-profiles', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Deleted-Profile-Ids': healDelHeader,
+          },
+          body: healBody,
+        }).catch(() => {});
+      }
+      if (missingOnPeer) {
+        const peerUrl = isDirectLocalHost()
+          ? 'https://filmio.my/api/tv-profiles'
+          : `${getFileListServerBase()}/api/tv-profiles`;
+        if (peerUrl) {
+          fetch(peerUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Deleted-Profile-Ids': healDelHeader,
+            },
+            body: healBody,
+          }).catch(() => {});
+        }
+      }
     }
 
     const currentActiveId = loadSharedActiveProfileId();
@@ -1344,7 +1498,9 @@ export function rememberProfileOnDevice(profile: SharedTvProfile): void {
 
 export function forgetProfileOnDevice(profileId: string): void {
   try {
-    sessionStorage.removeItem(SESSION_PROFILE_PICKED_KEY);
+    if (sessionStorage.getItem(SESSION_PROFILE_PICKED_KEY) === profileId) {
+      sessionStorage.removeItem(SESSION_PROFILE_PICKED_KEY);
+    }
     sessionStorage.removeItem(`smartcinema_pin_verified_${profileId}`);
     const raw = localStorage.getItem(REMEMBERED_PROFILES_STORAGE_KEY);
     if (!raw) return;

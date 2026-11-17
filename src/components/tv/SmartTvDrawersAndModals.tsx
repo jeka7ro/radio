@@ -142,6 +142,16 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
   setActiveSubLabel,
   setActiveSubCues,
 }) => {
+  const modalBackTouchRef = React.useRef<{ x: number; y: number } | null>(null);
+  const lastModalBackAtRef = React.useRef<number>(0);
+
+  const runDeduplicatedBack = (fn: () => void) => {
+    const now = Date.now();
+    if (now - lastModalBackAtRef.current < 380) return;
+    lastModalBackAtRef.current = now;
+    fn();
+  };
+
   return (
     <>
 {/* APPLE macOS TAHOE FLOATING ROUNDED LIQUID GLASS "Фильтр / Filtru" SHEET */}
@@ -183,7 +193,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-1.5 px-1">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
                   {/* 1. Начать поиск */}
                   <button
                     type="button"
@@ -344,7 +354,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-1.5 px-1">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
                   {filterSubMenu === 'type' &&
                     (
                       [
@@ -565,7 +575,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-1.5 px-1">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
               {TV_GENRE_PILLS.filter(
                 (g) => g.id !== 'top' && (adultContentEnabled || g.id !== 'Adult')
               ).map((g, idx) => {
@@ -645,7 +655,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-2 px-1">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-2 px-1">
                   {/* 0A. Profil Activ & Schimbare Rapidă Utilizator (Prioritatea #1) */}
                   <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-400/35 space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -1371,7 +1381,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto divide-y divide-white/[0.04]">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden divide-y divide-white/[0.04]">
                   {settingsSubMenu === 'audio' &&
                     SMART_TV_AUDIO_OPTIONS.map((opt) => {
                       const checked = tvSettings.defaultAudioPref === opt.id;
@@ -1651,17 +1661,19 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
             paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
           }}
-          className="fixed inset-0 z-[125] bg-[#101010]/95 backdrop-blur-2xl flex flex-col justify-between p-5 sm:p-10 overflow-y-auto"
+          className="fixed inset-0 z-[125] w-full max-w-[100vw] bg-[#101010]/95 backdrop-blur-2xl flex flex-col justify-between p-5 sm:p-10 overflow-y-auto overflow-x-hidden overscroll-x-none"
           onClick={() => setIsTvRadioPlayerOpen(false)}
         >
           {/* Ambient Blurred Cover Art Background */}
           {activeRadioTrack?.coverUrl && (
-            <img
-              src={activeRadioTrack.coverUrl}
-              alt=""
-              aria-hidden="true"
-              className="fixed inset-0 w-full h-full object-cover opacity-25 blur-3xl scale-110 pointer-events-none select-none"
-            />
+            <div aria-hidden="true" className="pointer-events-none fixed inset-0 overflow-hidden">
+              <img
+                src={activeRadioTrack.coverUrl}
+                alt=""
+                aria-hidden="true"
+                className="w-full h-full object-cover opacity-25 blur-3xl scale-110 pointer-events-none select-none"
+              />
+            </div>
           )}
 
           {/* Top Bar */}
@@ -1672,8 +1684,31 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             <button
               type="button"
               autoFocus
-              onClick={() => setIsTvRadioPlayerOpen(false)}
-              className="h-11 px-5 rounded-full bg-white text-[#141414] hover:brightness-95 focus:outline-none focus:ring-4 focus:ring-white/50 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-xl cursor-pointer"
+              onTouchStart={(e) => {
+                const t = e.touches?.[0];
+                if (t) modalBackTouchRef.current = { x: t.clientX, y: t.clientY };
+              }}
+              onTouchEnd={(e) => {
+                const start = modalBackTouchRef.current;
+                modalBackTouchRef.current = null;
+                const t = e.changedTouches?.[0];
+                if (
+                  start &&
+                  t &&
+                  (Math.abs(t.clientX - start.x) > 20 ||
+                    Math.abs(t.clientY - start.y) > 20)
+                ) {
+                  return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                runDeduplicatedBack(() => setIsTvRadioPlayerOpen(false));
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                runDeduplicatedBack(() => setIsTvRadioPlayerOpen(false));
+              }}
+              className="min-h-[44px] min-w-[44px] h-11 px-5 rounded-full bg-white text-[#141414] hover:brightness-95 focus:outline-none focus:ring-4 focus:ring-white/50 font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-xl cursor-pointer touch-manipulation"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>{tr('Înapoi la Radio', 'Back to Radio', 'Назад к радио')}</span>
@@ -2107,8 +2142,31 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                 type="button"
                 autoFocus
                 data-trailer-back="true"
-                onClick={() => setIsTrailerModalOpen(false)}
-                className="h-10 px-5 rounded-full bg-white text-[#141414] hover:bg-zinc-200 focus:bg-amber-400 focus:text-black font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-2xl shrink-0 cursor-pointer focus:outline-none focus:ring-4 focus:ring-white transition-all"
+                onTouchStart={(e) => {
+                  const t = e.touches?.[0];
+                  if (t) modalBackTouchRef.current = { x: t.clientX, y: t.clientY };
+                }}
+                onTouchEnd={(e) => {
+                  const start = modalBackTouchRef.current;
+                  modalBackTouchRef.current = null;
+                  const t = e.changedTouches?.[0];
+                  if (
+                    start &&
+                    t &&
+                    (Math.abs(t.clientX - start.x) > 20 ||
+                      Math.abs(t.clientY - start.y) > 20)
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  e.stopPropagation();
+                  runDeduplicatedBack(() => setIsTrailerModalOpen(false));
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  runDeduplicatedBack(() => setIsTrailerModalOpen(false));
+                }}
+                className="min-h-[44px] min-w-[44px] h-11 px-5 rounded-full bg-white text-[#141414] hover:bg-zinc-200 focus:bg-amber-400 focus:text-black font-extrabold text-xs sm:text-sm inline-flex items-center gap-2 shadow-2xl shrink-0 cursor-pointer touch-manipulation focus:outline-none focus:ring-4 focus:ring-white transition-all"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>{tr('← Înapoi la Film', '← Back to Movie', '← Назад к фильму')}</span>
@@ -2209,9 +2267,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
           isOpen={Boolean(isHandoffModalOpen || isPinLockRequired)}
           isPinLockRequired={Boolean(isPinLockRequired)}
           onClose={() => {
-            if (!isPinLockRequired) {
-              setIsHandoffModalOpen(false);
-            }
+            setIsHandoffModalOpen(false);
           }}
           profiles={tvProfiles}
           activeProfileId={activeProfileId}

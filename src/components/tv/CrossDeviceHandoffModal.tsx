@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   UserCheck,
   Delete,
+  RefreshCw,
 } from 'lucide-react';
 import {
   getWatchProgressKeyForProfile,
@@ -32,6 +33,7 @@ import {
   unmarkProfileDeleted,
   compressUploadedAvatarImage,
   isAdminJekaProfile,
+  normalizeProfileUniqueName,
 } from '../../services/deviceContinuityService';
 
 interface HandoffMediaInfo {
@@ -82,6 +84,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   );
   const [viewMode, setViewMode] = useState<'list' | 'pin_prompt' | 'edit'>('list');
   const [isManageMode, setIsManageMode] = useState<boolean>(false);
+  const [isSyncingProfiles, setIsSyncingProfiles] = useState<boolean>(false);
   const [deviceLabel, setDeviceLabel] = useState<string>('Dispozitiv');
   const [focusedCardId, setFocusedCardId] = useState<string | null>(activeProfileId);
   const modalRootRef = useRef<HTMLDivElement | null>(null);
@@ -103,18 +106,23 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         setLocalProfiles(latest);
       }
     };
+    const runServerSync = () => {
+      syncSharedProfilesFromServer()
+        .then((fresh) => {
+          if (active && Array.isArray(fresh) && fresh.length > 0) {
+            setLocalProfiles(fresh);
+            onProfilesChangeRef.current?.(fresh);
+          }
+        })
+        .catch(() => {});
+    };
     syncLocal();
-    syncSharedProfilesFromServer()
-      .then((fresh) => {
-        if (active && Array.isArray(fresh) && fresh.length > 0) {
-          setLocalProfiles(fresh);
-          onProfilesChangeRef.current?.(fresh);
-        }
-      })
-      .catch(() => {});
+    runServerSync();
+    const pollTimer = window.setInterval(runServerSync, 10_000);
     window.addEventListener('aether:profiles-updated', syncLocal);
     return () => {
       active = false;
+      window.clearInterval(pollTimer);
       window.removeEventListener('aether:profiles-updated', syncLocal);
     };
   }, [isOpen]);
@@ -143,6 +151,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   const [draftLang, setDraftLang] = useState<'ro' | 'en' | 'ru'>('ro');
   const [draftIsKids, setDraftIsKids] = useState<boolean>(false);
   const [showTvKeyboard, setShowTvKeyboard] = useState<boolean>(false);
+  const [isSavingAccount, setIsSavingAccount] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -630,7 +639,17 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     openEditorForProfile(prof);
   };
 
-  const handleSaveAccount = () => {
+  const normalizedDraftName = normalizeProfileUniqueName(draftName);
+  const duplicateExistingProfile = normalizedDraftName
+    ? (profiles.length > 0 ? profiles : loadSharedProfiles()).find(
+        (p) =>
+          p.id !== editingProfileId &&
+          normalizeProfileUniqueName(p.name) === normalizedDraftName
+      ) || null
+    : null;
+
+  const handleSaveAccount = async () => {
+    if (isSavingAccount) return;
     const trimmedDraft = draftName.trim();
     if (editingProfileId === 'NEW' && !trimmedDraft) {
       setUploadError(
@@ -647,104 +666,173 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         ? profiles.find((p) => p.id === editingProfileId)
         : undefined;
     const cleanName = trimmedDraft || existingForFallback?.name || 'User';
-    setUploadError('');
-    const cleanPin = draftPin.replace(/\D/g, '').slice(0, 6);
+    const targetNormName = normalizeProfileUniqueName(cleanName);
 
-    if (editingProfileId === 'NEW') {
-      const now = Date.now();
-      const newProf: SharedTvProfile = {
-        id: `acc_${now}`,
-        name: cleanName,
-        avatarEmoji: draftAvatarEmoji,
-        avatarUrl: draftAvatarUrl,
-        avatarBg: draftAvatarBg,
-        pin: cleanPin || undefined,
-        uiLang: draftLang,
-        isKids: draftIsKids,
-        updatedAt: now,
-      };
-      unmarkProfileDeleted(newProf.id);
-      try {
-        localStorage.setItem(getWatchProgressKeyForProfile(newProf.id), '{}');
-        localStorage.setItem(getSavedVodKeyForProfile(newProf.id), '[]');
-        localStorage.setItem(`filmio_seed_progress_v3_${newProf.id}`, '1');
-        localStorage.setItem(`filmio_seed_saved_v3_${newProf.id}`, '1');
-        localStorage.setItem(
-          `aether_radio_favorites_v2_${newProf.id}`,
-          JSON.stringify({ updatedAt: Date.now(), stations: [] })
-        );
-        localStorage.setItem(
-          `aether_tv_channel_favorites_v2_${newProf.id}`,
-          JSON.stringify({ updatedAt: Date.now(), channels: [] })
-        );
-      } catch {
-        // ignore
-      }
-      fetch(`/api/tv-progress?profileId=${encodeURIComponent(newProf.id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      }).catch(() => {});
-      fetch(`/api/tv-saved?profileId=${encodeURIComponent(newProf.id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '[]',
-      }).catch(() => {});
-      fetch(`/api/tv-radio-favorites?profileId=${encodeURIComponent(newProf.id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updatedAt: Date.now(), stations: [] }),
-      }).catch(() => {});
-      fetch(`/api/tv-channel-favorites?profileId=${encodeURIComponent(newProf.id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updatedAt: Date.now(), channels: [] }),
-      }).catch(() => {});
-      const nextList = [...profiles, newProf];
-      applyUpdatedProfiles(nextList);
-      setFocusedCardId(newProf.id);
-      setEditingProfileId(null);
-      setViewMode('list');
-    } else if (editingProfileId) {
-      const existingProf = profiles.find((p) => p.id === editingProfileId);
-      const updatedProf: SharedTvProfile = {
-        ...existingProf,
-        id: editingProfileId,
-        name: cleanName,
-        avatarEmoji: draftAvatarEmoji,
-        avatarUrl: draftAvatarUrl,
-        avatarBg: draftAvatarBg,
-        pin: cleanPin || undefined,
-        uiLang: draftLang,
-        isKids: draftIsKids,
-        updatedAt: Date.now(),
-      };
-      unmarkProfileDeleted(updatedProf.id);
-      const nextList = profiles.map((p) =>
-        p.id === editingProfileId ? updatedProf : p
+    const findConflictingProfile = (list: SharedTvProfile[]) =>
+      list.find(
+        (p) =>
+          p.id !== editingProfileId &&
+          normalizeProfileUniqueName(p.name) === targetNormName
+      ) || null;
+
+    const localDup = findConflictingProfile(
+      profiles.length > 0 ? profiles : loadSharedProfiles()
+    );
+    if (localDup) {
+      setUploadError(
+        tr(
+          `Contul „${localDup.name}” există deja! Alege alt nume.`,
+          `Account "${localDup.name}" already exists! Choose another name.`,
+          `Профиль «${localDup.name}» уже существует! Выберите другое имя.`
+        )
       );
-      applyUpdatedProfiles(nextList);
-      if (updatedProf.id === activeProfileId) {
-        if (cleanPin) {
-          rememberProfileOnDevice(updatedProf);
-          try {
-            sessionStorage.setItem(
-              `smartcinema_pin_verified_${updatedProf.id}`,
-              cleanPin
-            );
-          } catch {
-            // ignore
+      return;
+    }
+
+    setUploadError('');
+    setIsSavingAccount(true);
+    try {
+      const fresh = await Promise.race([
+        syncSharedProfilesFromServer().catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2200)),
+      ]);
+      const latestList =
+        Array.isArray(fresh) && fresh.length > 0 ? fresh : loadSharedProfiles();
+      if (Array.isArray(fresh) && fresh.length > 0) {
+        setLocalProfiles(fresh);
+        onProfilesChangeRef.current?.(fresh);
+      }
+      const serverDup = findConflictingProfile(latestList);
+      if (serverDup) {
+        setUploadError(
+          tr(
+            `Contul „${serverDup.name}” există deja! Alege alt nume.`,
+            `Account "${serverDup.name}" already exists! Choose another name.`,
+            `Профиль «${serverDup.name}» уже существует! Выберите другое имя.`
+          )
+        );
+        return;
+      }
+
+      const cleanPin = draftPin.replace(/\D/g, '').slice(0, 6);
+
+      if (editingProfileId === 'NEW') {
+        const now = Date.now();
+        const newProf: SharedTvProfile = {
+          id: `acc_${now}`,
+          name: cleanName,
+          avatarEmoji: draftAvatarEmoji,
+          avatarUrl: draftAvatarUrl,
+          avatarBg: draftAvatarBg,
+          pin: cleanPin || undefined,
+          uiLang: draftLang,
+          isKids: draftIsKids,
+          updatedAt: now,
+        };
+        unmarkProfileDeleted(newProf.id);
+        try {
+          localStorage.setItem(getWatchProgressKeyForProfile(newProf.id), '{}');
+          localStorage.setItem(getSavedVodKeyForProfile(newProf.id), '[]');
+          localStorage.setItem(`filmio_seed_progress_v3_${newProf.id}`, '1');
+          localStorage.setItem(`filmio_seed_saved_v3_${newProf.id}`, '1');
+          localStorage.setItem(
+            `aether_radio_favorites_v2_${newProf.id}`,
+            JSON.stringify({ updatedAt: Date.now(), stations: [] })
+          );
+          localStorage.setItem(
+            `aether_tv_channel_favorites_v2_${newProf.id}`,
+            JSON.stringify({ updatedAt: Date.now(), channels: [] })
+          );
+        } catch {
+          // ignore
+        }
+        fetch(`/api/tv-progress?profileId=${encodeURIComponent(newProf.id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        }).catch(() => {});
+        fetch(`/api/tv-saved?profileId=${encodeURIComponent(newProf.id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '[]',
+        }).catch(() => {});
+        fetch(`/api/tv-radio-favorites?profileId=${encodeURIComponent(newProf.id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updatedAt: Date.now(), stations: [] }),
+        }).catch(() => {});
+        fetch(`/api/tv-channel-favorites?profileId=${encodeURIComponent(newProf.id)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updatedAt: Date.now(), channels: [] }),
+        }).catch(() => {});
+        const nextList = [...latestList, newProf];
+        applyUpdatedProfiles(nextList);
+        setFocusedCardId(newProf.id);
+        if (!(isManageMode && isCurrentActiveAdminJeka)) {
+          rememberProfileOnDevice(newProf);
+          if (cleanPin) {
+            try {
+              sessionStorage.setItem(
+                `smartcinema_pin_verified_${newProf.id}`,
+                cleanPin
+              );
+            } catch {
+              // ignore
+            }
+          }
+          saveSharedActiveProfileId(newProf.id);
+          onSelectProfile(newProf.id);
+          setEditingProfileId(null);
+          setViewMode('list');
+          onClose();
+          return;
+        }
+        setEditingProfileId(null);
+        setViewMode('list');
+      } else if (editingProfileId) {
+        const existingProf = latestList.find((p) => p.id === editingProfileId);
+        const updatedProf: SharedTvProfile = {
+          ...existingProf,
+          id: editingProfileId,
+          name: cleanName,
+          avatarEmoji: draftAvatarEmoji,
+          avatarUrl: draftAvatarUrl,
+          avatarBg: draftAvatarBg,
+          pin: cleanPin || undefined,
+          uiLang: draftLang,
+          isKids: draftIsKids,
+          updatedAt: Date.now(),
+        };
+        unmarkProfileDeleted(updatedProf.id);
+        const nextList = latestList.map((p) =>
+          p.id === editingProfileId ? updatedProf : p
+        );
+        applyUpdatedProfiles(nextList);
+        if (updatedProf.id === activeProfileId) {
+          if (cleanPin) {
+            rememberProfileOnDevice(updatedProf);
+            try {
+              sessionStorage.setItem(
+                `smartcinema_pin_verified_${updatedProf.id}`,
+                cleanPin
+              );
+            } catch {
+              // ignore
+            }
+          } else {
+            forgetProfileOnDevice(updatedProf.id);
+            rememberProfileOnDevice(updatedProf);
           }
         } else {
           forgetProfileOnDevice(updatedProf.id);
-          rememberProfileOnDevice(updatedProf);
         }
-      } else {
-        forgetProfileOnDevice(updatedProf.id);
+        setFocusedCardId(updatedProf.id);
+        setEditingProfileId(null);
+        setViewMode('list');
       }
-      setFocusedCardId(updatedProf.id);
-      setEditingProfileId(null);
-      setViewMode('list');
+    } finally {
+      setIsSavingAccount(false);
     }
   };
 
@@ -797,7 +885,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         paddingLeft: 'max(1rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
         paddingRight: 'max(1rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
       }}
-      className="fixed inset-0 z-[250] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(12,12,12,0.98)_55%,_#060606_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto select-none"
+      className="fixed inset-0 z-[250] w-full max-w-[100vw] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(12,12,12,0.98)_55%,_#060606_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto overflow-x-hidden overscroll-x-none select-none"
       onClick={() => {
         if (!isPinLockRequired && viewMode === 'list') onClose();
       }}
@@ -1089,6 +1177,28 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                       'Изменить профили (Имя / Фото / PIN)'
                     )}
               </span>
+            </button>
+
+            <button
+              type="button"
+              data-bottom-action-btn="true"
+              disabled={isSyncingProfiles}
+              onClick={() => {
+                setIsSyncingProfiles(true);
+                syncSharedProfilesFromServer()
+                  .then((fresh) => {
+                    if (Array.isArray(fresh) && fresh.length > 0) {
+                      setLocalProfiles(fresh);
+                      onProfilesChangeRef.current?.(fresh);
+                    }
+                  })
+                  .catch(() => {})
+                  .finally(() => setIsSyncingProfiles(false));
+              }}
+              className="h-11 px-5 rounded-full text-xs sm:text-sm font-extrabold tracking-wider uppercase inline-flex items-center gap-2 border border-white/25 bg-white/[0.06] hover:bg-white/15 text-zinc-300 hover:text-white transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-zinc-950 disabled:opacity-60"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingProfiles ? 'animate-spin' : ''}`} />
+              <span>{tr('Sincronizează conturi', 'Sync Profiles', 'Синхронизировать')}</span>
             </button>
 
             {activeProfile?.pin && (
@@ -1399,15 +1509,22 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                       <input
                         type="text"
                         value={draftName}
-                        onChange={(e) => setDraftName(e.target.value)}
+                        onChange={(e) => {
+                          setDraftName(e.target.value);
+                          if (uploadError) setUploadError('');
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            handleSaveAccount();
+                            void handleSaveAccount();
                           }
                         }}
                         placeholder={tr('Ex: Eugeniu, Maria, Alex...', 'E.g. John, Maria...', 'Например: Евгений...')}
-                        className="flex-1 h-11 px-4 rounded-xl bg-[#121212] border border-white/20 focus:border-blue-400 text-sm sm:text-base font-extrabold text-white focus:outline-none"
+                        className={`flex-1 h-11 px-4 rounded-xl bg-[#121212] border text-sm sm:text-base font-extrabold text-white focus:outline-none ${
+                          duplicateExistingProfile
+                            ? 'border-rose-500 focus:border-rose-400'
+                            : 'border-white/20 focus:border-blue-400'
+                        }`}
                       />
                       <button
                         type="button"
@@ -1418,6 +1535,19 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                         ⌨ TV
                       </button>
                     </div>
+                    {duplicateExistingProfile ? (
+                      <p className="text-xs font-bold text-rose-400">
+                        {tr(
+                          `Contul „${duplicateExistingProfile.name}” există deja! Alege alt nume.`,
+                          `Account "${duplicateExistingProfile.name}" already exists! Choose another name.`,
+                          `Профиль «${duplicateExistingProfile.name}» уже существует! Выберите другое имя.`
+                        )}
+                      </p>
+                    ) : uploadError ? (
+                      <p className="text-xs font-bold text-rose-400">
+                        {uploadError}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* Optional 4-Digit PIN */}
@@ -1503,14 +1633,20 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setDraftName((s) => s + ' ')}
+                          onClick={() => {
+                            setDraftName((s) => s + ' ');
+                            if (uploadError) setUploadError('');
+                          }}
                           className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white hover:text-zinc-950 text-xs font-bold"
                         >
                           Spațiu
                         </button>
                         <button
                           type="button"
-                          onClick={() => setDraftName((s) => s.slice(0, -1))}
+                          onClick={() => {
+                            setDraftName((s) => s.slice(0, -1));
+                            if (uploadError) setUploadError('');
+                          }}
                           className="px-3 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white text-xs font-bold"
                         >
                           ⌫ Șterge
@@ -1522,7 +1658,10 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                         <button
                           key={ch}
                           type="button"
-                          onClick={() => setDraftName((s) => s + ch)}
+                          onClick={() => {
+                            setDraftName((s) => s + ch);
+                            if (uploadError) setUploadError('');
+                          }}
                           className="h-9 rounded-lg bg-[#222222] hover:bg-blue-400 hover:text-zinc-950 focus:bg-blue-400 focus:text-zinc-950 text-xs font-extrabold text-white transition-colors"
                         >
                           {ch}
@@ -1617,21 +1756,24 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={handleSaveAccount}
-                  className="h-11 px-6 rounded-2xl bg-blue-400 hover:bg-blue-300 text-zinc-950 font-extrabold text-sm shadow-lg cursor-pointer"
+                  disabled={Boolean(duplicateExistingProfile) || isSavingAccount}
+                  onClick={() => void handleSaveAccount()}
+                  className="h-11 px-6 rounded-2xl bg-blue-400 hover:bg-blue-300 disabled:opacity-45 disabled:cursor-not-allowed text-zinc-950 font-extrabold text-sm shadow-lg cursor-pointer"
                 >
                   {' '}
-                  {editingProfileId === 'NEW'
-                    ? tr(
-                        'Creează Contul & Intră',
-                        'Create Account & Sign In',
-                        'Создать и войти'
-                      )
-                    : tr(
-                        'Salvează Modificările',
-                        'Save Changes',
-                        'Сохранить изменения'
-                      )}
+                  {isSavingAccount
+                    ? tr('Se verifică...', 'Checking...', 'Проверка...')
+                    : editingProfileId === 'NEW'
+                      ? tr(
+                          'Creează Contul & Intră',
+                          'Create Account & Sign In',
+                          'Создать и войти'
+                        )
+                      : tr(
+                          'Salvează Modificările',
+                          'Save Changes',
+                          'Сохранить изменения'
+                        )}
                 </button>
                 <button
                   type="button"

@@ -659,7 +659,7 @@ export function isMobilePhoneDevice(): boolean {
   }
   return (
     window.innerWidth < 768 ||
-    (window.innerHeight < 520 && window.innerWidth < 920)
+    (window.innerHeight <= 540 && window.innerWidth <= 980)
   );
 }
 

@@ -462,7 +462,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         </div>
 
         {/* Subtitles Results List */}
-        <div className="flex-1 overflow-y-auto p-3.5 sm:p-4 space-y-2 min-h-[220px]">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3.5 sm:p-4 space-y-2 min-h-[220px]">
           {errorMsg && (
             <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/70 text-rose-200 text-xs font-medium">
               {errorMsg}
