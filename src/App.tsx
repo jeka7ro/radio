@@ -83,17 +83,25 @@ export const App: React.FC = () => {
     if (isCarRoute) {
       document.documentElement.classList.add('car-widescreen-mode');
     }
-    const isTvMode =
-      pathname === '/tv' ||
-      pathname.startsWith('/tv/') ||
-      params.has('tv') ||
-      params.get('tvmode') === '1' ||
-      isSmartTvMode ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX|BRAVIA|Sony|Android TV|GoogleTV|AFT/i.test(
-        navigator.userAgent
+    const ua = navigator.userAgent || '';
+    const isExplicitTvUa =
+      /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
+        ua
       );
+    const isPhoneUa =
+      !isExplicitTvUa &&
+      /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua);
+    const isTvMode =
+      !isPhoneUa &&
+      (pathname === '/tv' ||
+        pathname.startsWith('/tv/') ||
+        params.has('tv') ||
+        params.get('tvmode') === '1' ||
+        isExplicitTvUa);
     if (isTvMode) {
       document.documentElement.classList.add('smart-tv-mode');
+    } else {
+      document.documentElement.classList.remove('smart-tv-mode');
     }
 
     // Smart TV Remote D-Pad spatial navigation & LG webOS Back key (461) for Web Mode

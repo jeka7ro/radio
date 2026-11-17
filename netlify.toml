@@ -82,6 +82,12 @@
   force = true
 
 [[redirects]]
+  from = "/api/tv-music-sync"
+  to = "/.netlify/functions/tv-sync"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/start.json"
   to = "/.netlify/functions/msx-start"
   status = 200

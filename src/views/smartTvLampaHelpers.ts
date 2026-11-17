@@ -496,7 +496,13 @@ export function isRussianVodItem(
     idStr === 'kp_5508530' ||
     item.kpId === '5508530' ||
     String(item.kpId) === '5508530' ||
-    /zvyozdy|зв[её]зды/i.test(item.name || '')
+    /zvyozdy|зв[её]зды/i.test(item.name || '') ||
+    idStr === 'tt27636698' ||
+    imdbStr === 'tt27636698' ||
+    idStr === 'kp_5354824' ||
+    item.kpId === '5354824' ||
+    String(item.kpId) === '5354824' ||
+    /volya'?s\s+show|шоу\s+воли/i.test(item.name || '')
   ) {
     return true;
   }
@@ -578,7 +584,13 @@ export function isRussianTvShowItem(
     idStr === 'kp_5508530' ||
     item.kpId === '5508530' ||
     String(item.kpId) === '5508530' ||
-    /zvyozdy|зв[её]зды/i.test(item.name || '')
+    /zvyozdy|зв[её]зды/i.test(item.name || '') ||
+    idStr === 'tt27636698' ||
+    imdbStr === 'tt27636698' ||
+    idStr === 'kp_5354824' ||
+    item.kpId === '5354824' ||
+    String(item.kpId) === '5354824' ||
+    /volya'?s\s+show|шоу\s+воли/i.test(item.name || '')
   ) {
     return true;
   }
@@ -609,7 +621,7 @@ export function isRussianTvShowItem(
   }
   if (item.type === 'movie') return false;
   const titleText = `${item.name || ''} ${item.releaseTitle || ''}`;
-  return /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
+  return /(?:^|[^\p{L}])(шоу\s+воли|кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
     titleText
   );
 }
@@ -617,7 +629,7 @@ export function isRussianTvShowItem(
 export function isVkDirectSourcePath(sourcePath?: string | null): boolean {
   return Boolean(
     sourcePath &&
-    /(?:VK\s*Видео|VK\s*\/\s*RUTUBE|RUTUBE\s+Official)/i.test(sourcePath)
+    /(?:VK\s*Видео|VK\s*\/\s*RUTUBE|RUTUBE\s+Official|Direct\s+Cloud\s+HLS)/i.test(sourcePath)
   );
 }
 
@@ -647,6 +659,196 @@ export function getVodCardRatingInfo(
     value: fallbackVal,
     isRussian: isRu,
   };
+}
+
+export function isValidVodPosterHttpUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (/no-poster|\/poster\/medium\/fallback\/img/i.test(trimmed)) return false;
+  if (
+    trimmed.includes('metahub.space/poster/medium/') &&
+    !/metahub\.space\/poster\/medium\/tt\d+/i.test(trimmed)
+  ) {
+    return false;
+  }
+  return (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('data:image/')
+  );
+}
+
+export function buildFallbackVodPosterDataUri(title?: string): string {
+  const cleanTitle = String(title || 'Filmio')
+    .replace(/\[.*?\]/g, ' ')
+    .replace(/\(\d{4}\)/g, ' ')
+    .replace(/\b(4K|UHD|HDR|FHD|1080p|720p)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Filmio';
+
+  const words = cleanTitle.split(' ');
+  const lines: string[] = [];
+  let current = '';
+  for (const w of words) {
+    if (!current) {
+      current = w;
+    } else if ((current + ' ' + w).length <= 18) {
+      current += ' ' + w;
+    } else {
+      lines.push(current);
+      current = w;
+      if (lines.length === 2) break;
+    }
+  }
+  if (current && lines.length < 3) {
+    lines.push(current);
+  }
+  const clippedLines = lines.slice(0, 3).map((l, idx) =>
+    idx === 2 && lines.length === 3 && words.join(' ').length > lines.join(' ').length
+      ? `${l.slice(0, 16)}…`
+      : l
+  );
+
+  const escapeXml = (s: string) =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+  const textSvg = clippedLines
+    .map((line, i) => {
+      const y = 305 + i * 36;
+      return `<text x="200" y="${y}" text-anchor="middle" fill="#e2e8f0" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="25" font-weight="700">${escapeXml(line)}</text>`;
+    })
+    .join('');
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" width="400" height="600">` +
+    `<defs><linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">` +
+    `<stop offset="0%" stop-color="#0b1120"/>` +
+    `<stop offset="55%" stop-color="#14213d"/>` +
+    `<stop offset="100%" stop-color="#080b12"/>` +
+    `</linearGradient></defs>` +
+    `<rect width="400" height="600" fill="url(#bg)"/>` +
+    `<rect x="12" y="12" width="376" height="576" rx="22" fill="none" stroke="rgba(96,165,250,0.22)" stroke-width="2"/>` +
+    `<circle cx="200" cy="215" r="38" fill="rgba(37,99,235,0.18)" stroke="rgba(96,165,250,0.45)" stroke-width="2"/>` +
+    `<polygon points="190,198 190,232 220,215" fill="#60a5fa"/>` +
+    textSvg +
+    `</svg>`;
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function extractValidVodKpNum(item?: Partial<CinemetaItem> | null): number {
+  if (!item) return 0;
+  const kpNum = Number(
+    item.kpId ||
+      (String(item.id || '').startsWith('kp_')
+        ? String(item.id || '').replace(/^kp_/, '')
+        : 0)
+  );
+  return kpNum > 0 && !(kpNum >= 9001000 && kpNum <= 9001999) ? kpNum : 0;
+}
+
+export function resolveSafeVodPosterUrl(
+  item?: Partial<CinemetaItem> | null
+): string {
+  if (!item) return buildFallbackVodPosterDataUri('');
+  const isZvyozdyCard =
+    item.id === 'tt31712367' ||
+    item.id === 'kp_5508530' ||
+    String(item.kpId || '') === '5508530' ||
+    /zvyozdy|зв[её]зд/i.test(String(item.name || ''));
+  if (isZvyozdyCard) return '/posters/zvyozdy.jpg';
+
+  if (
+    item.poster &&
+    !item.poster.includes('tt31712367') &&
+    !item.poster.includes('pl.img.gg') &&
+    isValidVodPosterHttpUrl(item.poster)
+  ) {
+    return item.poster.replace('/posters/kp_small/', '/posters/kp/');
+  }
+  if (
+    item.background &&
+    !item.background.includes('tt31712367') &&
+    isValidVodPosterHttpUrl(item.background)
+  ) {
+    return item.background;
+  }
+  const kpNum = extractValidVodKpNum(item);
+  if (kpNum > 0) {
+    return `https://kinopoiskapiunofficial.tech/images/posters/kp/${kpNum}.jpg`;
+  }
+  const ttId = String(item.imdbId || '').startsWith('tt')
+    ? String(item.imdbId).split(':')[0]
+    : String(item.id || '').startsWith('tt')
+      ? String(item.id).split(':')[0]
+      : '';
+  if (/^tt\d+$/i.test(ttId)) {
+    return `https://images.metahub.space/poster/medium/${ttId}/img`;
+  }
+  return buildFallbackVodPosterDataUri(item.name);
+}
+
+export function handleVodPosterImgError(
+  e: { currentTarget: HTMLImageElement },
+  item?: Partial<CinemetaItem> | null
+): void {
+  const target = e.currentTarget;
+  if (target.dataset.vodFallbackDone === '1') return;
+
+  const isZvyozdyCard = Boolean(
+    item &&
+      (item.id === 'tt31712367' ||
+        item.id === 'kp_5508530' ||
+        String(item.kpId || '') === '5508530' ||
+        /zvyozdy|зв[её]зд/i.test(String(item.name || '')))
+  );
+  if (isZvyozdyCard) {
+    const cdn =
+      'https://avatars.mds.yandex.net/get-kinopoisk-image/4486454/c06e5be9-ca78-479e-bfae-0f24e43bb452/360';
+    if (!target.src.includes('avatars.mds.yandex.net') && !target.dataset.triedZvyozdyCdn) {
+      target.dataset.triedZvyozdyCdn = '1';
+      target.src = cdn;
+      return;
+    }
+    if (!target.src.includes('/posters/zvyozdy.jpg') && !target.dataset.triedZvyozdyLocal) {
+      target.dataset.triedZvyozdyLocal = '1';
+      target.src = '/posters/zvyozdy.jpg';
+      return;
+    }
+  }
+
+  const bg = item?.background;
+  if (
+    !target.dataset.triedBg &&
+    bg &&
+    !bg.includes('tt31712367') &&
+    isValidVodPosterHttpUrl(bg) &&
+    target.src !== bg
+  ) {
+    target.dataset.triedBg = '1';
+    target.src = bg;
+    return;
+  }
+
+  const kpNum = extractValidVodKpNum(item);
+  if (!target.dataset.triedKp && kpNum > 0) {
+    const kpPoster = `https://kinopoiskapiunofficial.tech/images/posters/kp/${kpNum}.jpg`;
+    if (target.src !== kpPoster) {
+      target.dataset.triedKp = '1';
+      target.src = kpPoster;
+      return;
+    }
+  }
+
+  target.dataset.vodFallbackDone = '1';
+  target.src = buildFallbackVodPosterDataUri(item?.name);
 }
 
 export function formatSeriesCardSubtitleText(
@@ -754,10 +956,14 @@ export interface ResolvedDirectVodStream {
   ok: boolean;
   type?: 'movie' | 'series';
   sourcePath?: string;
+  season?: number;
+  episode?: number;
+  rawHlsUrl?: string;
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
   proxyHlsUrl?: string;
+  fallbackHlsUrl?: string;
   backupHlsUrls?: string[];
   embedUrl?: string;
   title?: string;
@@ -1923,7 +2129,12 @@ export function loadSmartTvSettings(profileId?: string): SmartTvSettings {
     const raw = localStorage.getItem(
       getSmartTvSettingsKeyForProfile(targetPid)
     );
-    const parsed: Partial<SmartTvSettings> = raw ? JSON.parse(raw) : {};
+    const parsed: Partial<SmartTvSettings> & {
+      subLangExplicitlySetInSettings?: boolean;
+    } = raw ? JSON.parse(raw) : {};
+    const profilesList = loadSharedProfiles();
+    const targetProfile =
+      profilesList.find((p) => p.id === targetPid) || profilesList[0];
     const explicitTheme = localStorage.getItem(`aether_tv_theme_${targetPid}`);
     const resolvedTheme: 'dark' | 'ambient' =
       explicitTheme === 'ambient' || explicitTheme === 'dark'
@@ -1933,11 +2144,21 @@ export function loadSmartTvSettings(profileId?: string): SmartTvSettings {
           : profileMedia.tvTheme === 'ambient' || profileMedia.tvTheme === 'dark'
             ? profileMedia.tvTheme
             : DEFAULT_SMART_TV_SETTINGS.tvTheme || 'dark';
+    const rawSubLang =
+      profileMedia.defaultSubLang ||
+      parsed.defaultSubLang ||
+      DEFAULT_SMART_TV_SETTINGS.defaultSubLang;
+    const effectiveDefaultSubLang =
+      parsed.subLangExplicitlySetInSettings === true ||
+      targetProfile?.uiLang === 'ru' ||
+      rawSubLang === 'ro'
+        ? rawSubLang
+        : 'ro';
     const merged: SmartTvSettings = {
       ...DEFAULT_SMART_TV_SETTINGS,
       ...parsed,
       defaultAudioPref: profileMedia.defaultAudioPref || parsed.defaultAudioPref || DEFAULT_SMART_TV_SETTINGS.defaultAudioPref,
-      defaultSubLang: profileMedia.defaultSubLang || parsed.defaultSubLang || DEFAULT_SMART_TV_SETTINGS.defaultSubLang,
+      defaultSubLang: effectiveDefaultSubLang,
       defaultSubFontSize: profileMedia.defaultSubFontSize || parsed.defaultSubFontSize || DEFAULT_SMART_TV_SETTINGS.defaultSubFontSize,
       defaultSubFontPx: profileMedia.defaultSubFontPx || parsed.defaultSubFontPx || DEFAULT_SMART_TV_SETTINGS.defaultSubFontPx,
       tvTheme: resolvedTheme,
@@ -1961,7 +2182,10 @@ export function saveSmartTvSettings(next: SmartTvSettings, profileId?: string) {
     };
     localStorage.setItem(
       getSmartTvSettingsKeyForProfile(targetPid),
-      JSON.stringify(cleanNext)
+      JSON.stringify({
+        ...cleanNext,
+        subLangExplicitlySetInSettings: true,
+      })
     );
     localStorage.setItem(`aether_tv_theme_${targetPid}`, resolvedTheme);
     saveActiveProfileMediaPrefs(
@@ -1978,7 +2202,8 @@ export function saveSmartTvSettings(next: SmartTvSettings, profileId?: string) {
               : 24),
         tvTheme: resolvedTheme,
       },
-      targetPid
+      targetPid,
+      { explicitFromSettings: true }
     );
   } catch {
     // ignore

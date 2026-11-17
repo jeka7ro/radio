@@ -60,6 +60,8 @@ import {
   formatSeriesCardBadgeText,
   formatSeriesCardSubtitleText,
   getVodCardRatingInfo,
+  resolveSafeVodPosterUrl,
+  handleVodPosterImgError,
   isAdminJekaProfile,
 } from "../../views/smartTvLampaHelpers";
 
@@ -840,9 +842,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 const isFav = savedVodItems.some(
                                   (x) => x.id === item.id
                                 );
-                                const posterUrl =
-                                  item.poster ||
-                                  `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                const posterUrl = resolveSafeVodPosterUrl(item);
                                 return (
                                   <button
                                     key={item.id}
@@ -859,12 +859,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         src={posterUrl}
                                         alt={item.name}
                                         loading="lazy"
-                                        onError={(e) => {
-                                          const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
-                                          if (e.currentTarget.src !== fallback) {
-                                            e.currentTarget.src = fallback;
-                                          }
-                                        }}
+                                        onError={(e) => handleVodPosterImgError(e, item)}
                                         className="w-full h-full object-cover"
                                       />
                                       {(() => {
@@ -942,9 +937,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   const isFav = savedVodItems.some(
                                     (x) => x.id === item.id
                                   );
-                                  const posterUrl =
-                                    item.poster ||
-                                    `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                  const posterUrl = resolveSafeVodPosterUrl(item);
                                   return (
                                     <button
                                       key={item.id}
@@ -961,12 +954,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           src={posterUrl}
                                           alt={item.name}
                                           loading="lazy"
-                                          onError={(e) => {
-                                            const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
-                                            if (e.currentTarget.src !== fallback) {
-                                              e.currentTarget.src = fallback;
-                                            }
-                                          }}
+                                          onError={(e) => handleVodPosterImgError(e, item)}
                                           className="w-full h-full object-cover"
                                         />
                                         {(() => {
@@ -1254,9 +1242,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               : filteredUhdItems.slice(0, 12)
                             ).map((item) => {
                               const isFav = savedVodItems.some((x) => x.id === item.id);
-                              const posterUrl =
-                                item.poster ||
-                                `https://images.metahub.space/poster/medium/${item.id}/img`;
+                              const posterUrl = resolveSafeVodPosterUrl(item);
                               return (
                                 <button
                                   key={`uhd-top-${item.id}`}
@@ -1273,12 +1259,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       src={posterUrl}
                                       alt={item.name}
                                       loading="lazy"
-                                      onError={(e) => {
-                                        const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
-                                        if (e.currentTarget.src !== fallback) {
-                                          e.currentTarget.src = fallback;
-                                        }
-                                      }}
+                                      onError={(e) => handleVodPosterImgError(e, item)}
                                       className="w-full h-full object-cover"
                                     />
                                     {(() => {
@@ -1337,9 +1318,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                               {filteredUhdItems.slice(12).map((item) => {
                                 const isFav = savedVodItems.some((x) => x.id === item.id);
-                                const posterUrl =
-                                  item.poster ||
-                                  `https://images.metahub.space/poster/medium/${item.id}/img`;
+                                const posterUrl = resolveSafeVodPosterUrl(item);
                                 return (
                                   <button
                                     key={`uhd-rest-${item.id}`}
@@ -1356,12 +1335,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         src={posterUrl}
                                         alt={item.name}
                                         loading="lazy"
-                                        onError={(e) => {
-                                          const fallback = `https://images.metahub.space/poster/medium/${item.id}/img`;
-                                          if (e.currentTarget.src !== fallback) {
-                                            e.currentTarget.src = fallback;
-                                          }
-                                        }}
+                                        onError={(e) => handleVodPosterImgError(e, item)}
                                         className="w-full h-full object-cover"
                                       />
                                       {(() => {
@@ -1585,9 +1559,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4.5">
                         {vodItems.filter(Boolean).filter((it: any) => it && it.id).map((item: CinemetaItem) => {
-                          const posterUrl =
-                            item.poster ||
-                            `https://images.metahub.space/poster/medium/${item.id}/img`;
+                          const posterUrl = resolveSafeVodPosterUrl(item);
                           const rawImdb = item.imdbRating || '';
                           const numImdb = parseFloat(String(rawImdb)) || 0;
                           const displayScore = numImdb > 0 ? numImdb.toFixed(1) : '7.8';
@@ -1614,13 +1586,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   src={posterUrl}
                                   alt={item.name}
                                   loading="lazy"
-                                  onError={(e) => {
-                                    if (item.background && e.currentTarget.src !== item.background) {
-                                      e.currentTarget.src = item.background;
-                                    } else {
-                                      e.currentTarget.src = 'https://images.metahub.space/poster/medium/fallback/img';
-                                    }
-                                  }}
+                                  onError={(e) => handleVodPosterImgError(e, item)}
                                   className="w-full h-full object-cover"
                                 />
 
@@ -1788,9 +1754,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                             const isFav = savedVodItems.some(
                               (x) => x.id === item.id
                             );
-                            const posterUrl =
-                              item.poster ||
-                              `https://images.metahub.space/poster/medium/${item.id}/img`;
+                            const posterUrl = resolveSafeVodPosterUrl(item);
                             return (
                               <button
                                 key={item.id}
@@ -1807,6 +1771,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     src={posterUrl}
                                     alt={item.name}
                                     loading="lazy"
+                                    onError={(e) => handleVodPosterImgError(e, item)}
                                     className="w-full h-full object-cover"
                                   />
                                   {(() => {
@@ -2089,7 +2054,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       }}
                                       className={`w-[3px] rounded-full transition-all ${
                                         isPlayingCurrent
-                                          ? 'bg-gradient-to-b from-amber-300 via-emerald-400 to-cyan-400 shadow-[0_0_8px_rgba(52,211,153,0.45)] eq-bar'
+                                          ? 'bg-gradient-to-b from-[#93c5fd] via-[#3b82f6] to-[#1e3a8a] shadow-[0_0_8px_rgba(59,130,246,0.5)] eq-bar'
                                           : 'bg-white/15'
                                       }`}
                                     />
@@ -2385,7 +2350,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                     {/* Dedicated Radio Search Bar + Expandable On-Screen TV Remote Keyboard */}
                     <div className="p-3.5 rounded-2xl bg-[#1c1c1c] border border-white/15 shadow-lg space-y-3">
                       <div className="flex flex-wrap items-center gap-2.5">
-                        <div className="flex-1 min-w-[220px] h-11 px-4 rounded-xl bg-[#121212] border-2 border-white/15 focus-within:border-[#60a5fa] flex items-center gap-3">
+                        <div className="flex-1 min-w-[220px] h-11 px-4 rounded-xl bg-[#0e121b] border-2 border-white/15 focus-within:border-[#60a5fa] flex items-center gap-3">
                           <Search className="w-5 h-5 text-[#60a5fa] shrink-0" />
                           <input
                             ref={radioSearchInputRef}
@@ -3160,11 +3125,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       ) => (
                         <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                           {itemsList.map((item) => {
-                            const posterUrl =
-                              item.poster ||
-                              (String(item.id || '').startsWith('tt')
-                                ? `https://images.metahub.space/poster/medium/${item.id}/img`
-                                : '');
+                            const posterUrl = resolveSafeVodPosterUrl(item);
                             const rInfo = getVodCardRatingInfo(item);
                             const showKzBadge =
                               forceKinozalBadge || isKinozalRu(item);
@@ -3180,23 +3141,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 className="group w-full block text-left focus:outline-none cursor-pointer"
                               >
                                 <div className="aspect-[2/3] w-full rounded-2xl bg-[#242424] relative overflow-hidden shadow-lg group-focus:ring-4 group-focus:ring-white group-hover:ring-2 group-hover:ring-white/80 group-focus:scale-[1.03] transition-all">
-                                  {posterUrl ? (
-                                    <img
-                                      src={posterUrl}
-                                      alt={item.name}
-                                      loading="lazy"
-                                      onError={(e) => {
-                                        e.currentTarget.style.display = 'none';
-                                      }}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  ) : null}
-                                  <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center text-zinc-500 bg-gradient-to-b from-[#172554]/40 to-[#0f172a]">
-                                    <Film className="w-10 h-10 mb-2 text-[#60a5fa]/60" />
-                                    <span className="text-xs font-bold text-zinc-300 line-clamp-3">
-                                      {item.name}
-                                    </span>
-                                  </div>
+                                  <img
+                                    src={posterUrl}
+                                    alt={item.name}
+                                    loading="lazy"
+                                    onError={(e) => handleVodPosterImgError(e, item)}
+                                    className="w-full h-full object-cover"
+                                  />
                                   <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
                                     <VodCardProducerBadge item={item} />
                                     {showKzBadge && (
@@ -4166,9 +4117,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           const isLiveCard = false;
                           const devLabel =
                             sanitizeDeviceName(entry.deviceName) || 'TV';
-                          const posterUrl =
-                            item.poster ||
-                            `https://images.metahub.space/poster/medium/${item.id}/img`;
+                          const posterUrl = resolveSafeVodPosterUrl(item);
                           return (
                             <div
                               key={item.id}
@@ -4202,6 +4151,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     src={posterUrl}
                                     alt={item.name}
                                     loading="lazy"
+                                    onError={(e) => handleVodPosterImgError(e, item)}
                                     className="w-full h-full object-cover"
                                   />
                                   {isLiveCard && (
@@ -4236,7 +4186,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                             }`}
                                         >
                                           {item.type === 'series'
-                                            ? `${tr('SERIAL', 'SERIES', 'СЕРИАЛ')} S${entry.season}:E${entry.episode}`
+                                            ? `S${entry.season || 1}:E${entry.episode || 1}`
                                             : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
                                         </span>
                                       </div>
@@ -4314,9 +4264,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       ) : (
                         <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
                           {savedVodItems.map((item) => {
-                            const posterUrl =
-                              item.poster ||
-                              `https://images.metahub.space/poster/medium/${item.id}/img`;
+                            const posterUrl = resolveSafeVodPosterUrl(item);
                             return (
                               <button
                                 key={item.id}
@@ -4333,6 +4281,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     src={posterUrl}
                                     alt={item.name}
                                     loading="lazy"
+                                    onError={(e) => handleVodPosterImgError(e, item)}
                                     className="w-full h-full object-cover"
                                   />
                                   <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">

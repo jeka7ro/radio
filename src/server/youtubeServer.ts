@@ -39,6 +39,8 @@ interface ResolvedYouTubeStream {
   qualityLabel: string;
   videoUrl: string;
   audioUrl: string;
+  audioContentLength: number;
+  audioMimeType: string;
   hlsManifestUrl?: string;
   userAgent: string;
   sponsorSegments: SponsorSegment[];
@@ -74,34 +76,9 @@ function parseDurationTextToSeconds(raw: string): number {
   return parts[0] || 0;
 }
 
-export async function searchYouTubeVideos(query: string): Promise<YouTubeVideoItem[]> {
-  const cleanQuery = (query || '').trim() || 'trending romania';
-  const cacheKey = cleanQuery.toLowerCase();
-  const cached = searchCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < SEARCH_CACHE_TTL_MS) {
-    return cached.items;
-  }
+const SHORT_SNIPPET_RE = /\b(shorts?|teaser|preview|snippet|ringtone|15\s*sec|30\s*sec)\b/i;
 
-  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery)}&hl=ro&gl=RO`;
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': DESKTOP_UA,
-      'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
-      Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+410',
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(`YouTube search HTTP ${res.status}`);
-  }
-
-  const html = await res.text();
-  const match = html.match(/var ytInitialData = (\{.+?\});<\/script>/);
-  if (!match?.[1]) {
-    return [];
-  }
-
-  const data = JSON.parse(match[1]);
+function extractYouTubeVideoItems(data: unknown): YouTubeVideoItem[] {
   const items: YouTubeVideoItem[] = [];
   const seen = new Set<string>();
 
@@ -158,6 +135,84 @@ export async function searchYouTubeVideos(query: string): Promise<YouTubeVideoIt
   }
 
   walk(data);
+  return items;
+}
+
+function pickBestMusicVideoMatch(results: YouTubeVideoItem[]): YouTubeVideoItem | undefined {
+  return (
+    results.find(
+      (r) =>
+        !r.isLive &&
+        r.durationSec >= 65 &&
+        r.durationSec <= 1200 &&
+        !SHORT_SNIPPET_RE.test(r.title || '')
+    ) ||
+    results.find((r) => !r.isLive && r.durationSec >= 45) ||
+    results[0]
+  );
+}
+
+export async function searchYouTubeVideos(query: string): Promise<YouTubeVideoItem[]> {
+  const cleanQuery = (query || '').trim() || 'trending romania';
+  const cacheKey = cleanQuery.toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SEARCH_CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  let items: YouTubeVideoItem[] = [];
+
+  // Primary path: Innertube WEB JSON search (avoids brittle HTML regex truncation)
+  try {
+    const itRes = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': DESKTOP_UA,
+        'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+      body: JSON.stringify({
+        query: cleanQuery,
+        context: {
+          client: {
+            clientName: 'WEB',
+            clientVersion: '2.20250101.00.00',
+            hl: 'ro',
+            gl: 'RO',
+          },
+        },
+      }),
+    });
+    if (itRes.ok) {
+      const jsonData = await itRes.json();
+      items = extractYouTubeVideoItems(jsonData);
+    }
+  } catch {
+    // fall through to HTML fallback
+  }
+
+  // Fallback path: scrape /results HTML if Innertube JSON returned empty
+  if (items.length === 0) {
+    const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery)}&hl=ro&gl=RO`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
+        Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+410',
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`YouTube search HTTP ${res.status}`);
+    }
+
+    const html = await res.text();
+    const match = html.match(/var ytInitialData = (\{.+?\});<\/script>/);
+    if (match?.[1]) {
+      items = extractYouTubeVideoItems(JSON.parse(match[1]));
+    }
+  }
+
   if (items.length > 0) {
     searchCache.set(cacheKey, { items, ts: Date.now() });
   }
@@ -193,11 +248,12 @@ async function fetchSponsorSegments(videoId: string): Promise<SponsorSegment[]> 
 }
 
 export async function resolveYouTubeStream(
-  videoId: string
+  videoId: string,
+  forceRefresh = false
 ): Promise<ResolvedYouTubeStream> {
   const cleanId = (videoId || '').trim();
   const cached = resolvedStreamCache.get(cleanId);
-  if (cached && Date.now() - cached.resolvedAt < STREAM_CACHE_TTL_MS) {
+  if (!forceRefresh && cached && Date.now() - cached.resolvedAt < STREAM_CACHE_TTL_MS) {
     return cached;
   }
 
@@ -290,7 +346,7 @@ export async function resolveYouTubeStream(
       ) || progressive.find((f) => f.url);
   }
 
-  // Prefer highest bitrate audio stream (TIDAL Master / HQ audio: Opus 251 or AAC 140 sorted by bitrate desc)
+  // Prefer highest bitrate audio/mp4 stream (itag 140 128kbps AAC ahead of low-bitrate 139 or webm)
   const audioFormats = adaptive
     .filter(
       (f) =>
@@ -299,13 +355,23 @@ export async function resolveYouTubeStream(
           String(f.mimeType || '').startsWith('audio/webm') ||
           f.itag === 140 ||
           f.itag === 251 ||
-          f.itag === 141)
+          f.itag === 141 ||
+          f.itag === 139)
     )
-    .sort(
-      (a, b) =>
+    .sort((a, b) => {
+      const mp4A =
+        String(a.mimeType || '').startsWith('audio/mp4') || a.itag === 140 || a.itag === 139 ? 1 : 0;
+      const mp4B =
+        String(b.mimeType || '').startsWith('audio/mp4') || b.itag === 140 || b.itag === 139 ? 1 : 0;
+      if (mp4B !== mp4A) return mp4B - mp4A;
+      const tagScoreA = a.itag === 140 ? 2 : a.itag === 139 ? 0 : 1;
+      const tagScoreB = b.itag === 140 ? 2 : b.itag === 139 ? 0 : 1;
+      if (tagScoreB !== tagScoreA) return tagScoreB - tagScoreA;
+      return (
         (Number(b.bitrate || b.averageBitrate) || 0) -
         (Number(a.bitrate || a.averageBitrate) || 0)
-    );
+      );
+    });
   const bestAudio =
     audioFormats.find((f) =>
       String(f.mimeType || '').startsWith('audio/mp4')
@@ -331,6 +397,9 @@ export async function resolveYouTubeStream(
     qualityLabel: String(bestVideo?.qualityLabel || '1080p HD'),
     videoUrl: String(bestVideo?.url || ''),
     audioUrl: String(bestAudio?.url || ''),
+    audioContentLength: Number(bestAudio?.contentLength) || 0,
+    audioMimeType:
+      String(bestAudio?.mimeType || 'audio/mp4').split(';')[0] || 'audio/mp4',
     hlsManifestUrl,
     userAgent: activeUa,
     sponsorSegments,
@@ -1507,10 +1576,7 @@ export async function handleYouTubeRequest(
     try {
       if (!id && q) {
         const results = await searchYouTubeVideos(q);
-        const bestMatch =
-          results.find(
-            (r) => !r.isLive && r.durationSec >= 45 && r.durationSec <= 900
-          ) || results[0];
+        const bestMatch = pickBestMusicVideoMatch(results);
         if (bestMatch?.videoId) {
           id = bestMatch.videoId;
         }
@@ -1522,54 +1588,151 @@ export async function handleYouTubeRequest(
         return true;
       }
 
-      const info = await resolveYouTubeStream(id);
+      let activeInfo = await resolveYouTubeStream(id);
 
-      // Fast path: if direct AAC/M4A audio stream URL exists and no start offset is requested, proxy it with HTTP Range support
-      if (info.audioUrl && startSec === 0) {
-        const rangeHeader = req.headers.range;
-        const upstreamRes = await fetch(info.audioUrl, {
-          headers: {
-            'User-Agent': info.userAgent,
-            ...(rangeHeader ? { Range: rangeHeader } : {}),
-          },
-        });
+      // Fast path: stream DASH audio/mp4 in 1MB &range= chunks to bypass googlevideo ~10s burst throttling
+      if (activeInfo.audioUrl && startSec === 0) {
+        const stripRangeParam = (raw: string): string => {
+          try {
+            const u = new URL(raw);
+            u.searchParams.delete('range');
+            return u.toString();
+          } catch {
+            return raw.replace(/[?&]range=[^&]*/g, '');
+          }
+        };
 
-        if (upstreamRes.ok || upstreamRes.status === 206) {
+        let baseUrl = stripRangeParam(activeInfo.audioUrl);
+        let totalSize = activeInfo.audioContentLength;
+
+        if (totalSize <= 0) {
+          try {
+            const sep = baseUrl.includes('?') ? '&' : '?';
+            const probeRes = await fetch(`${baseUrl}${sep}range=0-65535`, {
+              headers: { 'User-Agent': activeInfo.userAgent },
+            });
+            const cr = probeRes.headers.get('content-range') || '';
+            const mTotal = /\/(\d+)$/.exec(cr);
+            if (mTotal?.[1]) totalSize = Number(mTotal[1]) || 0;
+            await probeRes.body?.cancel().catch(() => {});
+          } catch {
+            // fall through to ffmpeg fallback below
+          }
+        }
+
+        if (totalSize > 0) {
+          const rangeHeader = typeof req.headers.range === 'string' ? req.headers.range.trim() : '';
+          const rangeMatch = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader);
+          const reqStart = rangeMatch
+            ? Math.min(Math.max(0, Number(rangeMatch[1])), totalSize - 1)
+            : 0;
+          const reqEnd =
+            rangeMatch && rangeMatch[2]
+              ? Math.min(Math.max(reqStart, Number(rangeMatch[2])), totalSize - 1)
+              : totalSize - 1;
+          const isPartial = Boolean(rangeMatch);
+
           const outHeaders: Record<string, string> = {
-            'Content-Type':
-              upstreamRes.headers.get('content-type') || 'audio/mp4',
+            'Content-Type': activeInfo.audioMimeType || 'audio/mp4',
             'Accept-Ranges': 'bytes',
+            'Content-Length': String(reqEnd - reqStart + 1),
+            ...(isPartial ? { 'Content-Range': `bytes ${reqStart}-${reqEnd}/${totalSize}` } : {}),
             'Cache-Control': 'public, max-age=600',
             'Access-Control-Allow-Origin': '*',
+            ...(activeInfo.durationSec > 0
+              ? {
+                  'X-Content-Duration': String(activeInfo.durationSec),
+                  'Access-Control-Expose-Headers':
+                    'X-Content-Duration, Content-Range, Accept-Ranges',
+                }
+              : {
+                  'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges',
+                }),
           };
-          const contentLen = upstreamRes.headers.get('content-length');
-          if (contentLen) outHeaders['Content-Length'] = contentLen;
-          const contentRange = upstreamRes.headers.get('content-range');
-          if (contentRange) outHeaders['Content-Range'] = contentRange;
-          if (info.durationSec > 0) {
-            outHeaders['X-Content-Duration'] = String(info.durationSec);
-            outHeaders['Access-Control-Expose-Headers'] =
-              'X-Content-Duration, Content-Range, Accept-Ranges';
+
+          if (req.method === 'HEAD') {
+            res.writeHead(isPartial ? 206 : 200, outHeaders);
+            res.end();
+            return true;
           }
 
-          res.writeHead(upstreamRes.status, outHeaders);
-          if (upstreamRes.body) {
-            const reader = upstreamRes.body.getReader();
-            let closed = false;
-            req.on('close', () => {
-              closed = true;
-              void reader.cancel().catch(() => {});
-            });
-            while (!closed) {
-              const { done, value } = await reader.read();
-              if (done || closed) break;
-              if (value) res.write(Buffer.from(value));
+          let closed = false;
+          const markClosed = () => {
+            closed = true;
+          };
+          req.on('close', markClosed);
+          res.on('close', markClosed);
+
+          const CHUNK_SIZE = 1048576;
+          let pos = reqStart;
+          let refreshedOnce = false;
+          let headersWritten = false;
+
+          while (pos <= reqEnd && !closed) {
+            const chunkEnd = Math.min(reqEnd, pos + CHUNK_SIZE - 1);
+            const sep = baseUrl.includes('?') ? '&' : '?';
+            let chunkBuf: Buffer | null = null;
+
+            for (let attempt = 0; attempt < 3 && !closed; attempt++) {
+              try {
+                const cRes = await fetch(`${baseUrl}${sep}range=${pos}-${chunkEnd}`, {
+                  headers: { 'User-Agent': activeInfo.userAgent },
+                });
+                if (cRes.status === 403 && !refreshedOnce) {
+                  refreshedOnce = true;
+                  activeInfo = await resolveYouTubeStream(id, true);
+                  if (activeInfo.audioUrl) {
+                    baseUrl = stripRangeParam(activeInfo.audioUrl);
+                  }
+                  continue;
+                }
+                if (cRes.ok || cRes.status === 206) {
+                  const ab = await cRes.arrayBuffer();
+                  if (ab.byteLength > 0) {
+                    chunkBuf = Buffer.from(ab);
+                    break;
+                  }
+                }
+              } catch {
+                // retry short transient socket/timeout error
+              }
+              if (!closed) {
+                await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+              }
             }
+
+            if (!chunkBuf || closed) break;
+
+            if (!headersWritten) {
+              headersWritten = true;
+              res.writeHead(isPartial ? 206 : 200, outHeaders);
+            }
+
+            const ok = res.write(chunkBuf);
+            if (!ok && !closed) {
+              await new Promise<void>((resolve) => {
+                const onDone = () => {
+                  res.off('drain', onDone);
+                  res.off('close', onDone);
+                  resolve();
+                };
+                res.once('drain', onDone);
+                res.once('close', onDone);
+              });
+            }
+            pos += chunkBuf.byteLength;
           }
-          if (!res.writableEnded) res.end();
-          return true;
+
+          req.off('close', markClosed);
+          res.off('close', markClosed);
+          if (headersWritten) {
+            if (!res.writableEnded) res.end();
+            return true;
+          }
         }
       }
+
+      const info = activeInfo;
 
       // Fallback path: extract pure AAC audio stream via FFmpeg from audioUrl, videoUrl, or hlsManifestUrl
       const inputSource =

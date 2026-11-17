@@ -8,6 +8,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import ffmpegPath from 'ffmpeg-static';
 
 const requireCjs = createRequire(import.meta.url);
+try {
+  const resolvedEnginePath = requireCjs.resolve('./fastTorrentEngine.cjs');
+  delete requireCjs.cache[resolvedEnginePath];
+} catch {
+  // ignore
+}
 const torrentStream = requireCjs('./fastTorrentEngine.cjs') as (
   link: Buffer | string,
   opts?: Record<string, unknown>
@@ -110,6 +116,7 @@ interface ActiveTorrentEngine {
   activeStreams: Set<() => void>;
   verifiedPieces: Set<number>;
   prewarmedFiles?: Set<number>;
+  lastTrackerError?: string;
   files: Array<{
     index: number;
     name: string;
@@ -159,6 +166,8 @@ interface GlobalFileListState {
   activeHlsSession: ActiveHlsSession | null;
   internalRangeServerPort: number;
   rangePrioritySeq: number;
+  lastFlIpVerifiedAt?: number;
+  inFlightFlUnlockPromise?: Promise<boolean> | null;
 }
 
 const gState: GlobalFileListState =
@@ -381,8 +390,18 @@ export async function authenticateFileList(
       headers: { 'User-Agent': USER_AGENT },
     });
     const cookies1 = res1.headers.getSetCookie ? res1.headers.getSetCookie() : [];
-    const phpSess =
-      cookies1.map((c) => c.split(';')[0]).find((c) => c.startsWith('PHPSESSID=')) || '';
+    const cookieMap = new Map<string, string>();
+    for (const rawC of cookies1) {
+      const pair = String(rawC || '').split(';')[0].trim();
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const k = pair.slice(0, eq).trim();
+      const v = pair.slice(eq + 1).trim();
+      if (v && v !== 'deleted') cookieMap.set(k, v);
+    }
+    const phpSess = cookieMap.get('PHPSESSID')
+      ? `PHPSESSID=${cookieMap.get('PHPSESSID')}`
+      : '';
     const html1 = await res1.text();
     const validator =
       (html1.match(/name=["']validator["']\s+value=["']([^"']+)["']/i) || [])[1] || '';
@@ -400,6 +419,7 @@ export async function authenticateFileList(
         'User-Agent': USER_AGENT,
         'Content-Type': 'application/x-www-form-urlencoded',
         Cookie: phpSess,
+        Origin: 'https://filelist.io',
         Referer: 'https://filelist.io/login.php',
       },
       body: body.toString(),
@@ -407,28 +427,45 @@ export async function authenticateFileList(
     });
 
     const cookies2 = res2.headers.getSetCookie ? res2.headers.getSetCookie() : [];
-    const combinedCookie = [...cookies1, ...cookies2]
-      .map((c) => c.split(';')[0])
-      .filter(
-        (c) =>
-          !c.endsWith('=deleted') &&
-          (c.startsWith('PHPSESSID=') || c.startsWith('uid=') || c.startsWith('pass='))
-      )
+    for (const rawC of cookies2) {
+      const pair = String(rawC || '').split(';')[0].trim();
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const k = pair.slice(0, eq).trim();
+      const v = pair.slice(eq + 1).trim();
+      if (!v || v === 'deleted') {
+        cookieMap.delete(k);
+      } else {
+        cookieMap.set(k, v);
+      }
+    }
+    const combinedCookie = Array.from(cookieMap.entries())
+      .filter(([k]) => k === 'PHPSESSID' || k === 'uid' || k === 'pass')
+      .map(([k, v]) => `${k}=${v}`)
       .join('; ');
 
     let passkey = current.passkey;
+    let myStatus = 0;
     if (combinedCookie.includes('uid=')) {
       const resMy = await safeFetch('https://filelist.io/my.php', {
         headers: { 'User-Agent': USER_AGENT, Cookie: combinedCookie },
+        redirect: 'manual',
       });
-      const htmlMy = await resMy.text();
-      const pkMatch =
-        htmlMy.match(/passkey[\s\S]{0,250}?([a-f0-9]{32})/i) ||
-        htmlMy.match(/([a-f0-9]{32})/);
-      if (pkMatch?.[1]) {
-        passkey = pkMatch[1];
+      myStatus = resMy.status;
+      if (resMy.status === 200) {
+        const htmlMy = await resMy.text();
+        const pkMatch =
+          htmlMy.match(/passkey[\s\S]{0,250}?([a-f0-9]{32})/i) ||
+          htmlMy.match(/([a-f0-9]{32})/);
+        if (pkMatch?.[1]) {
+          passkey = pkMatch[1];
+        }
       }
     }
+
+    console.log(
+      `[FileList-Auth] Unlocked tracker IP for ${user} (takelogin HTTP ${res2.status}, my.php HTTP ${myStatus || 'skip'})`
+    );
 
     const updated: FileListSession = {
       username: user,
@@ -439,9 +476,89 @@ export async function authenticateFileList(
     };
     saveSession(updated);
     return updated;
-  } catch {
+  } catch (err) {
+    console.warn('[FileList-Auth] authenticateFileList error:', (err as Error)?.message || err);
     return current;
   }
+}
+
+export async function ensureFileListTrackerIpUnlocked(force = false): Promise<boolean> {
+  if (
+    !force &&
+    gState.lastFlIpVerifiedAt &&
+    Date.now() - gState.lastFlIpVerifiedAt < 10 * 60 * 1000
+  ) {
+    return true;
+  }
+  if (gState.inFlightFlUnlockPromise) {
+    return gState.inFlightFlUnlockPromise;
+  }
+
+  const runPromise = (async (): Promise<boolean> => {
+    try {
+      const current = loadSession();
+      let needLogin = force || !current.cookie?.includes('uid=');
+      let okSession = false;
+
+      if (!needLogin) {
+        try {
+          const checkRes = await safeFetch('https://filelist.io/my.php', {
+            headers: { 'User-Agent': USER_AGENT, Cookie: current.cookie },
+            redirect: 'manual',
+          });
+          okSession = checkRes.status === 200;
+          if (!okSession) needLogin = true;
+        } catch {
+          needLogin = true;
+        }
+      }
+
+      let activeSession = current;
+      if (needLogin) {
+        activeSession = await authenticateFileList();
+        try {
+          const verifyRes = await safeFetch('https://filelist.io/my.php', {
+            headers: { 'User-Agent': USER_AGENT, Cookie: activeSession.cookie },
+            redirect: 'manual',
+          });
+          okSession = verifyRes.status === 200;
+        } catch {
+          okSession = activeSession.cookie.includes('uid=');
+        }
+      }
+
+      gState.lastFlIpVerifiedAt = Date.now();
+
+      for (const [eid, entry] of activeEngines.entries()) {
+        if (eid <= 0 || !entry?.engine) continue;
+        try {
+          const trackerClient = entry.engine.discovery?.tracker;
+          if (trackerClient && Array.isArray(trackerClient._trackers) && activeSession.passkey) {
+            for (const tr of trackerClient._trackers) {
+              if (tr?.announceUrl && /filelist\.io|thefl\.org/i.test(tr.announceUrl)) {
+                tr.announceUrl = String(tr.announceUrl).replace(
+                  /\/[a-f0-9]{32}\/announce/i,
+                  `/${activeSession.passkey}/announce`
+                );
+              }
+            }
+          }
+          trackerClient?.start?.();
+          trackerClient?.update?.();
+          entry.engine.pokePeers?.();
+        } catch {
+          // ignore per-engine refresh failure
+        }
+      }
+
+      return okSession;
+    } finally {
+      gState.inFlightFlUnlockPromise = null;
+    }
+  })();
+
+  gState.inFlightFlUnlockPromise = runPromise;
+  return runPromise;
 }
 
 function formatBytes(bytes: number): string {
@@ -479,13 +596,14 @@ function parseCleanReleaseInfo(
     /\bS\d{1,2}(?:E\d{1,2}|\.Complete|-\d)/i.test(raw) ||
     /\bSeason[\s.]?\d+/i.test(raw);
 
-  const quality = /2160p|4K|UHD/i.test(raw)
-    ? '4K UHD'
-    : /1080p/i.test(raw)
-      ? '1080p Full HD'
-      : /720p/i.test(raw)
-        ? '720p HD'
-        : 'HD';
+  const quality =
+    /2160p|4K/i.test(raw) || (/\bUHD\b/i.test(raw) && !/\b(1080p|720p)\b/i.test(raw))
+      ? '4K UHD'
+      : /1080p/i.test(raw)
+        ? '1080p Full HD'
+        : /720p/i.test(raw)
+          ? '720p HD'
+          : 'HD';
 
   const isRo =
     /RO/i.test(categoryName) ||
@@ -735,6 +853,7 @@ export async function getFileListCatalog(options: {
   imdb?: string;
   sort?: 'seeders' | 'latest';
   page?: number;
+  fresh?: boolean;
 }): Promise<FileListTorrentCard[]> {
   const section = options.section || 'ro';
   const query = (options.query || '').trim();
@@ -742,10 +861,13 @@ export async function getFileListCatalog(options: {
   const sort = options.sort || 'seeders';
   const page = options.page || 1;
   const cacheKey = `${section}|${imdb}|${query.toLowerCase()}|${sort}|${page}`;
+  const ttlMs = query || imdb ? 30_000 : 60_000;
 
-  const cached = catalogCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 90_000) {
-    return cached.items;
+  if (!options.fresh) {
+    const cached = catalogCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < ttlMs) {
+      return cached.items;
+    }
   }
   const existingFlight = inFlightCatalog.get(cacheKey);
   if (existingFlight) {
@@ -935,31 +1057,36 @@ async function fetchTorrentioStreams(
       if (!/^[a-f0-9]{40}$/.test(infoHash)) continue;
       const lines = String(s.title || '').split('\n').map((l) => l.trim()).filter(Boolean);
       const releaseLine = s.behaviorHints?.filename || lines[0] || `Torrentio ${infoHash.slice(0, 8)}`;
-      const statsLine = lines.find((l) => l.includes('') || l.includes('')) || lines[1] || '';
+      const statsLine =
+        lines.find((l) => /[\u{1F464}\u{1F4BE}]/u.test(l) || /\b(GB|MB)\b/i.test(l)) ||
+        lines[1] ||
+        '';
       const audioLine = lines.length >= 3 ? lines[lines.length - 1] : '';
 
-      const seedMatch = statsLine.match(/\s*(\d+)/);
+      const seedMatch = statsLine.match(/\u{1F464}\s*(\d+)/u);
       const seeders = seedMatch ? parseInt(seedMatch[1], 10) : 15;
       if (seeders < 2) continue;
 
-      const sizeMatch = statsLine.match(/\s*([\d.]+\s*[GMK]B)/i);
+      const sizeMatch = statsLine.match(/(?:\u{1F4BE}\s*)?([\d.]+\s*[GMK]B)/iu);
       const sizeFormatted = sizeMatch ? sizeMatch[1] : '2.4 GB';
       const sizeNum = parseFloat(sizeFormatted) || 2.4;
       const sizeBytes = /GB/i.test(sizeFormatted)
         ? Math.round(sizeNum * 1024 * 1024 * 1024)
         : Math.round(sizeNum * 1024 * 1024);
 
-      const trackerMatch = statsLine.match(/\s*([^\n]+)/);
+      const trackerMatch = statsLine.match(/\u2699\uFE0F?\s*([^\n]+)/u);
       const trackerName = trackerMatch ? trackerMatch[1].trim() : 'P2P';
 
       const combinedText = `${s.name || ''} ${releaseLine}`;
-      const quality = /2160p|4k|uhd/i.test(combinedText)
-        ? '4K UHD'
-        : /1080p/i.test(combinedText)
-          ? '1080p Full HD'
-          : /720p/i.test(combinedText)
-            ? '720p HD'
-            : 'HD';
+      const quality =
+        /2160p|4k/i.test(combinedText) ||
+        (/\buhd\b/i.test(combinedText) && !/\b(1080p|720p)\b/i.test(combinedText))
+          ? '4K UHD'
+          : /1080p/i.test(combinedText)
+            ? '1080p Full HD'
+            : /720p/i.test(combinedText)
+              ? '720p HD'
+              : 'HD';
 
       const trackers = (s.sources || [])
         .filter((src) => src.startsWith('tracker:'))
@@ -973,7 +1100,23 @@ async function fetchTorrentioStreams(
         releaseTitle: releaseLine,
       });
 
-      const isRo = /|\b(RO|ROsub|Romanian)\b/i.test(String(s.title || ''));
+      const isRo = /\u{1F1F7}\u{1F1F4}|\b(RO|ROsub|Romanian)\b/iu.test(String(s.title || ''));
+      const cleanAudioInfo =
+        audioLine && !/[\u{1F464}\u{1F4BE}]/u.test(audioLine)
+          ? audioLine
+              .replace(/\u{1F1EC}\u{1F1E7}|\u{1F1FA}\u{1F1F8}/gu, 'EN')
+              .replace(/\u{1F1F7}\u{1F1F4}/gu, 'RO')
+              .replace(/\u{1F1F7}\u{1F1FA}/gu, 'RU')
+              .replace(/\u{1F1EB}\u{1F1F7}/gu, 'FR')
+              .replace(/\u{1F1EA}\u{1F1F8}/gu, 'ES')
+              .replace(/\u{1F1E9}\u{1F1EA}/gu, 'DE')
+              .replace(/\u{1F1EE}\u{1F1F9}/gu, 'IT')
+              .replace(/[^\x20-\x7E\u00A0-\u024F]/g, ' ')
+              .replace(/(?:\s*\/\s*)+/g, ' / ')
+              .replace(/(?:^\s*\/\s*|\s*\/\s*$)/g, '')
+              .replace(/\s+/g, ' ')
+              .trim() || undefined
+          : undefined;
       results.push({
         id: synId,
         flId: `tio:${infoHash}`,
@@ -997,7 +1140,7 @@ async function fetchTorrentioStreams(
         provider: 'torrentio',
         infoHash,
         fileIdx: typeof s.fileIdx === 'number' ? s.fileIdx : undefined,
-        audioInfo: audioLine && !audioLine.includes('') ? audioLine : undefined,
+        audioInfo: cleanAudioInfo,
       });
     }
     return results.slice(0, 18);
@@ -1078,11 +1221,11 @@ function parseKinozalRowsFromHtml(
       defaultType === 'series' ||
       /\[S\d+|\[\d+x\d+|\bсезон\b|\bсерии\b|\bвыпуск/i.test(rawTitle);
 
-    const quality = /\b(2160p|4k|uhd)\b/i.test(rawTitle)
+    const quality = /(?:^|[^a-zа-яё0-9])(2160[pр]|4k|uhd)(?=$|[^a-zа-яё0-9])/i.test(rawTitle)
       ? '4K UHD'
-      : /\b1080[pi]\b/i.test(rawTitle)
+      : /(?:^|[^a-zа-яё0-9])1080[piр](?=$|[^a-zа-яё0-9])/i.test(rawTitle)
         ? '1080p Full HD'
-        : /\b720p\b/i.test(rawTitle)
+        : /(?:^|[^a-zа-яё0-9])720[pр](?=$|[^a-zа-яё0-9])/i.test(rawTitle)
           ? '720p HD'
           : '480p SD';
 
@@ -1094,7 +1237,7 @@ function parseKinozalRowsFromHtml(
       .replace(/\s*\(.*$/g, '')
       .replace(/\s*\/.*$/g, '')
       .replace(/[.\s-]*Сезон\s*\d+\.?/gi, '')
-      .replace(/\b(2160p|1080[pi]|720p|4K|UHD|WEB-?DLRip|WEB-?DL|WEBRip|BDRip|Blu-?Ray|HDTVRip|HDTV)\b.*$/i, '')
+      .replace(/\s*(2160[pр]|1080[piр]|720[pр]|4K|UHD|WEB-?DLRip|WEB-?DL|WEBRip|BDRip|Blu-?Ray|HDTVRip|HDTV)(?=$|[^a-zа-яё0-9]).*$/i, '')
       .replace(/\s+/g, ' ')
       .replace(/[\[\]().,\s-]+$/g, '')
       .trim();
@@ -1161,11 +1304,23 @@ async function fetchKinozalRussianTorrents(
 
   // Search Russian categories first (16 = Русские сериалы, 5 = Наше кино, 6 = Телевизор, 12 = Документальное)
   const primaryCats = type === 'series' ? [16, 6, 12] : [5, 12, 16];
+  const exactRutorEpUrls =
+    type === 'series' && season && episode
+      ? [
+          `https://rutor.info/search/0/6/000/0/${encodeURIComponent(
+            `${cleanQuery} ${String(season).padStart(2, '0')}x${String(episode).padStart(2, '0')}`
+          )}`,
+        ]
+      : [];
   const urls = [
+    ...exactRutorEpUrls,
     ...primaryCats.map(
       (cat) =>
         `https://rutor.info/search/0/${cat}/000/2/${encodeURIComponent(cleanQuery)}`
     ),
+    ...(type === 'series'
+      ? [`https://rutor.info/search/0/6/000/0/${encodeURIComponent(cleanQuery)}`]
+      : []),
     `https://rutor.info/search/0/0/000/2/${encodeURIComponent(cleanQuery)}`,
   ];
 
@@ -1261,14 +1416,14 @@ async function fetchKinozalRussianTorrents(
     if (type === 'series' && season) {
       const sPad = `S${String(season).padStart(2, '0')}`;
       const seasonRegex = new RegExp(
-        `(\\[${sPad}|\\b${sPad}(?:E\\d+|\\b)|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
+        `(\\[${sPad}|\\b${sPad}(?:E\\d+|\\b)|\\[0*${season}[xх]\\d+|\\b0*${season}\\s*сезон)`,
         'i'
       );
       const seasonMatches = pool.filter(
         (t) =>
           seasonRegex.test(t.releaseTitle) ||
           (season === 1 &&
-            !/\[S0*[2-9]|\[S[1-9]\d|\bS0*[2-9](?:E\d+|\b)|\[0*[2-9]x|\b(?:[2-9]|[1-9]\d)\s*сезон/i.test(
+            !/\[S0*[2-9]|\[S[1-9]\d|\bS0*[2-9](?:E\d+|\b)|\[0*[2-9][xх]|\[[1-9]\d[xх]|\b(?:[2-9]|[1-9]\d)\s*сезон/i.test(
               t.releaseTitle
             ))
       );
@@ -1278,7 +1433,7 @@ async function fetchKinozalRussianTorrents(
       if (episode && episode > 0) {
         const matchesRequestedEpisode = (rel: string): boolean => {
           const mRangeBracket =
-            rel.match(/\[(?:S?0*\d+x)?0*(\d+)\s*[-–]\s*0*(\d+)(?:\s*из\s*\d+)?\]/i) ||
+            rel.match(/\[(?:S?0*\d+[xх])?0*(\d+)\s*[-–]\s*0*(\d+)(?:\s*из\s*\d+)?\]/i) ||
             rel.match(/\b0*(\d+)\s*[-–]\s*0*(\d+)\s*(?:сери|выпуск)/i) ||
             rel.match(/\bS\d{1,2}E0*(\d+)\s*[-–]\s*E?0*(\d+)\b/i);
           if (mRangeBracket) {
@@ -1289,9 +1444,9 @@ async function fetchKinozalRussianTorrents(
             }
           }
           const mSingle =
-            rel.match(/\[(?:S?0*\d+x)0*(\d+)\]/i) ||
+            rel.match(/\[(?:S?0*\d+[xх])0*(\d+)(?:\s*из\s*\d+)?\]/i) ||
             rel.match(/\bS\d{1,2}[.\s_-]*E0*(\d+)\b/i) ||
-            rel.match(/(?:^|[^\d-])0*(\d+)\s*(?:серия|выпуск)\b/i);
+            rel.match(/(?:^|[^\d-])0*(\d+)\s*(?:серия|выпуск)(?=$|[^a-zа-яё0-9])/i);
           if (mSingle) {
             return Number(mSingle[1]) === episode;
           }
@@ -1528,18 +1683,79 @@ async function getOrStartTorrentEngine(
   explicitInfoHash?: string
 ): Promise<ActiveTorrentEngine> {
   ensureTmpDir();
+  let preservedVerified: Set<number> | null = null;
+  let preservedProbes: Map<number, any> | null = null;
   const existing = activeEngines.get(torrentId);
   if (existing) {
     existing.lastAccessed = Date.now();
-    try {
-      await existing.readyPromise;
-      return existing;
-    } catch {
+    const hasModernPoke =
+      typeof existing.engine?.pokePeers === 'function' &&
+      typeof existing.engine?.resetCriticalAndFocus === 'function';
+    const wiresCount = Array.isArray(existing.engine?.swarm?.wires)
+      ? existing.engine.swarm.wires.length
+      : 0;
+    const prevZeroSince = Number((existing as any).zeroPeerSince || 0);
+    if (wiresCount === 0) {
+      if (!prevZeroSince) {
+        (existing as any).zeroPeerSince = Date.now();
+      }
+    } else {
+      (existing as any).zeroPeerSince = 0;
+    }
+    const zeroDurationMs =
+      wiresCount === 0 && prevZeroSince ? Date.now() - prevZeroSince : 0;
+    const noActiveStreams =
+      !existing.activeStreams || existing.activeStreams.size === 0;
+    const shouldRecycle =
+      !hasModernPoke ||
+      (wiresCount === 0 && zeroDurationMs > 20000 && noActiveStreams);
+
+    if (shouldRecycle) {
+      preservedVerified = new Set(existing.verifiedPieces || []);
+      preservedProbes = new Map(existing.probeCache || []);
       activeEngines.delete(torrentId);
+      if (existing.activeStreams) {
+        for (const closeOld of Array.from(existing.activeStreams)) {
+          try {
+            closeOld();
+          } catch {
+            // ignore
+          }
+        }
+        existing.activeStreams.clear();
+      }
       try {
         existing.engine?.destroy();
       } catch {
         // ignore
+      }
+    } else {
+      try {
+        await existing.readyPromise;
+        const curWires = Array.isArray(existing.engine?.swarm?.wires)
+          ? existing.engine.swarm.wires.length
+          : 0;
+        if (torrentId > 0 && curWires === 0) {
+          await Promise.race([
+            ensureFileListTrackerIpUnlocked(true),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+          ]);
+          try {
+            existing.engine?.discovery?.tracker?.start?.();
+            existing.engine?.discovery?.tracker?.update?.();
+            existing.engine?.pokePeers?.();
+          } catch {
+            // ignore
+          }
+        }
+        return existing;
+      } catch {
+        activeEngines.delete(torrentId);
+        try {
+          existing.engine?.destroy();
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -1665,6 +1881,15 @@ async function getOrStartTorrentEngine(
         });
       }
     } else {
+      if (
+        !gState.lastFlIpVerifiedAt ||
+        Date.now() - gState.lastFlIpVerifiedAt > 10 * 60 * 1000
+      ) {
+        await Promise.race([
+          ensureFileListTrackerIpUnlocked(false),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+        ]);
+      }
       const session = loadSession();
       const torrentFilePath = path.join(TORRENT_CACHE_DIR, `${torrentId}.torrent`);
       let torrentBuf: Buffer;
@@ -1709,7 +1934,7 @@ async function getOrStartTorrentEngine(
         id: peerId,
         dht: false,
         tracker: true,
-        connections: 90,
+        connections: 100,
         uploads: 4,
         verify: true,
       });
@@ -1722,11 +1947,41 @@ async function getOrStartTorrentEngine(
       readyPromise: Promise.resolve(),
       lastAccessed: Date.now(),
       activeStreams: new Set(),
-      verifiedPieces: new Set<number>(),
+      verifiedPieces: preservedVerified || new Set<number>(),
       prewarmedFiles: new Set<number>(),
+      lastTrackerError: undefined,
       files: [],
-      probeCache: new Map(),
+      probeCache: preservedProbes || new Map(),
     };
+
+    if (torrentId > 0) {
+      let lastTrackerWarnUnlockAt = 0;
+      engine.on('tracker-warning', (err: any) => {
+        const msg = String(err?.message || err || '').trim();
+        if (!msg) return;
+        const curWires = Array.isArray(engine?.swarm?.wires)
+          ? engine.swarm.wires.length
+          : 0;
+        if (
+          curWires === 0 ||
+          /ip address|whitelist|unauthor|passkey|unregistered|denied/i.test(msg)
+        ) {
+          entry.lastTrackerError = msg;
+        }
+        if (/ip address|unauthor|passkey|unregistered|denied/i.test(msg)) {
+          const now = Date.now();
+          if (now - lastTrackerWarnUnlockAt > 15000) {
+            lastTrackerWarnUnlockAt = now;
+            console.warn('[FileList-Tracker] Tracker warning triggered re-unlock:', msg);
+            ensureFileListTrackerIpUnlocked(true).catch(() => {});
+          }
+        }
+      });
+      engine.on('peer', () => {
+        entry.lastTrackerError = undefined;
+      });
+    }
+    (entry as any).createdAt = Date.now();
 
     engine.on('verify', (pieceIdx: number) => {
       if (typeof pieceIdx === 'number' && pieceIdx >= 0) {
@@ -2222,10 +2477,35 @@ async function probeTorrentVideoFile(
 
 let inFlightRangeServerPromise: Promise<number> | null = null;
 
+function ensureTorrentSwarmAlive(
+  entry: ActiveTorrentEngine,
+  targetPiece?: number
+): void {
+  try {
+    const eng = entry?.engine;
+    if (!eng) return;
+    const wiresCount = Array.isArray(eng.swarm?.wires)
+      ? eng.swarm.wires.length
+      : 0;
+    if (wiresCount < 5 || typeof targetPiece === 'number') {
+      eng.pokePeers?.(targetPiece);
+      eng.discovery?.tracker?.update?.();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+const RANGE_SERVER_VERSION = 2;
+
 function ensureInternalRangeServer(): Promise<number> {
-  if (gState.internalRangeServerPort > 0) {
+  if (
+    gState.internalRangeServerPort > 0 &&
+    (gState as any).rangeServerVersion === RANGE_SERVER_VERSION
+  ) {
     return Promise.resolve(gState.internalRangeServerPort);
   }
+  gState.internalRangeServerPort = 0;
   if (inFlightRangeServerPromise) {
     return inFlightRangeServerPromise;
   }
@@ -2258,14 +2538,18 @@ function ensureInternalRangeServer(): Promise<number> {
             'Content-Range': `bytes ${start}-${end}/${total}`,
             'Accept-Ranges': 'bytes',
             'Content-Length': end - start + 1,
-            'Content-Type': 'application/octet-stream',
+            'Content-Type': 'video/x-matroska',
           });
         } else {
           res.writeHead(200, {
             'Content-Length': total,
             'Accept-Ranges': 'bytes',
-            'Content-Type': 'application/octet-stream',
+            'Content-Type': 'video/x-matroska',
           });
+        }
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
         }
 
         const verifiedDiskPath =
@@ -2298,9 +2582,23 @@ function ensureInternalRangeServer(): Promise<number> {
         }
 
         const s = videoFile.createReadStream({ start, end });
+        const pieceLen = Number(entry.engine?.torrent?.pieceLength || 4 * 1024 * 1024);
+        const focusCount = Math.max(2, Math.min(6, Math.ceil((24 * 1024 * 1024) / pieceLen)));
+        ensureTorrentSwarmAlive(
+          entry,
+          typeof s.startPiece === 'number' ? s.startPiece : undefined
+        );
         try {
-          if (typeof s.startPiece === 'number' && entry.engine.critical) {
-            entry.engine.critical(s.startPiece, 12);
+          if (typeof s.startPiece === 'number') {
+            if (start > 512 * 1024 && start < total - 4 * 1024 * 1024) {
+              if (typeof entry.engine.resetCriticalAndFocus === 'function') {
+                entry.engine.resetCriticalAndFocus(s.startPiece, focusCount);
+              } else {
+                entry.engine.critical?.(s.startPiece, focusCount);
+              }
+            } else {
+              entry.engine.critical?.(s.startPiece, 2);
+            }
           }
         } catch {
           // ignore
@@ -2337,9 +2635,51 @@ function ensureInternalRangeServer(): Promise<number> {
       const addr = srv.address();
       gState.internalRangeServerPort =
         typeof addr === 'object' && addr ? addr.port : 0;
+      (gState as any).rangeServerVersion = RANGE_SERVER_VERSION;
+      inFlightRangeServerPromise = null;
       resolve(gState.internalRangeServerPort);
     });
   });
+}
+
+function torrentExplicitlyMismatchesEpisode(
+  text: string,
+  season?: number,
+  episode?: number
+): boolean {
+  if (!season || !episode || !text) return false;
+  const s = Number(season);
+  const e = Number(episode);
+
+  const explicitPatterns = [
+    /\bS0*(\d{1,2})[.\s_-]*E0*(\d{1,3})(?:\s*[-–]\s*E?0*(\d{1,3}))?\b/gi,
+    /\[(?:S?0*(\d{1,2})[xх])0*(\d{1,3})(?:\s*[-–]\s*0*(\d{1,3}))?(?:\s*из\s*\d+)?\]/gi,
+    /\b0*(\d{1,2})\s*сезон[^0-9]{1,20}0*(\d{1,3})(?:\s*[-–]\s*0*(\d{1,3}))?\s*(?:серия|выпуск)/gi,
+  ];
+  let matchedExplicitSe = false;
+  for (const pat of explicitPatterns) {
+    for (const m of text.matchAll(pat)) {
+      matchedExplicitSe = true;
+      const ms = Number(m[1]);
+      const me1 = Number(m[2]);
+      const me2 = m[3] ? Number(m[3]) : null;
+      if (ms !== s) return true;
+      if (me2 !== null) {
+        if (e < me1 || e > me2) return true;
+      } else if (me1 !== e) {
+        return true;
+      }
+    }
+  }
+  if (!matchedExplicitSe) {
+    const singleEpMatch = text.match(
+      /(?:^|[^\d])0*(\d{1,3})\s*(?:выпуск|серия)(?:[^\d]|$)/i
+    );
+    if (singleEpMatch && Number(singleEpMatch[1]) !== e) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function selectBestVideoFileIndex(
@@ -2368,7 +2708,10 @@ function selectBestVideoFileIndex(
       const found = pool.find((f) => pat.test(f.name) || pat.test(f.path));
       if (found) return found.index;
     }
-    if (pool.length > 1 && episode >= 1 && episode <= pool.length) {
+    if (pool.length > 1 && episode >= 1) {
+      if (episode > pool.length) {
+        return -1;
+      }
       const sortedByName = [...pool].sort((a, b) =>
         a.name.localeCompare(b.name, undefined, {
           numeric: true,
@@ -2376,6 +2719,16 @@ function selectBestVideoFileIndex(
         })
       );
       return sortedByName[episode - 1].index;
+    }
+    if (
+      pool.length === 1 &&
+      torrentExplicitlyMismatchesEpisode(
+        `${pool[0].name} ${pool[0].path}`,
+        season,
+        episode
+      )
+    ) {
+      return -1;
     }
   }
 
@@ -2488,6 +2841,7 @@ export async function handleFileListRequest(
         downloadedBytes,
         downloadedText: formatBytes(downloadedBytes),
         durationSec: probedDurationSec,
+        trackerError: targetEntry?.lastTrackerError || undefined,
         source:
           magnetMetaById.get(targetEntry?.id || 0)?.provider === 'kinozal'
             ? 'Kinozal VIP'
@@ -2535,8 +2889,9 @@ export async function handleFileListRequest(
       const sort =
         (parsedUrl.searchParams.get('sort') as 'seeders' | 'latest') || 'seeders';
       const page = parseInt(parsedUrl.searchParams.get('page') || '1', 10) || 1;
+      const fresh = parsedUrl.searchParams.get('fresh') === '1';
 
-      const items = await getFileListCatalog({ section, query: q, imdb, sort, page });
+      const items = await getFileListCatalog({ section, query: q, imdb, sort, page, fresh });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
@@ -2598,12 +2953,15 @@ export async function handleFileListRequest(
       const idParam = parsedUrl.searchParams.get('id') || '';
       const imdbParam = parsedUrl.searchParams.get('imdb') || '';
       const rawQueryParam = parsedUrl.searchParams.get('q') || '';
-      let typeParam = parsedUrl.searchParams.get('type') || 'movie';
+      const rawTypeParam = parsedUrl.searchParams.get('type');
+      let typeParam = rawTypeParam || 'movie';
       const season = parseInt(parsedUrl.searchParams.get('s') || '0', 10) || undefined;
       const episode = parseInt(parsedUrl.searchParams.get('e') || '0', 10) || undefined;
-      if (season || episode) {
+      if (rawTypeParam === 'series' || (!rawTypeParam && (season || episode))) {
         typeParam = 'series';
       }
+      const effectiveSeason = typeParam === 'series' ? season : undefined;
+      const effectiveEpisode = typeParam === 'series' ? episode : undefined;
 
       // STRICT RULE: Kinozal is ONLY for Russian TV Shows & Russian movies/series!
       // Romanian content (Asia Express, Insula Iubirii, Clanul, etc.) is NEVER Russian!
@@ -2616,14 +2974,17 @@ export async function handleFileListRequest(
         )) ||
         (rawQueryParam && /\b(asia\s*express|america\s*express|insula\s*iubirii|power\s*couple|chefi\s*la\s*cutite|las\s*fierbinti|survivor\s*romania|clanul|tatutu|camera\s*609|scara\s*b|burlacul|vocea\s*romaniei|romanii\s*au\s*talent|te\s*cunosc\s*de\s*undeva|bravo\s*ai\s*stil|sunt\s*celebru|visuri\s*la\s*cheie|iubire\s*cu\s*parfum\s*de\s*lavanda)\b/i.test(rawQueryParam));
 
+      const kpParam = (parsedUrl.searchParams.get('kp') || '').trim();
       const ruExplicit = parsedUrl.searchParams.get('ru');
       const isRussianParam = isRomanianQuery
         ? false
-        : ruExplicit === '1'
+        : kpParam === '5354824'
           ? true
-          : ruExplicit === '0'
-            ? false
-            : /[а-яёА-ЯЁ]/i.test(rawQueryParam);
+          : ruExplicit === '1'
+            ? true
+            : ruExplicit === '0'
+              ? false
+              : /[а-яёА-ЯЁ]/i.test(rawQueryParam);
       const queryParam =
         typeParam === 'series'
           ? rawQueryParam
@@ -2633,6 +2994,41 @@ export async function handleFileListRequest(
               .replace(/\s{2,}/g, ' ')
               .trim() || rawQueryParam.trim()
           : rawQueryParam.trim();
+      let effectiveRuQuery = queryParam;
+      if (
+        isRussianParam &&
+        (!effectiveRuQuery || !/[а-яёА-ЯЁ]/i.test(effectiveRuQuery)) &&
+        kpParam &&
+        /^\d+$/.test(kpParam)
+      ) {
+        if (kpParam === '5354824') {
+          effectiveRuQuery = 'Шоу Воли';
+        } else {
+          try {
+            const ctrl = new AbortController();
+            const kpTimer = setTimeout(() => ctrl.abort(), 2500);
+            const kpRes = await fetch(
+              `https://kinopoiskapiunofficial.tech/api/v2.2/films/${kpParam}`,
+              {
+                headers: {
+                  'X-API-KEY': '8c8e1a50-6322-4135-8875-5d40a5420d86',
+                  Accept: 'application/json',
+                },
+                signal: ctrl.signal,
+              }
+            );
+            clearTimeout(kpTimer);
+            if (kpRes.ok) {
+              const kpJson = (await kpRes.json()) as { nameRu?: string };
+              if (kpJson?.nameRu && /[а-яёА-ЯЁ]/i.test(kpJson.nameRu)) {
+                effectiveRuQuery = kpJson.nameRu.trim();
+              }
+            }
+          } catch {
+            // ignore KP lookup timeout
+          }
+        }
+      }
       const requestedFileIdx = parsedUrl.searchParams.get('fileIdx');
 
       let matchingTorrents: FileListTorrentCard[] = [];
@@ -2644,18 +3040,25 @@ export async function handleFileListRequest(
           : parseInt(idParam.replace(/^fl:/i, ''), 10) || 0;
 
       const [kzStreams, flByImdb, tioStreams] = await Promise.all([
-        isRussianParam && queryParam
+        isRussianParam && effectiveRuQuery
           ? fetchKinozalRussianTorrents(
-              queryParam,
+              effectiveRuQuery,
               typeParam === 'series' ? 'series' : 'movie',
-              season,
-              episode
+              effectiveSeason,
+              effectiveEpisode
             ).catch(() => [])
           : Promise.resolve([]),
         !isRussianParam && imdbParam && imdbParam.startsWith('tt')
           ? getFileListCatalog({ imdb: imdbParam }).catch(() => [])
           : Promise.resolve([]),
-        Promise.resolve([] as FileListTorrentCard[]),
+        !isRussianParam && imdbParam && imdbParam.startsWith('tt')
+          ? fetchTorrentioStreams(
+              imdbParam,
+              typeParam === 'series' ? 'series' : 'movie',
+              effectiveSeason,
+              effectiveEpisode
+            ).catch(() => [])
+          : Promise.resolve([]),
       ]);
 
       kinozalTorrents = kzStreams;
@@ -2688,12 +3091,17 @@ export async function handleFileListRequest(
       kinozalTorrents = sortByQualityAndSeeders(kinozalTorrents);
 
       // If series, filter or rank torrents matching the requested Season/Episode AFTER sorting
-      if (typeParam === 'series' && season) {
-        const sPad = `S${String(season).padStart(2, '0')}`;
-        const ePad = episode ? `E${String(episode).padStart(2, '0')}` : '';
-        const epRegex = ePad ? new RegExp(`${sPad}[.\\s_-]*${ePad}\\b`, 'i') : null;
+      if (typeParam === 'series' && effectiveSeason) {
+        const sPad = `S${String(effectiveSeason).padStart(2, '0')}`;
+        const ePad = effectiveEpisode ? `E${String(effectiveEpisode).padStart(2, '0')}` : '';
+        const epRegex = effectiveEpisode
+          ? new RegExp(
+              `(?:${sPad}[.\\s_-]*${ePad}\\b|\\[(?:S?0*${effectiveSeason}[xх])0*${effectiveEpisode}(?:\\s*из\\s*\\d+)?\\])`,
+              'i'
+            )
+          : null;
         const seasonPackRegex = new RegExp(
-          `(${sPad}(?!E\\d)|Season[.\\s_-]*0*${season}\\b|\\[0*${season}x\\d+|\\b0*${season}\\s*сезон)`,
+          `(${sPad}(?!E\\d)|Season[.\\s_-]*0*${effectiveSeason}\\b|\\[0*${effectiveSeason}[xх]0*\\d+\\s*[-–]\\s*\\d+|\\b0*${effectiveSeason}\\s*сезон)`,
           'i'
         );
 
@@ -2802,6 +3210,41 @@ export async function handleFileListRequest(
       );
 
       const strictIdParam = parsedUrl.searchParams.get('strictId') === '1';
+      if (typeParam === 'series' && effectiveSeason && targetTorrentId !== 0) {
+        if (
+          !strictIdParam &&
+          !matchingTorrents.some((t) => t.id === targetTorrentId)
+        ) {
+          targetTorrentId = 0;
+        } else if (strictIdParam && effectiveEpisode) {
+          const strictTitle =
+            matchingTorrents.find((t) => t.id === targetTorrentId)?.releaseTitle ||
+            '';
+          if (
+            (strictTitle &&
+              torrentExplicitlyMismatchesEpisode(
+                strictTitle,
+                effectiveSeason,
+                effectiveEpisode
+              )) ||
+            (targetTorrentId < 0 &&
+              !matchingTorrents.some((t) => t.id === targetTorrentId) &&
+              !magnetMetaById.has(targetTorrentId))
+          ) {
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Origin': '*',
+            });
+            res.end(
+              JSON.stringify({
+                ok: false,
+                error: 'Selected torrent does not match requested episode',
+              })
+            );
+            return true;
+          }
+        }
+      }
       if (
         targetTorrentId < 0 &&
         !strictIdParam &&
@@ -2980,19 +3423,53 @@ export async function handleFileListRequest(
         (f) => /\.(mkv|mp4|avi|m4v|ts|webm)$/i.test(f.name) && !/\bsample\b/i.test(f.name)
       );
       const magnetPresetIdx = magnetMetaById.get(targetTorrentId)?.fileIdx;
+      const autoEpFileIdx =
+        effectiveSeason && effectiveEpisode
+          ? selectBestVideoFileIndex(entry.files, effectiveSeason, effectiveEpisode)
+          : -1;
       const selectedFileIdx =
         requestedFileIdx !== null && requestedFileIdx !== ''
           ? parseInt(requestedFileIdx, 10)
-          : typeof magnetPresetIdx === 'number' && entry.files[magnetPresetIdx]
-            ? magnetPresetIdx
-            : selectBestVideoFileIndex(entry.files, season, episode);
+          : effectiveSeason && effectiveEpisode
+            ? autoEpFileIdx
+            : typeof magnetPresetIdx === 'number' && entry.files[magnetPresetIdx]
+              ? magnetPresetIdx
+              : selectBestVideoFileIndex(entry.files, effectiveSeason, effectiveEpisode);
+
+      if (
+        selectedFileIdx < 0 ||
+        (effectiveSeason &&
+          effectiveEpisode &&
+          entry.files.length <= 1 &&
+          torrentExplicitlyMismatchesEpisode(
+            selectedTorrentMeta.releaseTitle || '',
+            effectiveSeason,
+            effectiveEpisode
+          ))
+      ) {
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error:
+              entry.files.length <= 1
+                ? 'Requested episode not present inside single-episode torrent'
+                : 'Requested episode not present inside torrent pack',
+          })
+        );
+        return true;
+      }
 
       const selectedFile =
         entry.files.find((f) => f.index === selectedFileIdx) || entry.files[0];
 
+      const relOrFile = `${selectedFile?.name || ''} ${selectedTorrentMeta.releaseTitle || ''}`;
       if (
-        /\b(2160p|4k|uhd)\b/i.test(selectedFile?.name || '') ||
-        /\b(2160p|4k|uhd)\b/i.test(selectedTorrentMeta.releaseTitle || '')
+        /\b(2160p|4k)\b/i.test(relOrFile) ||
+        (/\buhd\b/i.test(relOrFile) && !/\b(1080p|720p)\b/i.test(relOrFile))
       ) {
         selectedTorrentMeta.quality = '4K UHD';
       }
@@ -3167,6 +3644,13 @@ export async function handleFileListRequest(
       }
       const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
       if (!verifiedDiskPath) {
+        const curWires = Array.isArray(entry.engine?.swarm?.wires)
+          ? entry.engine.swarm.wires.length
+          : 0;
+        if (id > 0 && curWires === 0) {
+          ensureFileListTrackerIpUnlocked(true).catch(() => {});
+        }
+        ensureTorrentSwarmAlive(entry);
         prewarmVideoTailCues(entry, fileIdx);
       }
 
@@ -3296,6 +3780,53 @@ export async function handleFileListRequest(
           Math.round(cachedProbe.durationSec)
         );
       }
+      if (!verifiedDiskPath && id > 0) {
+        const isStartCached =
+          startSec <= 1 &&
+          Boolean(
+            verifyDiskPiecesForByteRange(
+              entry,
+              fileIdx,
+              0,
+              Math.min(Math.max(0, Number(rawFile.length) - 1), 2 * 1024 * 1024)
+            )
+          );
+        const curWires = Array.isArray(entry.engine?.swarm?.wires)
+          ? entry.engine.swarm.wires.length
+          : 0;
+        if (!isStartCached && curWires === 0) {
+          const deadline = Date.now() + 1800;
+          while (Date.now() < deadline && !clientDisconnectedEarly) {
+            const liveWires = Array.isArray(entry.engine?.swarm?.wires)
+              ? entry.engine.swarm.wires.length
+              : 0;
+            if (liveWires > 0) break;
+            if (entry.lastTrackerError && Date.now() + 900 > deadline) break;
+            await new Promise((r) => setTimeout(r, 150));
+          }
+          const finalWires = Array.isArray(entry.engine?.swarm?.wires)
+            ? entry.engine.swarm.wires.length
+            : 0;
+          if (
+            finalWires === 0 &&
+            entry.lastTrackerError &&
+            !clientDisconnectedEarly &&
+            !res.destroyed &&
+            !res.writableEnded
+          ) {
+            res.writeHead(503, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Origin': '*',
+              'X-Tracker-Error': String(entry.lastTrackerError).slice(0, 120),
+            });
+            res.end(
+              JSON.stringify({ ok: false, error: entry.lastTrackerError })
+            );
+            return true;
+          }
+        }
+      }
+
       res.writeHead(200, streamHeaders);
 
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
@@ -3443,8 +3974,10 @@ export async function handleFileListRequest(
       if (useDirectPipe) {
         directReadStream = rawFile.createReadStream();
         try {
-          if (typeof directReadStream.startPiece === 'number' && entry.engine.critical) {
-            entry.engine.critical(directReadStream.startPiece, 12);
+          if (typeof directReadStream.startPiece === 'number') {
+            const pLen = Number(entry.engine?.torrent?.pieceLength || 4 * 1024 * 1024);
+            const directFocus = Math.max(2, Math.min(6, Math.ceil((24 * 1024 * 1024) / pLen)));
+            entry.engine.critical?.(directReadStream.startPiece, directFocus);
           }
         } catch {
           // ignore
@@ -3605,6 +4138,7 @@ export async function handleFileListRequest(
         }
 
         const entry = await getOrStartTorrentEngine(id);
+        ensureTorrentSwarmAlive(entry);
         if (entry.activeStreams) {
           for (const closeOld of Array.from(entry.activeStreams)) {
             try {

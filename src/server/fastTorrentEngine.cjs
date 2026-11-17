@@ -24,7 +24,7 @@ const blocklist = require('ip-set');
 
 // Modern high-bandwidth streaming constants (replaces 2014 ADSL MAX_REQUESTS=5 & broken piece.BLOCK_SIZE)
 const BLOCK_LEN = piece.BLOCK_LENGTH || 16384;
-const MIN_REQUESTS = 8;
+const MIN_REQUESTS = 16;
 const MAX_REQUESTS_FAST = 64; // 64 * 16KB = 1MB in-flight pipeline per fast seedbox peer
 const CHOKE_TIMEOUT = 4000;
 const REQUEST_TIMEOUT = 10000;
@@ -164,15 +164,44 @@ function FastFileStream(engine, file, opts) {
   this._missing = this.length;
   this._reading = false;
   this._notifying = false;
-  // Keep at least 32MB (or 4 pieces of 8MB = ~26s of 1080p video) marked critical ahead of playhead!
+  // Keep a tight 24MB (min 2 pieces) critical window right at the active playhead!
   this._critical = Math.max(
-    4,
-    Math.min(12, Math.ceil((32 * 1024 * 1024) / pieceLength))
+    2,
+    Math.min(8, Math.ceil((24 * 1024 * 1024) / pieceLength))
   );
   this._offset = offset - this.startPiece * pieceLength;
+  this._stallTimer = null;
 }
 
 util.inherits(FastFileStream, stream.Readable);
+
+FastFileStream.prototype._clearStallTimer = function () {
+  if (this._stallTimer) {
+    clearTimeout(this._stallTimer);
+    this._stallTimer = null;
+  }
+};
+
+FastFileStream.prototype._armStallTimer = function (curPiece) {
+  const self = this;
+  if (self._stallTimer || self._destroyed || !self._reading) return;
+  self._stallTimer = setTimeout(function () {
+    self._stallTimer = null;
+    if (self._destroyed || !self._reading) return;
+    if (!self._engine.bitfield || self._engine.bitfield.get(curPiece)) {
+      self.notify();
+      return;
+    }
+    const lookaheadEnd = Math.min(self.endPiece, curPiece + self._critical);
+    if (lookaheadEnd >= curPiece && self._engine.critical) {
+      self._engine.critical(curPiece, lookaheadEnd - curPiece + 1);
+    }
+    if (typeof self._engine.pokePeers === 'function') {
+      self._engine.pokePeers(curPiece);
+    }
+    self._armStallTimer(curPiece);
+  }, 3500);
+};
 
 FastFileStream.prototype._read = function () {
   if (this._reading) return;
@@ -193,6 +222,14 @@ FastFileStream.prototype.notify = function () {
   }
 
   if (!this._engine.bitfield.get(curPiece)) {
+    const wireCount =
+      this._engine.swarm && Array.isArray(this._engine.swarm.wires)
+        ? this._engine.swarm.wires.length
+        : 0;
+    if (wireCount < 2 && typeof this._engine.pokePeers === 'function') {
+      this._engine.pokePeers(curPiece);
+    }
+    this._armStallTimer(curPiece);
     // On-demand instant SSD piece verification if file already exists on disk (0ms wait for cached pieces!)
     if (this._engine._tryVerifyDiskPiece) {
       this._engine._tryVerifyDiskPiece(curPiece, function (verifiedOk) {
@@ -204,6 +241,7 @@ FastFileStream.prototype.notify = function () {
     return;
   }
 
+  this._clearStallTimer();
   if (this._notifying) return;
   this._notifying = true;
   this._engine.store.get(this._piece++, function (err, buffer) {
@@ -221,6 +259,7 @@ FastFileStream.prototype.notify = function () {
     self._missing -= buffer.length;
 
     if (!self._missing) {
+      self._clearStallTimer();
       self.push(buffer);
       self.push(null);
       return;
@@ -242,6 +281,7 @@ FastFileStream.prototype.notify = function () {
 FastFileStream.prototype.destroy = function (err) {
   if (this._destroyed) return;
   this._destroyed = true;
+  this._clearStallTimer();
   if (err) this.emit('error', err);
   this.emit('close');
 };
@@ -321,6 +361,34 @@ function fastTorrentStream(link, opts, cb) {
     port: DEFAULT_PORT,
     announce: opts.trackers,
   });
+  engine.discovery = discovery;
+  let lastPokeAt = 0;
+  engine.pokePeers = function () {
+    if (destroyed) return;
+    const now = Date.now();
+    try {
+      swarm.resume();
+    } catch {
+      // ignore
+    }
+    if (now - lastPokeAt >= 8000) {
+      lastPokeAt = now;
+      try {
+        if (discovery.tracker && typeof discovery.tracker.update === 'function') {
+          discovery.tracker.update();
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        if (discovery.dht && typeof discovery._dhtAnnounce === 'function') {
+          discovery._dhtAnnounce();
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
   const blocked = blocklist(opts.blocklist);
 
   discovery.on('peer', function (addr) {
@@ -330,6 +398,14 @@ function fastTorrentStream(link, opts, cb) {
       engine.emit('peer', addr);
       engine.connect(addr);
     }
+  });
+
+  discovery.on('warning', function (err) {
+    engine.emit('tracker-warning', err);
+  });
+
+  discovery.on('error', function (err) {
+    engine.emit('tracker-warning', err);
   });
 
   const ontorrent = function (torrent) {
@@ -366,6 +442,7 @@ function fastTorrentStream(link, opts, cb) {
     const reservations = torrent.pieces.map(function () {
       return [];
     });
+    const pieceLastActivity = new Float64Array(torrent.pieces.length);
     const diskCheckAttempted = new Uint8Array(torrent.pieces.length);
     const diskCheckInFlight = new Map();
 
@@ -571,11 +648,13 @@ function fastTorrentStream(link, opts, cb) {
       let i = r.indexOf(null);
       if (i === -1) i = r.length;
       r[i] = wire;
+      pieceLastActivity[index] = Date.now();
 
       wire.request(index, offset, size, function (err, block) {
         if (r[i] === wire) r[i] = null;
 
         if (p !== pieces[index]) return onupdatetick();
+        pieceLastActivity[index] = Date.now();
 
         if (err) {
           p.cancel(reservation);
@@ -616,13 +695,13 @@ function fastTorrentStream(link, opts, cb) {
     };
 
     const onvalidatewire = function (wire) {
-      if (wire.requests.length >= 4) return;
+      if (wire.requests.length >= 12) return;
 
       for (let i = 0; i < engine.selection.length; i++) {
         const next = engine.selection[i];
         for (let j = next.from + next.offset; j <= next.to; j++) {
           if (!wire.peerPieces[j]) continue;
-          while (wire.requests.length < 4 && onrequest(wire, j, false)) {
+          while (wire.requests.length < 12 && onrequest(wire, j, false)) {
             // pipeline initial validation blocks on the exact active piece
           }
           if (wire.requests.length) return;
@@ -721,6 +800,26 @@ function fastTorrentStream(link, opts, cb) {
 
       wire.on('close', function () {
         clearTimeout(id);
+        for (let k = 0; k < reservations.length; k++) {
+          const rk = reservations[k];
+          if (!rk || !pieces[k]) continue;
+          let touched = false;
+          for (let m = 0; m < rk.length; m++) {
+            if (rk[m] === wire) {
+              rk[m] = null;
+              touched = true;
+            }
+          }
+          if (touched && Array.isArray(wire.requests)) {
+            for (let q = 0; q < wire.requests.length; q++) {
+              const req = wire.requests[q];
+              if (req && req.piece === k) {
+                pieces[k].cancel((req.offset / BLOCK_LEN) | 0);
+              }
+            }
+          }
+        }
+        onupdatetick();
       });
       wire.on('choke', function () {
         clearTimeout(id);
@@ -832,6 +931,77 @@ function fastTorrentStream(link, opts, cb) {
         onupdate();
       };
 
+      const resetWedgedPieceIfNeeded = function (pIdx) {
+        if (
+          typeof pIdx !== 'number' ||
+          pIdx < 0 ||
+          pIdx >= pieces.length ||
+          !pieces[pIdx] ||
+          engine.bitfield.get(pIdx)
+        ) {
+          return;
+        }
+        const now = Date.now();
+        if (now - (pieceLastActivity[pIdx] || 0) <= 4000) return;
+        let hasLiveRequest = false;
+        for (let w = 0; w < wires.length && !hasLiveRequest; w++) {
+          const reqs = wires[w] && wires[w].requests;
+          if (!Array.isArray(reqs)) continue;
+          for (let q = 0; q < reqs.length; q++) {
+            if (reqs[q] && reqs[q].piece === pIdx) {
+              hasLiveRequest = true;
+              break;
+            }
+          }
+        }
+        if (!hasLiveRequest || pieces[pIdx].missing === 0) {
+          const expectedLen =
+            pIdx === torrent.pieces.length - 1 ? pieceRemainder : pieceLength;
+          pieces[pIdx] = piece(expectedLen);
+          reservations[pIdx] = [];
+          pieceLastActivity[pIdx] = now;
+        }
+      };
+
+      engine.pokePeers = function (targetPiece) {
+        if (destroyed) return;
+        const now = Date.now();
+        try {
+          swarm.resume();
+        } catch {
+          // ignore
+        }
+        if (now - lastPokeAt >= 8000) {
+          lastPokeAt = now;
+          try {
+            if (
+              discovery.tracker &&
+              typeof discovery.tracker.update === 'function'
+            ) {
+              discovery.tracker.update();
+            }
+          } catch {
+            // ignore
+          }
+          try {
+            if (discovery.dht && typeof discovery._dhtAnnounce === 'function') {
+              discovery._dhtAnnounce();
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (typeof targetPiece === 'number') {
+          resetWedgedPieceIfNeeded(targetPiece);
+        }
+        if (engine.selection && engine.selection[0]) {
+          const s0 = engine.selection[0];
+          resetWedgedPieceIfNeeded(s0.from + s0.offset);
+        }
+        oninterestchange();
+        onupdate();
+      };
+
       rechokeIntervalId = setInterval(onrechoke, RECHOKE_INTERVAL);
 
       process.nextTick(function () {
@@ -911,6 +1081,17 @@ function fastTorrentStream(link, opts, cb) {
     const count = width || 1;
     for (let i = 0; i < count; i++) {
       critical[pieceIdx + i] = true;
+    }
+  };
+
+  engine.resetCriticalAndFocus = function (pieceIdx, width) {
+    critical.length = 0;
+    const count = width || 2;
+    for (let i = 0; i < count; i++) {
+      critical[pieceIdx + i] = true;
+    }
+    if (typeof engine.pokePeers === 'function') {
+      engine.pokePeers(pieceIdx);
     }
   };
 

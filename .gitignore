@@ -35,6 +35,7 @@ dist-ssr
 .tv-saved*.json
 .tv-radio-favs*.json
 .tv-channel-favs*.json
+.music-sync*.json
 .netlify
 
 

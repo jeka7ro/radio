@@ -800,7 +800,7 @@ export const CURATED_TOP_RUSSIAN_TV_SHOWS: IedemVodItem[] = [
     year: 2026,
     ratingKinopoisk: '7.8',
     episodesCount: 180,
-    seasonsCount: 1,
+    seasonsCount: 4,
     tvShowNetwork: 'tnt',
     networkBadge: 'ТНТ',
     agelimit: 16,
@@ -1125,6 +1125,7 @@ export interface IedemVerifiedMeta {
   backdropUrl?: string;
   logoUrl?: string;
   overview?: string;
+  tmdbChecked?: boolean;
   checkedAt: number;
 }
 
@@ -1224,20 +1225,148 @@ export function extractExplicitYearFromIedemText(item: IedemVodItem): number | u
   return undefined;
 }
 
+function isUsableVodPosterUrl(u?: string): u is string {
+  return Boolean(u && typeof u === 'string' && u.trim() && !/no-poster/i.test(u));
+}
+
+async function fetchTmdbRuPoster(
+  baseTitle: string,
+  wantSeries: boolean,
+  targetYear?: number
+): Promise<{ posterUrl?: string; rating?: string; year?: number }> {
+  const normTarget = normalizeRuCompareKey(baseTitle);
+  const spaceTitle = baseTitle.replace(/[.:]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const prefixTitle = baseTitle.includes(':')
+    ? baseTitle.split(':')[0].trim()
+    : baseTitle.split('.').length >= 3
+      ? baseTitle.split('.').slice(0, 2).join('.').trim()
+      : '';
+  const normPrefix = normalizeRuCompareKey(prefixTitle);
+  const queries = [...new Set([baseTitle, spaceTitle, prefixTitle].filter((q) => q.length >= 2))];
+  const targetNums: string[] = baseTitle.match(/\d+/g) || [];
+  const epType = wantSeries ? 'tv' : 'movie';
+
+  for (const q of queries) {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3500);
+      const r = await fetch(
+        `https://api.themoviedb.org/3/search/${epType}?api_key=15d2ea6d0dc1d476efbca3eba2b9bbfb&language=ru-RU&query=${encodeURIComponent(
+          q
+        )}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(t);
+      if (!r.ok) continue;
+      const d = (await r.json()) as {
+        results?: Array<{
+          name?: string;
+          title?: string;
+          original_name?: string;
+          original_title?: string;
+          poster_path?: string | null;
+          first_air_date?: string;
+          release_date?: string;
+          vote_average?: number;
+        }>;
+      };
+      const results = (Array.isArray(d.results) ? d.results : []).filter((x) =>
+        Boolean(x?.poster_path)
+      );
+      if (results.length === 0) continue;
+
+      let bestHit: (typeof results)[0] | null = null;
+      let bestScore = 0;
+      for (const hit of results) {
+        const hitName = hit.name || hit.title || '';
+        const hitOrig = hit.original_name || hit.original_title || '';
+        const nh = normalizeRuCompareKey(hitName);
+        const no = normalizeRuCompareKey(hitOrig);
+        let score = 0;
+        if (nh === normTarget || (no && no === normTarget)) {
+          score = 100;
+        } else if (
+          nh &&
+          (nh.startsWith(normTarget) || normTarget.startsWith(nh))
+        ) {
+          score = 85;
+        } else if (
+          normPrefix.length >= 5 &&
+          nh &&
+          nh.startsWith(normPrefix)
+        ) {
+          score = 70;
+        }
+        if (score === 0) continue;
+
+        const dt = hit.first_air_date || hit.release_date || '';
+        const hitYr = dt ? Number(dt.slice(0, 4)) : 0;
+        if (targetYear && hitYr >= 1940) {
+          const diff = Math.abs(hitYr - targetYear);
+          if (diff <= 1) score += 15;
+          else if (diff >= 5) score -= 25;
+        }
+        if (targetNums.length > 0) {
+          const hitNums: string[] = hitName.match(/\d+/g) || [];
+          if (targetNums.every((n) => hitNums.includes(n))) score += 10;
+          else if (hitNums.length > 0) score -= 20;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestHit = hit;
+        }
+      }
+
+      if (bestHit?.poster_path && bestScore >= 60) {
+        const dt = bestHit.first_air_date || bestHit.release_date || '';
+        const hitYr = dt ? Number(dt.slice(0, 4)) : undefined;
+        const rating =
+          typeof bestHit.vote_average === 'number' && bestHit.vote_average > 0
+            ? bestHit.vote_average.toFixed(1)
+            : undefined;
+        return {
+          posterUrl: `https://image.tmdb.org/t/p/w500${bestHit.poster_path}`,
+          rating,
+          year: hitYr && hitYr >= 1930 && hitYr <= 2026 ? hitYr : undefined,
+        };
+      }
+    } catch {
+      // ignore TMDB lookup error
+    }
+  }
+  return {};
+}
+
 export async function resolveIedemKinopoiskMeta(
   item: IedemVodItem
 ): Promise<IedemVerifiedMeta> {
   const cacheKey = getIedemKpCacheKey(item);
   const existing = iedemKpCache.get(cacheKey);
-  if (existing) return existing;
+  if (existing && (isUsableVodPosterUrl(existing.posterUrl) || existing.tmdbChecked)) {
+    return existing;
+  }
 
   const baseTitle = cleanIedemBaseTitle(item.title);
   const normTarget = normalizeRuCompareKey(baseTitle);
   if (!baseTitle || normTarget.length < 2) {
-    const empty: IedemVerifiedMeta = { checkedAt: Date.now() };
+    const empty: IedemVerifiedMeta = { checkedAt: Date.now(), tmdbChecked: true };
     iedemKpCache.set(cacheKey, empty);
     return empty;
   }
+
+  const wantSeries = item.type === 'multistream';
+  const titleYearMatch = String(item.title || '').match(
+    /(?:^|[\s(\-«"])(19[4-9]\d|20[0-2]\d)(?:$|[\s).»"г])/i
+  );
+  const targetYear =
+    typeof item.year === 'number' && item.year >= 1940 && item.year <= 2026
+      ? item.year
+      : titleYearMatch
+        ? Number(titleYearMatch[1])
+        : undefined;
+
+  let chosenMeta: Partial<IedemVerifiedMeta> = {};
+  let kpHadExplicitNoPoster = false;
 
   try {
     const res = await fetch(
@@ -1250,165 +1379,191 @@ export async function resolveIedemKinopoiskMeta(
         },
       }
     );
-    if (!res.ok) {
-      return { checkedAt: Date.now() };
-    }
-    const data = (await res.json()) as {
-      films?: Array<{
-        filmId?: number;
-        nameRu?: string;
-        nameEn?: string;
-        type?: string;
-        year?: string | number;
-        rating?: string | number;
-        posterUrl?: string;
-        posterUrlPreview?: string;
-        countries?: Array<{ country?: string }>;
-      }>;
-    };
-    const films = Array.isArray(data.films) ? data.films : [];
-    const wantSeries = item.type === 'multistream';
+    if (res.ok) {
+      const data = (await res.json()) as {
+        films?: Array<{
+          filmId?: number;
+          nameRu?: string;
+          nameEn?: string;
+          type?: string;
+          year?: string | number;
+          rating?: string | number;
+          posterUrl?: string;
+          posterUrlPreview?: string;
+          countries?: Array<{ country?: string }>;
+        }>;
+      };
+      const films = Array.isArray(data.films) ? data.films : [];
 
-    const colonPrefix = baseTitle.includes(':') ? baseTitle.split(':')[0].trim() : '';
-    const normColonPrefix = colonPrefix.length >= 3 ? normalizeRuCompareKey(colonPrefix) : '';
+      const colonPrefix = baseTitle.includes(':')
+        ? baseTitle.split(':')[0].trim()
+        : baseTitle.split('.').length >= 3
+          ? baseTitle.split('.').slice(0, 2).join('.').trim()
+          : '';
+      const normColonPrefix =
+        colonPrefix.length >= 3 ? normalizeRuCompareKey(colonPrefix) : '';
 
-    const exactMatches = films.filter((f) => {
-      const fNormRu = normalizeRuCompareKey(f.nameRu);
-      const fNormEn = normalizeRuCompareKey(f.nameEn);
-      return fNormRu === normTarget || (fNormEn && fNormEn === normTarget);
-    });
+      const exactMatches = films.filter((f) => {
+        const fNormRu = normalizeRuCompareKey(f.nameRu);
+        const fNormEn = normalizeRuCompareKey(f.nameEn);
+        return fNormRu === normTarget || (fNormEn && fNormEn === normTarget);
+      });
 
-    const prefixSeriesMatches =
-      wantSeries && normColonPrefix
-        ? films.filter((f) => {
-            const fNormRu = normalizeRuCompareKey(f.nameRu);
-            return fNormRu === normColonPrefix;
-          })
-        : [];
+      const prefixSeriesMatches =
+        wantSeries && normColonPrefix
+          ? films.filter((f) => {
+              const fNormRu = normalizeRuCompareKey(f.nameRu);
+              return fNormRu === normColonPrefix;
+            })
+          : [];
 
-    const isSeriesType = (t?: string) =>
-      t === 'TV_SERIES' || t === 'MINI_SERIES' || t === 'TV_SHOW';
+      const isSeriesType = (t?: string) =>
+        t === 'TV_SERIES' || t === 'MINI_SERIES' || t === 'TV_SHOW';
 
-    const isRuCountryList = (countries?: Array<{ country?: string }>) =>
-      Array.isArray(countries) &&
-      countries.some((c) =>
-        /(Росси|СССР|Беларус|Казахстан)/i.test(String(c?.country || ''))
-      );
+      const isRuCountryList = (countries?: Array<{ country?: string }>) =>
+        Array.isArray(countries) &&
+        countries.some((c) =>
+          /(Росси|СССР|Беларус|Казахстан)/i.test(String(c?.country || ''))
+        );
 
-    const titleYearMatch = String(item.title || '').match(
-      /(?:^|[\s(\-«"])(19[4-9]\d|20[0-2]\d)(?:$|[\s).»"г])/i
-    );
-    const targetYear =
-      typeof item.year === 'number' && item.year >= 1940 && item.year <= 2026
-        ? item.year
-        : titleYearMatch
-          ? Number(titleYearMatch[1])
-          : undefined;
+      const matchesTargetYear = (fYear?: string | number) => {
+        if (!fYear || fYear === 'null') return false;
+        const py = Number(String(fYear).slice(0, 4));
+        if (!Number.isFinite(py) || py < 1930 || py > 2026) return false;
+        if (!targetYear) return true;
+        return Math.abs(py - targetYear) <= 1;
+      };
 
-    const matchesTargetYear = (fYear?: string | number) => {
-      if (!fYear || fYear === 'null') return false;
-      const py = Number(String(fYear).slice(0, 4));
-      if (!Number.isFinite(py) || py < 1930 || py > 2026) return false;
-      if (!targetYear) return true;
-      return Math.abs(py - targetYear) <= 1;
-    };
+      const isUnindexedNewYear = (fYear?: string | number) =>
+        (!fYear || fYear === 'null') && (!targetYear || targetYear >= 2025);
 
-    const isUnindexedNewYear = (fYear?: string | number) =>
-      (!fYear || fYear === 'null') && (!targetYear || targetYear >= 2025);
+      const isMultiSeasonPriorYear = (fYear?: string | number) => {
+        if (!wantSeries || !fYear || fYear === 'null' || !targetYear) return false;
+        const py = Number(String(fYear).slice(0, 4));
+        return Number.isFinite(py) && py >= 2000 && py <= targetYear;
+      };
 
-    const isMultiSeasonPriorYear = (fYear?: string | number) => {
-      if (!wantSeries || !fYear || fYear === 'null' || !targetYear) return false;
-      const py = Number(String(fYear).slice(0, 4));
-      return Number.isFinite(py) && py >= 2000 && py <= targetYear;
-    };
-
-    // Prefer exact match with matching media type, target year (±1), and Russian/USSR origin
-    const chosen =
-      exactMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          isRuCountryList(f.countries) &&
-          matchesTargetYear(f.year)
-      ) ||
-      exactMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          matchesTargetYear(f.year)
-      ) ||
-      exactMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          isRuCountryList(f.countries) &&
-          isUnindexedNewYear(f.year)
-      ) ||
-      exactMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          isUnindexedNewYear(f.year)
-      ) ||
-      exactMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          isRuCountryList(f.countries) &&
-          isMultiSeasonPriorYear(f.year)
-      ) ||
-      prefixSeriesMatches.find(
-        (f) =>
-          isSeriesType(f.type) === wantSeries &&
-          isRuCountryList(f.countries) &&
-          (matchesTargetYear(f.year) || isMultiSeasonPriorYear(f.year))
-      ) ||
-      (!item.kinozalHash
-        ? exactMatches.find(
-            (f) => isRuCountryList(f.countries) && matchesTargetYear(f.year)
-          ) || exactMatches.find((f) => matchesTargetYear(f.year))
-        : undefined);
-
-    if (chosen) {
-      const parsedYear = Number(String(chosen.year).slice(0, 4));
-      const validYear =
-        Number.isFinite(parsedYear) && parsedYear >= 1930 && parsedYear <= 2026
-          ? parsedYear
-          : targetYear;
-      const hasCountries =
-        Array.isArray(chosen.countries) && chosen.countries.length > 0;
-      const isRu = hasCountries ? isRuCountryList(chosen.countries) : undefined;
-
-      const rawRating = String(chosen.rating || '').trim();
-      let validRating: string | undefined;
-      if (rawRating && rawRating !== 'null' && !rawRating.endsWith('%')) {
-        const rNum = parseFloat(rawRating.replace(',', '.'));
-        if (Number.isFinite(rNum) && rNum > 0 && rNum <= 10) {
-          validRating = rNum.toFixed(1);
-        }
-      }
-
-      const posterUrl =
-        chosen.posterUrlPreview ||
-        chosen.posterUrl ||
-        (chosen.filmId
-          ? `https://kinopoiskapiunofficial.tech/images/posters/kp/${chosen.filmId}.jpg`
+      // Prefer exact match with matching media type, target year (±1), and Russian/USSR origin
+      const chosen =
+        exactMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            isRuCountryList(f.countries) &&
+            matchesTargetYear(f.year)
+        ) ||
+        exactMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            matchesTargetYear(f.year)
+        ) ||
+        exactMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            isRuCountryList(f.countries) &&
+            isUnindexedNewYear(f.year)
+        ) ||
+        exactMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            isUnindexedNewYear(f.year)
+        ) ||
+        exactMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            isRuCountryList(f.countries) &&
+            isMultiSeasonPriorYear(f.year)
+        ) ||
+        prefixSeriesMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            isRuCountryList(f.countries) &&
+            (matchesTargetYear(f.year) ||
+              isMultiSeasonPriorYear(f.year) ||
+              isUnindexedNewYear(f.year))
+        ) ||
+        prefixSeriesMatches.find(
+          (f) =>
+            isSeriesType(f.type) === wantSeries &&
+            (matchesTargetYear(f.year) ||
+              isMultiSeasonPriorYear(f.year) ||
+              isUnindexedNewYear(f.year))
+        ) ||
+        (!item.kinozalHash
+          ? exactMatches.find(
+              (f) => isRuCountryList(f.countries) && matchesTargetYear(f.year)
+            ) || exactMatches.find((f) => matchesTargetYear(f.year))
           : undefined);
 
-      const meta: IedemVerifiedMeta = {
-        year: validYear,
-        isRussian: isRu,
-        kpId: chosen.filmId,
-        ratingKinopoisk: validRating,
-        posterUrl,
-        checkedAt: Date.now(),
-      };
-      iedemKpCache.set(cacheKey, meta);
-      persistIedemKpCache();
-      return meta;
+      if (chosen) {
+        const parsedYear = Number(String(chosen.year).slice(0, 4));
+        const validYear =
+          Number.isFinite(parsedYear) && parsedYear >= 1930 && parsedYear <= 2026
+            ? parsedYear
+            : targetYear;
+        const hasCountries =
+          Array.isArray(chosen.countries) && chosen.countries.length > 0;
+        const isRu = hasCountries ? isRuCountryList(chosen.countries) : undefined;
+
+        const rawRating = String(chosen.rating || '').trim();
+        let validRating: string | undefined;
+        if (rawRating && rawRating !== 'null' && !rawRating.endsWith('%')) {
+          const rNum = parseFloat(rawRating.replace(',', '.'));
+          if (Number.isFinite(rNum) && rNum > 0 && rNum <= 10) {
+            validRating = rNum.toFixed(1);
+          }
+        }
+
+        kpHadExplicitNoPoster = /no-poster/i.test(
+          `${chosen.posterUrlPreview || ''} ${chosen.posterUrl || ''}`
+        );
+        const kpPosterUrl = isUsableVodPosterUrl(chosen.posterUrlPreview)
+          ? chosen.posterUrlPreview
+          : isUsableVodPosterUrl(chosen.posterUrl)
+            ? chosen.posterUrl
+            : undefined;
+
+        chosenMeta = {
+          year: validYear,
+          isRussian: isRu,
+          kpId: chosen.filmId,
+          ratingKinopoisk: validRating,
+          posterUrl: kpPosterUrl,
+        };
+      }
     }
   } catch {
-    // ignore network error
+    // ignore KP network error
   }
 
-  const fallbackMeta: IedemVerifiedMeta = { checkedAt: Date.now() };
-  iedemKpCache.set(cacheKey, fallbackMeta);
-  return fallbackMeta;
+  let tmdbChecked = false;
+  if (!isUsableVodPosterUrl(chosenMeta.posterUrl)) {
+    tmdbChecked = true;
+    const tmdb = await fetchTmdbRuPoster(baseTitle, wantSeries, targetYear);
+    if (tmdb.posterUrl) {
+      chosenMeta = {
+        ...chosenMeta,
+        posterUrl: tmdb.posterUrl,
+        year: chosenMeta.year || tmdb.year,
+        ratingKinopoisk: chosenMeta.ratingKinopoisk || tmdb.rating,
+      };
+    } else if (chosenMeta.kpId && !kpHadExplicitNoPoster) {
+      chosenMeta = {
+        ...chosenMeta,
+        posterUrl: `https://kinopoiskapiunofficial.tech/images/posters/kp/${chosenMeta.kpId}.jpg`,
+      };
+    }
+  }
+
+  const finalMeta: IedemVerifiedMeta = {
+    ...chosenMeta,
+    tmdbChecked,
+    checkedAt: Date.now(),
+  };
+  iedemKpCache.set(cacheKey, finalMeta);
+  if (finalMeta.posterUrl || finalMeta.kpId || finalMeta.year) {
+    persistIedemKpCache();
+  }
+  return finalMeta;
 }
 
 export function proxyIedemPosterUrl(rawUrl?: string): string {

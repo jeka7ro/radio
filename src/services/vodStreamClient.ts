@@ -5,10 +5,13 @@ export interface ResolvedDirectVodStream {
   ok: boolean;
   type?: 'movie' | 'series';
   sourcePath?: string;
+  season?: number;
+  episode?: number;
   dashUrl?: string;
   dashaUrl?: string;
   hlsUrl?: string;
   proxyHlsUrl?: string;
+  fallbackHlsUrl?: string;
   rawHlsUrl?: string;
   backupHlsUrls?: string[];
   embedUrl?: string;
@@ -99,6 +102,7 @@ export async function resolveDirectVodStreamClient(params: {
               ...rawData,
               hlsUrl: toBridgeOrigin(rawData.hlsUrl),
               proxyHlsUrl: toBridgeOrigin(rawData.proxyHlsUrl),
+              fallbackHlsUrl: toBridgeOrigin(rawData.fallbackHlsUrl),
               dashUrl: toBridgeOrigin(rawData.dashUrl),
               dashaUrl: toBridgeOrigin(rawData.dashaUrl),
               backupHlsUrls: Array.isArray(rawData.backupHlsUrls)
@@ -114,16 +118,38 @@ export async function resolveDirectVodStreamClient(params: {
                 : rawData.vkQualities,
             }
           : rawData;
-        if (data?.ok && (data.hlsUrl || data.proxyHlsUrl)) {
+        const safeData: ResolvedDirectVodStream = {
+          ...data,
+          dashUrl:
+            data.dashUrl && !/interkh\.com/i.test(String(data.dashUrl))
+              ? data.dashUrl
+              : undefined,
+          dashaUrl:
+            data.dashaUrl && !/interkh\.com/i.test(String(data.dashaUrl))
+              ? data.dashaUrl
+              : undefined,
+        };
+        if (safeData?.ok && (safeData.hlsUrl || safeData.proxyHlsUrl)) {
+          const rawCandidate = String(safeData.rawHlsUrl || safeData.hlsUrl || '');
+          const mustUseProxy =
+            isLocalLan ||
+            Boolean(bridgeOrigin) ||
+            /interkh\.com|bl\.rutube\.ru|jmeekos\.com|vidmoly/i.test(rawCandidate) ||
+            String(safeData.hlsUrl || '').startsWith('/api/tv-proxy');
           const effectiveHls =
-            isLocalLan && data.proxyHlsUrl
-              ? data.proxyHlsUrl
-              : data.hlsUrl || data.proxyHlsUrl;
+            safeData.proxyHlsUrl && mustUseProxy
+              ? safeData.proxyHlsUrl
+              : safeData.hlsUrl || safeData.proxyHlsUrl;
           return {
-            ...data,
-            rawHlsUrl: data.rawHlsUrl || data.hlsUrl,
+            ...safeData,
+            rawHlsUrl: safeData.rawHlsUrl || safeData.hlsUrl,
             hlsUrl: effectiveHls,
-            proxyHlsUrl: data.proxyHlsUrl || effectiveHls,
+            proxyHlsUrl: safeData.proxyHlsUrl || effectiveHls,
+            fallbackHlsUrl:
+              safeData.fallbackHlsUrl ||
+              (safeData.proxyHlsUrl && safeData.proxyHlsUrl !== effectiveHls
+                ? safeData.proxyHlsUrl
+                : undefined),
           };
         }
         if (

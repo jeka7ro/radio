@@ -1,4 +1,128 @@
 import { gzipSync } from 'node:zlib';
+import http from 'node:http';
+import https from 'node:https';
+
+const vkHttpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 64,
+  maxFreeSockets: 24,
+});
+const vkHttpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 64,
+  maxFreeSockets: 24,
+});
+
+function fetchVkRangeHttp1(
+  urlStr,
+  start,
+  end,
+  hdrs,
+  timeoutMs,
+  signal,
+  redirectsLeft = 4
+) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Client aborted'));
+      return;
+    }
+    let parsedU;
+    try {
+      parsedU = new URL(urlStr);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const isHttps = parsedU.protocol === 'https:';
+    const transport = isHttps ? https : http;
+    const reqHdrs = {
+      ...hdrs,
+      Connection: 'keep-alive',
+    };
+    if (start >= 0 && end >= start) {
+      reqHdrs.Range = `bytes=${start}-${end}`;
+    }
+    let settled = false;
+    const reqOut = transport.get(
+      {
+        protocol: parsedU.protocol,
+        hostname: parsedU.hostname,
+        port: parsedU.port || (isHttps ? 443 : 80),
+        path: `${parsedU.pathname}${parsedU.search}`,
+        agent: isHttps ? vkHttpsAgent : vkHttpAgent,
+        headers: reqHdrs,
+      },
+      (resIn) => {
+        const sc = resIn.statusCode || 0;
+        if (
+          [301, 302, 303, 307, 308].includes(sc) &&
+          resIn.headers.location &&
+          redirectsLeft > 0
+        ) {
+          resIn.resume();
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          const nextUrl = new URL(resIn.headers.location, urlStr).toString();
+          fetchVkRangeHttp1(
+            nextUrl,
+            start,
+            end,
+            hdrs,
+            timeoutMs,
+            signal,
+            redirectsLeft - 1
+          ).then(resolve, reject);
+          return;
+        }
+        const chunks = [];
+        resIn.on('data', (c) => chunks.push(c));
+        resIn.on('end', () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          resolve({
+            status: sc,
+            headers: resIn.headers,
+            body: Buffer.concat(chunks),
+            finalUrl: urlStr,
+          });
+        });
+        resIn.on('error', (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          reject(err);
+        });
+      }
+    );
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reqOut.destroy(new Error('Client aborted'));
+      reject(new Error('Client aborted'));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      reqOut.destroy(new Error('VK slice timeout'));
+      reject(new Error('VK slice timeout'));
+    }, timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    reqOut.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+  });
+}
 
 // Per-container cache of freshly signed VK Video & Vidmoly stream URLs (resolves srcIp / ASN mismatch across Netlify AWS Lambda containers)
 const vkSignedContainerCache = new Map();
@@ -296,21 +420,27 @@ export default async (req) => {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 11000);
+    const timeoutId = setTimeout(() => controller.abort(), 26000);
 
     const rangeHeader = req.headers.get('range') || '';
     const effectiveUa =
       customUa ||
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-    // VK / OK CDN Parallel Byte-Range Accelerator + Signed-IP Self-Healing Proxy:
+    // VK / OK CDN & iEdem Live TV Parallel Byte-Range Accelerator + Signed-IP Self-Healing Proxy:
     // 1) vkuser.net / okcdn.ru binds srcIp + srcAg to the server that called al_video.php and sets Access-Control-Allow-Origin: https://vkvideo.ru (so 302 breaks CORS & IP).
     // 2) On Netlify serverless, different Lambda containers can have different outbound NAT IPs; if okcdn.ru returns 400/403, refreshVkSignedTargetUrl re-signs for THIS container's IP.
-    // 3) vkuser.net throttles single HTTP connections (zs=65) to ~220 KB/s; parallel clamped Range slices + ReadableStream deliver 20+ Mbps for segments of any size.
+    // 3) vkuser.net & rossteleccom.net/iedem.com throttle single HTTP connections to ~0.6-1.7 Mbps; parallel clamped Range slices + ReadableStream deliver 12-25+ Mbps for segments of any size.
+    const isIedemThrottledSeg =
+      /(rossteleccom\.net|iedem\.com|jmeekos\.com)/i.test(targetUrl) ||
+      /\/iptv\/[A-Za-z0-9_-]+\/\d+\/[^/?#]+\.(?:ts|m4s|mp4|aac)$/i.test(
+        parsedTarget.pathname
+      );
     const isVkThrottledBinary =
-      req.method === 'GET' &&
+      (req.method === 'GET' || req.method === 'HEAD') &&
       !rawMode &&
-      /(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(targetUrl) &&
+      (/(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(targetUrl) ||
+        isIedemThrottledSeg) &&
       !/\.(m3u8?|pls)(\?|$)/i.test(parsedTarget.pathname) &&
       !/\/video\/?$/i.test(parsedTarget.pathname);
 
@@ -394,6 +524,14 @@ export default async (req) => {
           }
 
           if (totalBytes > 0 && !headCt.includes('mpegurl') && !headCt.includes('m3u')) {
+            if (vkMetaCache.size > 400) {
+              const nowTs = Date.now();
+              for (const [k, v] of vkMetaCache) {
+                if (nowTs - v.ts > 5 * 60 * 1000 || vkMetaCache.size > 300) {
+                  vkMetaCache.delete(k);
+                }
+              }
+            }
             meta = {
               totalBytes,
               contentType: headCt || 'video/mp4',
@@ -409,6 +547,24 @@ export default async (req) => {
           const isTsSeg =
             /\.(ts|m4s|aac)(\?|$)/i.test(parsedTarget.pathname) ||
             headCt.includes('mp2t');
+          if (req.method === 'HEAD') {
+            clearTimeout(timeoutId);
+            return new Response(null, {
+              status: 200,
+              headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Access-Control-Expose-Headers':
+                  'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                'Content-Type': isTsSeg
+                  ? headCt || 'video/mp2t'
+                  : headCt || 'video/mp4',
+                'Content-Length': String(totalBytes),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=60',
+              },
+            });
+          }
           const rangeMatch = rangeHeader.match(/bytes=(\d+)-(\d*)/i);
 
           const streamAbort = new AbortController();
@@ -429,32 +585,27 @@ export default async (req) => {
               if (streamAbort.signal.aborted) {
                 throw new Error('Client aborted');
               }
-              const sliceCtrl = new AbortController();
-              const sliceTimer = setTimeout(() => sliceCtrl.abort(), 4500);
-              const onAbort = () => sliceCtrl.abort();
-              streamAbort.signal.addEventListener('abort', onAbort, { once: true });
               try {
-                const sr = await fetch(resolvedMediaUrl, {
-                  method: 'GET',
-                  headers: {
+                const sr = await fetchVkRangeHttp1(
+                  resolvedMediaUrl,
+                  s,
+                  e,
+                  {
                     'User-Agent': effectiveUa,
                     Referer: refererHeader,
                     Origin: originHeader,
                     Accept: '*/*',
-                    Range: `bytes=${s}-${e}`,
                   },
-                  redirect: 'follow',
-                  signal: sliceCtrl.signal,
-                });
-                clearTimeout(sliceTimer);
-                streamAbort.signal.removeEventListener('abort', onAbort);
-                if (sr.ok || sr.status === 206) {
-                  const u8 = new Uint8Array(await sr.arrayBuffer());
-                  if (u8.byteLength === e - s + 1) return u8;
+                  8500,
+                  streamAbort.signal
+                );
+                if (
+                  (sr.status === 200 || sr.status === 206) &&
+                  sr.body.byteLength === e - s + 1
+                ) {
+                  return new Uint8Array(sr.body);
                 }
               } catch {
-                clearTimeout(sliceTimer);
-                streamAbort.signal.removeEventListener('abort', onAbort);
                 if (streamAbort.signal.aborted) throw new Error('Client aborted');
                 await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
               }
@@ -470,7 +621,7 @@ export default async (req) => {
               slices.push([cursor, firstEnd]);
               cursor = firstEnd + 1;
             }
-            const step = isTsSeg ? 262144 : 393216; // 384 KB for MP4
+            const step = 196608; // 192 KB HTTP/1.1 parallel slices per socket
             while (cursor <= toByte) {
               slices.push([cursor, Math.min(cursor + step - 1, toByte)]);
               cursor += step;
@@ -599,7 +750,7 @@ export default async (req) => {
           if (isTsSeg && !rangeMatch && totalBytes <= 25 * 1024 * 1024) {
             clearTimeout(timeoutId);
             const slices = buildSlicesForRange(0, totalBytes - 1, true);
-            const stream = await createSlidingWindowStream(slices, 5);
+            const stream = await createSlidingWindowStream(slices, 16);
             return new Response(stream, {
               status: 200,
               headers: {
@@ -616,7 +767,11 @@ export default async (req) => {
           }
 
           // Progressive MP4 / WebM or explicit Range request: stream chunks via instant-TTFB ReadableStream
-          const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 2 * 1024 * 1024;
+          const maxWindow = isTsSeg
+            ? 25 * 1024 * 1024
+            : !rangeMatch && totalBytes <= 4 * 1024 * 1024
+              ? totalBytes
+              : 3.5 * 1024 * 1024;
           const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
           if (startByte >= totalBytes) {
             return new Response(null, {
@@ -639,9 +794,10 @@ export default async (req) => {
           const rangeLen = endByte - startByte + 1;
           clearTimeout(timeoutId);
           const slices = buildSlicesForRange(startByte, endByte, true);
-          const stream = await createSlidingWindowStream(slices, 5);
+          const stream = await createSlidingWindowStream(slices, 12);
+          const isFull200Response = !rangeMatch && endByte === totalBytes - 1;
           return new Response(stream, {
-            status: 206,
+            status: isFull200Response ? 200 : 206,
             headers: {
               'Access-Control-Allow-Origin': '*',
               'Access-Control-Allow-Private-Network': 'true',
@@ -650,7 +806,9 @@ export default async (req) => {
               'Content-Type': isTsSeg
                 ? headCt || 'video/mp2t'
                 : headCt || 'video/mp4',
-              'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
+              ...(isFull200Response
+                ? {}
+                : { 'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}` }),
               'Content-Length': String(rangeLen),
               'Accept-Ranges': 'bytes',
               'Cache-Control': 'public, max-age=60',

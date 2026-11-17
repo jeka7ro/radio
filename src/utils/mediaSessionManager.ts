@@ -598,6 +598,17 @@ export function exitNativeDocumentFullscreen(): void {
 
 export function isSmartTvDevice(): boolean {
   if (typeof window === 'undefined') return false;
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const isExplicitTvUa =
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
+      ua
+    );
+  if (
+    !isExplicitTvUa &&
+    /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua)
+  ) {
+    return false;
+  }
   if (window.__IS_SMART_TV_DEVICE__) return true;
   if (
     typeof document !== 'undefined' &&
@@ -605,12 +616,7 @@ export function isSmartTvDevice(): boolean {
   ) {
     return true;
   }
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-  if (
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
-      ua
-    )
-  ) {
+  if (isExplicitTvUa) {
     return true;
   }
   if (/Android/i.test(ua) && !/Mobile/i.test(ua)) {
@@ -626,7 +632,6 @@ export function isSmartTvDevice(): boolean {
 
 export function isMobilePhoneDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  if (isSmartTvDevice()) return false;
   if (
     typeof document !== 'undefined' &&
     document.documentElement.classList.contains('car-widescreen-mode')
@@ -634,9 +639,17 @@ export function isMobilePhoneDevice(): boolean {
     return false;
   }
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-  if (/iPhone|iPod|Android.*Mobile|Windows Phone|Mobile Safari/i.test(ua)) {
+  const isExplicitTvUa =
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL/i.test(
+      ua
+    );
+  if (
+    !isExplicitTvUa &&
+    /iPhone|iPod|Android.*Mobile|Windows Phone|Mobile Safari/i.test(ua)
+  ) {
     return true;
   }
+  if (isSmartTvDevice()) return false;
   const isTouchDevice =
     ((typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 1) ||
       Boolean(window.matchMedia?.('(pointer: coarse)').matches)) &&

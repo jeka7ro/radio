@@ -939,6 +939,33 @@ export function normalizeFileListResolveData<
   return data;
 }
 
+const WATCH_PROGRESS_PREFIX = 'aether_vod_watch_progress_v1_';
+const SAVED_VOD_PREFIX = 'aether_saved_vod_items_v1_';
+
+let profileSaveEpoch = 0;
+let inFlightProfileSavePromise: Promise<unknown> | null = null;
+
+function getCanonicalProfileRank(p: Partial<SharedTvProfile>): number {
+  const id = String(p?.id || '');
+  const nameLower = String(p?.name || '').trim().toLowerCase();
+  if (id === 'p1' || nameLower === 'jeka') return 0;
+  if (id === 'acc_1793971115106' || nameLower === 'emma') return 1;
+  if (id === 'p2' || nameLower === 'family') return 2;
+  if (id === 'p3' || nameLower === 'guest') return 3;
+  if (id === 'p4' || Boolean(p?.isKids)) return 5;
+  return 4;
+}
+
+export function sortCanonicalSharedProfiles(
+  profiles: SharedTvProfile[]
+): SharedTvProfile[] {
+  return [...profiles].sort((a, b) => {
+    const rankDiff = getCanonicalProfileRank(a) - getCanonicalProfileRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
 export function loadSharedProfiles(): SharedTvProfile[] {
   try {
     const raw = localStorage.getItem(TV_PROFILES_STORAGE_KEY);
@@ -965,24 +992,83 @@ export function loadSharedProfiles(): SharedTvProfile[] {
       );
       if (!hasEmma && !deletedIds.has('acc_1793971115106')) {
         normalized.splice(1, 0, normalizeProfile(DEFAULT_SHARED_PROFILES[1], 1));
-      } else {
-        // Place Emma right after JEKA so both primary profiles are always first
-        const emmaIdx = normalized.findIndex(
-          (p) =>
-            p.id === 'acc_1793971115106' ||
-            p.name.trim().toLowerCase() === 'emma'
-        );
-        if (emmaIdx > 1) {
-          const [emmaProf] = normalized.splice(emmaIdx, 1);
-          normalized.splice(1, 0, emmaProf);
-        }
       }
-      return normalized;
+      return sortCanonicalSharedProfiles(normalized);
     }
     return DEFAULT_SHARED_PROFILES;
   } catch {
     return DEFAULT_SHARED_PROFILES;
   }
+}
+
+function mergeMatchingProfileFields(
+  base: SharedTvProfile,
+  preferred: SharedTvProfile
+): SharedTvProfile {
+  const existingTs = base.updatedAt || 0;
+  const incomingTs = preferred.updatedAt || 0;
+  return {
+    ...base,
+    ...preferred,
+    defaultAudioPref: preferred.defaultAudioPref || base.defaultAudioPref,
+    defaultSubLang: preferred.defaultSubLang || base.defaultSubLang,
+    defaultSubFontSize: preferred.defaultSubFontSize || base.defaultSubFontSize,
+    defaultSubFontPx: preferred.defaultSubFontPx || base.defaultSubFontPx,
+    tvTheme: preferred.tvTheme || base.tvTheme,
+    updatedAt: Math.max(existingTs, incomingTs) || undefined,
+  };
+}
+
+export function reconcileAuthoritativeProfiles(
+  localProfiles: SharedTvProfile[],
+  remoteProfiles: SharedTvProfile[]
+): SharedTvProfile[] {
+  const deletedIds = loadDeletedProfileIds();
+  const localById = new Map<string, SharedTvProfile>();
+  localProfiles.forEach((p, idx) => {
+    if (!p || typeof p.id !== 'string') return;
+    const norm = normalizeProfile(p, idx);
+    if (norm.id) localById.set(norm.id, norm);
+  });
+
+  const remoteById = new Map<string, SharedTvProfile>();
+  remoteProfiles.forEach((p, idx) => {
+    if (!p || typeof p.id !== 'string') return;
+    const norm = normalizeProfile(p, idx);
+    if (!norm.id) return;
+    if (norm.id !== 'p1' && deletedIds.has(norm.id)) return;
+    if (norm.id === 'p1' && norm.name === 'Eugeniu' && !norm.pin) return;
+
+    const existingRemote = remoteById.get(norm.id);
+    if (existingRemote) {
+      const exTs = existingRemote.updatedAt || 0;
+      const inTs = norm.updatedAt || 0;
+      remoteById.set(
+        norm.id,
+        inTs >= exTs
+          ? mergeMatchingProfileFields(existingRemote, norm)
+          : mergeMatchingProfileFields(norm, existingRemote)
+      );
+      return;
+    }
+
+    const localMatch = localById.get(norm.id);
+    if (localMatch) {
+      const localTs = localMatch.updatedAt || 0;
+      const remoteTs = norm.updatedAt || 0;
+      if (localTs > remoteTs) {
+        remoteById.set(norm.id, mergeMatchingProfileFields(norm, localMatch));
+      } else {
+        remoteById.set(norm.id, mergeMatchingProfileFields(localMatch, norm));
+      }
+    } else {
+      remoteById.set(norm.id, norm);
+    }
+  });
+
+  const reconciled = sortCanonicalSharedProfiles(Array.from(remoteById.values()));
+  if (reconciled.length === 0) return DEFAULT_SHARED_PROFILES;
+  return reconciled;
 }
 
 export function mergeSharedProfiles(
@@ -1006,45 +1092,17 @@ export function mergeSharedProfiles(
     const existingTs = existing.updatedAt || 0;
     const incomingTs = norm.updatedAt || 0;
     if (incomingTs > existingTs || (isLocal && incomingTs >= existingTs)) {
-      byId.set(norm.id, {
-        ...existing,
-        ...norm,
-        defaultAudioPref: norm.defaultAudioPref || existing.defaultAudioPref,
-        defaultSubLang: norm.defaultSubLang || existing.defaultSubLang,
-        defaultSubFontSize:
-          norm.defaultSubFontSize || existing.defaultSubFontSize,
-        defaultSubFontPx: norm.defaultSubFontPx || existing.defaultSubFontPx,
-        tvTheme: norm.tvTheme || existing.tvTheme,
-        updatedAt: Math.max(existingTs, incomingTs) || undefined,
-      });
+      byId.set(norm.id, mergeMatchingProfileFields(existing, norm));
     } else {
-      byId.set(norm.id, {
-        ...norm,
-        ...existing,
-        defaultAudioPref: existing.defaultAudioPref || norm.defaultAudioPref,
-        defaultSubLang: existing.defaultSubLang || norm.defaultSubLang,
-        defaultSubFontSize:
-          existing.defaultSubFontSize || norm.defaultSubFontSize,
-        defaultSubFontPx: existing.defaultSubFontPx || norm.defaultSubFontPx,
-        tvTheme: existing.tvTheme || norm.tvTheme,
-        updatedAt: Math.max(existingTs, incomingTs) || undefined,
-      });
+      byId.set(norm.id, mergeMatchingProfileFields(norm, existing));
     }
   };
 
   remoteProfiles.forEach((p, idx) => addOrMerge(p, idx, false));
   localProfiles.forEach((p, idx) => addOrMerge(p, idx, true));
 
-  const merged = Array.from(byId.values());
+  const merged = sortCanonicalSharedProfiles(Array.from(byId.values()));
   if (merged.length === 0) return DEFAULT_SHARED_PROFILES;
-  const emmaIdx = merged.findIndex(
-    (p) =>
-      p.id === 'acc_1793971115106' || p.name.trim().toLowerCase() === 'emma'
-  );
-  if (emmaIdx > 1) {
-    const [emmaProf] = merged.splice(emmaIdx, 1);
-    merged.splice(1, 0, emmaProf);
-  }
   return merged;
 }
 
@@ -1054,7 +1112,7 @@ export function saveSharedProfiles(
 ): void {
   const deletedIds = loadDeletedProfileIds();
   let finalProfiles = profiles
-    .filter((p) => p && !deletedIds.has(p.id))
+    .filter((p) => p && (!deletedIds.has(p.id) || p.id === 'p1'))
     .map((p, idx) => normalizeProfile(p, idx));
 
   if (!options?.allowShrink) {
@@ -1065,39 +1123,57 @@ export function saveSharedProfiles(
       // ignore
     }
   }
+  finalProfiles = sortCanonicalSharedProfiles(finalProfiles);
 
   try {
     localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(finalProfiles));
   } catch {
     // ignore
   }
+  profileSaveEpoch += 1;
   const payload = JSON.stringify(finalProfiles);
   const deletedHeader = JSON.stringify(Array.from(deletedIds));
+  const replaceHeader = options?.allowShrink ? '1' : '0';
+  const requests: Promise<unknown>[] = [];
   try {
-    fetch('/api/tv-profiles', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Deleted-Profile-Ids': deletedHeader,
-      },
-      body: payload,
-    }).catch(() => {});
+    requests.push(
+      fetch('/api/tv-profiles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Deleted-Profile-Ids': deletedHeader,
+          'X-Replace-Profiles': replaceHeader,
+        },
+        body: payload,
+      }).catch(() => {})
+    );
   } catch {
     // ignore
   }
   if (isLocalHomeServer()) {
     try {
-      fetch('https://filmio.my/api/tv-profiles', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Deleted-Profile-Ids': deletedHeader,
-        },
-        body: payload,
-      }).catch(() => {});
+      requests.push(
+        fetch('https://filmio.my/api/tv-profiles', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Deleted-Profile-Ids': deletedHeader,
+            'X-Replace-Profiles': replaceHeader,
+          },
+          body: payload,
+        }).catch(() => {})
+      );
     } catch {
       // ignore
     }
+  }
+  if (requests.length > 0) {
+    const currentPromise = Promise.allSettled(requests).finally(() => {
+      if (inFlightProfileSavePromise === currentPromise) {
+        inFlightProfileSavePromise = null;
+      }
+    });
+    inFlightProfileSavePromise = currentPromise;
   }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -1107,41 +1183,70 @@ export function saveSharedProfiles(
 }
 
 export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]> {
-  const local = loadSharedProfiles();
   try {
-    const res = await fetch('/api/tv-profiles');
+    if (inFlightProfileSavePromise) {
+      await inFlightProfileSavePromise.catch(() => {});
+    }
+    const epochAtFetchStart = profileSaveEpoch;
+    const local = loadSharedProfiles();
+    const res = await fetch('/api/tv-profiles', { cache: 'no-store' });
     if (!res.ok) return local;
     const remote = await res.json();
     if (!Array.isArray(remote) || remote.length === 0) return local;
-    const merged = mergeSharedProfiles(local, remote);
+    if (profileSaveEpoch !== epochAtFetchStart || inFlightProfileSavePromise) {
+      if (inFlightProfileSavePromise) {
+        await inFlightProfileSavePromise.catch(() => {});
+      }
+      return loadSharedProfiles();
+    }
+
+    const authoritative = reconcileAuthoritativeProfiles(local, remote);
+    const authoritativeIds = new Set(authoritative.map((p) => p.id));
+
+    for (const ghost of local) {
+      if (!ghost?.id || ghost.id === 'p1' || authoritativeIds.has(ghost.id)) {
+        continue;
+      }
+      forgetProfileOnDevice(ghost.id);
+      try {
+        localStorage.removeItem(`${WATCH_PROGRESS_PREFIX}${ghost.id}`);
+        localStorage.removeItem(`${SAVED_VOD_PREFIX}${ghost.id}`);
+        localStorage.removeItem(`aether_radio_favorites_v2_${ghost.id}`);
+        localStorage.removeItem(`aether_tv_channel_favorites_v2_${ghost.id}`);
+        localStorage.removeItem(`filmio_seed_progress_v3_${ghost.id}`);
+        localStorage.removeItem(`filmio_seed_saved_v3_${ghost.id}`);
+      } catch {
+        // ignore
+      }
+    }
+
     try {
-      localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(merged));
+      localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(authoritative));
     } catch {
       // ignore
     }
-    // If local had custom or newer profiles missing on the server, push merged back to server
-    const remoteIds = new Set(remote.map((r: SharedTvProfile) => r?.id));
-    const hasUnsyncedLocal = merged.some((m) => !remoteIds.has(m.id));
-    if (hasUnsyncedLocal) {
-      fetch('/api/tv-profiles', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Deleted-Profile-Ids': JSON.stringify(
-            Array.from(loadDeletedProfileIds())
-          ),
-        },
-        body: JSON.stringify(merged),
-      }).catch(() => {});
+
+    const currentActiveId = loadSharedActiveProfileId();
+    if (!authoritativeIds.has(currentActiveId)) {
+      const fallbackId =
+        authoritative.find((p) => p.id === 'p1')?.id ||
+        authoritative[0]?.id ||
+        'p1';
+      try {
+        localStorage.setItem(ACTIVE_TV_PROFILE_STORAGE_KEY, fallbackId);
+      } catch {
+        // ignore
+      }
     }
+
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
-        new CustomEvent('aether:profiles-updated', { detail: merged })
+        new CustomEvent('aether:profiles-updated', { detail: authoritative })
       );
     }
-    return merged;
+    return authoritative;
   } catch {
-    return local;
+    return loadSharedProfiles();
   }
 }
 
@@ -1351,9 +1456,15 @@ export function getActiveProfileMediaPrefs(
     settingsParsed.defaultAudioPref ||
     'original') as ProfileMediaPreferences['defaultAudioPref'];
 
-  const subLang = (prof?.defaultSubLang ||
-    settingsParsed.defaultSubLang ||
-    'ro') as ProfileMediaPreferences['defaultSubLang'];
+  const rawSubLang =
+    prof?.defaultSubLang || settingsParsed.defaultSubLang || 'ro';
+  const subLang = (
+    settingsParsed.subLangExplicitlySetInSettings === true ||
+    prof?.uiLang === 'ru' ||
+    rawSubLang === 'ro'
+      ? rawSubLang
+      : 'ro'
+  ) as ProfileMediaPreferences['defaultSubLang'];
 
   const subFontSize = (prof?.defaultSubFontSize ||
     settingsParsed.defaultSubFontSize ||
@@ -1419,7 +1530,8 @@ export function getActiveProfileMediaPrefs(
 
 export function saveActiveProfileMediaPrefs(
   partial: Partial<ProfileMediaPreferences>,
-  explicitProfileId?: string
+  explicitProfileId?: string,
+  options?: { explicitFromSettings?: boolean }
 ): ProfileMediaPreferences {
   const profileId = explicitProfileId || loadSharedActiveProfileId() || 'p1';
   const current = getActiveProfileMediaPrefs(profileId);
@@ -1463,6 +1575,9 @@ export function saveActiveProfileMediaPrefs(
       defaultSubFontSize: next.defaultSubFontSize,
       defaultSubFontPx: next.defaultSubFontPx,
       tvTheme: resolvedTheme,
+      subLangExplicitlySetInSettings: Boolean(
+        options?.explicitFromSettings || parsed.subLangExplicitlySetInSettings
+      ),
     };
     localStorage.setItem(settingsKey, JSON.stringify(updatedSettings));
     localStorage.setItem(`aether_tv_theme_${profileId}`, resolvedTheme);

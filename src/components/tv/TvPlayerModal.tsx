@@ -54,7 +54,10 @@ import {
 import {
   getActiveProfileMediaPrefs,
   saveActiveProfileMediaPrefs,
+  hasLocalLoopbackBridge,
+  isLocalHomeServer,
 } from '../../services/deviceContinuityService';
+import { buildFileListApiUrl } from '../../views/smartTvLampaHelpers';
 import {
   claimMediaSession,
   releaseMediaSession,
@@ -101,8 +104,6 @@ const IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP: Record<string, string> = {
   '7251': '10024',
   '9204': '237',
   '9208': '6370',
-  // Pro TV RO (6997 is HEVC 0x24 -> 7055 H.264+AAC)
-  '6997': '7055',
   // Кинопремьера (HD orig MP2/AC3 -> HD AAC 224)
   '9020': '224',
   // Viju+ Megahit / Premiere / Serial (HD orig MP2/AC3 -> HD AAC 201 / 202 / 2443)
@@ -122,12 +123,24 @@ const IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP: Record<string, string> = {
   '9044': '904',
 };
 
-function resolveWorkingStreamUrl(rawUrl: string): string {
+function resolveWorkingStreamUrl(
+  rawUrl: string,
+  channel?: TvChannel | null
+): string {
   const iedemMatch = rawUrl.match(
     /^(https?:\/\/[^/]+\/iptv\/[^/]+\/)(\d+)(\/index\.m3u8.*)$/i
   );
   if (iedemMatch) {
-    const mappedCid = IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP[iedemMatch[2]];
+    const cid = iedemMatch[2];
+    const isProTvRoChannel = Boolean(
+      channel &&
+      (/\/6997\/index\.m3u8/i.test(channel.id || '') ||
+        /^Pro\s*TV\s*RO$/i.test((channel.name || '').trim()))
+    );
+    if (cid === '6997' || (isProTvRoChannel && cid === '7055')) {
+      return `${iedemMatch[1]}${isLocalHomeServer() ? '6997' : '7055'}${iedemMatch[3]}`;
+    }
+    const mappedCid = IEDEM_AAC_COMPATIBLE_CHANNEL_ID_MAP[cid];
     if (mappedCid) {
       return `${iedemMatch[1]}${mappedCid}${iedemMatch[3]}`;
     }
@@ -274,15 +287,51 @@ function getCandidateStreams(
   const urls: string[] = [];
   const seen = new Set<string>();
 
-  const add = (u?: string) => {
+  const add = (u?: string, chCtx?: TvChannel | null) => {
     if (!u) return;
-    const resolved = resolveWorkingStreamUrl(u.trim());
+    const resolved = resolveWorkingStreamUrl(u.trim(), chCtx);
     if (!resolved || seen.has(resolved)) return;
     seen.add(resolved);
     urls.push(resolved);
   };
 
-  add(channel.url);
+  add(channel.url, channel);
+
+  const iedemPrefixMatch = `${channel.id || ''} ${channel.url || ''}`.match(
+    /(https?:\/\/[^/\s]+\/iptv\/[^/\s]+\/)\d+\/index\.m3u8/i
+  );
+  if (iedemPrefixMatch) {
+    const prefix = iedemPrefixMatch[1];
+    if (
+      /^Pro\s*TV\s*RO\b|^PRO\s*TV\s*HD/i.test(channel.name || '') ||
+      /\/6997\/index\.m3u8/i.test(channel.id || '')
+    ) {
+      const ordered = isLocalHomeServer()
+        ? [
+            `${prefix}6997/index.m3u8`,
+            `${prefix}19452/index.m3u8`,
+            `${prefix}7055/index.m3u8`,
+            `${prefix}2456/index.m3u8`,
+            'https://cmero-ott-live.ssl.cdn.cra.cz/channels/cme-ro-voyo-news/playlist.m3u8?offsetSeconds=0&url=0',
+          ]
+        : [
+            `${prefix}7055/index.m3u8`,
+            `${prefix}19452/index.m3u8`,
+            `${prefix}2456/index.m3u8`,
+            'https://cmero-ott-live.ssl.cdn.cra.cz/channels/cme-ro-voyo-news/playlist.m3u8?offsetSeconds=0&url=0',
+          ];
+      for (const cand of ordered) add(cand, null);
+    } else if (/Pro\s*TV\s*Chisinau/i.test(channel.name || '')) {
+      const ordered = [
+        `${prefix}19452/index.m3u8`,
+        `${prefix}2456/index.m3u8`,
+        isLocalHomeServer()
+          ? `${prefix}6997/index.m3u8`
+          : `${prefix}7055/index.m3u8`,
+      ];
+      for (const cand of ordered) add(cand, null);
+    }
+  }
 
   const targetKey = normalizeEpgLookupKey(channel.name, true);
   if (targetKey) {
@@ -300,13 +349,13 @@ function getCandidateStreams(
         }
       }
     }
-    for (const u of nonOrigMatches) add(u);
-    for (const u of otherMatches) add(u);
+    for (const u of nonOrigMatches) add(u, null);
+    for (const u of otherMatches) add(u, null);
   }
 
   for (const [pattern, backups] of KNOWN_CHANNEL_BACKUPS) {
     if (pattern.test(channel.name)) {
-      for (const b of backups) add(b);
+      for (const b of backups) add(b, null);
     }
   }
 
@@ -316,13 +365,24 @@ function getCandidateStreams(
 function buildProxyStreamUrl(
   rawUrl: string,
   referrer?: string,
-  userAgent?: string
+  userAgent?: string,
+  forceRelativeCloud = false
 ): string {
   const params = new URLSearchParams();
   params.set('url', rawUrl);
   if (referrer) params.set('ref', referrer);
   if (userAgent) params.set('ua', userAgent);
-  return `/api/tv-proxy?${params.toString()}`;
+  const rel = `/api/tv-proxy?${params.toString()}`;
+  const onLocalOrigin =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.startsWith('192.168.') ||
+      window.location.hostname.startsWith('10.'));
+  if (!forceRelativeCloud && !onLocalOrigin && hasLocalLoopbackBridge()) {
+    return buildFileListApiUrl(rel);
+  }
+  return rel;
 }
 
 function convertSrtToVtt(srtText: string): string {
@@ -1080,6 +1140,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
     let cancelled = false;
     let frameWatchdogTimer: number | null = null;
+    let stallWatchdogInterval: number | null = null;
     setVideoStatus('loading');
 
     const clearWatchdog = () => {
@@ -1091,6 +1152,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
     const cleanupHls = () => {
       clearWatchdog();
+      if (stallWatchdogInterval !== null) {
+        window.clearInterval(stallWatchdogInterval);
+        stallWatchdogInterval = null;
+      }
       if (hlsRef.current) {
         try {
           hlsRef.current.destroy();
@@ -1109,11 +1174,20 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       candidateStreams[streamIndex] ||
       candidateStreams[0] ||
       currentTvChannel.url;
-    const directUrl = resolveWorkingStreamUrl(activeRawUrl);
+    const directUrl = resolveWorkingStreamUrl(
+      activeRawUrl,
+      streamIndex === 0 ? currentTvChannel : null
+    );
     const proxiedUrl = buildProxyStreamUrl(
       directUrl,
       currentTvChannel.httpReferrer,
       currentTvChannel.httpUserAgent
+    );
+    const cloudFallbackProxiedUrl = buildProxyStreamUrl(
+      directUrl,
+      currentTvChannel.httpReferrer,
+      currentTvChannel.httpUserAgent,
+      true
     );
 
     const safeAutoPlay = async () => {
@@ -1234,26 +1308,80 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
             video.disableRemotePlayback = true;
           }
           let triedDirectFallback = false;
+          let triedCloudProxyFallback = false;
+          let networkRetryCount = 0;
           let mediaRecoveryCount = 0;
+          let lastProgressTime = -1;
+          let frozenCycles = 0;
 
           const hls = new Hls({
             enableWorker: !isHardwareSmartTv,
             lowLatencyMode: false,
             startFragPrefetch: true,
-            liveSyncDurationCount: 1.2,
-            liveMaxLatencyDurationCount: 4,
-            backBufferLength: 8,
-            maxBufferLength: 12,
-            maxMaxBufferLength: 24,
-            maxBufferSize: 18 * 1000 * 1000,
-            highBufferWatchdogPeriod: 1,
-            nudgeMaxRetry: 5,
-            manifestLoadingTimeOut: 10000,
-            manifestLoadingMaxRetry: 2,
-            levelLoadingTimeOut: 10000,
-            fragLoadingTimeOut: 12000,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 7,
+            maxLiveSyncPlaybackRate: 1.05,
+            backBufferLength: 15,
+            maxBufferLength: 45,
+            maxMaxBufferLength: 90,
+            maxBufferSize: 60 * 1000 * 1000,
+            maxBufferHole: 0.8,
+            highBufferWatchdogPeriod: 2,
+            nudgeOffset: 0.25,
+            nudgeMaxRetry: 10,
+            manifestLoadingTimeOut: 15000,
+            manifestLoadingMaxRetry: 4,
+            manifestLoadingRetryDelay: 500,
+            levelLoadingTimeOut: 15000,
+            levelLoadingMaxRetry: 4,
+            levelLoadingRetryDelay: 500,
+            fragLoadingTimeOut: 28000,
+            fragLoadingMaxRetry: 6,
+            fragLoadingRetryDelay: 500,
           });
           hlsRef.current = hls;
+
+          stallWatchdogInterval = window.setInterval(() => {
+            if (cancelled || userPausedTvRef.current || activeArchiveProg) return;
+            if (video.readyState >= 2 || video.currentTime > 0) {
+              if (Math.abs(video.currentTime - lastProgressTime) > 0.05) {
+                lastProgressTime = video.currentTime;
+                frozenCycles = 0;
+                return;
+              }
+              frozenCycles += 1;
+              if (frozenCycles === 3) {
+                hlsRef.current?.startLoad();
+                if (video.buffered && video.buffered.length > 0) {
+                  const bEnd = video.buffered.end(video.buffered.length - 1);
+                  if (bEnd > video.currentTime + 1.2) {
+                    try {
+                      video.currentTime = Math.max(
+                        video.currentTime + 0.4,
+                        bEnd - 2.5
+                      );
+                    } catch {
+                      // ignore seek error on live buffer
+                    }
+                  }
+                }
+                if (video.paused) {
+                  void safeAutoPlay();
+                }
+              } else if (frozenCycles >= 6) {
+                frozenCycles = 0;
+                if (streamIndex + 1 < candidateStreams.length) {
+                  cleanupHls();
+                  setStreamIndex((prev) => prev + 1);
+                } else {
+                  hlsRef.current?.loadSource(
+                    triedCloudProxyFallback ? cloudFallbackProxiedUrl : proxiedUrl
+                  );
+                  hlsRef.current?.startLoad();
+                }
+              }
+            }
+          }, 3500);
 
           let hasAppliedInitialProfileTracks = false;
           const syncTracks = () => {
@@ -1340,16 +1468,17 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 video.readyState === 0 &&
                 (!video.buffered || video.buffered.length === 0)
               ) {
-                if (canVideoPlayNativeHls) {
-                  switchToNativeVideoHls(proxiedUrl);
-                  return;
-                }
                 if (streamIndex + 1 < candidateStreams.length) {
                   cleanupHls();
                   setStreamIndex((prev) => prev + 1);
+                  return;
+                }
+                if (isIosMobile && canVideoPlayNativeHls) {
+                  switchToNativeVideoHls(proxiedUrl);
+                  return;
                 }
               }
-            }, 12000);
+            }, 15000);
           });
 
           hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncTracks);
@@ -1357,36 +1486,64 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
 
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (cancelled) return;
-            if (data.fatal) {
+            if (!data.fatal) {
               if (
-                data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+                data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
+                data.details === Hls.ErrorDetails.BUFFER_NUDGE_ON_STALL
+              ) {
+                hls.startLoad();
+                if (video.paused && !userPausedTvRef.current) {
+                  void safeAutoPlay();
+                }
+              }
+              return;
+            }
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              if (!triedCloudProxyFallback && proxiedUrl !== cloudFallbackProxiedUrl) {
+                triedCloudProxyFallback = true;
+                hls.loadSource(cloudFallbackProxiedUrl);
+                hls.startLoad();
+                return;
+              }
+              if (networkRetryCount < 3) {
+                networkRetryCount += 1;
+                hls.startLoad();
+                return;
+              }
+              if (
                 !triedDirectFallback &&
-                canTryDirectHttp
+                canTryDirectHttp &&
+                !/(rossteleccom\.net|iedem\.com|jmeekos\.com)/i.test(directUrl)
               ) {
                 triedDirectFallback = true;
                 hls.loadSource(directUrl);
+                hls.startLoad();
                 return;
               }
-              if (
-                data.type === Hls.ErrorTypes.MEDIA_ERROR &&
-                mediaRecoveryCount < 2
-              ) {
-                mediaRecoveryCount += 1;
-                hls.recoverMediaError();
-                return;
-              }
-              if (canVideoPlayNativeHls) {
-                switchToNativeVideoHls(proxiedUrl);
-                return;
-              }
-              cleanupHls();
-              // Automatically try the next backup stream candidate if one exists
-              if (streamIndex + 1 < candidateStreams.length) {
-                setStreamIndex((prev) => prev + 1);
-                return;
-              }
-              setVideoStatus('error');
             }
+            if (
+              data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+              mediaRecoveryCount < 3
+            ) {
+              mediaRecoveryCount += 1;
+              if (mediaRecoveryCount === 2) {
+                hls.swapAudioCodec();
+              }
+              hls.recoverMediaError();
+              void safeAutoPlay();
+              return;
+            }
+            if (streamIndex + 1 < candidateStreams.length) {
+              cleanupHls();
+              setStreamIndex((prev) => prev + 1);
+              return;
+            }
+            if (isIosMobile && canVideoPlayNativeHls) {
+              switchToNativeVideoHls(proxiedUrl);
+              return;
+            }
+            cleanupHls();
+            setVideoStatus('error');
           });
           return;
         }
@@ -1723,25 +1880,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       return;
     }
     setActiveSubtitleTrack(trackIdx);
-    if (trackIdx === -1) {
-      saveActiveProfileMediaPrefs({ defaultSubLang: 'off' });
-    } else if (trackIdx >= 0 && subtitleTracks[trackIdx]) {
-      const hay =
-        `${subtitleTracks[trackIdx].name} ${subtitleTracks[trackIdx].lang || ''}`.toLowerCase();
-      if (/ro|rum|ron|român/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'ro' });
-      } else if (/ru|rus|рус/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'ru' });
-      } else if (/en|eng|english/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'en' });
-      } else if (/es|spa|españ/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'es' });
-      } else if (/fr|fra|fre|franç/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'fr' });
-      } else if (/de|ger|deu|deutsch/i.test(hay)) {
-        saveActiveProfileMediaPrefs({ defaultSubLang: 'de' });
-      }
-    }
     const video = videoRef.current;
 
     if (trackIdx === 999) {

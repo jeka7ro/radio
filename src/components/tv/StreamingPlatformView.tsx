@@ -326,7 +326,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
     <div className={`space-y-8 pb-20 -mx-3 sm:-mx-6 px-3 sm:px-6 pt-2 ${theme.containerBg} min-h-screen transition-colors duration-300`}>
       {/* 1. TOP PLATFORM SWITCHER DOCK */}
       <div className="space-y-4">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+        <div className="flex items-center gap-2 overflow-x-auto py-2 px-2 -mx-2 no-scrollbar">
           {STREAMING_PLATFORMS.map((plat) => {
             const isActive = section === plat.id;
             return (
@@ -555,7 +555,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
               </div>
             </div>
 
-            <div className="flex items-start gap-4 sm:gap-6 overflow-x-auto pb-4 no-scrollbar pt-2">
+            <div className="flex items-start gap-4 sm:gap-6 overflow-x-auto pt-2 pb-4 px-3 -mx-3 no-scrollbar">
               {top10Items.map((item, idx) =>
                 renderCard(item, idx, theme.showTop10Ranks)
               )}
@@ -567,7 +567,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
             <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight">
               {theme.shelf1Title}
             </h3>
-            <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pb-4 no-scrollbar pt-2">
+            <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pt-2 pb-4 px-3 -mx-3 no-scrollbar">
               {originalHits.map((item, idx) => renderCard(item, idx, false))}
             </div>
           </div>
@@ -582,7 +582,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
                   `Фильмы ${currentPlat.label}`
                 )}
               </h3>
-              <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pb-4 no-scrollbar pt-2">
+              <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pt-2 pb-4 px-3 -mx-3 no-scrollbar">
                 {moviesList.slice(0, 12).map((item, idx) => renderCard(item, idx, false))}
               </div>
             </div>

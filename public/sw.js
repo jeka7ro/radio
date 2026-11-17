@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v17';
+const CACHE_NAME = 'aether-radio-v45';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -246,21 +246,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for static shell assets (/assets/*.js, /assets/*.css, icons, fonts)
+  // Network-first with cache fallback for same-origin static shell assets so PWA launches always execute fresh deploys
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(request).then((cached) => {
-        const networkFetch = fetch(request)
-          .then((response) => {
-            if (response && response.ok) {
-              const clone = response.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-            }
-            return response;
-          })
-          .catch(() => cached);
-        return cached || networkFetch;
-      })
+      fetch(request, { cache: 'no-store' })
+        .then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
   }
 });

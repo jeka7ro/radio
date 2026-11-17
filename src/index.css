@@ -3,6 +3,7 @@
 /* Smart TV Chromium (< 88) fallback: Tailwind preflight uses `input:where([type=button])` in the same selector list as `button`,
    causing older Chromium engines without `:where()` support to drop the entire rule and leave buttons with a solid white (`buttonface`) background! */
 @layer base {
+
   button,
   input[type='button'],
   input[type='reset'],
@@ -57,8 +58,8 @@
 
 @media (orientation: portrait) {
   html.ios-pwa-standalone {
-    --safe-top: max(env(safe-area-inset-top, 0px), var(--ios-pwa-top-floor, 44px));
-    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--ios-pwa-top-floor, 48px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ios-pwa-bottom-floor, 16px));
     --safe-left: env(safe-area-inset-left, 0px);
     --safe-right: env(safe-area-inset-right, 0px);
   }
@@ -68,8 +69,8 @@
   html.ios-pwa-standalone {
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
-    --safe-left: max(env(safe-area-inset-left, 0px), var(--ios-pwa-side-floor, 40px));
-    --safe-right: max(env(safe-area-inset-right, 0px), var(--ios-pwa-side-floor, 40px));
+    --safe-left: max(env(safe-area-inset-left, 0px), var(--ios-pwa-side-floor, 44px));
+    --safe-right: max(env(safe-area-inset-right, 0px), var(--ios-pwa-side-floor, 44px));
   }
 }
 
@@ -118,6 +119,7 @@ body {
 
 /* Prevent iOS Safari / Mobile browsers from auto-zooming when focusing inputs or selects */
 @media (max-width: 767px) {
+
   input,
   select,
   textarea {
@@ -170,11 +172,9 @@ select:focus-visible {
    APPLE macOS TAHOE (LIQUID GLASS TRANSLUCENCY + PILL BUTTONS + SQUIRCLES)
    ============================================================================ */
 .tahoe-glass {
-  background: linear-gradient(
-    145deg,
-    rgba(22, 26, 36, 0.94) 0%,
-    rgba(14, 17, 24, 0.96) 100%
-  );
+  background: linear-gradient(145deg,
+      rgba(22, 26, 36, 0.94) 0%,
+      rgba(14, 17, 24, 0.96) 100%);
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -182,11 +182,9 @@ select:focus-visible {
 }
 
 .tahoe-emerald-osd {
-  background: linear-gradient(
-    145deg,
-    rgba(20, 24, 34, 0.95) 0%,
-    rgba(12, 15, 22, 0.97) 100%
-  );
+  background: linear-gradient(145deg,
+      rgba(20, 24, 34, 0.95) 0%,
+      rgba(12, 15, 22, 0.97) 100%);
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -213,11 +211,15 @@ select:focus-visible {
     0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
-/* Bulletproof Smart TV Remote Focus Highlight on OSD & Popover Buttons (No nested backdrop-filter or transition glitches on LG webOS) */
-.tahoe-emerald-card:focus,
-[data-vod-bottom-row="true"] button:focus,
-[data-vod-menu-popover="true"] button:focus,
-[data-vod-top-back-btn="true"]:focus {
+/* Bulletproof Smart TV Remote Focus Highlight on OSD & Popover Buttons (scoped to Smart TV or keyboard :focus-visible so mobile touch taps never turn pills solid white) */
+html.smart-tv-mode .tahoe-emerald-card:focus,
+html.smart-tv-mode [data-vod-bottom-row="true"] button:focus,
+html.smart-tv-mode [data-vod-menu-popover="true"] button:focus,
+html.smart-tv-mode [data-vod-top-back-btn="true"]:focus,
+.tahoe-emerald-card:focus-visible,
+[data-vod-bottom-row="true"] button:focus-visible,
+[data-vod-menu-popover="true"] button:focus-visible,
+[data-vod-top-back-btn="true"]:focus-visible {
   background: #ffffff !important;
   background-color: #ffffff !important;
   color: #09090b !important;
@@ -230,20 +232,29 @@ select:focus-visible {
   transition: none !important;
 }
 
-.tahoe-emerald-card:focus *,
-[data-vod-bottom-row="true"] button:focus *,
-[data-vod-menu-popover="true"] button:focus *,
-[data-vod-top-back-btn="true"]:focus * {
+html.smart-tv-mode .tahoe-emerald-card:focus *,
+html.smart-tv-mode [data-vod-bottom-row="true"] button:focus *,
+html.smart-tv-mode [data-vod-menu-popover="true"] button:focus *,
+html.smart-tv-mode [data-vod-top-back-btn="true"]:focus *,
+.tahoe-emerald-card:focus-visible *,
+[data-vod-bottom-row="true"] button:focus-visible *,
+[data-vod-menu-popover="true"] button:focus-visible *,
+[data-vod-top-back-btn="true"]:focus-visible * {
   color: #09090b !important;
 }
 
+html.smart-tv-mode [data-music-root="true"] button:focus {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85) !important;
+}
+
 /* Ensure horizontal & vertical spacing between OSD transport pills ONLY on legacy Smart TV Chromium engines (< 84) that lack Flexbox gap */
-html.no-flex-gap [data-vod-bottom-row="true"] > div > button,
-html.no-flex-gap [data-vod-bottom-row="true"] > div > div {
+html.no-flex-gap [data-vod-bottom-row="true"]>div>button,
+html.no-flex-gap [data-vod-bottom-row="true"]>div>div {
   margin-right: 8px;
 }
-html.no-flex-gap [data-vod-bottom-row="true"] > div > button:last-child,
-html.no-flex-gap [data-vod-bottom-row="true"] > div > div:last-child {
+
+html.no-flex-gap [data-vod-bottom-row="true"]>div>button:last-child,
+html.no-flex-gap [data-vod-bottom-row="true"]>div>div:last-child {
   margin-right: 0;
 }
 
@@ -269,18 +280,24 @@ article.rounded-2xl {
 
 /* Equalizer animation & skeleton pulse with case-by-case reduced-motion handling */
 @keyframes eqBounce {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: scaleY(0.45);
   }
+
   50% {
     transform: scaleY(1);
   }
 }
 
 @keyframes skeletonFade {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.45;
   }
@@ -289,6 +306,7 @@ article.rounded-2xl {
 .eq-bar {
   transform-origin: bottom;
   animation: eqBounce 0.85s ease-in-out infinite;
+
   @media (prefers-reduced-motion: reduce) {
     animation: none;
     opacity: 0.85;
@@ -305,6 +323,7 @@ article.rounded-2xl {
 
 .skeleton-pulse {
   animation: skeletonFade 1.6s ease-in-out infinite;
+
   @media (prefers-reduced-motion: reduce) {
     animation: none;
     opacity: 0.7;
@@ -316,6 +335,7 @@ article.rounded-2xl {
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
 }
+
 .no-scrollbar::-webkit-scrollbar {
   display: none !important;
   width: 0 !important;
@@ -366,11 +386,9 @@ input[type="search"]::-webkit-search-decoration {
   input[type="range"]::-webkit-slider-runnable-track {
     width: 100%;
     height: 8px;
-    background: linear-gradient(
-      to right,
-      var(--brand-color, #2563eb) var(--progress, 80%),
-      #cbd5e1 var(--progress, 80%)
-    );
+    background: linear-gradient(to right,
+        var(--brand-color, #2563eb) var(--progress, 80%),
+        #cbd5e1 var(--progress, 80%));
     border-radius: 4px;
   }
 
@@ -407,13 +425,26 @@ input[type="search"]::-webkit-search-decoration {
   }
 }
 
-/* Clean focus handling for poster cards & 100% width inside CSS Grid on older LG webOS Chromium (< 88) */
+/* Clean focus handling for poster cards & 100% width inside CSS Grid on older LG webOS Chromium (< 88).
+   padding-top: 10px keeps the child poster's scale(1.03) + ring-4 white outline (~8.6px) strictly inside
+   the <button>'s own layout box so LG webOS GPU tile invalidation & scroll containers never clip the top outline! */
 button[data-vod-card="true"]:not(.flex):not(.inline-flex),
-button[data-watched-poster-btn="true"] {
+button[data-watched-poster-btn="true"],
+button[data-klub-card="true"]:not(.flex):not(.inline-flex) {
   display: block;
   width: 100%;
+  padding-top: 10px;
+  position: relative;
+  overflow: visible !important;
   outline: none !important;
   box-shadow: none !important;
+}
+
+button[data-vod-card="true"]:focus,
+button[data-watched-poster-btn="true"]:focus,
+button[data-klub-card="true"]:focus,
+button[data-tv-channel-card="true"]:focus {
+  z-index: 20;
 }
 
 button.cast-person-card {
@@ -439,9 +470,9 @@ button.cast-person-card {
   aspect-ratio: auto !important;
 }
 
-:not(img).aspect-\[2\/3\] > img,
-:not(img).aspect-\[2\/3\] > video,
-:not(img).aspect-\[2\/3\] > iframe {
+:not(img).aspect-\[2\/3\]>img,
+:not(img).aspect-\[2\/3\]>video,
+:not(img).aspect-\[2\/3\]>iframe {
   position: absolute !important;
   top: 0 !important;
   right: 0 !important;
@@ -461,9 +492,9 @@ div.aspect-square.w-full {
   aspect-ratio: auto !important;
 }
 
-div.aspect-square.w-full > img,
-div.aspect-square.w-full > video,
-div.aspect-square.w-full > svg {
+div.aspect-square.w-full>img,
+div.aspect-square.w-full>video,
+div.aspect-square.w-full>svg {
   position: absolute !important;
   top: 0 !important;
   right: 0 !important;
@@ -472,6 +503,17 @@ div.aspect-square.w-full > svg {
   width: 100% !important;
   height: 100% !important;
   object-fit: cover !important;
+}
+
+div.aspect-square.w-full > button[data-cover-fill="true"] {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
 }
 
 button.aspect-video,
@@ -484,9 +526,9 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) {
   aspect-ratio: auto !important;
 }
 
-button.aspect-video > img,
-div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > img,
-div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > iframe {
+button.aspect-video>img,
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"])>img,
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"])>iframe {
   position: absolute !important;
   top: 0 !important;
   right: 0 !important;
@@ -497,7 +539,7 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > iframe {
   object-fit: cover !important;
 }
 
-div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > video {
+div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"])>video {
   position: absolute !important;
   top: 0 !important;
   right: 0 !important;
@@ -513,6 +555,7 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > video {
   0% {
     transform: rotate(0deg);
   }
+
   100% {
     transform: rotate(360deg);
   }
@@ -522,16 +565,20 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > video {
   0% {
     transform: rotate(360deg);
   }
+
   100% {
     transform: rotate(0deg);
   }
 }
 
 @keyframes scLogoAura {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 0.45;
     transform: scale(0.92);
   }
+
   50% {
     opacity: 1;
     transform: scale(1.08);
@@ -539,10 +586,13 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"]) > video {
 }
 
 @keyframes scLogoPlayPulse {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: scale(1);
     filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.45));
   }
+
   50% {
     transform: scale(1.06);
     filter: drop-shadow(0 0 9px rgba(96, 165, 250, 0.85));
@@ -568,56 +618,69 @@ html.smart-tv-mode [class*="backdrop-blur"] {
 
 
 /* Fallback for LG webOS / Tizen Smart TVs (Chromium < 84) without CSS Flexbox gap support */
-html.no-flex-gap .flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-1 > *:not(:last-child):not([class*="mr-"]) {
+html.no-flex-gap .flex:not(.flex-col).gap-1>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-1>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.25rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-1\.5 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-1\.5 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-1\.5>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-1\.5>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.375rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-2 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-2 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-2>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-2>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.5rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-2\.5 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-2\.5 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-2\.5>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-2\.5>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.625rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-3 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-3 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-3>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-3>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.75rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-3\.5 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-3\.5 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-3\.5>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-3\.5>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 0.875rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-4 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-4 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-4>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-4>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 1rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-5 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-5 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-5>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-5>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 1.25rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-6 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-6 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-6>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-6>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 1.5rem;
 }
-html.no-flex-gap .flex:not(.flex-col).gap-8 > *:not(:last-child):not([class*="mr-"]),
-html.no-flex-gap .inline-flex:not(.flex-col).gap-8 > *:not(:last-child):not([class*="mr-"]) {
+
+html.no-flex-gap .flex:not(.flex-col).gap-8>*:not(:last-child):not([class*="mr-"]),
+html.no-flex-gap .inline-flex:not(.flex-col).gap-8>*:not(:last-child):not([class*="mr-"]) {
   margin-right: 2rem;
 }
-html.no-flex-gap .flex.flex-col.gap-1\.5 > *:not(:last-child):not([class*="mb-"]) {
+
+html.no-flex-gap .flex.flex-col.gap-1\.5>*:not(:last-child):not([class*="mb-"]) {
   margin-bottom: 0.375rem;
 }
-html.no-flex-gap .flex.flex-col.gap-2 > *:not(:last-child):not([class*="mb-"]) {
+
+html.no-flex-gap .flex.flex-col.gap-2>*:not(:last-child):not([class*="mb-"]) {
   margin-bottom: 0.5rem;
 }
-html.no-flex-gap .flex.flex-col.gap-3 > *:not(:last-child):not([class*="mb-"]) {
+
+html.no-flex-gap .flex.flex-col.gap-3>*:not(:last-child):not([class*="mb-"]) {
   margin-bottom: 0.75rem;
 }
-html.no-flex-gap .flex.flex-col.gap-4 > *:not(:last-child):not([class*="mb-"]) {
+
+html.no-flex-gap .flex.flex-col.gap-4>*:not(:last-child):not([class*="mb-"]) {
   margin-bottom: 1rem;
 }
 
@@ -625,23 +688,20 @@ html.smart-tv-mode button[data-vod-card="true"],
 html.smart-tv-mode button[data-klub-card="true"],
 html.smart-tv-mode button[data-watched-poster-btn="true"],
 html.smart-tv-mode button[data-tv-channel-card="true"] {
-  transition-property: transform, opacity, border-color, background-color, color !important;
-  transition-duration: 120ms !important;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
+  transition: none !important;
+  overflow: visible !important;
+}
+
+html.smart-tv-mode button[data-vod-card="true"] > div,
+html.smart-tv-mode button[data-klub-card="true"] > div,
+html.smart-tv-mode button[data-watched-poster-btn="true"] > div {
+  transition: none !important;
 }
 
 html.smart-tv-mode button {
-  transition-property: transform, opacity, border-color, background-color, color !important;
+  transition-property: transform, opacity, border-color, background-color, color;
 }
 
-html.smart-tv-mode button[data-vod-card="true"] img,
-html.smart-tv-mode button[data-klub-card="true"] img,
-html.smart-tv-mode button[data-watched-poster-btn="true"] img,
-html.smart-tv-mode button[data-tv-channel-card="true"] img {
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
-}
 /* === END SMART TV SMOOTH PERFORMANCE OPTIMIZATION === */
 
 /* ============================================================================
@@ -654,7 +714,7 @@ html.smart-tv-mode button[data-tv-channel-card="true"] img {
   color: #f8fafc !important;
 }
 
-[data-tv-theme="ambient"] > header {
+[data-tv-theme="ambient"]>header {
   background: rgba(45, 57, 77, 0.84) !important;
   backdrop-filter: blur(26px) saturate(180%);
   -webkit-backdrop-filter: blur(26px) saturate(180%);
@@ -663,11 +723,9 @@ html.smart-tv-mode button[data-tv-channel-card="true"] img {
 
 [data-tv-theme="ambient"] .tahoe-glass,
 [data-tv-theme="ambient"] .tahoe-emerald-osd {
-  background: linear-gradient(
-    145deg,
-    rgba(71, 88, 114, 0.76) 0%,
-    rgba(52, 66, 89, 0.82) 100%
-  ) !important;
+  background: linear-gradient(145deg,
+      rgba(71, 88, 114, 0.76) 0%,
+      rgba(52, 66, 89, 0.82) 100%) !important;
   border-color: rgba(255, 255, 255, 0.26) !important;
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
@@ -688,12 +746,16 @@ html.smart-tv-mode button[data-tv-channel-card="true"] img {
 [data-tv-theme="ambient"] main .bg-\[\#242424\],
 [data-tv-theme="ambient"] main .bg-\[\#262626\],
 [data-tv-theme="ambient"] main .bg-\[\#0b0e14\],
-[data-tv-theme="ambient"] main .bg-\[\#0d111a\] {
+[data-tv-theme="ambient"] main .bg-\[\#0d111a\],
+[data-tv-theme="ambient"] main .bg-\[\#0e121b\],
+[data-tv-theme="ambient"] main .bg-\[\#0e121b\]\/95,
+[data-tv-theme="ambient"] main .bg-\[\#141926\] {
   background-color: rgba(58, 73, 97, 0.78) !important;
   border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
-[data-tv-theme="ambient"] main .bg-\[\#121212\] {
+[data-tv-theme="ambient"] main .bg-\[\#121212\],
+[data-tv-theme="ambient"] main .bg-\[\#080b12\] {
   background-color: rgba(38, 49, 68, 0.82) !important;
   border-color: rgba(255, 255, 255, 0.22) !important;
 }
@@ -746,7 +808,14 @@ html[data-vod-full-mode="true"] header {
   --tahoe-border-dark: rgba(255, 255, 255, 0.08);
 }
 
-html, body, #root, #app, button, input, select, textarea {
+html,
+body,
+#root,
+#app,
+button,
+input,
+select,
+textarea {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
   -webkit-font-smoothing: antialiased !important;
   -moz-osx-font-smoothing: grayscale !important;
@@ -755,8 +824,12 @@ html, body, #root, #app, button, input, select, textarea {
 /* Eliminare completă fonturi robotizate / monospace și aliniere numerică tabelară Apple */
 .tabular-nums,
 [class*="tabular-nums"],
-code, pre, kbd, samp,
-td, th,
+code,
+pre,
+kbd,
+samp,
+td,
+th,
 [class*="tabular-nums"] {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
   font-variant-numeric: tabular-nums !important;
@@ -821,10 +894,13 @@ tbody td {
 
 /* Optimizare iPhone / Mobil — Zero scroll orizontal pe pagină */
 @media (max-width: 768px) {
-  html, body {
+
+  html,
+  body {
     max-width: 100vw !important;
     overflow-x: hidden !important;
   }
+
   table {
     display: block;
     overflow-x: auto;
@@ -887,11 +963,13 @@ html.car-widescreen-mode [data-top-hero-card="true"] h2 {
     object-view-box: inset(6.9% 6.9% 6.9% 6.9%);
     transform: none !important;
   }
+
   .vod-fit-cinema-x {
     object-fit: contain;
     object-view-box: inset(0% 6.9% 0% 6.9%);
     transform: none !important;
   }
+
   .vod-fit-cinema-y {
     object-fit: contain;
     object-view-box: inset(6.9% 0% 6.9% 0%);
@@ -906,6 +984,7 @@ html.smart-tv-mode .vod-fit-cinema-y {
 }
 
 @supports not (object-view-box: inset(6.9%)) {
+
   html.smart-tv-mode .vod-fit-cinema-xy,
   html.smart-tv-mode .vod-fit-cinema-x,
   html.smart-tv-mode .vod-fit-cinema-y {
@@ -923,6 +1002,7 @@ html.smart-tv-sub1080 svg.lucide:not([class*="w-"]):not([class*="h-"]) {
   width: 1.15rem !important;
   height: 1.15rem !important;
 }
+
 html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
   width: 6.5rem !important;
   height: 6.5rem !important;
@@ -935,7 +1015,7 @@ html.smart-tv-sub1080 [data-filmio-startup-loader="full"] svg {
    LG webOS 77" OLED (1920x1080) retains its original full 1080p dimensions.
    ============================================================================ */
 html.smart-tv-sub1080 [data-home-billboard="true"],
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) {
   min-height: 180px !important;
   max-height: 205px !important;
   height: 195px !important;
@@ -945,14 +1025,14 @@ html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="tru
 
 html.smart-tv-sub1080 [data-home-billboard="true"] img[key*="hero_logo"],
 html.smart-tv-sub1080 [data-home-billboard="true"] img[src*="logo/medium"],
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) img[key*="hero_logo"],
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) img[src*="logo/medium"] {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) img[key*="hero_logo"],
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) img[src*="logo/medium"] {
   max-height: 28px !important;
   max-width: 190px !important;
 }
 
 html.smart-tv-sub1080 [data-home-billboard="true"] h2,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) h2 {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) h2 {
   font-size: 1.35rem !important;
   line-height: 1.15 !important;
 }
@@ -960,21 +1040,21 @@ html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="tru
 html.smart-tv-sub1080 [data-home-billboard="true"] .gap-3,
 html.smart-tv-sub1080 [data-home-billboard="true"] .gap-4,
 html.smart-tv-sub1080 [data-home-billboard="true"] .sm\:gap-4,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .gap-3,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .gap-4,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .sm\:gap-4 {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) .gap-3,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) .gap-4,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) .sm\:gap-4 {
   gap: 0.35rem !important;
 }
 
 html.smart-tv-sub1080 [data-home-billboard="true"] .mt-5,
 html.smart-tv-sub1080 [data-home-billboard="true"] .sm\:mt-12,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .mt-5,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) .sm\:mt-12 {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) .mt-5,
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) .sm\:mt-12 {
   margin-top: 0.35rem !important;
 }
 
 html.smart-tv-sub1080 [data-home-billboard="true"] p,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) p {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) p {
   font-size: 0.95rem !important;
   line-height: 1.25 !important;
   max-width: 440px !important;
@@ -985,7 +1065,7 @@ html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="tru
 }
 
 html.smart-tv-sub1080 [data-home-billboard="true"] button,
-html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]) button {
+html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="true"]):not([data-music-top-bar="true"]) button {
   height: 28px !important;
   padding-left: 12px !important;
   padding-right: 12px !important;
@@ -998,14 +1078,14 @@ html.smart-tv-sub1080 [data-top-hero-card="true"]:not([data-vod-detail-hero="tru
    By converting them to rem units that scale with root font-size (smart-tv-sub1080),
    the screen renders 8-10 cards per row identically to 1080p density.
    ============================================================================ */
-html.smart-tv-sub1080 [class*="minmax(175px"],
-html.smart-tv-sub1080 [class*="minmax(185px"] {
+html.smart-tv-sub1080 [class*="minmax(175px"]:not([data-music-player-grid="true"]),
+html.smart-tv-sub1080 [class*="minmax(185px"]:not([data-music-player-grid="true"]) {
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)) !important;
   gap: 0.85rem !important;
 }
 
-html.smart-tv-sub1080 [class*="minmax(240px"],
-html.smart-tv-sub1080 [class*="minmax(260px"] {
+html.smart-tv-sub1080 [class*="minmax(240px"]:not([data-music-player-grid="true"]),
+html.smart-tv-sub1080 [class*="minmax(260px"]:not([data-music-player-grid="true"]) {
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)) !important;
   gap: 0.85rem !important;
 }
@@ -1016,16 +1096,19 @@ html.smart-tv-sub1080 [data-vod-card="true"] {
 }
 
 @media (max-width: 1400px) and (min-aspect-ratio: 16/10) {
-  html.smart-tv-sub1080 [class*="minmax(175px"],
-  html.smart-tv-sub1080 [class*="minmax(185px"] {
+
+  html.smart-tv-sub1080 [class*="minmax(175px"]:not([data-music-player-grid="true"]),
+  html.smart-tv-sub1080 [class*="minmax(185px"]:not([data-music-player-grid="true"]) {
     grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
-  html.smart-tv-sub1080 [class*="minmax(240px"],
-  html.smart-tv-sub1080 [class*="minmax(260px"] {
+
+  html.smart-tv-sub1080 [class*="minmax(240px"]:not([data-music-player-grid="true"]),
+  html.smart-tv-sub1080 [class*="minmax(260px"]:not([data-music-player-grid="true"]) {
     grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     gap: 0.65rem !important;
   }
+
   html.smart-tv-sub1080 [data-vod-card="true"] {
     max-width: 100% !important;
     width: 100% !important;
@@ -1040,4 +1123,3 @@ html.smart-tv-sub1080 [data-vod-card="true"] {
   max-width: none !important;
   width: 100% !important;
 }
-

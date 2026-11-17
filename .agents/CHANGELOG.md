@@ -6,6 +6,412 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-17 19:45 — Eliminare Întreruperi, Stalling & Buffering pe PRO TV (`6997`/`19452`/`7055`) și Canalele TV Online Live (`vite.config.ts`, `netlify/functions/tv-proxy.mjs`, `TvPlayerModal.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Accelerator Multi-Socket 18x pentru segmente `.ts` iEdem + Transcodare Ultrafast HEVC -> H.264/AAC pe `Pro TV RO 6997` ([vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts)):**
+     - Extins acceleratorul paralel HTTP/1.1 Range (`isVkThrottledBinary` + `18` conexiuni paralele, felii `256 KB`) de la VK Video la toate segmentele TV Live/Mediateka iEdem (`rossteleccom.net`, `iedem.com`, `jmeekos.com`, `/iptv/.../*.ts`), ridicând viteza de descărcare de la `~0.6–1.1 Mbps` la `8–15+ Mbps`.
+     - Adăugat cache dedicat + remux `ffmpeg` ultrafast (`-copyts -c:v libx264 -preset ultrafast -crf 22 -bsf:v dump_extra -c:a copy`) pentru `Pro TV RO` (`6997`, orig. HEVC `0x24`), cu pre-încălzire în fundal la încărcarea `index.m3u8` ca segmentele să fie livrate nativ H.264/AAC cu continuitate exactă de timestamps PTS.
+  2. **Accelerator Parallel Range 16x în Cloud ([netlify/functions/tv-proxy.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-proxy.mjs)):**
+     - Extins `isVkThrottledBinary` și pentru segmentele iEdem, crescut pool-ul `maxSockets` la `64`, timeout la `26s` și fereastra paralelă la `16` conexiuni pe segmentele `.ts`.
+  3. **Buffer HLS Live extins, Watchdog Auto-Heal & LAN Bridge în Playerul TV ([TvPlayerModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/TvPlayerModal.tsx)):**
+     - Crescut bufferul `Hls.js` la `liveSyncDurationCount: 3`, `maxBufferLength: 45s` (`90s` max, `60 MB`), `fragLoadingTimeOut: 28s` cu 6 reîncercări și recuperare automată pe `BUFFER_STALLED_ERROR` / `MEDIA_ERROR` (`swapAudioCodec`).
+     - Adăugat `stallWatchdogInterval` (la 3.5s) care repornește descărcarea sau sare automat peste golurile din buffer / trece la următorul backup (`6997` <-> `19452` <-> `7055` <-> `2456`), blocând totodată căderea pe `directUrl` neproxifiat (`0.6 Mbps`) sau deturnarea prematură către `<video>` nativ pe Smart TV.
+     - Adăugat suport LAN Bridge în `buildProxyStreamUrl` cu fallback automat pe proxy-ul Cloud în caz de eroare.
+  4. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v45'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Nodurile `.ts` iEdem limitau conexiunile TCP unice la `0.6–1.1 Mbps`, iar timeout-ul `fragLoadingTimeOut: 12s` + bufferul minuscul (`12s` / `18 MB`, `liveSyncDurationCount: 1.2`) făceau ca `Pro TV RO` / `Pro TV Chisinau HD MD` și alte canale HD să se oprească la fiecare 10–15 secunde.
+- **Fișiere modificate:** `vite.config.ts`, `netlify/functions/tv-proxy.mjs`, `src/components/tv/TvPlayerModal.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 19:22 — Reparare Definitivă Redare Sezon/Episod `Шоу Воли` (`tt27636698` / `kp=5354824`) pe LG Smart TV, LAN & Cloud (`vod-stream.mjs`, `vodStreamClient.ts`, `smartTvLampaHelpers.ts`, `filelistServer.ts`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Proxy Kinogram HLS & eliminare `.mpd` DASH blocat de `503` ([vod-stream.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/vod-stream.mjs), [vodStreamClient.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/vodStreamClient.ts)):**
+     - Eliminat URL-urile `.mpd` de pe `interkh.com` (care întorceau `HTTP 503` din browser fără `Referer: https://api.kinogram.best/`) și returnat întotdeauna `hlsUrl: proxyHlsUrl || hlsUrl` (`/api/tv-proxy?url=...`) pe episoadele Direct Cloud HLS (`S3:E27..50`, `S4:E1..43`).
+  2. **Prioritizare nativă `Direct Cloud HLS` & detecție `tt27636698` ([smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts)):**
+     - Adăugat `tt27636698` / `kp_5354824` / `Volya's Show` în `isRussianVodItem` și `isRussianTvShowItem`, iar `isVkDirectSourcePath` recunoaște acum și `Direct Cloud HLS`, astfel încât episoadele 2025–2026 să ruleze direct în `<VodNativeHlsPlayer>` fără a cădea pe torrente inactive.
+  3. **Blocare torrente vechi / greșite în LAN ([filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)):**
+     - Adăugat `torrentExplicitlyMismatchesEpisode` în `selectBestVideoFileIndex` și `/api/filelist/resolve`: respinge ID-urile de torrent vechi salvate (ex: `-917075368`) sau torentele de alt sezon/episod atât în modul non-strict cât și strict, și verifică întotdeauna fișierul exact al episodului cerut.
+  4. **Dezlegare `flTorrentId` & protecție titlu rusesc vs Cinemeta ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Curățat `flTorrentId` și `Stream #...` de pe seriale la deschidere/salvare în `watchProgressMap`, resetat `userManuallySelectedServerRef` la schimbarea episodului, curățat cardul `tt27636698` -> `Шоу Воли (ТНТ)` (`kpId: '5354824'`), blocat suprascrierea titlului și listei de episoade din Cinemeta pe seriale rusești, și reparat afișarea titlului în OSD-ul playerului nativ.
+  5. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v44'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Cardul salvat în „Continuă vizionarea” (`tt27636698`) reținea un `flTorrentId: -917075368` blocat pe `S1:E1` / timeout, `isVkDirectSourcePath` nu recunoștea `Direct Cloud HLS`, `vod-stream.mjs` expunea DASH/HLS neproxifiat de pe `interkh.com` (`503`), iar Cinemeta suprascria titlul în `"Volya's Show"`.
+- **Fișiere modificate:** `netlify/functions/vod-stream.mjs`, `src/services/vodStreamClient.ts`, `src/views/smartTvLampaHelpers.ts`, `src/server/filelistServer.ts`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 18:57 — Eliminare Tăiere Contur Alb (Focus Ring) la Navigarea pe Carduri pe LG webOS Smart TV (`index.css`, `SmartTvLampaViewCore.tsx`, `StreamingPlatformView.tsx`, `ActorProfileModal.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare tăiere GPU pe LG webOS (`backface-visibility`) & rezervare spațiu intern pe carduri ([index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css)):**
+     - Înlăturat `-webkit-backface-visibility: hidden` / `backface-visibility: hidden` de pe `button[data-vod-card="true"]`, `button[data-watched-poster-btn="true"]`, `button[data-klub-card="true"]` și imaginile acestora în `html.smart-tv-mode`, și dezactivat `transition` în modul TV pe card și copilul lui `> div` pentru ca scalarea `1.03` și conturul `ring-4` să se randeze atomic într-un singur cadru fără tăiere pe GPU tile.
+     - Adăugat `padding-top: 10px`, `position: relative`, `overflow: visible !important` pe butoanele de card poster (`:not(.flex):not(.inline-flex)`) + `z-index: 20` la `:focus`, astfel încât întreaga margine superioară a conturului alb să încapă integral în interiorul `<button>`-ului.
+  2. **Spațiere benzi orizontale & `<main>` la navigarea cu telecomanda ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [StreamingPlatformView.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/StreamingPlatformView.tsx), [ActorProfileModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/ActorProfileModal.tsx)):**
+     - Extins padding-ul benziilor `overflow-x-auto` (`Continuă vizionarea`, `StreamingPlatformView`, `ActorProfileModal`) cu `pt-2 px-3 -mx-3` / `py-2.5 px-2 -mx-2`, mărit `pt-3.5` pe `<main>` și pragul de scroll D-pad (`mainRect.top + 52` / `-68`).
+  3. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v43'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pe LG webOS TV, la mutarea focusului între carduri, combinația dintre layer-ul `backface-visibility: hidden` cu `padding-top: 0` și containerele `overflow-x-auto` tăia partea superioară a conturului alb (`ring-4` + `scale-[1.03]`).
+- **Fișiere modificate:** `src/index.css`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/StreamingPlatformView.tsx`, `src/components/tv/ActorProfileModal.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 18:35 — Eliminare Carduri / Postere Rupte în „Continuă vizionarea” & Cataloage VOD: Fallback TMDB `ru-RU` + Protecție SVG Poster Nativ (`smartTvLampaHelpers.ts`, `iedemVodService.ts`, `SmartTvLampaViewCore.tsx`, `SmartTvCatalogSections.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Rezoluție poster TMDB `ru-RU` & filtrare `no-poster.png` ([iedemVodService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/iedemVodService.ts)):**
+     - Actualizat `resolveIedemKinopoiskMeta` (și interfața `IedemVerifiedMeta` cu `tmdbChecked`) pentru a respinge placeholder-ele `no-poster.png` de pe Kinopoisk și a căuta automat posterul real pe TMDB (`ru-RU`, inclusiv pentru francize rusești separate prin punct ex. `Мосгаз. Дело №12. Южный порт` -> `https://image.tmdb.org/t/p/w500/...`).
+  2. **Helper unitar sigur pentru postere VOD ([smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts)):**
+     - Adăugate `isValidVodPosterHttpUrl`, `buildFallbackVodPosterDataUri` (poster nativ SVG Navy / Tahoe-Glass cu titlul centrat fără suprapuneri pe badge-uri), `resolveSafeVodPosterUrl` și `handleVodPosterImgError`.
+     - Eliminată generarea de URL-uri `metahub.space/poster/medium/<id>/img` pentru ID-uri care nu sunt IMDb (`tt...`, ex. `kinozal_*`, `kp_*`, `iedem_*`).
+  3. **Auto-îmbogățire postere lipsă în Istoric & înlocuire globală în UI ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx)):**
+     - Extins efectul de îmbogățire pentru „Continuă vizionarea” (`needsPoster`) să rezolve posterele lipsă / `no-poster` pentru `kinozal_*` și itemii fără `tt...`, salvând posterul actualizat în profil.
+     - Înlocuite toate fallback-urile nesigure `metahub.space` (inclusiv `poster/medium/fallback/img`) și adăugat `onError={(e) => handleVodPosterImgError(e, item)}` pe toate rafturile Home, Istoric, Favorite, Top IMDb, UHD și Sidebar.
+  4. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v42'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru că cardurile din „Continuă vizionarea” fără poster salvat (ex. `Мосгаз. Дело №12. Южный порт`, `kinozal_979807412`) cădeau pe `metahub.space/poster/medium/kinozal_.../img` (404) sau primeau `no-poster.png` de pe Kinopoisk, afișând iconița de imagine ruptă și text `alt` suprapus peste badge-uri.
+- **Fișiere modificate:** `src/views/smartTvLampaHelpers.ts`, `src/services/iedemVodService.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 18:21 — Eliminare Completă Alloha (`miyagi`) & Iframe-uri Terțe pentru Conținut Rusesc; Redare 100% Nativă (`VodNativeHlsPlayer`) + Torrente Kinozal/Rutor (`vod-stream.mjs`, `vite.config.ts`, `filelistServer.ts`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare totală `api.alloha.tv` / `miyagi-as.stravers.live` & fallback direct `.m3u8`/DASH ([vod-stream.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/vod-stream.mjs), [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts)):**
+     - Ștearsă complet funcția `resolveFromAllohaEmbed` și orice return de `Alloha VIP` / `embedUrl` din `resolveSecondaryProviders`.
+     - Promovat mirror-ul `https://api.kinogram.best` pe locul `#1` în `KINOGRAM_MIRROR_HOSTS` (și ca default referer în [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts)).
+     - Mapate episoadele aplatizate Kinogram (`kp/5354824` `1..182`) pe sezoanele reale (`38 / 51 / 50 / 43`), astfel încât episoadele noi 2025–2026 (`S3:E44`, `S4:E1..43`) să întoarcă `ok: true` cu stream nativ direct `.m3u8` HLS + `.mpd` DASH 1080p (`sourcePath: 'Direct Cloud HLS (1080p / HD)'`, `embedUrl: undefined`).
+  2. **Blocare absolută `<iframe>` terțe + păstrare titlu rusesc + fix torente LAN ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)):**
+     - Curățat titlul otrăvit `"Volya's Show"` în `sanitizedVodItem` / `detailedMeta` și oprit `kpData` să suprascrie numele itemilor rusești (`isRuKpForTitle`) cu `nameOriginal`/`nameEn` în engleză.
+     - Trimis parametrul `kp` la `/api/filelist/resolve`, iar în [filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts) rezolvat automat titlul chirilic din `kp` (ex: `kp=5354824` -> `'Шоу Воли'`) pentru ca torentele `[04x01]..[04x26] HDTV 1080р` să fie găsite indiferent de titlul din istoric.
+     - Blocate toate `<iframe>`-urile terțe pentru orice conținut rusesc (`!isCurrentVodForeign`) și oprit `syncPreferredVodServer` din a selecta `vidsrc_pm` pe conținut RU; dacă lipsește stream-ul nativ/torrent, afișează doar ecranul intern `renderRoCloudRetryCard`.
+  3. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v41'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** La cererea utilizatorului, pentru a elimina definitiv playerul extern plin de pop-up-uri (`miyagi` / Alloha) și orice `<iframe>` de pe conținutul rusesc, asigurând redare nativă exclusiv prin playerul intern (`VodNativeHlsPlayer`) cu Rutube 1080p, Torrente Kinozal/Rutor 1080p și HLS/DASH direct.
+- **Fișiere modificate:** `netlify/functions/vod-stream.mjs`, `vite.config.ts`, `src/server/filelistServer.ts`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 17:52 — Reparare Selecție Exactă Sezon/Episod pentru Show-urile Rusești (`Шоу Воли` & Emisiuni RU) pe Cloud (Rutube + Alloha VIP) și LAN Torrent (`vod-stream.mjs`, `vite.config.ts`, `filelistServer.ts`, `SmartTvLampaViewCore.tsx`, `smartTvLampaHelpers.ts`, `iedemVodService.ts`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Rezoluție multi-sezon Rutube + Alloha VIP fără fallback silențios la `S1:E1` ([vod-stream.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/vod-stream.mjs), [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts)):**
+     - Extins `fetchRutubeTvSeasonVideos` să pagineze până la 12 pagini (recuperând toate cele 114 episoade gratuite ТНТ `tv=280536` + episoadele PREMIER `tv=1813128`) și structurat `Шоу Воли` (`kp=5354824`) pe cele 4 sezoane reale (`38 / 51 / 50 / 41` episoade), normalizând și titlurile PREMIER etichetate greșit cu `"1 сезон, N выпуск"`.
+     - Eliminat fallback-ul silențios `|| seasonsOut[0]` / `|| targetSeason.episodes[0]` spre `S1:E1` atât în `resolveRutubeCuratedShow`, cât și în `VK_CURATED_SHOWS`, adăugând helper-ul exact `findExactSeasonAndEpisode`.
+     - Actualizat `resolveFromAllohaEmbed` pentru serialele stocate aplatizat în sezonul `"1"` pe Alloha (ex: `kp=5354824`) astfel încât să calculeze indexul global cumulat (`globalEp`) pe baza catalogului de sezoane, păstrând totodată intacte sezoanele curate (`rutubeFallbackRes.seasons`) împotriva suprascrierii de către `iedemRes.seasons` în `resolveSecondaryProviders`.
+     - Returnat HTTP `200` (și inclus `season`, `episode`, `title`, `embedUrl`) atât în handler-ul Netlify, cât și în middleware-ul `/api/vod-stream` din Vite (cu suport `season || s` și `episode || e`) atunci când `result.ok || result.embedUrl`.
+  2. **Player TV / Frontend ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts), [iedemVodService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/iedemVodService.ts)):**
+     - Adăugat `шоу\s+воли` în `isRussianTvShowItem` și actualizat `Шоу Воли (ТНТ)` la `seasonsCount: 4`, ascunzând episoadele fantomă KP S1 39..80 prin `isSyntheticVkShow`.
+     - Deblocat loader-ul infinit `<FilmioStartupLoader />` când `resolvedDirectStream?.embedUrl` este disponibil, adăugate atribute `key` per sezon/episod pe `<iframe>`-urile VOD și blocată căutarea duplicată FileList în engleză (`if (isForeignVod && isLocalHomeServer())`) pe itemii rusești îmbogățiți din Kinopoisk.
+  3. **Motor LAN Kinozal/Rutor ([filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)):**
+     - Recunoaștere calitate cu litera chirilică `р` (`1080р`, `2160р`, `720р` -> `'1080p Full HD'` etc.), căutare Rutor cat. 6 sortată după dată (`/0/`) + `[04x26]` / `[04х26]`, delimitare între episoade individuale și pachete de sezon în `handleFileListRequest`, și returnare `-1` / `{ ok: false }` în `selectBestVideoFileIndex` când episodul cerut depășește numărul de fișiere din pachet.
+  4. **Service Worker Cache:** Actualizat `CACHE_NAME` la `'aether-radio-v40'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** La selecția oricărui alt sezon/episod din `Шоу Воли` sau alte emisiuni rusești, aplicația cădea silențios pe sezonul 1 episodul 1 din cauza paginării limitate Rutube, fallback-urilor pe primul element, indexării aplatizate din Alloha VIP, poluării catalogului de sezoane iEdem, blocajului loader-ului peste iframe și selecției eronate de pachete torrent `S01`.
+- **Fișiere modificate:** `netlify/functions/vod-stream.mjs`, `vite.config.ts`, `src/server/filelistServer.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/services/iedemVodService.ts`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 16:21 — Rafinare Mini-Player Muzică din Header: Eliminare Linie de Jos & Bară Centrată cu Timp Parcurs / Rămas (`SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Eliminată linia subțire lipită pe marginea inferioară a capsulei din header ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)), care se tăia peste bordura rotunjită.
+  - Adăugată între titlu/artist și controalele `⏮ ⏯ ⏭ ✕` o bară interactivă de progres centrată vertical (`#60a5fa`, `handleSeekMusic` la click, `tabIndex={-1}` pentru a nu bloca navigarea D-pad pe telecomandă) încadrată de **timpul parcurs** (stânga, `M:SS`) și **timpul rămas** (dreapta, `-M:SS`), plus fallback compact pe ferestre inguste `sm`.
+  - Aliniate ambele capsule mini-player (Muzică & Radio) la fundalul Navy dark-glass `bg-[#0e121b]/90 hover:bg-[#141926]/95` și `text-[#94a3b8]`.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v39'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** La cererea utilizatorului, pentru afișarea clară a progresului audio (timp parcurs + timp rămas) fără bara tăiată de jos.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 16:17 — Aliniere Completă Suprafețe, Carduri, Bare & Texte din Muzică pe Paleta Navy / Tahoe-Glass din Sidebar & Header (`SmartTvMusicSpotifySection.tsx`, `spotifyMusicPremiumViews.tsx`, `SmartTvLampaViewCore.tsx`, `SmartTvCatalogSections.tsx`, `index.css`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare completă fundaluri și texte gri-cărbune / nuanțe reziduale Spotify ([SmartTvMusicSpotifySection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvMusicSpotifySection.tsx), [spotifyMusicPremiumViews.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/spotifyMusicPremiumViews.tsx)):**
+     - Înlocuite toate suprafețele gri (`#121212`, `#181818`, `#1f1f1f`, `#232329`, `#242424`, `#242428`, `#282828`, `#2a2a2a`, `#09090b`, `#101014`, `#1e1e22`) și textele calde `#a7a7a7` / `#b3b3b3` / `zinc-*` cu paleta unitară **Navy / Tahoe-Glass** identică cu Sidebar-ul (`tahoe-glass`, `#080b12`, `#0e121b`, `#141926`, `#161f30`, `#94a3b8` / `slate-*`).
+     - Eliminat și restul de palete lime/mov/roz/portocaliu (`#bef264`/`#3f6212`, `#a78bfa`/`#4c1d95`, `from-purple-600/35`, `from-indigo-700/35`, `from-rose-600/35`, `from-amber-600/35`) din cardurile de artiști, posturi și gradientele de playlist, uniformizându-le pe nuanțe Navy / Albastru Safir (`#172554`, `#1e3a8a`, `#2563eb`, `#3b82f6`, `#60a5fa`).
+  2. **Container rădăcină, căutare Radio & temă Ambient ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx), [index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css)):**
+     - Schimbat fundalul rădăcină al aplicației din `#181818` în `#080b12`, bara de căutare Radio în `#0e121b` și extins suportul `[data-tv-theme="ambient"]` pe noile clase `#080b12` / `#0e121b` / `#141926`.
+  3. **Cache Service Worker:** Actualizat `CACHE_NAME` la `'aether-radio-v38'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru ca întreaga secțiune Muzică (bara de sus, filtrele, hero bannerul, tabelele de piese, cardurile și playerul de jos) să aibă exact aceeași cromatică Navy / Tahoe-Glass ca Sidebar-ul și Header-ul Filmio.
+- **Fișiere modificate:** `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `src/index.css`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 16:07 — Sincronizare Autoritară a Conturilor pe Toate Dispozitivele & Curățare Automată Profile Fantomă (`deviceContinuityService.ts`, `CrossDeviceHandoffModal.tsx`, `SmartTvLampaViewCore.tsx`, `vite.config.ts`, `tv-sync.mjs`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Listă autoritară de server & curățare automată a fantomelor (`Cont 7`) ([deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts)):**
+     - Adăugate `sortCanonicalSharedProfiles` și `reconcileAuthoritativeProfiles` pentru a alinia determinist cele 6 conturi oficiale (`JEKA`, `Emma`, `Family`, `Guest`, `Test`, `Kids`) pe toate dispozitivele (Sony TV, Mac, iPhone, iPad) atât pe LAN cât și pe Cloud.
+     - Rescris `syncSharedProfilesFromServer()` să trateze răspunsul `/api/tv-profiles` ca sursă 100% autoritară: elimină imediat orice cont local fantomă (precum `Cont 7`), îi șterge cheile orfane din `localStorage`/`sessionStorage`, oprește complet re-trimiterea prin `POST` a profilelor locale fantomă către server și resetează profilul activ pe `p1` dacă dispozitivul era blocat pe un cont șters.
+     - Adăugată protecție anti-race (`inFlightProfileSavePromise` + `profileSaveEpoch`) și header `X-Replace-Profiles` la `saveSharedProfiles`.
+  2. **Prevenire creare accidentală `Cont 7` & re-sync instant ([CrossDeviceHandoffModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/CrossDeviceHandoffModal.tsx), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Blocat salvarea unui profil nou cu nume gol (fără generare automată `Cont 7` la dublu-OK din telecomandă).
+     - Re-sincronizare automată din server la deschiderea modalului de conturi și la revenirea în aplicație (`focus` / `visibilitychange`, throttle `60s`).
+  3. **Suport server `X-Replace-Profiles` ([vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts), [tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs)):**
+     - Suport explicit pentru înlocuirea listei de profiluri la ștergerile explicite (`allowShrink: true`) atât pe serverul LAN cât și pe Cloud.
+  4. **Cache Service Worker:** Actualizat `CACHE_NAME` la `'aether-radio-v37'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru ca fiecare dispozitiv conectat (Sony TV, telefon, tabletă, laptop) să afișeze exact aceleași conturi oficiale și să curețe automat orice cont fantomă rămas în memoria TV-ului.
+- **Fișiere modificate:** `src/services/deviceContinuityService.ts`, `src/components/tv/CrossDeviceHandoffModal.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `vite.config.ts`, `netlify/functions/tv-sync.mjs`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 15:55 — Unificare Paletă Vizuală Muzică, Studio & Radio pe Tema Navy / Albastru Safir a Site-ului (`spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`, `SmartTvCatalogSections.tsx`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Eliminate toate accentele verde Spotify (`#1ed760`, `#1db954`, `emerald-*`, `#18221e`, `#064e3b`, `#047857`, `#0d1f18`) din [spotifyMusicPremiumViews.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/spotifyMusicPremiumViews.tsx), [SmartTvMusicSpotifySection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvMusicSpotifySection.tsx) și [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) (`Studio Piesă`, `Radio Piesă`, `Biografie & Bibliografie`, `Melodii îndrăgite`, carduri albume/artiști, badge `OfflineDownloadedBadgeIcon` și card `Muzică Descărcată Offline`), înlocuindu-le integral cu paleta **Navy / Albastru Safir** a site-ului (`#0b0f19`, `#0f1d3a`, `#111622`, `#172554`, `#1e3a8a`, `#2563eb`, `#3b82f6`, `#60a5fa`, `#93c5fd`) și contrast curat `text-white` pe butoane `#2563eb`.
+  - Aliniat și egalizatorul Radio din [SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx) la gradientul `#93c5fd -> #3b82f6 -> #1e3a8a`.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v36'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru coerență vizuală 100% cu tema Navy a platformei Filmio, fără verde implicit Spotify.
+- **Fișiere modificate:** `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 15:47 — Redesign Mini-Player Audio & Radio din Header în Stil Dark-Glass Apple Music (`SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Înlocuită capsula albastră împărțită cu linii verticale și copertă rotativă din header ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)) cu o capsulă uniformă dark liquid-glass (`h-9 sm:h-[38px]`, `bg-white/[0.06] border-white/[0.12] backdrop-blur-2xl`), copertă pătrată cu colțuri rotunjite (`rounded-[7px]`), titlu + artist pe 2 rânduri curate, controale circulare discrete `⏮ ⏯ ⏭ ✕` fără linii verticale și bară subțire de progres (`2px`) la baza capsulei pentru muzică.
+  - Aliniat și mini-playerul Radio din header la același stil uniform dark-glass.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v35'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru armonizarea mini-playerului audio din header cu butoanele și tema întunecată a aplicației.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 14:21 — Înlocuire popup roșu de Favorite cu capsulă discretă Dark-Glass (`SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Înlocuit bannerul roșu din colțul dreapta-sus (`top-6 right-6`, `bg-rose-950/90` + linie `🔴 Telecomandă • [F] Tastatură`) din [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) cu o capsulă discretă centrată jos (`bottom-7 left-1/2`, `bg-[#12151e]/92 backdrop-blur-2xl`, iconiță vectorială `SfBookmarkIcon`, durată `1.8s`, fără emoji și fără suprapunere peste ceas/header).
+  - Actualizat `CACHE_NAME` la `'aether-radio-v34'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru eliminarea popup-ului intruziv din dreapta-sus și alinierea estetică cu interfața macOS/Apple TV+ dark liquid glass.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 14:18 — Eliminare cuvânt redundant `SERIAL` de pe badge-urile `S:E` (`SmartTvLampaViewCore.tsx`, `SmartTvCatalogSections.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Înlocuit `SERIAL S3:E3` / `SERIES S3:E3` / `СЕРИАЛ S3:E3` cu formatul compact `S3:E3` pe cardurile `Continuă vizionarea` din [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) și [SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx), prevenind suprapunerea cu ratingul / badge-ul platformei.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v33'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Notarea `S...:E...` indică deja clar că este serial și eliberează spațiu vizual pe postere.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 14:13 — Izolare Strictă Kinozal/iEdem & Dublaje RU față de Filme/Seriale Străine + FileList Live în Căutare Globală (`subtitleSearchService.ts`, `filelistServer.ts`, `VodNativeHlsPlayer.tsx`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare etichete Kinozal/iEdem și dublaje rusești de pe titlurile străine ([subtitleSearchService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/subtitleSearchService.ts), [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Adăugați helperii `isRussianAudioDubLabel` și `filterDisplayAudioItems` în [subtitleSearchService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/subtitleSearchService.ts) pentru a ascunde studiourile de dublaj rusesc (`MovieDalen`, `AlexFilm`, `JASKIER`, `LostFilm`, etc.) din meniul Audio al playerului, din pagina filmului și din modalul de descărcare offline pentru conținut străin (`isForeign` / `isCurrentVodForeign`).
+     - Actualizat panoul de surse video din pagina filmului (`openVodCompactPanel === 'filelist'`): titlu contextual (`Calitate & Sursă Video (FileList)` pentru străine, `Cloud România • FileList` pentru RO, și `Kinozal • VK • Cloud RU` exclusiv pe conținut rusesc), filtrare strictă a torrentelor Kinozal și afișare curată `Audio Original • Cloud Rapid` pe cardul Direct HLS fără `MovieDalen • AlexFilm • JASKIER`.
+     - Corectat `subLabel` și selecția pistei originale la `direct_hls_primary` în `flQualityOptions` și verificat badge-urile reale (`FileList`, `FileList RO`, `P2P Global`).
+  2. **Actualizare FileList Live & Căutare Globală ([filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Redus TTL cache în `getFileListCatalog` la `30s` pentru căutări/IMDb și `60s` pentru feed-urile de categorie, cu suport `?fresh=1` pentru bypass instant.
+     - Conectat `/api/filelist/catalog?q=...` live în paralel în căutarea globală (`section === 'search'`), și restricționat apelul `searchIedemVod` exclusiv la căutările cu intenție rusească (`isRussianSearchQuery`).
+  - Actualizat `CACHE_NAME` la `'aether-radio-v32'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru izolarea completă a etichetelor/dublajelor Kinozal și iEdem exclusiv pe filmele/serialele rusești și integrarea căutării live în timp real din FileList în căutarea globală.
+- **Fișiere modificate:** `src/services/subtitleSearchService.ts`, `src/server/filelistServer.ts`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 14:04 — Fix Rezoluții 4K/FHD pe Filme, Curățare Meniu `Calitate & Sursă Video` & Impunere Subtitrare Implicită Română (`filelistServer.ts`, `SmartTvLampaViewCore.tsx`, `VodNativeHlsPlayer.tsx`, `TvPlayerModal.tsx`, `deviceContinuityService.ts`, `smartTvLampaHelpers.ts`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Rezoluții `4K UHD` / `1080p Full HD` pe Filme ([filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Păstrat `type=movie` în `/api/filelist/resolve` chiar dacă cererea include `s=1&e=1` (`typeParam` comută pe `'series'` doar când lipsește `type` sau `type=series`), prevenind ștergerea rezultatelor la filmele de pe FileList (ex: `Project Hail Mary`, 9 torrente 4K/1080p/720p).
+     - Reparat parser-ul Torrentio (`fetchTorrentioStreams`) cu escape-uri Unicode curate fără emoji-uri literale și re-activat fallback-ul Torrentio P2P Global în paralel (`Promise.all`), păstrând FileList ca prioritate #1.
+     - Corectată clasificarea `1080p.UHD.BluRay` (detectat corect ca `1080p Full HD`, nu `4K UHD`) și omis `s`/`e` din cererile `/api/filelist/resolve` pentru filme în `SmartTvLampaViewCore`.
+  2. **Clarificare Meniu `Calitate & Sursă Video` ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)):**
+     - Sincronizat `activeServerId` (`"kinogram_hls"` în ramura Direct HLS) și `sourceQualityBadge` astfel încât bifa de server să reflecte sursa redată real.
+     - Ascuns blocul redundat `Servere Alternative (1)` când există o singură sursă (`serverOptions.length <= 1`), redenumit în `Schimbă Sursa Video` când există mai multe surse reale, și curățate etichetele de calitate (`4K UHD (2160p) • FileList`, `IMAX HDR • 27.63 GB`, fără `seed` spam și fără dublarea nivelului HLS unic).
+  3. **Subtitrare Implicită Strict Română (`ro`) ([deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts), [smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts), [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [TvPlayerModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/TvPlayerModal.tsx)):**
+     - Neutralizat `defaultSubLang: 'ru'` moștenit în profilurile `.tv-profiles.json` atunci când nu a fost ales explicit din `Setări TV` (`subLangExplicitlySetInSettings`), forțând `ro` ca implicit.
+     - Oprit suprascrierea preferinței globale la selectarea temporară a unei subtitrări din player/fallback (`VodNativeHlsPlayer`, `TvPlayerModal`, `SmartTvLampaViewCore`) și actualizată ordinea de fallback la `['ro', 'en', 'ru', 'es', 'fr', 'de']` cu ref-uri live.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v31'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru redarea în `4K UHD` / `1080p Full HD` pe filme, eliminarea meniului contradictoriu `Servere Alternative (1)` și pornirea automată a subtitrării în limba **Română** conform setării implicite.
+- **Fișiere modificate:** `src/server/filelistServer.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/components/tv/TvPlayerModal.tsx`, `src/services/deviceContinuityService.ts`, `src/views/smartTvLampaHelpers.ts`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 13:41 — Deblocare Asia Express Skip Intro (`România Cloud HD` + Failover 503 <1s) & Istoric/Biografie/Bibliografie Muzică (`SmartTvLampaViewCore.tsx`, `filelistServer.ts`, `fastTorrentEngine.cjs`, `VodNativeHlsPlayer.tsx`, `musicEncyclopediaService.ts`, `spotifyMusicPremiumViews.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Rezolvarea blocajului Asia Express după Skip Intro ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts), [fastTorrentEngine.cjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/fastTorrentEngine.cjs), [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)):**
+     - Eliminată suprascrierea automată a serverului din istoricul `flTorrentId` pentru emisiunile românești (`isRoVod`) când utilizatorul deschide din `Acasă` / `Continuă vizionarea`, prioritizând `România Cloud HD (Vidmoly 720p HD)` (~0.3s/segment la Skip Intro) și lăsând `filelist_torrent` exclusiv ca fallback sau când e selectat explicit din `Torrente FL`.
+     - Actualizat `authenticateFileList` (parsing curat de cookie-uri fără `=deleted`), adăugat `ensureFileListTrackerIpUnlocked` cu propagare `tracker-warning` în [fastTorrentEngine.cjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/fastTorrentEngine.cjs), fereastră critică concentrată `24 MB` + `resetCriticalAndFocus` pentru piese de `16 MB` (`MIN_REQUESTS = 16`, `onvalidatewire = 12`), reciclare motoare vechi fără `resetCriticalAndFocus`, și răspuns rapid `HTTP 503` în `<1s` cu comutare automată instant în `VodNativeHlsPlayer` când tracker-ul FileList blochează IP-ul (`IP Address change detected`, `0` peers) în loc să înghețe `32s+`.
+     - Reparat calculul progresului la închiderea playerului (`streamOffsetRef + v.currentTime`) ca să nu se dubleze timpul salvat dincolo de durata episodului, curățare `hideFrozenFrame()` înainte de failover, gardă overflow pe `startAtSeconds` și stare `loading` după `700ms` la seek.
+  2. **Biografie Artist, Bibliografie/Discografie & Istoric Piesă/Album în Muzică ([musicEncyclopediaService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/musicEncyclopediaService.ts), [spotifyMusicPremiumViews.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/spotifyMusicPremiumViews.tsx)):**
+     - Creat serviciul client CORS 100% fără consum Netlify (`loadMusicEncyclopedia`) cu surse Wikipedia (`ro`/`en`/`it`/`ru` + filtru strict de dezambiguizare muzicală), MusicBrainz (`origin`, ani activi, tip artist, stiluri) și traducere automată per paragraf via `translateTextToLang` + cache `localStorage`.
+     - Extinse cardurile din dreapta ale paginii `Studio Piesă` (`Despre Artist — Biografie & Bibliografie` cu origin/ani/stiluri, biografie expandabilă și discografie selectivă clicabilă; `De pe albumul & Istoricul Piesei` cu istoric lansare), adăugat tab nou `Istoric & Bio` în `SongStudioCore`, secțiune `Biografie & Istoric Carieră` în `ArtistProfileView` și `Istoricul & Povestea Albumului` în `AlbumDetailView` (0 emoji, strict iconițe vectoriale).
+  - Actualizat `CACHE_NAME` la `'aether-radio-v30'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru eliminarea blocajului la Skip Intro pe Asia Express și îmbogățirea secțiunii Muzică cu biografie completă, istoric piese/albume și discografie navigabilă.
+- **Fișiere modificate/create:** `src/server/fastTorrentEngine.cjs`, `src/server/filelistServer.ts`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/services/musicEncyclopediaService.ts`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 13:08 — Marcare Sezon Întreg ca Vizionat + Rearanjare Sidebar `Platforme` (`SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - **Marcare completă a unui sezon ca vizionat în 1 click ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+    - Adăugat `handleToggleSeasonWatched` cu persistență locală + cloud multi-dispozitiv (`/api/tv-progress`) și deduplicare canonică IMDb.
+    - Marchează/anulează simultan toate episoadele sezonului selectat (păstrând timestamp `updatedAt` la anulare pentru reconcilierea corectă la sync-ul în cloud), avansează automat pointerul serialului la următorul sezon/episod nevizionat (sau final `100%`) și filtrează din `Continuă vizionarea` cardurile golite complet (`0:00`).
+    - Adăugat butonul „Marchează sezonul văzut” / „Sezon văzut” chiar lângă tab-urile de sezoane (atât pe pagina serialului la `Sezoane & Episoade:`, cât și în sertarul `Sezoane:` din player) + bifă vectorială `CheckCircle2` direct pe tab-urile sezoanelor complet vizionate.
+  - **Rearanjare & simplificare vizuală bloc `Platforme` în sidebar ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+    - Eliminată linia dublă orizontală (`border-y` + `border-t`) dintre `Platforme` și `Setări TV`.
+    - Înlocuită grila colorată asimetrică (`4 + 2 + buton YT lat`) cu un panou pliabil armonios (`isSidebarPlatformsOpen`, icon `ChevronDown`) și grilă simetrică pe 2 coloane cu fundal dark-glass uniform (`bg-white/[0.045]`), mini-embleme vectoriale curate (fără emoji) și stare activă consistentă cu restul meniului.
+  - Actualizat `CACHE_NAME` la `'aether-radio-v29'` în [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js) și [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html).
+- **De ce:** Pentru a marca rapid un sezon întreg ca vizionat direct lângă tab-urile cu sezoane și pentru a integra blocul `Platforme` curat și coerent în bara laterală stângă.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 12:54 — Muzică Offline Completă în `IndexedDB` + Icoane Vectoriale SVG (`offlineMusicService.ts`, `spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - **Motor dedicat offline ([offlineMusicService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/offlineMusicService.ts)):** Stocare persistentă în `IndexedDB` (`aether_offline_music_db_v1`) cu suport pentru descărcare individuală, cozi batch la nivel de album/playlist/favorite/radio (`CONCURRENCY = 2`), progres live, anulare/ștergere și cache local `256×256` pentru coperțile offline.
+  - **Icoane vectoriale SVG fără emoji & controale în toate paginile Muzicii ([spotifyMusicPremiumViews.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/spotifyMusicPremiumViews.tsx), [SmartTvMusicSpotifySection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvMusicSpotifySection.tsx)):** `OfflineDownloadedBadgeIcon` (cerc `#1ed760` + săgeată vectorială), `TrackOfflineDownloadButton` pe fiecare piesă (rânduri, căutare, coadă, meniu `•••`, Studio și bara inferioară) și `CollectionOfflineDownloadButton` pe Playlisturi, `Melodii îndrăgite`, Albume, Artiști și Radio, plus secțiune `Descărcate Offline` cu banner automat fără internet.
+  - **Redare reală fără internet & integrare în meniul `Descărcate` ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):** Piesele descărcate se redau direct din `IndexedDB` (`blob:` URL) cu trafic 0 pe rețea/Netlify, iar secțiunea `Descărcate` + badge-ul din sidebar afișează și piesele audio offline. Actualizat `CACHE_NAME` la `'aether-radio-v28'`.
+- **De ce:** Pentru descărcarea și redarea integrală a melodiilor, playlisturilor, albumelor, favoritelor și mixurilor radio chiar și fără internet, cu marcaj vizual clar fără emoji.
+- **Fișiere modificate/create:** `src/services/offlineMusicService.ts`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 12:36 — Protecție Cotă Netlify (~95% Reducere Invocări & Bandă) (`vite.config.ts`, `musicProfileSyncService.ts`, `SmartTvLampaViewCore.tsx`, `youtube.mjs`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare polling cloud 24/7 și rescrieri inutile (`vite.config.ts`):** Scos `setInterval(..., 25000)` / `setTimeout(..., 2500)` și `forcePush=true` de pe `/api/tv-progress`, ridicat throttle-ul la `60s`, oprit push-ul cloud la `GET`-uri sau când datele sunt identice, și limitat sincronizarea poziției de redare pe `/api/tv-music-sync` la `180s` (păstrând push imediat exclusiv la Like/Unlike).
+  2. **Fără dublu-POST pe desktop & fără polling în taburi ascunse (`musicProfileSyncService.ts`, `SmartTvLampaViewCore.tsx`):** Dezactivat oglindirea directă din browser către `filmio.my` pe portul `:8769` (serverul Vite sincronizează deja deduplicat), adăugat throttle client `180s` pe progresul audio, mărit intervalele de fundal la `60s` local / `180s` în cloud (`filmio.my`), și oprit complet polling-ul când tabul este ascuns (`document.visibilityState === 'hidden'`).
+  3. **Optimizare audio serverless (`netlify/functions/youtube.mjs`):** Preferat flux `itag 139` (`HE-AAC v2`, ~1.1 MB/piesă = 1 singură invocare Lambda) pe `filmio.my` în loc de 2 invocări `itag 140`, plus header `Netlify-CDN-Cache-Control: public, max-age=86400, durable` pentru cache Edge CDN 24h. Actualizat `CACHE_NAME` la `'aether-radio-v27'`.
+- **De ce:** Pentru a preveni consumul inutil de invocări/bandă pe Netlify (iar Supabase nu există în proiect — consum 0).
+- **Fișiere modificate:** `vite.config.ts`, `src/services/musicProfileSyncService.ts`, `src/views/SmartTvLampaViewCore.tsx`, `netlify/functions/youtube.mjs`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 12:28 — Eliminare Întrerupere Audio la 10 Secunde în Muzică / `Melodii îndrăgite` (`youtubeServer.ts`, `youtube.mjs`, `SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Streaming Chunked de `1 MB` cu `&range=` pe `/api/youtube/audio` (`youtubeServer.ts`, `youtube.mjs`):** YouTube/GoogleVideo limita conexiunile fără `&range=` la ~160 KB (~10 secunde audio) urmat de throttling/reset de socket. Am înlocuit fluxul unic cu descărcare în bucăți de `1 MB` (`&range=${pos}-${chunkEnd}`), cu preferință strictă pentru `audio/mp4` `itag 140` (`128kbps AAC`), suport complet `HTTP 206 Range`, retry și reîmprospătare automată pe `403`, plus eliminare `302` redirect pe Netlify Lambda (`youtube.mjs`, în ferestre `206` de `3 MB` compatibile cu limita Lambda).
+  2. **Căutare Innertube JSON (`youtubei/v1/search`) + Filtrare Anti-Shorts/Preview (`youtubeServer.ts`, `youtube.mjs`):** Înlocuit regex-ul HTML fragil `var ytInitialData` (care întorcea 0 rezultate pe piese ca *Amore Disperato* și *Musica leggerissima*) cu API-ul JSON `youtubei/v1/search` (+ fallback HTML) și filtrare `durationSec >= 65` fără `#shorts`/`teaser`/`preview`/`snippet`.
+  3. **Reîncercare automată full-stream (`SmartTvLampaViewCore.tsx`):** `<audio onError>` reîncearcă o dată stream-ul complet (`/api/youtube/audio?...&retry=1` păstrând poziția curentă) înainte de a cădea pe `previewUrl` de 30s. Actualizat `CACHE_NAME` la `'aether-radio-v26'`.
+- **De ce:** Unele piese din `Melodii îndrăgite` se opreau după ~10 secunde din cauza throttling-ului `googlevideo.com` fără `&range=` sau a căutării HTML eșuate care declanșa fallback pe preview scurt.
+- **Fișiere modificate:** `src/server/youtubeServer.ts`, `netlify/functions/youtube.mjs`, `src/views/SmartTvLampaViewCore.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 12:08 — Import Favorite Spotify pe Profilul Principal `p1` (93 Piese Din Capturi, Total 97 Favorite Sincronizate) (`p1SpotifyFavoritesSeed.ts`, `_musicSeedP1.mjs`, `musicProfileSyncService.ts`, `tv-sync.mjs`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Extras și ordonat toate cele 93 de piese unice din cele 7 capturi Spotify Favorite (`#1 Hello My Love — YolcuBeats` până la `#99 Turnamme a fa pace — Raffaello`), îmbogățite automat cu coperți HD Deezer/iTunes/YouTube (`96/97` artwork real), durate exacte, ID-uri artist/album și playback direct în [p1SpotifyFavoritesSeed.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/p1SpotifyFavoritesSeed.ts) și [\_musicSeedP1.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/_musicSeedP1.mjs), păstrând intacte cele 4 piese anterioare (`97` piese totale pe `p1`).
+  - Integrat seed-ul exclusiv pentru profilul `p1` în [musicProfileSyncService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/musicProfileSyncService.ts) și [tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs), cu verificare `removedMap` atât după `id` cât și după cheie canonică (`artist::title`), izolare totală pentru `p2`/`p3`+ și împingere live în `.music-sync-p1.json` + cloud `/api/tv-music-sync`. Actualizat `CACHE_NAME` la `'aether-radio-v25'`.
+- **De ce:** La cererea utilizatorului de a importa piesele favorite din Spotify direct în `Melodii îndrăgite`, sincronizate pe toate dispozitivele (`Mac`, `iPhone`, `Smart TV`, `filmio.my`).
+- **Fișiere modificate/create:** `src/services/p1SpotifyFavoritesSeed.ts`, `netlify/functions/_musicSeedP1.mjs`, `src/services/musicProfileSyncService.ts`, `netlify/functions/tv-sync.mjs`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 11:51 — Fix Coperți Negre pe Home Muzică, Guard `smart-tv-mode` Desktop & Bară Inferioară Full-Width (`SmartTvLampaViewCore.tsx`, `src/index.css`, `SmartTvMusicSpotifySection.tsx`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Oprire activare forțată `smart-tv-mode` / `smart-tv-sub1080` pe Desktop (`SmartTvLampaViewCore.tsx`):** `useEffect`-ul de la montare verifică acum explicit User-Agent-ul și ruta (`/tv`, `?tv`), păstrând scalarea Smart TV exclusiv pe Smart TV reale și eliminând micșorarea fontului (`font-size`) pe macOS/Windows `< 1680px`.
+  2. **Reparare coperți `0px` (negre) pe toate cele 3 rafturi Home (`src/index.css`, `SmartTvMusicSpotifySection.tsx`):** Adăugat `data-cover-fill="true"` + `absolute inset-0 w-full h-full block` pe butoanele-wrapper ale imaginilor din `Ascultate recent`, `Posturi recomandate` și `Mixurile tale de top` (plus regula CSS `div.aspect-square.w-full > button[data-cover-fill="true"]` peste fallback-ul `height: 0; padding-bottom: 100%`) și lățime explicită `w-14 sm:w-[60px]` pe cardurile Quick-Pick.
+  3. **Bară Now Playing inferioară echilibrată pe 100% lățime (`SmartTvMusicSpotifySection.tsx`, `src/index.css`):** Înlocuit fundalul semi-transparent cu `bg-[#09090b]` opac, schimbat grila la `[minmax(0,1fr)_minmax(280px,540px)_minmax(0,1fr)]` cu `w-full` și `data-music-player-grid="true"`, și exclus `[data-music-player-grid="true"]` din regulile `smart-tv-sub1080` `[class*="minmax(...)"]`. Actualizat `CACHE_NAME` la `'aether-radio-v24'`.
+- **De ce:** Fallback-ul `div.aspect-square.w-full` cu `height: 0` colapsa butoanele ne-poziționate absolut la `0px` înălțime, iar regula `smart-tv-sub1080 [class*="minmax(260px"]` forța bara inferioară de 3 coloane într-o grilă de 4 coloane cu al 4-lea sfert gol.
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `src/index.css`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 11:29 — Eliminare Contur Alb Persistent pe Butoanele Muzicii la Click & Restaurare 512 KB `SmartTvLampaViewCore.tsx` (`SmartTvMusicSpotifySection.tsx`, `spotifyMusicPremiumViews.tsx`, `SmartTvLampaViewCore.tsx`, `src/index.css`, `public/sw.js`, `index.html`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - Eliminat toate clasele `:focus` vizuale (`focus:ring-2 focus:ring-white`, `focus:ring-2 focus:ring-[#1ed760]`, `focus:bg-white focus:text-black`) de pe butoanele din modulul Muzică (`Prev`/`Next`, `Shuffle`, `Repeat`, `Play/Pause`, bare de acțiune, rânduri de piese, studio și mini-playerul global din `SmartTvLampaViewCore.tsx`), păstrând feedback tactil discret (`hover:*`, `active:scale-90`/`active:scale-95`).
+  - Adăugat `data-music-root="true"` pe `SmartTvMusicSpotifySection` și `PremiumFullscreenPlayerModal`, cu contur de focus aplicat **exclusiv** pe Smart TV (`html.smart-tv-mode [data-music-root="true"] button:focus` în `src/index.css`). Actualizat `CACHE_NAME` la `'aether-radio-v23'` (`public/sw.js`, `index.html`).
+  - Restaurat integral fără pierderi sfârșitul componentei `SmartTvLampaViewCore.tsx` (`17.235` linii) după o trunchiere IDE de previzualizare >512 KB (`... [truncated for diff preview]` la linia `13067`), confirmat prin `npx tsc -b`, HMR Vite și build complet.
+- **De ce:** La apăsarea butoanelor Înainte/Înapoi cu mouse-ul sau touch, `focus:ring-2` rămânea blocat ca un cerc alb persistent în jurul butonului.
+- **Fișiere modificate:** `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/index.css`, `public/sw.js`, `index.html`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 11:24 — Revizuire Totală Modul Muzică (Design System Unificat, Fix Desktop `smart-tv-sub1080`, Eliminare Bare Duplicate & Spații Moarte) (`SmartTvMusicSpotifySection.tsx`, `spotifyMusicPremiumViews.tsx`, `SmartTvLampaViewCore.tsx`, `index.html`, `src/index.css`, `public/sw.js`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare gol mort de `119px` & scalare falsă `smart-tv-sub1080` pe Desktop (`index.html`, `src/index.css`, `public/sw.js`):**
+     - Adăugat `isDesktopOs` în `index.html` pentru a opri activarea `smart-tv-sub1080` și micșorarea `html { font-size }` pe ferestre macOS/Windows `< 1680px` (păstrând comportamentul intact pe Smart TV real).
+     - Înlocuit `data-top-hero-card="true"` de pe bara sticky a Muzicii cu `data-music-top-bar="true"` și exclus în `src/index.css` (`:not([data-music-top-bar="true"])`) pentru a nu mai forța `height: 195px` și butoane `28px`. Actualizat `CACHE_NAME` la `'aether-radio-v22'` în `public/sw.js` și `index.html`.
+  2. **Eliminare player duplicat în header-ul global (`SmartTvLampaViewCore.tsx`):**
+     - Ascuns complet mini-playerul albastru din bara de sus când utilizatorul se află deja în `Muzică` (`section === 'music' && !activeVodItem ? 'hidden' : 'inline-flex'`) și protejat `[data-music-top-bar="true"]` la navigarea din telecomandă.
+  3. **Design System Unificat (`spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`):**
+     - **Scară tipografică strictă în 4 trepte** (`H1` `text-xl sm:text-2xl lg:text-[26px]`, `H2` `text-base sm:text-lg font-bold`, `Body` `text-[13px] sm:text-sm font-semibold`, `Meta` `text-xs font-medium text-[#a7a7a7]`) și **3 înălțimi fixe de controale** (`h-10` toolbar/hero, `h-8` tab/filter pills, `w-8 h-8` icoane, `w-9 h-9` / `w-12 h-12` Play central).
+     - **Bară sticky unificată:** Buton `← Înapoi` nativ pe paginile secundare, `Acasă`, input căutare `h-10` curat, `Tastatură TV`, `Coadă` și `Melodii îndrăgite`, plus afișarea chip-urilor de playlist doar în `home`/`playlist` (eliminând barele suprapuse `ViewBackBar`).
+     - **Carduri Hero orizontale compacte & tabel piese aliniat:** Exportat `TrackTableHeader` cu aceeași grilă ca `PremiumTrackRow` în toate paginile (`Playlist`, `Artist`, `Album`, `Radio`, `Căutare`), eliminat inelele `animate-ping` / stickerele suprapuse și egalizat toate cardurile de pe `Acasă` (inclusiv `Posturi recomandate` cu artwork curat și insignă `RADIO`).
+     - **Bară Now Playing inferioară echilibrată:** CSS Grid în 3 coloane (`minmax(180px,1fr)_minmax(260px,520px)_minmax(180px,1fr)`) cu inima lângă text, transport Spotify curat în 5 butoane și controale dreapta uniforme (`Radio`, `Versuri` `Mic2`, `Coadă`, `Video HD`, `Volum`, `Fullscreen`), plus rafinare `SongStudioCore` (`max-w-[420px]`).
+- **De ce:** Pentru a elimina complet spațiile goale pierdute, barele suprapuse, playerul duplicat și diferențele haotice dintre dimensiunile fonturilor și ale butoanelor din modulul Muzică.
+- **Fișiere modificate:** `index.html`, `public/sw.js`, `src/index.css`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-17 11:03 — Compactare & Echilibrare Verticală Player Muzică Fullscreen (`spotifyMusicPremiumViews.tsx`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  - În `SongStudioCore` (`src/components/tv/spotifyMusicPremiumViews.tsx`): eliminat `h-full` pe wrapper-ul exterior în modul `compact` când `activeTab === 'studio'` (folosind `my-auto` pentru centrare naturală, păstrând `flex-1 h-full` pe tab-urile `Versuri Live` și `Coadă`) și înlocuit `flex-1 flex flex-col justify-between` de pe tabpanel-ul `studio` cu `flex flex-col gap-3.5 sm:gap-4 min-h-0`. Astfel titlul piesei, bara de timp, controalele de redare și butoanele rapide (`Vezi Artistul`, `Vezi Albumul`, `Radio Piesă`, `Video HD`) stau imediat sub copertă / `Mod Vinil Rotativ`, fără spațiu gol excesiv sub imagine.
+  - Dimensiunea coperții și a discului de vinil în modul fullscreen `compact` folosește acum scalare proporțională cu viewport-ul (`min(72vw,36vh)` / `sm:w-[min(340px,40vh)]`), iar eticheta audio (`track.qualityLabel`) este afișată centrat sub un singur rând echilibrat de butoane de acțiune.
+  - În `PremiumFullscreenPlayerModal`: schimbat `justify-between` în `justify-start`, aliniat header-ul la `max-w-2xl mx-auto`, ajustat strălucirea ambientală (`50% 32%`) și îngustat coloana principală la `max-w-xl`.
+- **De ce:** Pe ecranele înalte (mobil, tabletă, desktop), `flex-1` + `justify-between` împingea coperta sus și controalele jos, lăsând sute de pixeli de fundal gol imediat sub poza albumului.
+- **Fișiere modificate:** `src/components/tv/spotifyMusicPremiumViews.tsx`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-16 23:05 — Hardening Complet Sistem: Fix Detecție iPhone/Mobil vs `smart-tv-mode`, Accelerare VK Video prin HTTP/1.1 Multi-Socket (`14x` Local / `12x` Cloud) & Margine Hero (`App.tsx`, `index.html`, `public/sw.js`, `mediaSessionManager.ts`, `HomeHeroBillboard.tsx`, `vite.config.ts`, `netlify/functions/tv-proxy.mjs`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare falsă activare `html.smart-tv-mode` pe iPhone & Mac (`src/App.tsx`, `index.html`, `src/utils/mediaSessionManager.ts`, `public/sw.js`):**
+     - În `App.tsx`, starea UI `isSmartTvMode` nu mai aplică clasa `html.smart-tv-mode`, iar dispozitivele mobile (`iPhone|iPod|Android.*Mobile|Windows Phone` fără UA explicit de TV) sunt protejate atât în `index.html` cât și în `isSmartTvDevice()` / `isMobilePhoneDevice()`. Astfel `isMobilePhoneDevice()` întoarce corect `true` pe iPhone PWA și Chrome (activând safe-area iOS, modul portret în player, OSD la tap, efectul glass și eliminând evidențierea alb-pe-alb `:focus`).
+     - Actualizat Service Worker la `'aether-radio-v21'` în `public/sw.js` și `index.html`.
+  2. **Accelerare VK Video Direct peste HTTP/1.1 Multi-Socket (`vite.config.ts`, `netlify/functions/tv-proxy.mjs`):**
+     - Înlocuit `fetch` (`undici`, care multiplexa HTTP/2 pe un singur socket TCP și era limitat de VK la `~0.78 Mbps`) cu helper dedicat `fetchVkRangeHttp1` (`node:https` / `node:http` cu `keepAlive`, `maxSockets: 24`, slice-uri `192 KB`, concurență `14x` local / `12x` pe Netlify), ridicând viteza VK de peste `6x` (`4.79 Mbps` pe `Range: bytes=0-`) și adăugând răspuns corect `200`/`HEAD` și în `netlify/functions/tv-proxy.mjs`.
+  3. **Spacing Hero Banner Mobil (`HomeHeroBillboard.tsx`):**
+     - Lărgit `pr-36 sm:pr-48` pe bara de sus pentru separare clară față de punctele de paginare.
+- **De ce:** Auditul complet al sistemului a scos la iveală faptul că `html.smart-tv-mode` dezactiva detectarea `isMobilePhone` pe iPhone și că multiplexarea HTTP/2 din `undici` limita stream-urile VK Direct pe ambele medii (localhost și `filmio.my`).
+- **Fișiere modificate:** `src/App.tsx`, `index.html`, `public/sw.js`, `src/utils/mediaSessionManager.ts`, `src/components/tv/HomeHeroBillboard.tsx`, `vite.config.ts`, `netlify/functions/tv-proxy.mjs`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-16 22:40 — Remedieri Redare Localhost & Smart TV: Deblocare *Asia Express S7:E32* la Minutul `48:00`, Eliminare Dublare Offset (`5986->11972`) & Redare VK Video Direct fără Eroare `code=4` (`vite.config.ts`, `vod-stream.mjs`, `fastTorrentEngine.cjs`, `filelistServer.ts`, `VodNativeHlsPlayer.tsx`, `SmartTvLampaViewCore.tsx`, `vodStreamClient.ts`, `smartTvLampaHelpers.ts`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Streaming VK Video Direct Conform RFC pentru LG webOS / Smart TV (`/api/tv-proxy` în `vite.config.ts`, `vod-stream.mjs`, `vodStreamClient.ts`, `VodNativeHlsPlayer.tsx`):**
+     - Eliminată trunchierea prematură la `2 MB` și răspunsul eronat `206` pe cererile fără `Range`: `/api/tv-proxy` returnează acum `200 OK` complet (fără `Range`), `206 Partial Content` pe `Range: bytes=0-` până la `totalBytes - 1`, suportă nativ cereri `HEAD` și fallback `Range: bytes=0-1`, și transmite fluxul printr-o fereastră glisantă mărginită (`MAX_IN_FLIGHT = 4`, chunk inițial `64 KB`, slice-uri `512 KB`, backpressure + curățare imediată la `abort`).
+     - În `vod-stream.mjs`, dispozitivele Smart TV (`Web0S/Tizen/BRAVIA/NetCast`) preferă MP4 `<= 1080p`/`<= 1440p` în locul `4K`, iar răspunsul include `fallbackHlsUrl` (`.m3u8`); dacă `<video>` raportează `MEDIA_ERR_SRC_NOT_SUPPORTED` (`code=4`) pe MP4 direct, `VodNativeHlsPlayer` comută automat în `hls.js` pe `fallbackHlsUrl`.
+  2. **Deblocare P2P *Asia Express S7:E32* la `48:00` & Eliminare Blocaje Swarm `numPeers=0` (`fastTorrentEngine.cjs`, `filelistServer.ts`):**
+     - Adăugat `engine.pokePeers(targetPiece)` în `fastTorrentEngine.cjs` (re-announce tracker/DHT debounced la `8s`, `swarm.resume()`, eliberarea rezervărilor de piese blocate după `4s` fără cereri active și curățare completă la `wire.on('close')`), plus timer de `3.5s` în `FastFileStream`.
+     - În `filelistServer.ts`, adăugat `ensureTorrentSwarmAlive()`, curățarea cache-ului CJS pentru reîncărcări curate, reciclarea motoarelor vechi cu `0 peers` cu păstrarea pieselor verificate și `probeCache`, și suport dedicat `HEAD` fără deschidere de flux pe serverul intern Range (`RANGE_SERVER_VERSION = 2`).
+  3. **Corectare Dublare Offset (`3032->6064`, `5986->11972`), Buffer LG webOS MSE & Failover Rapid P2P ↔ Cloud (`VodNativeHlsPlayer.tsx`, `SmartTvLampaViewCore.tsx`, `smartTvLampaHelpers.ts`):**
+     - Detectat automat când fragmentele fMP4 de la FFmpeg păstrează `tfdt` absolut (`bStart >= expectedMinAbs`), resetând `streamOffsetRef.current = 0` înaintea alinierii `video.currentTime` pentru a elimina salturile la dublul poziției și falsul avans către episodul următor.
+     - Mărite limitele bufferului MSE pentru TV (`maxAheadSec: 45`, `keepBehindMaxSec: 36`, `keepBehindTargetSec: 18`) folosind intervalul contiguu `getContigAheadSec()`, protejat `initialAudioTrackIndex` împotriva repornirilor inutile când pista `0`/unică rulează deja, și adăugat timeout de `9.5s` pe `reader.read()` care reîncearcă o dată sau comută fără întrerupere pe `kinogram_hls` (`România Cloud HD`) păstrând secunda exactă din `lastPlaybackTimeRef.current?.cur`.
+- **De ce:** Utilizatorul a raportat blocarea episodului *Asia Express S7:E32* exact la minutul `48:00` și eșecul redării show-urilor VK (`Звёзды`, `Шоу «Токсики»`, `Comedy Club`) pe localhost / LG webOS Smart TV (`code=4`, dublare poziție la seek și pierdere swarm P2P).
+- **Fișiere modificate:** `vite.config.ts`, `netlify/functions/vod-stream.mjs`, `src/services/vodStreamClient.ts`, `src/views/smartTvLampaHelpers.ts`, `src/server/fastTorrentEngine.cjs`, `src/server/filelistServer.ts`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`.
+
+---
+
+### 2026-11-16 21:25 — Eliminare Totală Ecran Blocat Localhost/Tailscale, Buton `← Înapoi` Garantat în Player PWA/iOS, Restaurare Calibrare iPhone PWA & Sincronizare Cross-Device Muzică per Profil (`SmartTvLampaViewCore.tsx`, `VodNativeHlsPlayer.tsx`, `MediatecaView.tsx`, `vod-stream.mjs`, `musicProfileSyncService.ts`, `tv-sync.mjs`, `vite.config.ts`, `index.html`, `src/index.css`, `HomeHeroBillboard.tsx`, `public/sw.js`, `src/main.tsx`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Eliminare definitivă a ferestrei blocate „Conectează la localhost:8769 / Wi-Fi Local / Tailscale” & Rutare Cloud RO (`SmartTvLampaViewCore.tsx`, `MediatecaView.tsx`, `vod-stream.mjs`):**
+     - Șters 100% blocajele UI cu adrese locale (`192.168.101.87`, `100.79.113.57`, `localhost:8769`, „Acest titlu românesc...”).
+     - În `handleOpenVod` și `syncPreferredVodServer`, titlurile românești și externe de pe Cloud / telefon (LTE / `filmio.my`) folosesc direct `kinogram_hls` (HLS Cloud RO / Vidmoly / Rumble) fără să cadă în `filelist_torrent` sau în iframe-ul alb `vidsrc_pm`.
+     - Dacă `filelist_torrent` nu are sursă, playerul trece automat pe `<VodNativeHlsPlayer>` (`resolvedDirectStream`) sau afișează un card curat pe negru (`#09090b`) cu butonul `Reîncearcă Redarea Cloud HD` și `Alege alt episod`, cu reîncercare automată o singură dată pentru seriale RO.
+     - În `vod-stream.mjs`: acceptat ambii parametri `season`/`s` și `episode`/`e`, paralelizat sondarea oglinzilor Vidmoly (`Promise.any` cu timeout `6500ms`) și verificarea primelor 2 surse `vmIds` în paralel (`7500ms`).
+     - Aplicat fundal `#000000` (`bg-black`, `colorScheme: 'dark'`) pe toate iframe-urile VOD.
+  2. **Buton `← Înapoi` Vizibil & Contrast Ridicat în Player VOD (iPhone Home Screen PWA & Chrome) (`SmartTvLampaViewCore.tsx`, `VodNativeHlsPlayer.tsx`, `src/index.css`):**
+     - Ridicat `[data-vod-top-bar="true"]` la `z-[70]` și inclus `isDirectStreamLoading || isFileListStreamLoading` în condiția de afișare; eliminat stilul transparent `.tahoe-emerald-card` în favoarea pastilei întunecate `bg-zinc-950/90 border-white/25 text-white` (`min-h-[40px]` pe mobil).
+     - Limitat evidențierea albă `:focus` din `src/index.css` la `html.smart-tv-mode ...:focus` și `...:focus-visible`, prevenind transformarea butonului `← Înapoi` în alb-pe-alb la tap pe iPhone Chrome.
+     - Pe mobil (`isMobilePhone`), `handleOpenVod` și `handleStartVodPlayback` trezesc întotdeauna OSD-ul (`wakeVodOsd()`), iar `VodNativeHlsPlayer` răspunde la tap pe întreg ecranul (inclusiv barele negre portret de sus și jos).
+  3. **Restaurare Calibrare iPhone Home Screen PWA, Eliminare Suprapunere Hero & Actualizare Forțată Service Worker (`index.html`, `src/index.css`, `HomeHeroBillboard.tsx`, `public/sw.js`, `src/main.tsx`):**
+     - Restaurat `<meta name="apple-mobile-web-app-status-bar-style" content="black" />`, recalibrat `--ios-pwa-top-floor` și `--ios-pwa-bottom-floor: 16px`, și ajustat `paddingBottom` al barei mobile de jos (`clamp(0.35rem, calc(env(safe-area-inset-bottom, 0px) * 0.55), 1.15rem)`).
+     - Adăugat `pr-28 sm:pr-44` și `truncate` pe badge-ul de platformă din `HomeHeroBillboard.tsx` pentru a nu se mai suprapune peste punctele de paginare pe ecrane `390px`.
+     - Actualizat `public/sw.js` la `aether-radio-v20` cu strategie Network-First (fallback Cache offline) pentru asset-urile originii curente, șters cache-urile vechi în `index.html`, și adăugat reload automat la `controllerchange` în `src/main.tsx`.
+  4. **Sincronizare Completă Muzică per Profil (`JEKA` / `p1` și toate profilurile) (`musicProfileSyncService.ts`, `tv-sync.mjs`, `netlify.toml`, `vite.config.ts`, `SmartTvLampaViewCore.tsx`, `SmartTvMusicSpotifySection.tsx`):**
+     - Adăugat endpointul `/api/tv-music-sync` (`tv-sync.mjs` + `netlify.toml` + middleware `vite.config.ts` cu oglindire bidirecțională `https://filmio.my/api/tv-music-sync` și stocare locală `.music-sync-{profileId}.json`).
+     - Sincronizează automat per profil: melodiile îndrăgite (`likedTracks` cu ștergeri marcate prin `removedMap` și migrarea favoritelor existente ale lui `p1` de pe Mac), istoricul *Ascultate recent* (`recentTracks`) și progresul redării (`playbackState`: piesa curentă + secunda exactă, reluat automat la tap pe Play).
+- **De ce:** Utilizatorul a raportat pe iPhone Home Screen PWA și Chrome lipsa butonului `← Înapoi` în player și variantă alb-pe-alb, ecran alb și fereastra interzisă cu `localhost:8769 / 192.168.101.87 / Tailscale` pe *Asia Express*, suprapunerea badge-ului pe Hero și desincronizarea favoritelor/progresului muzical pe profilul său între Mac și telefon.
+- **Fișiere modificate/create:** `.gitignore`, `index.html`, `netlify.toml`, `public/sw.js`, `vite.config.ts`, `netlify/functions/tv-sync.mjs`, `netlify/functions/vod-stream.mjs`, `src/index.css`, `src/main.tsx`, `src/services/musicProfileSyncService.ts` (nou), `src/components/tv/HomeHeroBillboard.tsx`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/MediatecaView.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`.
+
+---
+
 ### 2026-11-16 19:05 — Experiență Premium Muzică (Pagini Dinamice, Artist / Album / Piesă, Generator Radio Piesă & Versuri Live Sincronizate) (`spotifyMusicPremiumViews.tsx`, `SmartTvMusicSpotifySection.tsx`, `youtubeServer.ts`, `youtube.mjs`, `SmartTvLampaViewCore.tsx`)
 - **Autor:** Antigravity
 - **Ce s-a făcut:**

@@ -132,7 +132,12 @@ function wrapTvProxyUrl(
   return `/api/tv-proxy?url=${encodeURIComponent(rawUrl)}&ref=${encodeURIComponent(refUrl)}&ua=${encodeURIComponent(ua)}${extraParams}`;
 }
 
-async function extractVkVideoStreams(oid, vid, vkHash = '') {
+async function extractVkVideoStreams(
+  oid,
+  vid,
+  vkHash = '',
+  isSmartTv = false
+) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -169,7 +174,11 @@ async function extractVkVideoStreams(oid, vid, vkHash = '') {
 
     if (qualities.length === 0 && !hlsUrl) return null;
     const pref1080 = qualities.find((q) => q.height === 1080);
-    const bestMp4 = pref1080 || qualities[0];
+    const bestMp4 = isSmartTv
+      ? pref1080 ||
+      qualities.find((q) => q.height <= 1440) ||
+      qualities[0]
+      : pref1080 || qualities[0];
     const detectedMaxHeight =
       qualities[0]?.height || (rawMaxMp4Height > 0 ? rawMaxMp4Height : 1080);
     const vkIdToken = cleanHash ? `${oid}_${vid}_${cleanHash}` : `${oid}_${vid}`;
@@ -179,15 +188,16 @@ async function extractVkVideoStreams(oid, vid, vkHash = '') {
       : '';
     const proxiedBestMp4 = bestMp4?.url
       ? wrapTvProxyUrl(
-          bestMp4.url,
-          'https://vkvideo.ru/',
-          DEFAULT_VOD_UA,
-          `${vkIdParam}&vkq=${bestMp4.height}`
-        )
+        bestMp4.url,
+        'https://vkvideo.ru/',
+        DEFAULT_VOD_UA,
+        `${vkIdParam}&vkq=${bestMp4.height}`
+      )
       : '';
     return {
       bestUrl: proxiedBestMp4 || proxiedHls,
       hlsUrl: proxiedBestMp4 || proxiedHls,
+      fallbackHlsUrl: proxiedHls || undefined,
       rawHlsUrl: hlsUrl || bestMp4?.url,
       duration: durationSec,
       maxHeight: detectedMaxHeight,
@@ -852,19 +862,19 @@ const VK_CURATED_SHOWS = [
 
 const rutubeSeasonCache = new Map();
 
-async function fetchRutubeTvSeasonVideos(tvId, rutubeSeason) {
-  const key = `${tvId}_${rutubeSeason}`;
+async function fetchRutubeTvSeasonVideos(tvId, rutubeSeason, maxPages = 12) {
+  const key = `${tvId}_${rutubeSeason}_${maxPages}`;
   const cached = rutubeSeasonCache.get(key);
   if (cached && Date.now() - cached.ts < VK_CACHE_TTL_MS) {
     return cached.items;
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 7000);
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const allResults = [];
     let nextUrl = `https://rutube.ru/api/metainfo/tv/${tvId}/video/?season=${rutubeSeason}&type=2&format=json`;
     let pageCount = 0;
-    while (nextUrl && pageCount < 2) {
+    while (nextUrl && pageCount < maxPages) {
       pageCount++;
       const res = await fetch(nextUrl, {
         headers: { 'User-Agent': DEFAULT_VOD_UA },
@@ -888,6 +898,40 @@ async function fetchRutubeTvSeasonVideos(tvId, rutubeSeason) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function findExactSeasonAndEpisode(seasonsList, season, episode) {
+  if (!Array.isArray(seasonsList) || seasonsList.length === 0) {
+    return { targetSeason: null, targetEp: null };
+  }
+  const sNum = Number(season) || 1;
+  const eNum = Number(episode) || 1;
+  let targetSeason = seasonsList.find((s) => Number(s.season) === sNum) || null;
+  let targetEp =
+    targetSeason?.episodes?.find((e) => Number(e.episode) === eNum) || null;
+
+  if (!targetEp && sNum === 1 && eNum > 0 && seasonsList.length > 1) {
+    let rem = eNum;
+    for (const sObj of seasonsList) {
+      const eps = Array.isArray(sObj?.episodes) ? sObj.episodes : [];
+      if (eps.length === 0) continue;
+      const maxEpNum = Math.max(
+        eps.length,
+        Number(eps[eps.length - 1]?.episode) || 0
+      );
+      if (rem <= maxEpNum) {
+        const candidateEp =
+          eps.find((e) => Number(e.episode) === rem) || eps[rem - 1] || null;
+        if (candidateEp) {
+          targetSeason = sObj;
+          targetEp = candidateEp;
+        }
+        break;
+      }
+      rem -= maxEpNum;
+    }
+  }
+  return { targetSeason, targetEp };
 }
 
 async function fetchRutubePlayHls(videoId) {
@@ -1005,7 +1049,76 @@ const RUTUBE_CURATED_SHOWS = [
     kpIds: ['5354824'],
     titleRe: /шоу\s+воли/i,
     tvId: 280536,
-    seasonsMap: [{ displaySeason: 1, rutubeSeason: 1 }],
+    customBuildSeasons: async () => {
+      const [tntVids, premierVids] = await Promise.all([
+        fetchRutubeTvSeasonVideos(280536, 1, 12),
+        fetchRutubeTvSeasonVideos(1813128, 1, 10),
+      ]);
+      const s1Map = new Map();
+      const s2Map = new Map();
+      const s3Map = new Map();
+      const s4Map = new Map();
+
+      const buildEpObj = (v, epNum, fallbackTitle) => ({
+        episode: epNum,
+        videoId: v.id,
+        title: v.title || fallbackTitle,
+        thumbnail: v.thumbnail_url,
+        duration: Number(v.duration) || 3600,
+        audioNames: ['Русский (Оригинал • 1080p)'],
+      });
+
+      for (const v of tntVids) {
+        if (!v || v.is_paid || Number(v.duration) < 1200) continue;
+        const mVip = String(v.title || '').match(/(?:,\s*|\b)(\d{1,3})\s*выпуск/i);
+        const absEp = mVip ? Number(mVip[1]) : Number(v.episode) || 0;
+        if (!absEp || absEp <= 0) continue;
+        if (absEp <= 38) {
+          if (!s1Map.has(absEp)) {
+            s1Map.set(absEp, buildEpObj(v, absEp, `Выпуск ${absEp}`));
+          }
+        } else if (absEp <= 89) {
+          const ep2 = absEp - 38;
+          if (!s2Map.has(ep2)) {
+            s2Map.set(ep2, buildEpObj(v, ep2, `Выпуск ${ep2}`));
+          }
+        } else {
+          const ep3 = absEp - 89;
+          if (!s3Map.has(ep3)) {
+            s3Map.set(ep3, buildEpObj(v, ep3, `Выпуск ${ep3}`));
+          }
+        }
+      }
+
+      for (const v of premierVids) {
+        if (!v || v.is_paid || Number(v.duration) < 1200) continue;
+        const titleStr = String(v.title || '');
+        const premEp = Number(v.episode) || 0;
+        const mTitleEp = titleStr.match(/(?:,\s*|\b)(\d{1,3})\s*выпуск/i);
+        if (/2026\s*сезон/i.test(titleStr) || premEp >= 51) {
+          const ep4 =
+            premEp >= 51
+              ? premEp - 50
+              : mTitleEp
+                ? Number(mTitleEp[1])
+                : 1;
+          if (ep4 > 0 && !s4Map.has(ep4)) {
+            s4Map.set(ep4, buildEpObj(v, ep4, `2026 сезон • Выпуск ${ep4}`));
+          }
+        } else if (premEp >= 24 && premEp <= 50) {
+          if (!s3Map.has(premEp)) {
+            s3Map.set(premEp, buildEpObj(v, premEp, `2025 сезон • Выпуск ${premEp}`));
+          }
+        }
+      }
+
+      return [
+        { season: 1, episodes: [...s1Map.values()].sort((a, b) => a.episode - b.episode) },
+        { season: 2, episodes: [...s2Map.values()].sort((a, b) => a.episode - b.episode) },
+        { season: 3, episodes: [...s3Map.values()].sort((a, b) => a.episode - b.episode) },
+        { season: 4, episodes: [...s4Map.values()].sort((a, b) => a.episode - b.episode) },
+      ].filter((s) => s.episodes.length > 0);
+    },
   },
   {
     kpIds: ['5189047'],
@@ -1076,7 +1189,16 @@ const RUTUBE_CURATED_SHOWS = [
 
 async function resolveRutubeCuratedShow(showCfg, season = 1, episode = 1, effectiveUa = DEFAULT_VOD_UA) {
   const seasonsOut = [];
-  if (showCfg.searchQuery) {
+  if (typeof showCfg.customBuildSeasons === 'function') {
+    const customSeasons = await showCfg.customBuildSeasons();
+    if (Array.isArray(customSeasons)) {
+      for (const cs of customSeasons) {
+        if (cs && Array.isArray(cs.episodes) && cs.episodes.length > 0) {
+          seasonsOut.push(cs);
+        }
+      }
+    }
+  } else if (showCfg.searchQuery) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 7000);
     try {
@@ -1234,19 +1356,11 @@ async function resolveRutubeCuratedShow(showCfg, season = 1, episode = 1, effect
     })),
   }));
 
-  const targetSeason =
-    seasonsOut.find((s) => Number(s.season) === Number(season)) ||
-    seasonsOut[0];
-  let targetEp = targetSeason?.episodes.find(
-    (e) => Number(e.episode) === Number(episode)
+  const { targetSeason, targetEp } = findExactSeasonAndEpisode(
+    seasonsOut,
+    season,
+    episode
   );
-  if (!targetEp && targetSeason?.episodes?.length > 0) {
-    const epIdx = Math.max(0, Number(episode) - 1);
-    targetEp =
-      (epIdx < targetSeason.episodes.length
-        ? targetSeason.episodes[epIdx]
-        : null) || targetSeason.episodes[0];
-  }
 
   if (!targetSeason || !targetEp || !targetEp.videoId) {
     return {
@@ -1256,7 +1370,7 @@ async function resolveRutubeCuratedShow(showCfg, season = 1, episode = 1, effect
       season: Number(season) || 1,
       episode: Number(episode) || 1,
       seasons: serializedSeasons,
-      error: 'Episode not on Rutube; using Kinozal VIP fallback',
+      error: 'Requested episode not on Rutube curated feed',
     };
   }
   const hlsUrl = await fetchRutubePlayHls(targetEp.videoId);
@@ -1288,13 +1402,13 @@ async function resolveRutubeCuratedShow(showCfg, season = 1, episode = 1, effect
 }
 
 const KINOGRAM_MIRROR_HOSTS = [
+  'https://api.kinogram.best',
   'https://api.namy.ws',
   'https://api.delivembd.ws',
   'https://api.embess.ws',
   'https://api.luxembd.ws',
-  'https://api.kinogram.best',
 ];
-let lastWorkingKinogramHost = 'https://api.namy.ws';
+let lastWorkingKinogramHost = 'https://api.kinogram.best';
 
 async function fetchKinogramEmbed(path, userAgent = '') {
   const effectiveUa = pickSafeDesktopUa(userAgent);
@@ -1848,6 +1962,7 @@ async function resolveFromVkVideoSearch({
   season = 1,
   episode = 1,
   effectiveUa = DEFAULT_VOD_UA,
+  isSmartTv = false,
 }) {
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
   const primaryTitle =
@@ -1930,7 +2045,12 @@ async function resolveFromVkVideoSearch({
         parsed.find((x) => exactEpRe.test(x.title));
       if (!bestEp) continue;
 
-      const vkStream = await extractVkVideoStreams(bestEp.oid, bestEp.vid);
+      const vkStream = await extractVkVideoStreams(
+        bestEp.oid,
+        bestEp.vid,
+        '',
+        isSmartTv
+      );
       if (vkStream && vkStream.bestUrl) {
         return {
           ok: true,
@@ -1943,6 +2063,7 @@ async function resolveFromVkVideoSearch({
           audioNames: ['Русский (VK Видео Direct)'],
           hlsUrl: vkStream.bestUrl,
           proxyHlsUrl: vkStream.bestUrl,
+          fallbackHlsUrl: vkStream.fallbackHlsUrl,
           rawHlsUrl: vkStream.rawHlsUrl || vkStream.hlsUrl,
           vkQualities: vkStream.qualities,
           userAgent: effectiveUa,
@@ -1976,7 +2097,12 @@ async function resolveFromVkVideoSearch({
     if (parsed.length === 0) continue;
     const bestMovie =
       parsed.find((x) => /4k|uhd|2160/i.test(x.title)) || parsed[0];
-    const vkStream = await extractVkVideoStreams(bestMovie.oid, bestMovie.vid);
+    const vkStream = await extractVkVideoStreams(
+      bestMovie.oid,
+      bestMovie.vid,
+      '',
+      isSmartTv
+    );
     if (vkStream && vkStream.bestUrl) {
       return {
         ok: true,
@@ -1987,6 +2113,7 @@ async function resolveFromVkVideoSearch({
         audioNames: ['Русский (VK Видео Direct)'],
         hlsUrl: vkStream.bestUrl,
         proxyHlsUrl: vkStream.bestUrl,
+        fallbackHlsUrl: vkStream.fallbackHlsUrl,
         rawHlsUrl: vkStream.rawHlsUrl || vkStream.hlsUrl,
         vkQualities: vkStream.qualities,
         userAgent: effectiveUa,
@@ -1994,36 +2121,6 @@ async function resolveFromVkVideoSearch({
     }
   }
   return null;
-}
-
-async function resolveFromAllohaEmbed({ imdb, kp, season = 1, episode = 1 }) {
-  const cleanImdb = String(imdb || '').trim();
-  const cleanKp = String(kp || '').trim();
-  if (!cleanImdb && !cleanKp) return null;
-  const qs = cleanImdb
-    ? `imdb=${encodeURIComponent(cleanImdb)}`
-    : `kp=${encodeURIComponent(cleanKp)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
-  try {
-    const res = await fetch(
-      `https://api.alloha.tv/?token=04941a9a3ca3ac16e2b4327347bbc1&${qs}`,
-      { signal: controller.signal }
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    const iframe = json?.data?.iframe;
-    if (!iframe) return null;
-    const sep = iframe.includes('?') ? '&' : '?';
-    const embedUrl = json?.data?.seasons
-      ? `${iframe}${sep}season=${season}&episode=${episode}`
-      : iframe;
-    return embedUrl;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 function isGenericBalancerEpTitle(title) {
@@ -2287,14 +2384,15 @@ async function fetchVeziaiciCategoryPosts(catId, ua) {
 
 async function extractVidmolyDirectHls(vmId, ua) {
   if (!vmId) return null;
-  for (const host of [
+  const hosts = [
     'https://vidmoly.net',
+    'https://vidmoly.to',
     'https://vidmoly.org',
     'https://vidmoly.biz',
-    'https://vidmoly.to',
-  ]) {
+  ];
+  const probeHost = async (host) => {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5500);
+    const t = setTimeout(() => ctrl.abort(), 6500);
     try {
       const res = await fetch(`${host}/embed-${vmId}.html`, {
         headers: {
@@ -2303,24 +2401,25 @@ async function extractVidmolyDirectHls(vmId, ua) {
         },
         signal: ctrl.signal,
       });
-      if (!res.ok) continue;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = await res.text();
       const m3u8Url = html.match(/https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*/i)?.[0];
-      if (m3u8Url) {
-        return wrapTvProxyUrl(
-          m3u8Url,
-          `${host}/`,
-          ua,
-          `&vm=${encodeURIComponent(vmId)}`
-        );
-      }
-    } catch {
-      // try next mirror
+      if (!m3u8Url) throw new Error('No m3u8');
+      return wrapTvProxyUrl(
+        m3u8Url,
+        `${host}/`,
+        ua,
+        `&vm=${encodeURIComponent(vmId)}`
+      );
     } finally {
       clearTimeout(t);
     }
+  };
+  try {
+    return await Promise.any(hosts.map((host) => probeHost(host)));
+  } catch {
+    return null;
   }
-  return null;
 }
 
 async function extractRumbleDirectHls(rumbleId, ua) {
@@ -2441,34 +2540,34 @@ async function resolveFromRomanianCloudVod({
   const categoryPromise =
     descriptor.knownCategories.length > 0
       ? Promise.all(
-          descriptor.knownCategories.map(async (catMeta) => {
-            const posts = await fetchVeziaiciCategoryPosts(
-              catMeta.catId,
-              effectiveUa
+        descriptor.knownCategories.map(async (catMeta) => {
+          const posts = await fetchVeziaiciCategoryPosts(
+            catMeta.catId,
+            effectiveUa
+          );
+          const epMap = new Map();
+          for (const p of posts) {
+            const hay = normalizeRoAscii(
+              `${p?.title?.rendered || ''} ${p?.slug || ''}`
             );
-            const epMap = new Map();
-            for (const p of posts) {
-              const hay = normalizeRoAscii(
-                `${p?.title?.rendered || ''} ${p?.slug || ''}`
-              );
-              const epM = hay.match(/\bepisodul\s*0*(\d+)\b/i);
-              if (!epM) continue;
-              const epNum = Number(epM[1]);
-              if (!epNum || epMap.has(epNum)) continue;
-              epMap.set(epNum, {
-                postId: p.id,
-                episode: epNum,
-                title: normalizeRoAscii(p?.title?.rendered || `Episodul ${epNum}`),
-                duration: 10800,
-                audioNames: ['Română (Original)'],
-              });
-            }
-            return {
-              appSeason: catMeta.appSeason,
-              episodes: [...epMap.values()].sort((a, b) => a.episode - b.episode),
-            };
-          })
-        )
+            const epM = hay.match(/\bepisodul\s*0*(\d+)\b/i);
+            if (!epM) continue;
+            const epNum = Number(epM[1]);
+            if (!epNum || epMap.has(epNum)) continue;
+            epMap.set(epNum, {
+              postId: p.id,
+              episode: epNum,
+              title: normalizeRoAscii(p?.title?.rendered || `Episodul ${epNum}`),
+              duration: 10800,
+              audioNames: ['Română (Original)'],
+            });
+          }
+          return {
+            appSeason: catMeta.appSeason,
+            episodes: [...epMap.values()].sort((a, b) => a.episode - b.episode),
+          };
+        })
+      )
       : Promise.resolve([]);
 
   // Await searchPromise immediately so VK/Vidmoly extraction starts in ~250ms while categoryPromise finishes in parallel!
@@ -2499,7 +2598,7 @@ async function resolveFromRomanianCloudVod({
       const epEntry = seasonObj?.episodes.find((e) => e.episode === targetEp);
       if (epEntry?.postId) {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 5500);
+        const t = setTimeout(() => ctrl.abort(), 7500);
         try {
           const pRes = await fetch(
             `https://veziaici.net/wp-json/wp/v2/posts/${epEntry.postId}?_fields=id,slug,title,content`,
@@ -2520,11 +2619,11 @@ async function resolveFromRomanianCloudVod({
   if (!targetPost?.content?.rendered) {
     return builtSeasonsCatalog
       ? {
-          ok: false,
-          type: 'series',
-          seasons: builtSeasonsCatalog,
-          error: 'Requested Romanian episode not yet published on cloud portal',
-        }
+        ok: false,
+        type: 'series',
+        seasons: builtSeasonsCatalog,
+        error: 'Requested Romanian episode not yet published on cloud portal',
+      }
       : null;
   }
 
@@ -2561,25 +2660,38 @@ async function resolveFromRomanianCloudVod({
 
   // STRICT RULE: Romanian shows (Asia Express, Insula Iubirii, etc.) use 100% Romanian Cloud sources (Vidmoly HD, Rumble) or FileList.io!
   // VK Video is NEVER used or scraped for Romanian TV shows!
+  const candidateVmIds = vmIds.slice(0, 2);
+  const vmExtractPromise =
+    candidateVmIds.length > 0
+      ? Promise.any(
+        candidateVmIds.map((id) =>
+          extractVidmolyDirectHls(id, effectiveUa).then((u) => {
+            if (!u) throw new Error('No Vidmoly HLS');
+            return u;
+          })
+        )
+      ).catch(() => null)
+      : Promise.resolve(null);
+
   const [vmHlsUrl, rumbleHlsUrl, catSeasonsFinal] = await Promise.all([
-    vmIds[0]
+    candidateVmIds.length > 0
       ? Promise.race([
-          extractVidmolyDirectHls(vmIds[0], effectiveUa),
-          new Promise((r) => setTimeout(() => r(null), 5500)),
-        ])
+        vmExtractPromise,
+        new Promise((r) => setTimeout(() => r(null), 7500)),
+      ])
       : Promise.resolve(null),
     rumbleIds[0]
       ? Promise.race([
-          extractRumbleDirectHls(rumbleIds[0], effectiveUa),
-          new Promise((r) => setTimeout(() => r(null), 5500)),
-        ])
+        extractRumbleDirectHls(rumbleIds[0], effectiveUa),
+        new Promise((r) => setTimeout(() => r(null), 6500)),
+      ])
       : Promise.resolve(null),
     builtSeasonsCatalog
       ? Promise.resolve(null)
       : Promise.race([
-          categoryPromise,
-          new Promise((r) => setTimeout(() => r(null), 1800)),
-        ]),
+        categoryPromise,
+        new Promise((r) => setTimeout(() => r(null), 2200)),
+      ]),
   ]);
   if (!builtSeasonsCatalog && catSeasonsFinal) {
     builtSeasonsCatalog = buildCatalogFromRaw(catSeasonsFinal);
@@ -2632,13 +2744,31 @@ async function resolveFromRomanianCloudVod({
   });
 
   if (orderedStreams.length === 0) {
+    if (vmIds[0] || rumbleIds[0]) {
+      const cleanEpTitleFallback = normalizeRoAscii(
+        targetPost.title?.rendered || `${descriptor.canonicalQuery} • S${appSeason}:E${targetEp}`
+      );
+      return {
+        ok: true,
+        type: 'series',
+        sourcePath: 'România Cloud HD (Embed Direct)',
+        season: appSeason,
+        episode: targetEp,
+        title: cleanEpTitleFallback,
+        embedUrl: vmIds[0]
+          ? `https://vidmoly.net/embed-${vmIds[0]}.html`
+          : `https://rumble.com/embed/${rumbleIds[0]}/`,
+        audioNames: ['Română (Original)'],
+        ...(builtSeasonsCatalog ? { seasons: builtSeasonsCatalog } : {}),
+      };
+    }
     return builtSeasonsCatalog
       ? {
-          ok: false,
-          type: 'series',
-          seasons: builtSeasonsCatalog,
-          error: 'No direct HLS stream extracted from Romanian episode page',
-        }
+        ok: false,
+        type: 'series',
+        seasons: builtSeasonsCatalog,
+        error: 'No direct HLS stream extracted from Romanian episode page',
+      }
       : null;
   }
 
@@ -2690,6 +2820,10 @@ export async function resolveVodStreamData({
   userAgent = '',
 }) {
   const effectiveUa = pickSafeDesktopUa(userAgent);
+  const isSmartTvUa =
+    /Web0S|WebOS|Tizen|SmartTV|SMART-TV|BRAVIA|NetCast|VIDAA|HbbTV/i.test(
+      userAgent || ''
+    );
   const cleanKp = String(kp || '').trim();
   const cleanTitle = String(title || '').trim();
   const forceForeign = String(ru) === '0';
@@ -2732,11 +2866,11 @@ export async function resolveVodStreamData({
   const cleanImdb = String(imdb || '').trim();
   const matchedVkShow = !forceForeign && !isRomanianShow
     ? VK_CURATED_SHOWS.find(
-        (s) =>
-          (cleanKp && s.kpIds.includes(cleanKp)) ||
-          (cleanImdb && Array.isArray(s.imdbIds) && s.imdbIds.includes(cleanImdb)) ||
-          (cleanTitle && s.titleRe.test(cleanTitle))
-      )
+      (s) =>
+        (cleanKp && s.kpIds.includes(cleanKp)) ||
+        (cleanImdb && Array.isArray(s.imdbIds) && s.imdbIds.includes(cleanImdb)) ||
+        (cleanTitle && s.titleRe.test(cleanTitle))
+    )
     : null;
   if (matchedVkShow) {
     const vkSeasons = await matchedVkShow.buildSeasons();
@@ -2755,19 +2889,11 @@ export async function resolveVodStreamData({
         fallbackSeasonsCatalog,
         serializedVkSeasons
       );
-      const targetSeason =
-        vkSeasons.find((s) => Number(s.season) === Number(season)) ||
-        vkSeasons[0];
-      let targetEp = targetSeason?.episodes.find(
-        (e) => Number(e.episode) === Number(episode)
+      const { targetSeason, targetEp } = findExactSeasonAndEpisode(
+        vkSeasons,
+        season,
+        episode
       );
-      if (!targetEp && targetSeason?.episodes?.length > 0) {
-        const epIdx = Math.max(0, Number(episode) - 1);
-        targetEp =
-          (epIdx < targetSeason.episodes.length
-            ? targetSeason.episodes[epIdx]
-            : null) || targetSeason.episodes[0];
-      }
       if (targetSeason && targetEp) {
         if (targetEp.rutubeVideoId) {
           const hlsUrl = await fetchRutubePlayHls(targetEp.rutubeVideoId);
@@ -2788,7 +2914,12 @@ export async function resolveVodStreamData({
           }
         }
         if (targetEp.oid && targetEp.vid) {
-          const vkStream = await extractVkVideoStreams(targetEp.oid, targetEp.vid);
+          const vkStream = await extractVkVideoStreams(
+            targetEp.oid,
+            targetEp.vid,
+            '',
+            isSmartTvUa
+          );
           if (vkStream && vkStream.bestUrl) {
             return {
               ok: true,
@@ -2800,6 +2931,8 @@ export async function resolveVodStreamData({
               duration: targetEp.duration,
               audioNames: ['Русский (VK Видео Direct)'],
               hlsUrl: vkStream.bestUrl,
+              proxyHlsUrl: vkStream.bestUrl,
+              fallbackHlsUrl: vkStream.fallbackHlsUrl,
               rawHlsUrl: vkStream.hlsUrl || vkStream.bestUrl,
               vkQualities: vkStream.qualities,
               userAgent: effectiveUa,
@@ -2815,10 +2948,10 @@ export async function resolveVodStreamData({
   let rutubeFallbackRes = null;
   const matchedRutubeShow = !forceForeign && !isRomanianShow
     ? RUTUBE_CURATED_SHOWS.find(
-        (s) =>
-          (cleanKp && s.kpIds.includes(cleanKp)) ||
-          (cleanTitle && s.titleRe.test(cleanTitle))
-      )
+      (s) =>
+        (cleanKp && s.kpIds.includes(cleanKp)) ||
+        (cleanTitle && s.titleRe.test(cleanTitle))
+    )
     : null;
   if (matchedRutubeShow) {
     const rutubeRes = await resolveRutubeCuratedShow(
@@ -2850,7 +2983,7 @@ export async function resolveVodStreamData({
     !isRomanianShow &&
     (Boolean(matchedVkShow || matchedRutubeShow) ||
       (Number(cleanKp) >= 9001000 && Number(cleanKp) <= 9001999) ||
-      /(?:^|[^\p{L}])(кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
+      /(?:^|[^\p{L}])(шоу\s+воли|кстати|зв[её]зды|большое\s+шоу|натальная\s+карта|токсики|вопрос\s+ребром|прожарка|громкий\s+вопрос|тейбл\s+тайм|шоу\s+истории|неигры|контакты|битва\s+шефов|адская\s+кухня|адский\s+шеф|выжить\s+в|сокровища\s+императора|маска|аватар|конфетка|музыкальная\s+интуиция|стендап|stand\s*up|женский\s+стендап|comedy\s+club|камеди\s+клаб|однажды\s+в\s+россии|импровизаторы|импровизация|битва\s+экстрасенсов|экстрасенсы|пацанки|четыре\s+свадьбы|на\s+ножах|кондитер|молодые\s+ножи|холостяк|невеста|титаны|игры\s+титанов|вызов|последний\s+герой|чбд|что\s+было\s+дальше|ор[её]л\s+и\s+решка|мир\s+наизнанку)(?:[^\p{L}]|$)/iu.test(
         cleanTitle
       ));
   const isRussianNativeQuery =
@@ -2858,8 +2991,8 @@ export async function resolveVodStreamData({
     !isRomanianShow &&
     Boolean(
       isRuTvShowQuery ||
-        /[а-яА-ЯёЁ]/.test(cleanTitle) ||
-        (cleanKp && !imdb)
+      /[а-яА-ЯёЁ]/.test(cleanTitle) ||
+      (cleanKp && !imdb)
     );
 
   // For Russian TV Shows (ТВ-Шоу / Emisiuni RU), prioritize VK Видео Direct (#1) before iEdem MediaLibrary & Kinogram!
@@ -2876,6 +3009,7 @@ export async function resolveVodStreamData({
       season,
       episode,
       effectiveUa,
+      isSmartTv: isSmartTvUa,
     });
     if (vkShowRes && vkShowRes.ok) {
       return {
@@ -2902,6 +3036,7 @@ export async function resolveVodStreamData({
         season,
         episode,
         effectiveUa,
+        isSmartTv: isSmartTvUa,
       });
       if (vkSearchFirst && vkSearchFirst.ok) {
         return {
@@ -2932,29 +3067,15 @@ export async function resolveVodStreamData({
       }
     }
 
-    const embedUrl = await resolveFromAllohaEmbed({
-      imdb,
-      kp: cleanKp,
-      season,
-      episode,
-    });
-    if (rutubeFallbackRes || fallbackSeasonsCatalog) {
+    if (rutubeFallbackRes || curatedOrFallbackSeasons) {
+      const activeSeasons = curatedOrFallbackSeasons || rutubeFallbackRes?.seasons;
       return {
         ...(rutubeFallbackRes || {
           ok: false,
           type: 'series',
           error: 'Requested season or episode not available on direct VOD providers',
         }),
-        seasons: fallbackSeasonsCatalog || rutubeFallbackRes?.seasons,
-        ...(embedUrl ? { embedUrl, sourcePath: 'Alloha VIP (1080p)' } : {}),
-      };
-    }
-    if (embedUrl) {
-      return {
-        ok: false,
-        embedUrl,
-        sourcePath: 'Alloha VIP (1080p)',
-        error: 'Using clean Alloha VIP embed fallback',
+        seasons: activeSeasons,
       };
     }
     return { ok: false, error: 'Stream not found on VOD balancer' };
@@ -3034,35 +3155,150 @@ export async function resolveVodStreamData({
         };
       });
 
-      fallbackSeasonsCatalog = mergeSeasonsCatalogs(
-        fallbackSeasonsCatalog,
-        cleanSeasons
+      const hasCuratedMultiSeasons = Boolean(
+        rutubeFallbackRes &&
+        Array.isArray(rutubeFallbackRes.seasons) &&
+        rutubeFallbackRes.seasons.length > 1 &&
+        sortedRawSeasons.length === 1 &&
+        Number(sortedRawSeasons[0]?.season) === 1
       );
 
-      const targetSeason = sortedRawSeasons.find(
-        (s) => Number(s.season) === Number(season)
-      );
-      const episodes = Array.isArray(targetSeason?.episodes)
-        ? [...targetSeason.episodes].sort(
+      let activeCuratedSeasons = null;
+      let targetSeason = null;
+      let targetEp = null;
+      const reqS = Math.max(1, Number(season) || 1);
+      const reqE = Math.max(1, Number(episode) || 1);
+      let matchedCuratedEp = null;
+
+      if (hasCuratedMultiSeasons) {
+        activeCuratedSeasons = rutubeFallbackRes.seasons.map((s) => ({
+          ...s,
+          episodes: [...s.episodes],
+        }));
+        let prevSeasonsTotal = 0;
+        for (const sObj of activeCuratedSeasons.slice(0, -1)) {
+          if (Array.isArray(sObj.episodes) && sObj.episodes.length > 0) {
+            const lastNum =
+              Number(sObj.episodes[sObj.episodes.length - 1]?.episode) || 0;
+            prevSeasonsTotal += Math.max(sObj.episodes.length, lastNum);
+          }
+        }
+        const lastSeasonObj =
+          activeCuratedSeasons[activeCuratedSeasons.length - 1];
+        const lastMaxEp =
+          lastSeasonObj &&
+            Array.isArray(lastSeasonObj.episodes) &&
+            lastSeasonObj.episodes.length > 0
+            ? Math.max(
+              lastSeasonObj.episodes.length,
+              Number(
+                lastSeasonObj.episodes[lastSeasonObj.episodes.length - 1]
+                  ?.episode
+              ) || 0
+            )
+            : 0;
+
+        const flatEpisodes = (
+          Array.isArray(sortedRawSeasons[0]?.episodes)
+            ? [...sortedRawSeasons[0].episodes]
+            : []
+        ).sort((a, b) => (Number(a?.episode) || 1) - (Number(b?.episode) || 1));
+
+        for (const rawEp of flatEpisodes) {
+          const rawEpNum = Number(rawEp?.episode) || 0;
+          if (
+            rawEpNum > prevSeasonsTotal + lastMaxEp &&
+            (rawEp?.hls || rawEp?.dash)
+          ) {
+            const relEp = rawEpNum - prevSeasonsTotal;
+            if (
+              lastSeasonObj &&
+              !lastSeasonObj.episodes.some((e) => Number(e.episode) === relEp)
+            ) {
+              lastSeasonObj.episodes.push({
+                episode: relEp,
+                title:
+                  cleanKp === '5354824'
+                    ? `Шоу Воли, 2026 сезон, ${relEp} выпуск`
+                    : rawEp.title || `Выпуск ${relEp}`,
+                duration: Number(rawEp.duration) || 3600,
+                audioNames: ['Русский (Оригинал)'],
+              });
+            }
+          }
+        }
+        if (lastSeasonObj && Array.isArray(lastSeasonObj.episodes)) {
+          lastSeasonObj.episodes.sort((a, b) => a.episode - b.episode);
+        }
+
+        fallbackSeasonsCatalog = activeCuratedSeasons;
+        const matchedCuratedSeason = activeCuratedSeasons.find(
+          (s) => Number(s.season) === reqS
+        );
+        matchedCuratedEp =
+          matchedCuratedSeason?.episodes?.find(
+            (e) => Number(e.episode) === reqE
+          ) || null;
+
+        if (matchedCuratedSeason && matchedCuratedEp) {
+          let offset = 0;
+          for (const sEntry of activeCuratedSeasons) {
+            const sNum = Number(sEntry.season) || 0;
+            if (
+              sNum > 0 &&
+              sNum < reqS &&
+              Array.isArray(sEntry.episodes) &&
+              sEntry.episodes.length > 0
+            ) {
+              const lNum =
+                Number(sEntry.episodes[sEntry.episodes.length - 1]?.episode) || 0;
+              offset += Math.max(sEntry.episodes.length, lNum);
+            }
+          }
+          const globalEp = offset + reqE;
+          targetSeason = sortedRawSeasons[0];
+          targetEp =
+            flatEpisodes.find((e) => Number(e.episode) === globalEp) || null;
+        }
+      } else {
+        if (
+          !(
+            rutubeFallbackRes &&
+            Array.isArray(rutubeFallbackRes.seasons) &&
+            rutubeFallbackRes.seasons.length > 0
+          )
+        ) {
+          fallbackSeasonsCatalog = mergeSeasonsCatalogs(
+            fallbackSeasonsCatalog,
+            cleanSeasons
+          );
+        }
+
+        targetSeason = sortedRawSeasons.find(
+          (s) => Number(s.season) === Number(season)
+        );
+        const episodes = Array.isArray(targetSeason?.episodes)
+          ? [...targetSeason.episodes].sort(
             (a, b) => (Number(a?.episode) || 1) - (Number(b?.episode) || 1)
           )
-        : [];
-      let targetEp = episodes.find(
-        (e) => Number(e.episode) === Number(episode)
-      );
-      if (
-        cleanKp === '471505' &&
-        targetEp &&
-        !targetEp.dash &&
-        !targetEp.hls &&
-        episodes.some((e) => e.dash)
-      ) {
-        targetEp =
-          episodes.find(
-            (e) => e.dash && Number(e.episode) >= Number(episode)
-          ) ||
-          episodes.find((e) => e.dash) ||
-          targetEp;
+          : [];
+        targetEp = episodes.find(
+          (e) => Number(e.episode) === Number(episode)
+        );
+        if (
+          cleanKp === '471505' &&
+          targetEp &&
+          !targetEp.dash &&
+          !targetEp.hls &&
+          episodes.some((e) => e.dash)
+        ) {
+          targetEp =
+            episodes.find(
+              (e) => e.dash && Number(e.episode) >= Number(episode)
+            ) ||
+            episodes.find((e) => e.dash) ||
+            targetEp;
+        }
       }
 
       if (!targetSeason || !targetEp) {
@@ -3120,22 +3356,37 @@ export async function resolveVodStreamData({
         const proxyHlsUrl = hlsUrl
           ? wrapTvProxyUrl(hlsUrl, `${lastWorkingKinogramHost}/`, effectiveUa)
           : undefined;
+        const browserSafeDashUrl =
+          dashUrl && !/interkh\.com/i.test(dashUrl) ? dashUrl : undefined;
+        const browserSafeDashaUrl =
+          dashaUrl && !/interkh\.com/i.test(dashaUrl) ? dashaUrl : undefined;
         return {
           ok: true,
           type: 'series',
-          sourcePath: usedPath,
-          season: Number(targetSeason.season) || 1,
-          episode: Number(targetEp.episode) || 1,
-          title: targetEp.title || '',
+          sourcePath: hasCuratedMultiSeasons
+            ? 'Direct Cloud HLS (1080p / HD)'
+            : usedPath,
+          season: hasCuratedMultiSeasons
+            ? reqS
+            : Number(targetSeason.season) || 1,
+          episode: hasCuratedMultiSeasons
+            ? reqE
+            : Number(targetEp.episode) || 1,
+          title:
+            hasCuratedMultiSeasons && matchedCuratedEp?.title
+              ? matchedCuratedEp.title
+              : targetEp.title || '',
           duration: Number(targetEp.duration) || 0,
           audioNames: epAudioNames,
-          dashUrl,
-          dashaUrl,
-          hlsUrl,
+          dashUrl: browserSafeDashUrl,
+          dashaUrl: browserSafeDashaUrl,
+          hlsUrl: proxyHlsUrl || hlsUrl,
           proxyHlsUrl,
           rawHlsUrl: hlsUrl,
           userAgent: effectiveUa,
-          seasons: fallbackSeasonsCatalog || cleanSeasons,
+          seasons: hasCuratedMultiSeasons
+            ? activeCuratedSeasons
+            : rutubeFallbackRes?.seasons || fallbackSeasonsCatalog || cleanSeasons,
         };
       }
 
@@ -3206,6 +3457,11 @@ export async function resolveVodStreamData({
       }
     }
 
+    const browserSafeDashUrl =
+      dashUrl && !/interkh\.com/i.test(dashUrl) ? dashUrl : undefined;
+    const browserSafeDashaUrl =
+      dashaUrl && !/interkh\.com/i.test(dashaUrl) ? dashaUrl : undefined;
+
     return {
       ok: true,
       type: 'movie',
@@ -3213,9 +3469,9 @@ export async function resolveVodStreamData({
       title: titleMatch?.[1] || '',
       poster: posterMatch?.[1] || '',
       audioNames,
-      dashUrl,
-      dashaUrl,
-      hlsUrl,
+      dashUrl: browserSafeDashUrl,
+      dashaUrl: browserSafeDashaUrl,
+      hlsUrl: proxyHlsUrl || hlsUrl,
       proxyHlsUrl,
       rawHlsUrl: hlsUrl,
       userAgent: effectiveUa,
@@ -3242,8 +3498,8 @@ export async function handler(event) {
   const title = params.title || '';
   const mediaType = params.type || '';
   const year = params.year || '';
-  const season = Number(params.season) || 1;
-  const episode = Number(params.episode) || 1;
+  const season = Number(params.season || params.s) || 1;
+  const episode = Number(params.episode || params.e) || 1;
   const ru = params.ru ?? '';
   const userAgent =
     event.headers?.['user-agent'] || event.headers?.['User-Agent'] || '';

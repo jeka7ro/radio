@@ -4,6 +4,8 @@ import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
+import https from 'node:https';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { handleFileListRequest } from './src/server/filelistServer';
@@ -123,96 +125,96 @@ async function fetchAndParseXmltvFeed(feedUrl: string): Promise<ParsedEpgFeed> {
       ? zlib.gunzipSync(buf).toString('utf8')
       : buf.toString('utf8');
 
-  const channels: ParsedEpgFeed['channels'] = {};
-  const archiveChannels: ParsedEpgFeed['archiveChannels'] = {};
-  const keyMap: Record<string, string> = {};
+    const channels: ParsedEpgFeed['channels'] = {};
+    const archiveChannels: ParsedEpgFeed['archiveChannels'] = {};
+    const keyMap: Record<string, string> = {};
 
-  const firstProgIdx = xml.indexOf('<programme ');
-  const chSection = firstProgIdx > 0 ? xml.slice(0, firstProgIdx) : xml;
+    const firstProgIdx = xml.indexOf('<programme ');
+    const chSection = firstProgIdx > 0 ? xml.slice(0, firstProgIdx) : xml;
 
-  const chRegex = /<channel\s+id="([^"]+)">([\s\S]*?)<\/channel>/g;
-  let chMatch: RegExpExecArray | null;
-  while ((chMatch = chRegex.exec(chSection)) !== null) {
-    const id = chMatch[1].trim();
-    const body = chMatch[2];
-    const iconMatch = body.match(/<icon\s+src="([^"]+)"/i);
-    const icon = iconMatch?.[1]?.trim() || '';
+    const chRegex = /<channel\s+id="([^"]+)">([\s\S]*?)<\/channel>/g;
+    let chMatch: RegExpExecArray | null;
+    while ((chMatch = chRegex.exec(chSection)) !== null) {
+      const id = chMatch[1].trim();
+      const body = chMatch[2];
+      const iconMatch = body.match(/<icon\s+src="([^"]+)"/i);
+      const icon = iconMatch?.[1]?.trim() || '';
 
-    channels[id] = { icon, programmes: [] };
-    let firstDisplayName = id;
+      channels[id] = { icon, programmes: [] };
+      let firstDisplayName = id;
 
-    const idKey1 = normalizeEpgKey(id, false);
-    const idKey2 = normalizeEpgKey(id, true);
-    if (idKey1 && !keyMap[idKey1]) keyMap[idKey1] = id;
-    if (idKey2 && !keyMap[idKey2]) keyMap[idKey2] = id;
+      const idKey1 = normalizeEpgKey(id, false);
+      const idKey2 = normalizeEpgKey(id, true);
+      if (idKey1 && !keyMap[idKey1]) keyMap[idKey1] = id;
+      if (idKey2 && !keyMap[idKey2]) keyMap[idKey2] = id;
 
-    const dnRegex = /<display-name[^>]*>([^<]+)<\/display-name>/gi;
-    let dnMatch: RegExpExecArray | null;
-    while ((dnMatch = dnRegex.exec(body)) !== null) {
-      const name = decodeXmlEntities(dnMatch[1].trim());
-      if (firstDisplayName === id && name) {
-        firstDisplayName = name;
+      const dnRegex = /<display-name[^>]*>([^<]+)<\/display-name>/gi;
+      let dnMatch: RegExpExecArray | null;
+      while ((dnMatch = dnRegex.exec(body)) !== null) {
+        const name = decodeXmlEntities(dnMatch[1].trim());
+        if (firstDisplayName === id && name) {
+          firstDisplayName = name;
+        }
+        const k1 = normalizeEpgKey(name, false);
+        const k2 = normalizeEpgKey(name, true);
+        if (k1 && !keyMap[k1]) keyMap[k1] = id;
+        if (k2 && !keyMap[k2]) keyMap[k2] = id;
       }
-      const k1 = normalizeEpgKey(name, false);
-      const k2 = normalizeEpgKey(name, true);
-      if (k1 && !keyMap[k1]) keyMap[k1] = id;
-      if (k2 && !keyMap[k2]) keyMap[k2] = id;
-    }
 
-    archiveChannels[id] = {
-      icon,
-      displayName: firstDisplayName,
-      programmes: [],
-    };
-  }
-
-  if (firstProgIdx > 0) {
-    const minArchiveStop = now - 7 * 24 * 60 * 60 * 1000; // 7 days archive
-    const minLiveStop = now - 5 * 60 * 1000;
-    const maxStart = now + 12 * 60 * 60 * 1000;
-    const progRegex = /<programme\s+([^>]+)>([\s\S]*?)<\/programme>/g;
-    progRegex.lastIndex = firstProgIdx;
-
-    let progMatch: RegExpExecArray | null;
-    while ((progMatch = progRegex.exec(xml)) !== null) {
-      const attrs = progMatch[1];
-      const startStr = attrs.match(/start="([^"]+)"/)?.[1];
-      const stopStr = attrs.match(/stop="([^"]+)"/)?.[1];
-      const chId = attrs.match(/channel="([^"]+)"/)?.[1];
-      if (!startStr || !stopStr || !chId) continue;
-
-      const chEntry = channels[chId];
-      const archEntry = archiveChannels[chId];
-      if (!chEntry || !archEntry) continue;
-
-      const s = parseXmltvTimestamp(startStr);
-      const e = parseXmltvTimestamp(stopStr);
-      if (!s || !e || e < minArchiveStop || s > maxStart) continue;
-
-      const body = progMatch[2];
-      const titleRaw = body.match(/<title[^>]*>([^<]+)<\/title>/)?.[1];
-      if (!titleRaw) continue;
-
-      const descRaw = body.match(/<desc[^>]*>([^<]+)<\/desc>/)?.[1];
-      const catRaw = body.match(/<category[^>]*>([^<]+)<\/category>/)?.[1];
-
-      const item: EpgProgrammeItem = {
-        t: decodeXmlEntities(titleRaw.trim()),
-        d: descRaw ? decodeXmlEntities(descRaw.trim()).slice(0, 260) : undefined,
-        c: catRaw ? decodeXmlEntities(catRaw.trim()) : undefined,
-        s,
-        e,
+      archiveChannels[id] = {
+        icon,
+        displayName: firstDisplayName,
+        programmes: [],
       };
+    }
 
-      if (archEntry.programmes.length < 320) {
-        archEntry.programmes.push(item);
-      }
+    if (firstProgIdx > 0) {
+      const minArchiveStop = now - 7 * 24 * 60 * 60 * 1000; // 7 days archive
+      const minLiveStop = now - 5 * 60 * 1000;
+      const maxStart = now + 12 * 60 * 60 * 1000;
+      const progRegex = /<programme\s+([^>]+)>([\s\S]*?)<\/programme>/g;
+      progRegex.lastIndex = firstProgIdx;
 
-      if (e >= minLiveStop && chEntry.programmes.length < 6) {
-        chEntry.programmes.push(item);
+      let progMatch: RegExpExecArray | null;
+      while ((progMatch = progRegex.exec(xml)) !== null) {
+        const attrs = progMatch[1];
+        const startStr = attrs.match(/start="([^"]+)"/)?.[1];
+        const stopStr = attrs.match(/stop="([^"]+)"/)?.[1];
+        const chId = attrs.match(/channel="([^"]+)"/)?.[1];
+        if (!startStr || !stopStr || !chId) continue;
+
+        const chEntry = channels[chId];
+        const archEntry = archiveChannels[chId];
+        if (!chEntry || !archEntry) continue;
+
+        const s = parseXmltvTimestamp(startStr);
+        const e = parseXmltvTimestamp(stopStr);
+        if (!s || !e || e < minArchiveStop || s > maxStart) continue;
+
+        const body = progMatch[2];
+        const titleRaw = body.match(/<title[^>]*>([^<]+)<\/title>/)?.[1];
+        if (!titleRaw) continue;
+
+        const descRaw = body.match(/<desc[^>]*>([^<]+)<\/desc>/)?.[1];
+        const catRaw = body.match(/<category[^>]*>([^<]+)<\/category>/)?.[1];
+
+        const item: EpgProgrammeItem = {
+          t: decodeXmlEntities(titleRaw.trim()),
+          d: descRaw ? decodeXmlEntities(descRaw.trim()).slice(0, 260) : undefined,
+          c: catRaw ? decodeXmlEntities(catRaw.trim()) : undefined,
+          s,
+          e,
+        };
+
+        if (archEntry.programmes.length < 320) {
+          archEntry.programmes.push(item);
+        }
+
+        if (e >= minLiveStop && chEntry.programmes.length < 6) {
+          chEntry.programmes.push(item);
+        }
       }
     }
-  }
 
     const parsed: ParsedEpgFeed = {
       timestamp: now,
@@ -1698,8 +1700,8 @@ function tvStreamProxyPlugin(): Plugin {
                 (String(primary.item?.id || '').startsWith('tt')
                   ? primary.item.id
                   : String(secondary.item?.id || '').startsWith('tt')
-                  ? secondary.item.id
-                  : undefined);
+                    ? secondary.item.id
+                    : undefined);
               if (canonImdb) {
                 mergedItem.imdbId = canonImdb;
                 mergedItem.id = canonImdb;
@@ -1722,10 +1724,10 @@ function tvStreamProxyPlugin(): Plugin {
             item?.imdbId && String(item.imdbId).startsWith('tt')
               ? item.imdbId
               : String(item?.id || '').startsWith('tt')
-              ? item.id
-              : item?.kpId
-              ? `kp_${item.kpId}`
-              : item?.id;
+                ? item.id
+                : item?.kpId
+                  ? `kp_${item.kpId}`
+                  : item?.id;
           if (canonicalKey) {
             deduped[canonicalKey] = finalEntry;
           }
@@ -1740,7 +1742,7 @@ function tvStreamProxyPlugin(): Plugin {
       ) => {
         const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
         const now = Date.now();
-        if (!forcePush && now - (lastCloudSyncAtByProf[cleanId] || 0) < 12000) {
+        if (!forcePush && now - (lastCloudSyncAtByProf[cleanId] || 0) < 60000) {
           return;
         }
         lastCloudSyncAtByProf[cleanId] = now;
@@ -1749,37 +1751,29 @@ function tvStreamProxyPlugin(): Plugin {
           const localData = fs.existsSync(targetFile)
             ? JSON.parse(fs.readFileSync(targetFile, 'utf-8') || '{}')
             : {};
+          const localStr = JSON.stringify(localData);
           const res = await fetch(
             `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(cleanId)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(localData),
+              body: localStr,
             }
           );
           if (res.ok) {
             const cloudMerged = (await res.json()) as Record<string, any>;
             if (cloudMerged && typeof cloudMerged === 'object') {
               const finalMerged = mergeProgressEntriesMap(localData, cloudMerged);
-              fs.writeFileSync(
-                targetFile,
-                JSON.stringify(finalMerged),
-                'utf-8'
-              );
+              const finalStr = JSON.stringify(finalMerged);
+              if (finalStr !== localStr) {
+                fs.writeFileSync(targetFile, finalStr, 'utf-8');
+              }
             }
           }
         } catch {
           // ignore network errors when offline
         }
       };
-
-      // Background bidirectional sync between local disk (.tv-watch-progress.json) and cloud (https://filmio.my)
-      setInterval(() => {
-        void syncProfileProgressWithCloud('p1', false);
-      }, 25000);
-      setTimeout(() => {
-        void syncProfileProgressWithCloud('p1', true);
-      }, 2500);
 
       server.middlewares.use('/api/tv-progress', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1827,7 +1821,7 @@ function tvStreamProxyPlugin(): Plugin {
                 profileId
               )}&deleteId=${encodeURIComponent(deleteId)}`,
               { method: 'DELETE' }
-            ).catch(() => {});
+            ).catch(() => { });
           }
           res.writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
@@ -1846,18 +1840,18 @@ function tvStreamProxyPlugin(): Plugin {
             try {
               const incoming = JSON.parse(body || '{}') as Record<string, any>;
               const current = readDiskProgress() as Record<string, any>;
+              const prevStr = JSON.stringify(current);
               const merged = mergeProgressEntriesMap(current, incoming);
-              fs.writeFileSync(
-                targetProgressFile,
-                JSON.stringify(merged),
-                'utf-8'
-              );
-              void syncProfileProgressWithCloud(profileId, true);
+              const nextStr = JSON.stringify(merged);
+              if (nextStr !== prevStr) {
+                fs.writeFileSync(targetProgressFile, nextStr, 'utf-8');
+                void syncProfileProgressWithCloud(profileId, false);
+              }
               res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Cache-Control': 'no-cache, no-store',
               });
-              res.end(JSON.stringify(merged));
+              res.end(nextStr);
             } catch {
               res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
@@ -1867,12 +1861,15 @@ function tvStreamProxyPlugin(): Plugin {
           });
           return;
         }
-        void syncProfileProgressWithCloud(profileId, false);
+        const diskProgress = readDiskProgress();
+        if (Object.keys(diskProgress).length === 0) {
+          void syncProfileProgressWithCloud(profileId, false);
+        }
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-cache, no-store',
         });
-        res.end(JSON.stringify(readDiskProgress()));
+        res.end(JSON.stringify(diskProgress));
       });
 
       const getTvSavedFileForProfile = (profileId: string) => {
@@ -1930,7 +1927,7 @@ function tvStreamProxyPlugin(): Plugin {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(incoming),
                   }
-                ).catch(() => {});
+                ).catch(() => { });
               }
             } catch {
               // ignore
@@ -2029,7 +2026,7 @@ function tvStreamProxyPlugin(): Plugin {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(nextPayload),
                     }
-                  ).catch(() => {});
+                  ).catch(() => { });
                 }
               }
             } catch {
@@ -2137,7 +2134,7 @@ function tvStreamProxyPlugin(): Plugin {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(nextPayload),
                     }
-                  ).catch(() => {});
+                  ).catch(() => { });
                 }
               }
             } catch {
@@ -2167,13 +2164,238 @@ function tvStreamProxyPlugin(): Plugin {
         );
       });
 
+      const getTvMusicSyncFileForProfile = (profileId: string) => {
+        const cleanId =
+          (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        return path.resolve(__dirname, `.music-sync-${cleanId}.json`);
+      };
+
+      const mergeLocalMusicSyncData = (existing: any, incoming: any) => {
+        const prev = existing && typeof existing === 'object' ? existing : {};
+        const next = incoming && typeof incoming === 'object' ? incoming : {};
+        const baseTs =
+          Number(next.updatedAt) || Number(prev.updatedAt) || Date.now();
+        const removedMap: Record<string, number> = {
+          ...(prev.removedMap && typeof prev.removedMap === 'object'
+            ? prev.removedMap
+            : {}),
+          ...(next.removedMap && typeof next.removedMap === 'object'
+            ? next.removedMap
+            : {}),
+        };
+        const normKey = (t: any) => {
+          const a = String(t?.artist || '').toLowerCase().trim();
+          const ti = String(t?.title || '').toLowerCase().trim();
+          return a && ti ? `${a}::${ti}` : String(t?.id || '');
+        };
+        const seenIds = new Set<string>();
+        const seenKeys = new Set<string>();
+        const likedTracks: any[] = [];
+        for (const raw of [
+          ...(Array.isArray(next.likedTracks) ? next.likedTracks : []),
+          ...(Array.isArray(prev.likedTracks) ? prev.likedTracks : []),
+        ]) {
+          if (!raw || typeof raw !== 'object' || !raw.id || !raw.title) continue;
+          const idStr = String(raw.id);
+          const likedAt =
+            Number(raw.likedAt) ||
+            (Array.isArray(next.likedTracks) && next.likedTracks.includes(raw)
+              ? baseTs
+              : Number(prev.updatedAt) || 1);
+          const removedAt = Number(removedMap[idStr]) || 0;
+          if (removedAt > 0 && likedAt <= removedAt) continue;
+          if (removedAt > 0 && likedAt > removedAt) delete removedMap[idStr];
+          const k = normKey(raw);
+          if (seenIds.has(idStr) || (k && seenKeys.has(k))) continue;
+          seenIds.add(idStr);
+          if (k) seenKeys.add(k);
+          likedTracks.push({ ...raw, likedAt });
+        }
+        likedTracks.sort(
+          (a, b) => (Number(b.likedAt) || 0) - (Number(a.likedAt) || 0)
+        );
+        const recentIds = new Set<string>();
+        const recentKeys = new Set<string>();
+        const recentTracks: any[] = [];
+        for (const raw of [
+          ...(Array.isArray(next.recentTracks) ? next.recentTracks : []),
+          ...(Array.isArray(prev.recentTracks) ? prev.recentTracks : []),
+        ]) {
+          if (!raw || typeof raw !== 'object' || !raw.id || !raw.title) continue;
+          const idStr = String(raw.id);
+          const k = normKey(raw);
+          if (recentIds.has(idStr) || (k && recentKeys.has(k))) continue;
+          recentIds.add(idStr);
+          if (k) recentKeys.add(k);
+          recentTracks.push({ ...raw, playedAt: Number(raw.playedAt) || 0 });
+        }
+        recentTracks.sort(
+          (a, b) => (Number(b.playedAt) || 0) - (Number(a.playedAt) || 0)
+        );
+        const prevPb =
+          prev.playbackState && typeof prev.playbackState === 'object'
+            ? prev.playbackState
+            : null;
+        const nextPb =
+          next.playbackState && typeof next.playbackState === 'object'
+            ? next.playbackState
+            : null;
+        const playbackState =
+          nextPb &&
+            nextPb.track &&
+            (Number(nextPb.updatedAt) || 0) >= (Number(prevPb?.updatedAt) || 0)
+            ? nextPb
+            : prevPb && prevPb.track
+              ? prevPb
+              : null;
+        return {
+          updatedAt: Math.max(Number(prev.updatedAt) || 0, baseTs),
+          likedTracks: likedTracks.slice(0, 500),
+          removedMap,
+          recentTracks: recentTracks.slice(0, 50),
+          playbackState,
+        };
+      };
+
+      const lastMusicCloudPushAtByProf: Record<string, number> = {};
+      const lastMusicLikedSigByProf: Record<string, string> = {};
+
+      server.middlewares.use('/api/tv-music-sync', (req, res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        const reqUrl = new URL(req.url || '', 'http://localhost');
+        const profileId = reqUrl.searchParams.get('profileId') || 'p1';
+        const targetFile = getTvMusicSyncFileForProfile(profileId);
+
+        const emptyMusicPayload = () => ({
+          updatedAt: 0,
+          likedTracks: [],
+          removedMap: {},
+          recentTracks: [],
+          playbackState: null,
+        });
+
+        const readDiskMusicSync = () => {
+          try {
+            if (fs.existsSync(targetFile)) {
+              const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
+              if (parsed && typeof parsed === 'object') {
+                return mergeLocalMusicSyncData(null, parsed);
+              }
+            }
+          } catch {
+            // ignore
+          }
+          return null;
+        };
+
+        if (req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk;
+          });
+          req.on('end', () => {
+            try {
+              const incoming = JSON.parse(body || 'null');
+              if (incoming && typeof incoming === 'object') {
+                const existing = readDiskMusicSync();
+                const merged = mergeLocalMusicSyncData(existing, incoming);
+                const prevStr = existing ? JSON.stringify(existing) : '';
+                const nextStr = JSON.stringify(merged);
+                if (nextStr !== prevStr) {
+                  fs.writeFileSync(targetFile, nextStr, 'utf-8');
+                  const likedSig = `${(merged.likedTracks || []).length}:${Object.keys(merged.removedMap || {}).length}`;
+                  const nowTs = Date.now();
+                  const shouldPushMusicCloud =
+                    likedSig !== lastMusicLikedSigByProf[profileId] ||
+                    nowTs - (lastMusicCloudPushAtByProf[profileId] || 0) >= 180000;
+                  if (shouldPushMusicCloud) {
+                    lastMusicLikedSigByProf[profileId] = likedSig;
+                    lastMusicCloudPushAtByProf[profileId] = nowTs;
+                    fetch(
+                      `https://filmio.my/api/tv-music-sync?profileId=${encodeURIComponent(
+                        profileId
+                      )}`,
+                      {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: nextStr,
+                      }
+                    ).catch(() => { });
+                  }
+                }
+              }
+            } catch {
+              // ignore
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(readDiskMusicSync() || emptyMusicPayload()));
+          });
+          return;
+        }
+
+        const diskData = readDiskMusicSync();
+        if (
+          diskData &&
+          (diskData.likedTracks.length > 0 ||
+            diskData.recentTracks.length > 0 ||
+            diskData.playbackState)
+        ) {
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store',
+          });
+          res.end(JSON.stringify(diskData));
+          return;
+        }
+
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3200);
+        fetch(
+          `https://filmio.my/api/tv-music-sync?profileId=${encodeURIComponent(
+            profileId
+          )}`,
+          { signal: ctrl.signal }
+        )
+          .then((r) => (r.ok ? r.json() : null))
+          .then((cloudData) => {
+            clearTimeout(timer);
+            const payload =
+              cloudData && typeof cloudData === 'object'
+                ? mergeLocalMusicSyncData(diskData, cloudData)
+                : diskData || emptyMusicPayload();
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(payload));
+          })
+          .catch(() => {
+            clearTimeout(timer);
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(diskData || emptyMusicPayload()));
+          });
+      });
+
       const tvProfilesFile = path.resolve(__dirname, '.tv-profiles.json');
       server.middlewares.use('/api/tv-profiles', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
         res.setHeader(
           'Access-Control-Allow-Headers',
-          'Content-Type, X-Deleted-Profile-Ids'
+          'Content-Type, X-Deleted-Profile-Ids, X-Replace-Profiles'
         );
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
@@ -2200,6 +2422,8 @@ function tvStreamProxyPlugin(): Plugin {
             try {
               const incoming = JSON.parse(body || 'null');
               if (Array.isArray(incoming) && incoming.length > 0) {
+                const replaceMode =
+                  String(req.headers['x-replace-profiles'] || '') === '1';
                 const deletedHeader = String(
                   req.headers['x-deleted-profile-ids'] || '[]'
                 );
@@ -2216,15 +2440,22 @@ function tvStreamProxyPlugin(): Plugin {
                 }
                 const existing = readProfiles() || [];
                 const byId = new Map<string, Record<string, unknown>>();
-                for (const p of existing) {
-                  const id = typeof p?.id === 'string' ? p.id : '';
-                  if (id && !deletedIds.has(id)) {
-                    byId.set(id, p);
+                if (replaceMode) {
+                  const existingAdmin = existing.find((p) => p?.id === 'p1');
+                  if (existingAdmin) {
+                    byId.set('p1', existingAdmin);
+                  }
+                } else {
+                  for (const p of existing) {
+                    const id = typeof p?.id === 'string' ? p.id : '';
+                    if (id && (!deletedIds.has(id) || id === 'p1')) {
+                      byId.set(id, p);
+                    }
                   }
                 }
                 for (const p of incoming) {
                   const id = typeof p?.id === 'string' ? p.id : '';
-                  if (!id || deletedIds.has(id)) continue;
+                  if (!id || (id !== 'p1' && deletedIds.has(id))) continue;
                   const prev = byId.get(id);
                   const prevTs =
                     typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
@@ -2246,9 +2477,10 @@ function tvStreamProxyPlugin(): Plugin {
                     headers: {
                       'Content-Type': 'application/json',
                       'X-Deleted-Profile-Ids': deletedHeader,
+                      'X-Replace-Profiles': replaceMode ? '1' : '0',
                     },
                     body: JSON.stringify(merged),
-                  }).catch(() => {});
+                  }).catch(() => { });
                 }
               }
             } catch {
@@ -2327,41 +2559,41 @@ function tvStreamProxyPlugin(): Plugin {
             const ffBin = (ffmpegPath as unknown as string) || 'ffmpeg';
             const ffArgs = hasAudio
               ? [
-                  '-y',
-                  '-hide_banner',
-                  '-loglevel',
-                  'error',
-                  '-i',
-                  vPath,
-                  '-i',
-                  aPath,
-                  '-map',
-                  '0:v:0',
-                  '-map',
-                  '1:a:0',
-                  '-c',
-                  'copy',
-                  '-bsf:a',
-                  'aac_adtstoasc',
-                  '-movflags',
-                  '+faststart',
-                  outPath,
-                ]
+                '-y',
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-i',
+                vPath,
+                '-i',
+                aPath,
+                '-map',
+                '0:v:0',
+                '-map',
+                '1:a:0',
+                '-c',
+                'copy',
+                '-bsf:a',
+                'aac_adtstoasc',
+                '-movflags',
+                '+faststart',
+                outPath,
+              ]
               : [
-                  '-y',
-                  '-hide_banner',
-                  '-loglevel',
-                  'error',
-                  '-i',
-                  vPath,
-                  '-c',
-                  'copy',
-                  '-bsf:a',
-                  'aac_adtstoasc',
-                  '-movflags',
-                  '+faststart',
-                  outPath,
-                ];
+                '-y',
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-i',
+                vPath,
+                '-c',
+                'copy',
+                '-bsf:a',
+                'aac_adtstoasc',
+                '-movflags',
+                '+faststart',
+                outPath,
+              ];
 
             const proc = spawn(ffBin, ffArgs);
             proc.on('error', () => {
@@ -2585,8 +2817,14 @@ function tvStreamProxyPlugin(): Plugin {
           const title = reqUrl.searchParams.get('title') || '';
           const mediaType = reqUrl.searchParams.get('type') || '';
           const year = reqUrl.searchParams.get('year') || '';
-          const season = Number(reqUrl.searchParams.get('season')) || 1;
-          const episode = Number(reqUrl.searchParams.get('episode')) || 1;
+          const season =
+            Number(
+              reqUrl.searchParams.get('season') || reqUrl.searchParams.get('s')
+            ) || 1;
+          const episode =
+            Number(
+              reqUrl.searchParams.get('episode') || reqUrl.searchParams.get('e')
+            ) || 1;
           const ru = reqUrl.searchParams.get('ru') ?? '';
           const reqUa = String(req.headers['user-agent'] || '');
           const vodStreamPath = path.resolve(
@@ -2621,7 +2859,7 @@ function tvStreamProxyPlugin(): Plugin {
                 ? 'https://rutube.ru/'
                 : /vkvideo\.ru|okcdn\.ru|vkuser/i.test(result.hlsUrl)
                   ? 'https://vkvideo.ru/'
-                  : 'https://api.namy.ws/';
+                  : 'https://api.kinogram.best/';
               result.proxyHlsUrl = `/api/tv-proxy?url=${encodeURIComponent(
                 result.hlsUrl
               )}&ref=${encodeURIComponent(
@@ -2711,6 +2949,133 @@ function tvStreamProxyPlugin(): Plugin {
           ts: number;
         }
       >();
+      const transcodedTsCache = new Map<string, { buf: Buffer; ts: number }>();
+      const transcodedTsInFlight = new Map<string, Promise<Buffer>>();
+      const vkHttpsAgent = new https.Agent({
+        keepAlive: true,
+        maxSockets: 64,
+        maxFreeSockets: 24,
+      });
+      const vkHttpAgent = new http.Agent({
+        keepAlive: true,
+        maxSockets: 64,
+        maxFreeSockets: 24,
+      });
+
+      const fetchVkRangeHttp1 = (
+        urlStr: string,
+        start: number,
+        end: number,
+        hdrs: Record<string, string>,
+        timeoutMs: number,
+        signal?: AbortSignal,
+        redirectsLeft = 4
+      ): Promise<{
+        status: number;
+        headers: http.IncomingHttpHeaders;
+        body: Buffer;
+        finalUrl: string;
+      }> =>
+        new Promise((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error('Client aborted'));
+            return;
+          }
+          let parsedU: URL;
+          try {
+            parsedU = new URL(urlStr);
+          } catch (err) {
+            reject(err);
+            return;
+          }
+          const isHttps = parsedU.protocol === 'https:';
+          const transport = isHttps ? https : http;
+          const reqHdrs: Record<string, string> = {
+            ...hdrs,
+            Connection: 'keep-alive',
+          };
+          if (start >= 0 && end >= start) {
+            reqHdrs.Range = `bytes=${start}-${end}`;
+          }
+          let settled = false;
+          const reqOut = transport.get(
+            {
+              protocol: parsedU.protocol,
+              hostname: parsedU.hostname,
+              port: parsedU.port || (isHttps ? 443 : 80),
+              path: `${parsedU.pathname}${parsedU.search}`,
+              agent: isHttps ? vkHttpsAgent : vkHttpAgent,
+              headers: reqHdrs,
+            },
+            (resIn) => {
+              const sc = resIn.statusCode || 0;
+              if (
+                [301, 302, 303, 307, 308].includes(sc) &&
+                resIn.headers.location &&
+                redirectsLeft > 0
+              ) {
+                resIn.resume();
+                settled = true;
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                const nextUrl = new URL(resIn.headers.location, urlStr).toString();
+                fetchVkRangeHttp1(
+                  nextUrl,
+                  start,
+                  end,
+                  hdrs,
+                  timeoutMs,
+                  signal,
+                  redirectsLeft - 1
+                ).then(resolve, reject);
+                return;
+              }
+              const chunks: Buffer[] = [];
+              resIn.on('data', (c: Buffer) => chunks.push(c));
+              resIn.on('end', () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                resolve({
+                  status: sc,
+                  headers: resIn.headers,
+                  body: Buffer.concat(chunks),
+                  finalUrl: urlStr,
+                });
+              });
+              resIn.on('error', (err) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', onAbort);
+                reject(err);
+              });
+            }
+          );
+          const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reqOut.destroy(new Error('Client aborted'));
+            reject(new Error('Client aborted'));
+          };
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', onAbort);
+            reqOut.destroy(new Error('VK slice timeout'));
+            reject(new Error('VK slice timeout'));
+          }, timeoutMs);
+          signal?.addEventListener('abort', onAbort, { once: true });
+          reqOut.on('error', (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            reject(err);
+          });
+        });
 
       server.middlewares.use('/api/tv-proxy', async (req, res) => {
         if (req.method === 'OPTIONS') {
@@ -2729,9 +3094,9 @@ function tvStreamProxyPlugin(): Plugin {
           const rawTargetUrl = reqUrl.searchParams.get('url');
           const targetUrl = rawTargetUrl
             ? rawTargetUrl.replace(
-                /\/\/live7digi\.antenaplay\.ro\//gi,
-                '//live4ro.antenaplay.ro/'
-              )
+              /\/\/live7digi\.antenaplay\.ro\//gi,
+              '//live4ro.antenaplay.ro/'
+            )
             : null;
           const customRef = reqUrl.searchParams.get('ref') || '';
           const customUa = reqUrl.searchParams.get('ua') || '';
@@ -2794,7 +3159,7 @@ function tvStreamProxyPlugin(): Plugin {
                 saveRadioResponseCookies(targetUrl, warmRes.headers);
                 if (warmRes.body) {
                   const warmReader = warmRes.body.getReader();
-                  await warmReader.read().catch(() => {});
+                  await warmReader.read().catch(() => { });
                 }
               } catch {
                 // ignore warm probe abort
@@ -2811,13 +3176,20 @@ function tvStreamProxyPlugin(): Plugin {
           const activeCookie = getRadioCookieHeader(targetUrl);
           const rangeHeader = req.headers.range;
 
-          // VK / OK CDN Parallel Byte-Range Accelerator:
-          // vkuser.net / okcdn.ru throttles each individual HTTP connection (zs=65) to ~220 KB/s (1.76 Mbps),
-          // causing 1080p/4K streams (3.3–8 Mbps) to stall every ~20s. Clamped parallel Range slices boost throughput to 20–30 Mbps.
+          // VK / OK CDN & iEdem Live TV Parallel Byte-Range Accelerator:
+          // vkuser.net / okcdn.ru / rossteleccom.net / iedem.com throttle individual HTTP connections to ~0.6-1.76 Mbps,
+          // causing HD/4K segments to stall. Sliding-window parallel Range slices boost throughput to 12-25+ Mbps
+          // while strictly honoring HTTP 200 (no Range) & full HTTP 206 Range semantics (no premature truncation on Smart TV / Safari).
+          const isIedemThrottledSeg =
+            /(rossteleccom\.net|iedem\.com|jmeekos\.com)/i.test(targetUrl) ||
+            /\/iptv\/[A-Za-z0-9_-]+\/\d+\/[^/?#]+\.(?:ts|m4s|mp4|aac)$/i.test(
+              parsedTarget.pathname
+            );
           const isVkThrottledBinary =
-            req.method === 'GET' &&
+            (req.method === 'GET' || req.method === 'HEAD') &&
             !rawMode &&
-            /(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(targetUrl) &&
+            (/(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(targetUrl) ||
+              isIedemThrottledSeg) &&
             !/\.(m3u8?|pls)(\?|$)/i.test(parsedTarget.pathname) &&
             !/\/video\/?$/i.test(parsedTarget.pathname);
 
@@ -2826,41 +3198,63 @@ function tvStreamProxyPlugin(): Plugin {
             const onEarlyClose = () => {
               if (!res.writableEnded) accelCtrl.abort();
             };
+            req.on('aborted', onEarlyClose);
             res.on('close', onEarlyClose);
             try {
               let meta = vkMetaCache.get(targetUrl);
               if (!meta || Date.now() - meta.ts > 10 * 60 * 1000) {
-                const headTimer = setTimeout(() => accelCtrl.abort(), 6500);
-                const headRes = await fetch(targetUrl, {
-                  method: 'HEAD',
-                  headers: {
-                    'User-Agent': effectiveUa,
-                    Referer: refererHeader,
-                    Origin: originHeader,
-                    Accept: '*/*',
-                  },
-                  redirect: 'follow',
-                  signal: accelCtrl.signal,
-                });
-                clearTimeout(headTimer);
+                let headCt = '';
+                let totalBytes = 0;
+                let resolvedUrl = targetUrl;
+                let upstreamOk = false;
 
-                const headCt = (
-                  headRes.headers.get('content-type') || ''
-                ).toLowerCase();
-                const totalBytes = Number(
-                  headRes.headers.get('content-length') || 0
-                );
+                try {
+                  const rpRes = await fetchVkRangeHttp1(
+                    targetUrl,
+                    0,
+                    1,
+                    {
+                      'User-Agent': effectiveUa,
+                      Referer: refererHeader,
+                      Origin: originHeader,
+                      Accept: '*/*',
+                    },
+                    6000,
+                    accelCtrl.signal
+                  );
+                  headCt = String(rpRes.headers['content-type'] || '').toLowerCase();
+                  const crMatch = String(rpRes.headers['content-range'] || '').match(
+                    /\/(\d+)$/
+                  );
+                  if (crMatch) {
+                    totalBytes = Number(crMatch[1]) || 0;
+                  } else if (rpRes.status === 200) {
+                    totalBytes = Number(rpRes.headers['content-length'] || 0);
+                  }
+                  resolvedUrl = rpRes.finalUrl || targetUrl;
+                  upstreamOk = rpRes.status === 200 || rpRes.status === 206;
+                } catch {
+                  // ignore probe failure
+                }
 
                 if (
-                  headRes.ok &&
+                  upstreamOk &&
                   totalBytes > 0 &&
                   !headCt.includes('mpegurl') &&
                   !headCt.includes('m3u')
                 ) {
+                  if (vkMetaCache.size > 400) {
+                    const nowTs = Date.now();
+                    for (const [k, v] of vkMetaCache) {
+                      if (nowTs - v.ts > 5 * 60 * 1000 || vkMetaCache.size > 300) {
+                        vkMetaCache.delete(k);
+                      }
+                    }
+                  }
                   meta = {
                     totalBytes,
                     contentType: headCt || 'video/mp4',
-                    resolvedUrl: headRes.url || targetUrl,
+                    resolvedUrl,
                     ts: Date.now(),
                   };
                   vkMetaCache.set(targetUrl, meta);
@@ -2876,62 +3270,262 @@ function tvStreamProxyPlugin(): Plugin {
                 const isTsSeg =
                   /\.(ts|m4s|aac)(\?|$)/i.test(parsedTarget.pathname) ||
                   headCt.includes('mp2t');
+                const contentTypeOut = isTsSeg
+                  ? headCt || 'video/mp2t'
+                  : headCt || 'video/mp4';
+
+                if (req.method === 'HEAD') {
+                  clearTimeout(timeoutId);
+                  req.off('aborted', onEarlyClose);
+                  res.off('close', onEarlyClose);
+                  res.writeHead(200, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Private-Network': 'true',
+                    'Access-Control-Expose-Headers':
+                      'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                    'Content-Type': contentTypeOut,
+                    'Content-Length': String(totalBytes),
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': 'public, max-age=60',
+                  });
+                  res.end();
+                  return;
+                }
+
                 const rangeMatch = String(rangeHeader || '').match(
                   /bytes=(\d+)-(\d*)/i
                 );
 
-                // Small explicit range (e.g. Chrome checking headers, bytes=0-1000, or < 512KB):
-                // Direct single range fetch with zero slice overhead
+                // Ultra-fast parallel fetch + hardware-universal H.264/AAC remux for HEVC live TV segments (Pro TV RO 6997)
+                const needsHevcToH264Transcode =
+                  isTsSeg &&
+                  !rangeMatch &&
+                  req.method === 'GET' &&
+                  Boolean(ffmpegPath) &&
+                  (/\/iptv\/[^/]+\/6997\/[^/?#]+\.ts/i.test(resolvedMediaUrl) ||
+                    reqUrl.searchParams.get('h264') === '1');
+
+                if (needsHevcToH264Transcode) {
+                  clearTimeout(timeoutId);
+                  let cachedHit = transcodedTsCache.get(resolvedMediaUrl);
+                  if (cachedHit && Date.now() - cachedHit.ts >= 45000) {
+                    transcodedTsCache.delete(resolvedMediaUrl);
+                    cachedHit = undefined;
+                  }
+                  let outBuf: Buffer;
+                  if (cachedHit) {
+                    outBuf = cachedHit.buf;
+                  } else {
+                    let jobPromise = transcodedTsInFlight.get(resolvedMediaUrl);
+                    if (!jobPromise) {
+                      jobPromise = (async (): Promise<Buffer> => {
+                        const jobCtrl = new AbortController();
+                        const jobTimer = setTimeout(() => jobCtrl.abort(), 25000);
+                        try {
+                          const tsSliceStep = 262144; // 256 KB
+                          const tsRanges: Array<[number, number]> = [];
+                          for (let b = 0; b < totalBytes; b += tsSliceStep) {
+                            tsRanges.push([b, Math.min(b + tsSliceStep - 1, totalBytes - 1)]);
+                          }
+                          const results: Buffer[] = new Array(tsRanges.length);
+                          let cursor = 0;
+                          const runJobWorker = async () => {
+                            while (!jobCtrl.signal.aborted) {
+                              const idx = cursor++;
+                              if (idx >= tsRanges.length) return;
+                              const [s, e] = tsRanges[idx];
+                              let lastErr: unknown = null;
+                              for (let attempt = 0; attempt < 2; attempt++) {
+                                try {
+                                  const sr = await fetchVkRangeHttp1(
+                                    resolvedMediaUrl,
+                                    s,
+                                    e,
+                                    {
+                                      'User-Agent': effectiveUa,
+                                      Referer: refererHeader,
+                                      Origin: originHeader,
+                                      Accept: '*/*',
+                                    },
+                                    9500,
+                                    jobCtrl.signal
+                                  );
+                                  if (
+                                    (sr.status === 200 || sr.status === 206) &&
+                                    sr.body.length === e - s + 1
+                                  ) {
+                                    results[idx] = sr.body;
+                                    lastErr = null;
+                                    break;
+                                  }
+                                } catch (err) {
+                                  lastErr = err;
+                                  if (jobCtrl.signal.aborted) throw err;
+                                  await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
+                                }
+                              }
+                              if (lastErr || !results[idx]) {
+                                throw lastErr || new Error('HEVC TS slice failed');
+                              }
+                            }
+                          };
+                          const workers = Array.from(
+                            { length: Math.min(18, tsRanges.length) },
+                            () => runJobWorker()
+                          );
+                          await Promise.all(workers);
+                          const rawTsBuf = Buffer.concat(results);
+                          const remuxed = await new Promise<Buffer>((resolveRemux) => {
+                            const ff = spawn(ffmpegPath!, [
+                              '-hide_banner',
+                              '-loglevel',
+                              'error',
+                              '-copyts',
+                              '-i',
+                              'pipe:0',
+                              '-map',
+                              '0:v:0',
+                              '-map',
+                              '0:a:0?',
+                              '-c:v',
+                              'libx264',
+                              '-preset',
+                              'ultrafast',
+                              '-crf',
+                              '22',
+                              '-g',
+                              '50',
+                              '-keyint_min',
+                              '50',
+                              '-sc_threshold',
+                              '0',
+                              '-pix_fmt',
+                              'yuv420p',
+                              '-bsf:v',
+                              'dump_extra',
+                              '-c:a',
+                              'copy',
+                              '-muxdelay',
+                              '0',
+                              '-muxpreload',
+                              '0',
+                              '-f',
+                              'mpegts',
+                              'pipe:1',
+                            ]);
+                            const outChunks: Buffer[] = [];
+                            let settled = false;
+                            ff.stdout.on('data', (c: Buffer) => outChunks.push(c));
+                            ff.on('error', () => {
+                              if (!settled) {
+                                settled = true;
+                                resolveRemux(rawTsBuf);
+                              }
+                            });
+                            ff.on('close', (code) => {
+                              if (!settled) {
+                                settled = true;
+                                const merged = Buffer.concat(outChunks);
+                                resolveRemux(
+                                  code === 0 && merged.length > 0 ? merged : rawTsBuf
+                                );
+                              }
+                            });
+                            ff.stdin.on('error', () => { });
+                            ff.stdin.end(rawTsBuf);
+                          });
+                          const nowCacheTs = Date.now();
+                          for (const [k, v] of transcodedTsCache) {
+                            if (nowCacheTs - v.ts >= 45000) {
+                              transcodedTsCache.delete(k);
+                            }
+                          }
+                          while (transcodedTsCache.size >= 8) {
+                            const oldestKey = transcodedTsCache.keys().next().value;
+                            if (!oldestKey) break;
+                            transcodedTsCache.delete(oldestKey);
+                          }
+                          transcodedTsCache.set(resolvedMediaUrl, {
+                            buf: remuxed,
+                            ts: Date.now(),
+                          });
+                          return remuxed;
+                        } finally {
+                          clearTimeout(jobTimer);
+                          transcodedTsInFlight.delete(resolvedMediaUrl);
+                        }
+                      })();
+                      jobPromise.catch(() => { });
+                      transcodedTsInFlight.set(resolvedMediaUrl, jobPromise);
+                    }
+                    outBuf = await jobPromise;
+                  }
+                  if (res.writableEnded || res.destroyed) {
+                    return;
+                  }
+                  req.off('aborted', onEarlyClose);
+                  res.off('close', onEarlyClose);
+                  res.writeHead(200, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Private-Network': 'true',
+                    'Access-Control-Expose-Headers':
+                      'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+                    'Content-Type': 'video/mp2t',
+                    'Content-Length': String(outBuf.length),
+                    'Cache-Control': 'public, max-age=30',
+                  });
+                  res.end(outBuf);
+                  return;
+                }
+
+                // Small explicit range (e.g. Chrome/LG checking headers, bytes=0-1000, or <= 512KB):
+                // Direct single range fetch over HTTP/1.1 keep-alive socket
                 if (rangeMatch && rangeMatch[2]) {
                   const s = Number(rangeMatch[1]);
-                  const e = Number(rangeMatch[2]);
+                  const e = Math.min(Number(rangeMatch[2]), totalBytes - 1);
                   if (e >= s && e - s + 1 <= 512 * 1024) {
                     clearTimeout(timeoutId);
-                    const singleCtrl = new AbortController();
-                    const singleTimer = setTimeout(() => singleCtrl.abort(), 8000);
                     try {
-                      const sr = await fetch(resolvedMediaUrl, {
-                        method: 'GET',
-                        headers: {
+                      const sr = await fetchVkRangeHttp1(
+                        resolvedMediaUrl,
+                        s,
+                        e,
+                        {
                           'User-Agent': effectiveUa,
                           Referer: refererHeader,
                           Origin: originHeader,
                           Accept: '*/*',
-                          Range: `bytes=${s}-${e}`,
                         },
-                        redirect: 'follow',
-                        signal: singleCtrl.signal,
-                      });
-                      clearTimeout(singleTimer);
-                      if (sr.ok || sr.status === 206) {
-                        const buf = Buffer.from(await sr.arrayBuffer());
+                        8000,
+                        accelCtrl.signal
+                      );
+                      if (sr.status === 200 || sr.status === 206) {
+                        req.off('aborted', onEarlyClose);
                         res.off('close', onEarlyClose);
                         res.writeHead(206, {
                           'Access-Control-Allow-Origin': '*',
                           'Access-Control-Allow-Private-Network': 'true',
                           'Access-Control-Expose-Headers':
                             'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-                          'Content-Type': isTsSeg
-                            ? headCt || 'video/mp2t'
-                            : headCt || 'video/mp4',
-                          'Content-Range': `bytes ${s}-${e}/${totalBytes}`,
-                          'Content-Length': String(buf.length),
+                          'Content-Type': contentTypeOut,
+                          'Content-Range': `bytes ${s}-${s + sr.body.length - 1}/${totalBytes}`,
+                          'Content-Length': String(sr.body.length),
                           'Accept-Ranges': 'bytes',
                           'Cache-Control': 'public, max-age=60',
                         });
-                        res.end(buf);
+                        res.end(sr.body);
                         return;
                       }
                     } catch {
-                      clearTimeout(singleTimer);
+                      // fall through to full slicer
                     }
                   }
                 }
 
                 clearTimeout(timeoutId);
-                const maxWindow = isTsSeg ? 25 * 1024 * 1024 : 2 * 1024 * 1024;
                 const startByte = rangeMatch ? Number(rangeMatch[1]) : 0;
                 if (startByte >= totalBytes) {
+                  req.off('aborted', onEarlyClose);
                   res.off('close', onEarlyClose);
                   res.writeHead(416, {
                     'Access-Control-Allow-Origin': '*',
@@ -2940,27 +3534,26 @@ function tvStreamProxyPlugin(): Plugin {
                   res.end();
                   return;
                 }
-                const requestedEnd =
+                const endByte =
                   rangeMatch && rangeMatch[2]
-                    ? Number(rangeMatch[2])
-                    : startByte + maxWindow - 1;
-                const endByte = Math.min(
-                  requestedEnd,
-                  startByte + maxWindow - 1,
-                  totalBytes - 1
-                );
+                    ? Math.min(Number(rangeMatch[2]), totalBytes - 1)
+                    : totalBytes - 1;
+                const responseLen = endByte - startByte + 1;
 
-                const slices: Array<[number, number]> = [];
+                const sliceRanges: Array<[number, number]> = [];
                 let cur = startByte;
-                // Fast 64KB initial chunk for instantaneous start & header parsing
+                // Fast 64KB initial chunk for instantaneous ftyp/moov start
                 if (cur <= endByte) {
                   const firstEnd = Math.min(cur + 65536 - 1, endByte);
-                  slices.push([cur, firstEnd]);
+                  sliceRanges.push([cur, firstEnd]);
                   cur = firstEnd + 1;
                 }
-                const sliceStep = isTsSeg ? 262144 : 393216; // 384 KB for MP4
+                const sliceStep = isTsSeg ? 262144 : 196608; // 256 KB for Live TV .ts segments, 192 KB otherwise
                 while (cur <= endByte) {
-                  slices.push([cur, Math.min(cur + sliceStep - 1, endByte)]);
+                  sliceRanges.push([
+                    cur,
+                    Math.min(cur + sliceStep - 1, endByte),
+                  ]);
                   cur += sliceStep;
                 }
 
@@ -2972,34 +3565,27 @@ function tvStreamProxyPlugin(): Plugin {
                     if (accelCtrl.signal.aborted) {
                       throw new Error('Client aborted');
                     }
-                    const sliceCtrl = new AbortController();
-                    const sliceTimer = setTimeout(() => sliceCtrl.abort(), 3800);
-                    const onAbort = () => sliceCtrl.abort();
-                    accelCtrl.signal.addEventListener('abort', onAbort, {
-                      once: true,
-                    });
                     try {
-                      const sr = await fetch(resolvedMediaUrl, {
-                        method: 'GET',
-                        headers: {
+                      const sr = await fetchVkRangeHttp1(
+                        resolvedMediaUrl,
+                        s,
+                        e,
+                        {
                           'User-Agent': effectiveUa,
                           Referer: refererHeader,
                           Origin: originHeader,
                           Accept: '*/*',
-                          Range: `bytes=${s}-${e}`,
                         },
-                        redirect: 'follow',
-                        signal: sliceCtrl.signal,
-                      });
-                      clearTimeout(sliceTimer);
-                      accelCtrl.signal.removeEventListener('abort', onAbort);
-                      if (sr.ok || sr.status === 206) {
-                        const buf = Buffer.from(await sr.arrayBuffer());
-                        if (buf.length === e - s + 1) return buf;
+                        9500,
+                        accelCtrl.signal
+                      );
+                      if (
+                        (sr.status === 200 || sr.status === 206) &&
+                        sr.body.length === e - s + 1
+                      ) {
+                        return sr.body;
                       }
                     } catch {
-                      clearTimeout(sliceTimer);
-                      accelCtrl.signal.removeEventListener('abort', onAbort);
                       if (accelCtrl.signal.aborted) {
                         throw new Error('Client aborted');
                       }
@@ -3011,63 +3597,101 @@ function tvStreamProxyPlugin(): Plugin {
                   throw new Error('VK slice mismatch');
                 };
 
-                const slots = slices.map(() => {
-                  let resolve!: (b: Buffer) => void;
-                  let reject!: (err: unknown) => void;
-                  const promise = new Promise<Buffer>((resP, rejP) => {
-                    resolve = resP;
-                    reject = rejP;
-                  });
-                  promise.catch(() => {});
-                  return { promise, resolve, reject };
-                });
-                let nextIdx = 0;
-                const runWorker = async () => {
-                  while (!accelCtrl.signal.aborted) {
-                    const idx = nextIdx++;
-                    if (idx >= slices.length) return;
-                    const [s, e] = slices[idx];
-                    try {
-                      slots[idx].resolve(await fetchSlice(s, e));
-                    } catch (err) {
-                      slots[idx].reject(err);
-                      return;
-                    }
+                // Bounded multi-socket HTTP/1.1 sliding window
+                const MAX_IN_FLIGHT = isTsSeg ? 18 : 14;
+                const inflight = new Map<number, Promise<Buffer>>();
+                let launchedIdx = 0;
+                const scheduleAhead = (writeCursor: number) => {
+                  while (
+                    launchedIdx < sliceRanges.length &&
+                    launchedIdx - writeCursor < MAX_IN_FLIGHT &&
+                    !accelCtrl.signal.aborted
+                  ) {
+                    const idx = launchedIdx++;
+                    const [s, e] = sliceRanges[idx];
+                    const p = fetchSlice(s, e);
+                    p.catch(() => { });
+                    inflight.set(idx, p);
                   }
                 };
-                const workerCount = Math.min(4, slices.length);
-                for (let w = 0; w < workerCount; w++) {
-                  void runWorker();
+
+                scheduleAhead(0);
+                const firstPromise = inflight.get(0)!;
+                const firstChunk = await firstPromise;
+                inflight.delete(0);
+
+                if (accelCtrl.signal.aborted || res.writableEnded || res.destroyed) {
+                  return;
                 }
 
-                // As soon as the first chunk resolves, write headers & stream immediately!
-                const firstChunk = await slots[0].promise;
-                const isFullRange200 = isTsSeg && !rangeMatch;
-                res.writeHead(isFullRange200 ? 200 : 206, {
+                const use200Ok = !rangeMatch;
+                res.writeHead(use200Ok ? 200 : 206, {
                   'Access-Control-Allow-Origin': '*',
                   'Access-Control-Allow-Private-Network': 'true',
                   'Access-Control-Expose-Headers':
                     'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-                  'Content-Type': isTsSeg
-                    ? headCt || 'video/mp2t'
-                    : headCt || 'video/mp4',
-                  ...(isFullRange200
-                    ? { 'Content-Length': String(totalBytes) }
+                  'Content-Type': contentTypeOut,
+                  ...(use200Ok
+                    ? { 'Content-Length': String(responseLen) }
                     : {
-                        'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
-                        'Content-Length': String(endByte - startByte + 1),
-                      }),
+                      'Content-Range': `bytes ${startByte}-${endByte}/${totalBytes}`,
+                      'Content-Length': String(responseLen),
+                    }),
                   'Accept-Ranges': 'bytes',
                   'Cache-Control': 'public, max-age=60',
                 });
-                res.write(firstChunk);
-                for (let i = 1; i < slots.length; i++) {
-                  if (accelCtrl.signal.aborted || res.writableEnded) break;
-                  const chunk = await slots[i].promise;
-                  res.write(chunk);
+
+                const writeWithBackpressure = async (chunk: Buffer) => {
+                  if (
+                    accelCtrl.signal.aborted ||
+                    res.writableEnded ||
+                    res.destroyed
+                  ) {
+                    return false;
+                  }
+                  const ok = res.write(chunk);
+                  if (!ok) {
+                    await new Promise<void>((resolveDrain) => {
+                      const onDone = () => {
+                        res.off('drain', onDone);
+                        res.off('close', onDone);
+                        accelCtrl.signal.removeEventListener('abort', onDone);
+                        resolveDrain();
+                      };
+                      res.once('drain', onDone);
+                      res.once('close', onDone);
+                      accelCtrl.signal.addEventListener('abort', onDone, {
+                        once: true,
+                      });
+                    });
+                  }
+                  return true;
+                };
+
+                if (await writeWithBackpressure(firstChunk)) {
+                  for (let i = 1; i < sliceRanges.length; i++) {
+                    if (
+                      accelCtrl.signal.aborted ||
+                      res.writableEnded ||
+                      res.destroyed
+                    ) {
+                      break;
+                    }
+                    scheduleAhead(i);
+                    const nextP = inflight.get(i);
+                    if (!nextP) break;
+                    const chunk = await nextP;
+                    inflight.delete(i);
+                    if (!(await writeWithBackpressure(chunk))) {
+                      break;
+                    }
+                  }
                 }
+                req.off('aborted', onEarlyClose);
                 res.off('close', onEarlyClose);
-                res.end();
+                if (!res.writableEnded && !res.destroyed) {
+                  res.end();
+                }
                 return;
               }
             } catch {
@@ -3080,6 +3704,7 @@ function tvStreamProxyPlugin(): Plugin {
               }
               // Fall back cleanly to standard single-stream proxy below
             } finally {
+              req.off('aborted', onEarlyClose);
               res.off('close', onEarlyClose);
             }
           }
@@ -3374,7 +3999,7 @@ function tvStreamProxyPlugin(): Plugin {
                 const shouldPromote = useExplicitAudioIdx
                   ? thisAudioIdx === requestedAudioIdx
                   : !promotedOriginalAudio &&
-                    isOriginalHlsAudioMediaLine(trimmed);
+                  isOriginalHlsAudioMediaLine(trimmed);
                 if (shouldPromote) {
                   promotedOriginalAudio = true;
                   currentLine = currentLine
@@ -3460,6 +4085,32 @@ function tvStreamProxyPlugin(): Plugin {
                   ...headerLines,
                   ...selectedVariants.flatMap((p) => [p.infLine, p.uriLine]),
                 ].join('\n');
+              }
+            }
+
+            if (/\/iptv\/[^/]+\/6997\/index\.m3u8/i.test(finalUrl) && ffmpegPath) {
+              const segUrls = rawLines
+                .map((l) => l.trim())
+                .filter((l) => l && !l.startsWith('#'))
+                .map((l) => {
+                  try {
+                    return new URL(l, finalUrl).toString();
+                  } catch {
+                    return '';
+                  }
+                })
+                .filter((u) => /^https?:\/\//i.test(u));
+              if (segUrls.length > 0) {
+                const warmSegUrl = segUrls[Math.max(0, segUrls.length - 3)];
+                if (
+                  !transcodedTsCache.has(warmSegUrl) &&
+                  !transcodedTsInFlight.has(warmSegUrl)
+                ) {
+                  const localPort = req.socket?.localPort || 8769;
+                  fetch(
+                    `http://127.0.0.1:${localPort}/api/tv-proxy?url=${encodeURIComponent(warmSegUrl)}`
+                  ).catch(() => { });
+                }
               }
             }
 

@@ -5,6 +5,10 @@ import {
   SEED_PROGRESS_BY_PROFILE,
   SEED_SAVED_BY_PROFILE,
 } from './_seedData.mjs';
+import {
+  SEED_P1_MUSIC_LIKED_TRACKS,
+  P1_SPOTIFY_FAVORITES_UPDATED_AT,
+} from './_musicSeedP1.mjs';
 
 const globalStore = globalThis.__aetherCloudSyncStore || {
   profiles: Array.isArray(SEED_PROFILES) ? [...SEED_PROFILES] : [],
@@ -12,6 +16,7 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
   radioFavsByProfile: {},
   tvFavChannelsByProfile: {},
+  musicByProfile: {},
 };
 if (!globalStore.radioFavsByProfile) {
   globalStore.radioFavsByProfile = {};
@@ -19,12 +24,128 @@ if (!globalStore.radioFavsByProfile) {
 if (!globalStore.tvFavChannelsByProfile) {
   globalStore.tvFavChannelsByProfile = {};
 }
+if (!globalStore.musicByProfile) {
+  globalStore.musicByProfile = {};
+}
 globalThis.__aetherCloudSyncStore = globalStore;
+
+function normalizeMusicTrackKey(t) {
+  const artist = String(t?.artist || '').toLowerCase().trim();
+  const title = String(t?.title || '').toLowerCase().trim();
+  return artist && title ? `${artist}::${title}` : String(t?.id || '');
+}
+
+function mergeMusicProfileData(existing, incoming) {
+  const prev = existing && typeof existing === 'object' ? existing : {};
+  const next = incoming && typeof incoming === 'object' ? incoming : {};
+  const baseTs = Number(next.updatedAt) || Number(prev.updatedAt) || Date.now();
+
+  const removedMap = {
+    ...(prev.removedMap && typeof prev.removedMap === 'object' ? prev.removedMap : {}),
+    ...(next.removedMap && typeof next.removedMap === 'object' ? next.removedMap : {}),
+  };
+
+  const trackCandidates = [
+    ...(Array.isArray(next.likedTracks) ? next.likedTracks : []),
+    ...(Array.isArray(prev.likedTracks) ? prev.likedTracks : []),
+  ];
+  const seenIdIdx = new Map();
+  const seenKeyIdx = new Map();
+  const likedTracks = [];
+
+  for (const raw of trackCandidates) {
+    if (!raw || typeof raw !== 'object' || !raw.id || !raw.title) continue;
+    const idStr = String(raw.id);
+    const key = normalizeMusicTrackKey(raw);
+    const likedAt =
+      Number(raw.likedAt) ||
+      (Array.isArray(next.likedTracks) && next.likedTracks.includes(raw)
+        ? baseTs
+        : Number(prev.updatedAt) || 1);
+    const removedAt = Math.max(
+      Number(removedMap[idStr]) || 0,
+      key ? Number(removedMap[key]) || 0 : 0
+    );
+    if (removedAt > 0 && likedAt <= removedAt) continue;
+    if (removedAt > 0 && likedAt > removedAt) {
+      delete removedMap[idStr];
+      if (key) delete removedMap[key];
+    }
+    const existingIdx = seenIdIdx.has(idStr)
+      ? seenIdIdx.get(idStr)
+      : key && seenKeyIdx.has(key)
+        ? seenKeyIdx.get(key)
+        : undefined;
+    if (existingIdx !== undefined) {
+      if (likedAt > (Number(likedTracks[existingIdx].likedAt) || 0)) {
+        likedTracks[existingIdx] = { ...raw, likedAt };
+      }
+      continue;
+    }
+    const nextIdx = likedTracks.length;
+    seenIdIdx.set(idStr, nextIdx);
+    if (key) seenKeyIdx.set(key, nextIdx);
+    likedTracks.push({ ...raw, likedAt });
+  }
+
+  likedTracks.sort((a, b) => (Number(b.likedAt) || 0) - (Number(a.likedAt) || 0));
+
+  const recentCandidates = [
+    ...(Array.isArray(next.recentTracks) ? next.recentTracks : []),
+    ...(Array.isArray(prev.recentTracks) ? prev.recentTracks : []),
+  ];
+  const recentIds = new Set();
+  const recentKeys = new Set();
+  const recentTracks = [];
+  for (const raw of recentCandidates) {
+    if (!raw || typeof raw !== 'object' || !raw.id || !raw.title) continue;
+    const idStr = String(raw.id);
+    const key = normalizeMusicTrackKey(raw);
+    if (recentIds.has(idStr) || (key && recentKeys.has(key))) continue;
+    recentIds.add(idStr);
+    if (key) recentKeys.add(key);
+    recentTracks.push({
+      ...raw,
+      playedAt: Number(raw.playedAt) || 0,
+    });
+  }
+  recentTracks.sort((a, b) => (Number(b.playedAt) || 0) - (Number(a.playedAt) || 0));
+
+  const prevPb = prev.playbackState && typeof prev.playbackState === 'object' ? prev.playbackState : null;
+  const nextPb = next.playbackState && typeof next.playbackState === 'object' ? next.playbackState : null;
+  const prevPbTs = Number(prevPb?.updatedAt) || 0;
+  const nextPbTs = Number(nextPb?.updatedAt) || 0;
+  const playbackState =
+    nextPb && nextPb.track && nextPbTs >= prevPbTs
+      ? nextPb
+      : prevPb && prevPb.track
+      ? prevPb
+      : null;
+
+  return {
+    updatedAt: Math.max(Number(prev.updatedAt) || 0, baseTs),
+    likedTracks: likedTracks.slice(0, 500),
+    removedMap,
+    recentTracks: recentTracks.slice(0, 50),
+    playbackState,
+  };
+}
+
+globalStore.musicByProfile.p1 = mergeMusicProfileData(
+  {
+    updatedAt: P1_SPOTIFY_FAVORITES_UPDATED_AT,
+    likedTracks: SEED_P1_MUSIC_LIKED_TRACKS,
+    removedMap: {},
+    recentTracks: [],
+    playbackState: null,
+  },
+  globalStore.musicByProfile.p1 || null
+);
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Deleted-Profile-Ids',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Deleted-Profile-Ids, X-Replace-Profiles',
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-cache, no-store',
 };
@@ -47,6 +168,7 @@ export default async (req) => {
       if (req.method === 'POST') {
         const incoming = await req.json().catch(() => null);
         if (Array.isArray(incoming) && incoming.length > 0) {
+          const replaceMode = req.headers.get('x-replace-profiles') === '1';
           let deletedIds = new Set();
           try {
             const rawDel = req.headers.get('x-deleted-profile-ids') || '[]';
@@ -58,13 +180,21 @@ export default async (req) => {
             // ignore
           }
           const byId = new Map();
-          for (const p of globalStore.profiles || []) {
-            if (p?.id && !deletedIds.has(p.id)) {
-              byId.set(p.id, p);
+          const existingList = globalStore.profiles || [];
+          if (replaceMode) {
+            const existingAdmin = existingList.find((p) => p?.id === 'p1');
+            if (existingAdmin) {
+              byId.set('p1', existingAdmin);
+            }
+          } else {
+            for (const p of existingList) {
+              if (p?.id && (!deletedIds.has(p.id) || p.id === 'p1')) {
+                byId.set(p.id, p);
+              }
             }
           }
           for (const p of incoming) {
-            if (!p?.id || deletedIds.has(p.id)) continue;
+            if (!p?.id || (p.id !== 'p1' && deletedIds.has(p.id))) continue;
             if (p.id === 'p1' && p.name === 'Eugeniu' && !p.pin) continue;
             const prev = byId.get(p.id);
             const prevTs = typeof prev?.updatedAt === 'number' ? prev.updatedAt : 0;
@@ -209,6 +339,37 @@ export default async (req) => {
           headers: corsHeaders,
         }
       );
+    }
+
+    // 2d. /api/tv-music-sync (Per-profile Music Favorites, Recent Tracks & Playback Progress)
+    if (path.includes('tv-music-sync')) {
+      const currentMusic = globalStore.musicByProfile[profileId] || {
+        updatedAt: 0,
+        likedTracks: [],
+        removedMap: {},
+        recentTracks: [],
+        playbackState: null,
+      };
+      if (req.method === 'POST') {
+        const incoming = await req.json().catch(() => null);
+        if (incoming && typeof incoming === 'object') {
+          globalStore.musicByProfile[profileId] = mergeMusicProfileData(
+            currentMusic,
+            incoming
+          );
+        }
+        return new Response(
+          JSON.stringify(globalStore.musicByProfile[profileId] || currentMusic),
+          {
+            status: 200,
+            headers: corsHeaders,
+          }
+        );
+      }
+      return new Response(JSON.stringify(currentMusic), {
+        status: 200,
+        headers: corsHeaders,
+      });
     }
 
     // 3. /api/tv-progress

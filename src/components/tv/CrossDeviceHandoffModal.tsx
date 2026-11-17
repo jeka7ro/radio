@@ -23,6 +23,7 @@ import {
   detectCurrentDeviceName,
   loadSharedProfiles,
   saveSharedProfiles,
+  syncSharedProfilesFromServer,
   saveSharedActiveProfileId,
   isProfileRememberedOnDevice,
   rememberProfileOnDevice,
@@ -84,6 +85,8 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   const [deviceLabel, setDeviceLabel] = useState<string>('Dispozitiv');
   const [focusedCardId, setFocusedCardId] = useState<string | null>(activeProfileId);
   const modalRootRef = useRef<HTMLDivElement | null>(null);
+  const onProfilesChangeRef = useRef(onProfilesChange);
+  onProfilesChangeRef.current = onProfilesChange;
 
   useEffect(() => {
     if (Array.isArray(profilesProp) && profilesProp.length > 0) {
@@ -93,15 +96,27 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   useEffect(() => {
     if (!isOpen) return;
+    let active = true;
     const syncLocal = () => {
       const latest = loadSharedProfiles();
-      if (latest.length > 0) {
+      if (latest.length > 0 && active) {
         setLocalProfiles(latest);
       }
     };
     syncLocal();
+    syncSharedProfilesFromServer()
+      .then((fresh) => {
+        if (active && Array.isArray(fresh) && fresh.length > 0) {
+          setLocalProfiles(fresh);
+          onProfilesChangeRef.current?.(fresh);
+        }
+      })
+      .catch(() => {});
     window.addEventListener('aether:profiles-updated', syncLocal);
-    return () => window.removeEventListener('aether:profiles-updated', syncLocal);
+    return () => {
+      active = false;
+      window.removeEventListener('aether:profiles-updated', syncLocal);
+    };
   }, [isOpen]);
 
   // PIN unlock state
@@ -616,13 +631,23 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   };
 
   const handleSaveAccount = () => {
-    const cleanName =
-      draftName.trim() ||
-      tr(
-        `Cont ${profiles.length + 1}`,
-        `User ${profiles.length + 1}`,
-        `Профиль ${profiles.length + 1}`
+    const trimmedDraft = draftName.trim();
+    if (editingProfileId === 'NEW' && !trimmedDraft) {
+      setUploadError(
+        tr(
+          'Introdu un nume pentru noul cont.',
+          'Enter a name for the new account.',
+          'Введите имя для нового профиля.'
+        )
       );
+      return;
+    }
+    const existingForFallback =
+      editingProfileId && editingProfileId !== 'NEW'
+        ? profiles.find((p) => p.id === editingProfileId)
+        : undefined;
+    const cleanName = trimmedDraft || existingForFallback?.name || 'User';
+    setUploadError('');
     const cleanPin = draftPin.replace(/\D/g, '').slice(0, 6);
 
     if (editingProfileId === 'NEW') {

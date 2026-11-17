@@ -514,6 +514,39 @@ export function resolveAudioTrackIndexByPreference(
 }
 
 /**
+ * Returns true if an audio track label is a Russian/Ukrainian dubbing studio or RU track
+ * (and NOT an English/Romanian/Original track). Used to hide leaked RU dubs on foreign content.
+ */
+export function isRussianAudioDubLabel(label: string): boolean {
+  const s = String(label || '').trim();
+  if (!s) return false;
+  if (
+    /\b(orig|original|eng|english|ro|ron|rum|română|romana|romanian)\b|ориг/i.test(
+      s
+    )
+  ) {
+    return false;
+  }
+  return /[а-яёіїєґА-ЯЁІЇЄҐ]|\b(moviedalen|alexfilm|jaskier|lostfilm|hdrezka|rezka|red\s*head|tvshows|baibako|newstudio|kubik|coldfilm|ultradox|viruseproject|omskbird|pazl|ru\s*dub|rus\d*)\b/i.test(
+    s
+  );
+}
+
+/**
+ * Filter audio options for foreign VOD so Russian/Ukrainian dub tracks stay hidden
+ * whenever at least one Original / non-Russian audio track exists, keeping original indices intact.
+ */
+export function filterDisplayAudioItems<T>(
+  items: T[],
+  getLabel: (item: T) => string,
+  isForeign: boolean
+): T[] {
+  if (!isForeign || items.length === 0) return items;
+  const nonRu = items.filter((it) => !isRussianAudioDubLabel(getLabel(it)));
+  return nonRu.length > 0 ? nonRu : items;
+}
+
+/**
  * Automatically resolve IMDb ID (if missing) and fetch + download the best subtitle according to preferredLang.
  */
 export async function autoResolveAndFetchBestRoRuSubtitle(params: {

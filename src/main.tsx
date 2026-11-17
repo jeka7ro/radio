@@ -52,9 +52,16 @@ if ('serviceWorker' in navigator) {
         .catch(() => {});
     }
   } else {
+    let isSwRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!isSwRefreshing) {
+        isSwRefreshing = true;
+        window.location.reload();
+      }
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker
-        .register('/sw.js')
+        .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
           void reg.update();
           document.addEventListener('visibilitychange', () => {

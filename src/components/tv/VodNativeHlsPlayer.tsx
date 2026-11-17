@@ -44,6 +44,7 @@ import {
   downloadSubtitleAsVttBlobUrl,
   resolveAudioTrackIndexByPreference,
   inferAudioPrefFromTrackName,
+  filterDisplayAudioItems,
 } from '../../services/subtitleSearchService';
 import {
   getActiveProfileMediaPrefs,
@@ -160,6 +161,7 @@ function pickQualityLevelByPreference(
 interface VodNativeHlsPlayerProps {
   dashUrl?: string;
   hlsUrl?: string;
+  fallbackHlsUrl?: string;
   durationHintSec?: number;
   offlineItem?: OfflineMediaItem | null;
   isForeign?: boolean;
@@ -255,6 +257,7 @@ function resolveSubtitleFlagBadge(rawLabel?: string): {
 export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   dashUrl,
   hlsUrl,
+  fallbackHlsUrl,
   durationHintSec = 0,
   offlineItem,
   isForeign = false,
@@ -584,6 +587,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     hasAutoFocusedNextEpRef.current = false;
     watchedTicksInEpisodeRef.current = 0;
     hasAutoFocusedSkipIntroRef.current = null;
+    flStallStrikeRef.current = 0;
     setVideoDurationSec(0);
   }, [hlsUrl, dashUrl]);
 
@@ -972,19 +976,23 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const durationHintSecRef = useRef<number | undefined>(durationHintSec);
   durationHintSecRef.current = durationHintSec;
 
-  // Flush final playback progress on unmount / player close
+  // Flush final playback progress on unmount / player close (avoid doubling streamOffsetRef + currentTimeSecRef)
   useEffect(() => {
     return () => {
       const v = videoRef.current;
-      const effTime =
-        streamOffsetRef.current +
-        (v && Number.isFinite(v.currentTime) && v.currentTime > 0
-          ? v.currentTime
-          : currentTimeSecRef.current || 0);
-      const floorCur = Math.floor(effTime);
+      const hasLiveVideoTime = Boolean(
+        v && Number.isFinite(v.currentTime) && v.currentTime > 0
+      );
+      const rawEffTime = hasLiveVideoTime
+        ? streamOffsetRef.current + (v!.currentTime || 0)
+        : currentTimeSecRef.current || streamOffsetRef.current || 0;
       const totalDur = Math.floor(
         videoDurationSecRef.current || durationHintSecRef.current || 2700
       );
+      const floorCur =
+        totalDur > 60
+          ? Math.min(Math.floor(rawEffTime), Math.max(0, totalDur - 5))
+          : Math.floor(rawEffTime);
       if (floorCur > 1) {
         onTimeUpdateRef.current?.(floorCur, totalDur);
       }
@@ -1243,7 +1251,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       });
   };
 
+  const flBufferingTimerRef = useRef<number | null>(null);
+
   const cleanupFileListMse = () => {
+    if (flBufferingTimerRef.current) {
+      window.clearTimeout(flBufferingTimerRef.current);
+      flBufferingTimerRef.current = null;
+    }
     if (flSeekDebounceRef.current) {
       window.clearTimeout(flSeekDebounceRef.current);
       flSeekDebounceRef.current = null;
@@ -1282,6 +1296,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const flMseReaderDoneRef = useRef<boolean>(false);
   const flRetryCountRef = useRef<number>(0);
+  const flStallStrikeRef = useRef<number>(0);
 
   const loadFileListStreamIntoVideo = (
     video: HTMLVideoElement,
@@ -1343,9 +1358,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
       let hasFiredPlaying = false;
       const onStreamPlaying = () => {
+        if (flBufferingTimerRef.current) {
+          window.clearTimeout(flBufferingTimerRef.current);
+          flBufferingTimerRef.current = null;
+        }
         hasFiredPlaying = true;
         isSeekingFileListRef.current = false;
         hideFrozenFrame();
+        setStatus('playing');
       };
       video.addEventListener('playing', onStreamPlaying, { once: true });
 
@@ -1360,6 +1380,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             if (durHeader > 5) {
               setVideoDurationSec(durHeader);
             }
+            if (res.status >= 500) {
+              isSeekingFileListRef.current = false;
+              hideFrozenFrame();
+              onStreamError?.();
+              return;
+            }
             if (
               !res.ok ||
               !res.body ||
@@ -1372,18 +1398,37 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
 
             const reader = res.body.getReader();
-            const first = await reader.read();
+            const readChunkWithTimeout = async (timeoutMs: number) => {
+              let timerId: number | null = null;
+              try {
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                  timerId = window.setTimeout(() => {
+                    reject(new Error('__FL_STALL_TIMEOUT__'));
+                  }, timeoutMs);
+                });
+                return await Promise.race([reader.read(), timeoutPromise]);
+              } finally {
+                if (timerId !== null) {
+                  window.clearTimeout(timerId);
+                }
+              }
+            };
+
+            const first = await readChunkWithTimeout(16000);
             if (first.done || !first.value) {
               if (!controller.signal.aborted) {
                 isSeekingFileListRef.current = false;
                 flMseReaderDoneRef.current = true;
-                if (flRetryCountRef.current < 3) {
+                if (flRetryCountRef.current < 2) {
                   flRetryCountRef.current += 1;
                   window.setTimeout(() => {
                     if (!controller.signal.aborted && videoRef.current === video) {
                       loadFileListStreamIntoVideo(video, flStreamUrl);
                     }
                   }, 1000);
+                } else if (onStreamError && !userIntentionallyPausedRef.current) {
+                  hideFrozenFrame();
+                  onStreamError();
                 }
               }
               return;
@@ -1392,7 +1437,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             flRetryCountRef.current = 0;
             let initBuf = new Uint8Array(first.value);
             while (initBuf.length < 1536 && !controller.signal.aborted) {
-              const nextPart = await reader.read();
+              const nextPart = await readChunkWithTimeout(8000);
               if (nextPart.done || !nextPart.value) break;
               const merged = new Uint8Array(
                 initBuf.length + nextPart.value.length
@@ -1485,15 +1530,45 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             }
             let startedPlay = false;
             let didAlignInitialStart = false;
-            let maxAheadSec = isHardwareTv ? 15 : 35;
-            const keepBehindMaxSec = isHardwareTv ? 12 : 30;
-            const keepBehindTargetSec = isHardwareTv ? 4 : 12;
+            let maxAheadSec = isHardwareTv ? 45 : 85;
+            const keepBehindMaxSec = isHardwareTv ? 36 : 60;
+            const keepBehindTargetSec = isHardwareTv ? 18 : 25;
             let lastEvictMediaSec = -999;
+            let bytesAppendedSinceOpen = 0;
+
+            const getContigAheadSec = () => {
+              if (sb.buffered.length === 0) return 0;
+              const curT = video.currentTime || 0;
+              for (let i = 0; i < sb.buffered.length; i++) {
+                const rStart = sb.buffered.start(i);
+                const rEnd = sb.buffered.end(i);
+                if (curT >= rStart - 0.5 && curT <= rEnd + 0.5) {
+                  return Math.max(0, rEnd - curT);
+                }
+              }
+              return sb.buffered.length === 1
+                ? Math.max(0, sb.buffered.end(0) - curT)
+                : 0;
+            };
 
             const checkAndStartPlayback = () => {
               if (sb.buffered.length > 0) {
                 const bStart = sb.buffered.start(0);
                 const bEnd = sb.buffered.end(sb.buffered.length - 1);
+                if (!startedPlay && !didAlignInitialStart) {
+                  const expectedMinAbs =
+                    streamOffsetRef.current >= 20
+                      ? Math.max(10, streamOffsetRef.current * 0.5)
+                      : Math.max(5, streamOffsetRef.current - 12);
+                  if (
+                    streamOffsetRef.current >= 10 &&
+                    bStart >= expectedMinAbs
+                  ) {
+                    // FFmpeg preserved absolute container tfdt timestamps; avoid doubling streamOffsetRef + video.currentTime!
+                    streamOffsetRef.current = 0;
+                    setStreamOffsetSec(0);
+                  }
+                }
                 if (
                   !startedPlay &&
                   !didAlignInitialStart &&
@@ -1565,10 +1640,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
               while (
                 !controller.signal.aborted &&
-                sb.buffered.length > 0 &&
-                sb.buffered.end(sb.buffered.length - 1) -
-                (video.currentTime || 0) >
-                maxAheadSec
+                getContigAheadSec() > maxAheadSec
               ) {
                 if (
                   !hasFiredPlaying &&
@@ -1582,7 +1654,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               }
               if (controller.signal.aborted) break;
 
-              const { done, value } = await reader.read();
+              const contigAhead = getContigAheadSec();
+              const readTimeoutMs =
+                contigAhead < 3.0 && !userIntentionallyPausedRef.current
+                  ? 9500
+                  : 30000;
+              const { done, value } = await readChunkWithTimeout(readTimeoutMs);
               if (done || !value) {
                 flMseReaderDoneRef.current = true;
                 isSeekingFileListRef.current = false;
@@ -1614,13 +1691,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                           ms.endOfStream();
                         }
                       } else {
-                        // Premature EOF mid-episode: play remaining MSE buffer down to 2s, then automatically reconnect!
+                        // Premature EOF mid-episode: play remaining MSE buffer down to 2s, then reconnect or fail over!
                         while (
                           !controller.signal.aborted &&
-                          sb.buffered.length > 0 &&
-                          sb.buffered.end(sb.buffered.length - 1) -
-                          video.currentTime >
-                          2.0
+                          getContigAheadSec() > 2.0
                         ) {
                           await new Promise((r) => window.setTimeout(r, 300));
                         }
@@ -1636,7 +1710,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               (video.currentTime || 0)
                             )
                           );
-                          if (resumeAt > 5) {
+                          if (flStallStrikeRef.current >= 1 && onStreamError) {
+                            hideFrozenFrame();
+                            onStreamError();
+                          } else if (resumeAt > 5) {
+                            flStallStrikeRef.current += 1;
                             const cleanBase = flStreamUrl
                               .replace(/([?&])start=\d+/g, '')
                               .replace(/([?&])audio=\d+/g, '');
@@ -1649,9 +1727,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               video,
                               `${cleanBase}${sep}start=${resumeAt}&audio=${audioParam}`
                             );
+                          } else if (onStreamError) {
+                            hideFrozenFrame();
+                            onStreamError();
                           }
                         }
                       }
+                    } else if (onStreamError && !userIntentionallyPausedRef.current) {
+                      hideFrozenFrame();
+                      onStreamError();
                     }
                   } catch {
                     // ignore
@@ -1736,12 +1820,56 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 break;
               }
 
+              bytesAppendedSinceOpen += value.byteLength;
+              if (bytesAppendedSinceOpen >= 1024 * 1024 && hasFiredPlaying) {
+                flStallStrikeRef.current = 0;
+              }
+
               checkAndStartPlayback();
             }
-          } catch {
+          } catch (pumpErr: unknown) {
             if (!controller.signal.aborted) {
               flMseReaderDoneRef.current = true;
               isSeekingFileListRef.current = false;
+              const isStallTimeout =
+                (pumpErr as { message?: string })?.message ===
+                '__FL_STALL_TIMEOUT__';
+              const resumeAt = Math.max(
+                0,
+                Math.floor(
+                  streamOffsetRef.current + (video.currentTime || 0) ||
+                  startAtSecondsRef.current ||
+                  0
+                )
+              );
+              const durReport =
+                videoDurationSec > 60
+                  ? videoDurationSec
+                  : durationHintSec > 60
+                    ? durationHintSec
+                    : Math.max(resumeAt + 30, 3600);
+              if (resumeAt > 5) {
+                onTimeUpdate?.(resumeAt, Math.floor(durReport));
+              }
+              if (isStallTimeout && !userIntentionallyPausedRef.current) {
+                if (flStallStrikeRef.current < 1 && videoRef.current === video) {
+                  flStallStrikeRef.current += 1;
+                  const cleanBase = flStreamUrl
+                    .replace(/([?&])start=\d+/g, '')
+                    .replace(/([?&])audio=\d+/g, '');
+                  const sep = cleanBase.includes('?') ? '&' : '?';
+                  const audioParam = forcedAudioIdx >= 0 ? forcedAudioIdx : 0;
+                  streamOffsetRef.current = resumeAt;
+                  setStreamOffsetSec(resumeAt);
+                  loadFileListStreamIntoVideo(
+                    video,
+                    `${cleanBase}${sep}start=${resumeAt}&audio=${audioParam}`
+                  );
+                } else {
+                  hideFrozenFrame();
+                  onStreamError?.();
+                }
+              }
             }
           }
         },
@@ -1813,7 +1941,15 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     ensureAutoPlay(video);
   };
 
-  // Fetch available subtitles automatically in the background (Lampa style) & auto-enable RO or RU by default
+  const hasActiveSubtitleRef = useRef<boolean>(false);
+  hasActiveSubtitleRef.current =
+    Boolean(subtitleVttUrl) || (subtitleCues && subtitleCues.length > 0);
+  const preferredSubLangRef = useRef<string>(preferredSubLang || 'ro');
+  preferredSubLangRef.current = preferredSubLang || 'ro';
+  const applyAutoSubCbRef = useRef(onApplyAutoSubtitle);
+  applyAutoSubCbRef.current = onApplyAutoSubtitle;
+
+  // Fetch available subtitles automatically in the background (Lampa style) & auto-enable RO -> EN -> RU
   useEffect(() => {
     if (!imdbId || !imdbId.startsWith('tt')) {
       setAvailableSubs([]);
@@ -1834,18 +1970,16 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         if (cancelled) return;
         setAvailableSubs(list);
 
-        // Automatically activate subtitle by default according to profile's preferredSubLang ('ro' | 'ru' | 'en' | 'es' | 'fr' | 'de' | 'off')
+        // Automatically activate subtitle by default according to profile's preferredSubLang ('ro' | 'en' | 'ru' | 'es' | 'fr' | 'de' | 'off')
         const effSubLang =
-          preferredSubLang || getActiveProfileMediaPrefs().defaultSubLang || 'ro';
-        const alreadyHasSub =
-          Boolean(subtitleVttUrl) || (subtitleCues && subtitleCues.length > 0);
+          preferredSubLangRef.current || getActiveProfileMediaPrefs().defaultSubLang || 'ro';
         if (
           effSubLang !== 'off' &&
-          !alreadyHasSub &&
+          !hasActiveSubtitleRef.current &&
           list.length > 0 &&
-          onApplyAutoSubtitle
+          applyAutoSubCbRef.current
         ) {
-          const allLangs = ['ro', 'ru', 'en', 'es', 'fr', 'de'];
+          const allLangs = ['ro', 'en', 'ru', 'es', 'fr', 'de'];
           const prefOrder = [
             effSubLang,
             ...allLangs.filter((l) => l !== effSubLang),
@@ -1860,9 +1994,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(
                 autoTrack.url
               );
-              if (!cancelled && cues.length > 0) {
+              if (!cancelled && cues.length > 0 && !hasActiveSubtitleRef.current) {
                 setActiveSubTrackId(autoTrack.id);
-                onApplyAutoSubtitle({
+                applyAutoSubCbRef.current?.({
                   vttBlobUrl,
                   label: autoTrack.langLabel,
                   cues,
@@ -1889,16 +2023,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const handleSelectQuickSubTrack = async (track: OnlineSubtitleTrack) => {
     setLoadingSubTrackId(track.id);
-    if (
-      track.langCode2 === 'ro' ||
-      track.langCode2 === 'ru' ||
-      track.langCode2 === 'en' ||
-      track.langCode2 === 'es' ||
-      track.langCode2 === 'fr' ||
-      track.langCode2 === 'de'
-    ) {
-      saveActiveProfileMediaPrefs({ defaultSubLang: track.langCode2 });
-    }
     try {
       const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(
         track.url
@@ -2175,6 +2299,21 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         if (cancelled) return;
         const errCode = video.error ? video.error.code : 0;
         logTvVod('native_video_error', `code=${errCode}`);
+        if (
+          fallbackHlsUrl &&
+          targetUrl !== fallbackHlsUrl &&
+          (errCode === 4 ||
+            reason === 'direct_mp4_stream' ||
+            /(vkuser\.net|okcdn\.ru|mycdn\.me|vkuservideo\.net)/i.test(
+              targetUrl
+            ))
+        ) {
+          video.onerror = null;
+          video.removeAttribute('src');
+          video.load();
+          startHlsPlayback(fallbackHlsUrl);
+          return;
+        }
         if (!retriedNative) {
           retriedNative = true;
           window.setTimeout(() => {
@@ -2636,10 +2775,18 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         (hlsUrl.includes('/api/filelist/stream') ||
           hlsUrl.includes('/api/youtube/stream'))
       ) {
-        const initialSeek =
+        const hintedDur = durationHintSec && durationHintSec > 60 ? durationHintSec : 0;
+        const rawInitialSeek =
           startAtSecondsRef.current > 5
             ? Math.floor(startAtSecondsRef.current)
             : 0;
+        const initialSeek =
+          hintedDur > 0 && rawInitialSeek >= hintedDur - 15
+            ? 0
+            : rawInitialSeek;
+        if (initialSeek !== rawInitialSeek) {
+          startAtSecondsRef.current = 0;
+        }
         streamOffsetRef.current = initialSeek;
         setStreamOffsetSec(initialSeek);
         appliedStartRef.current = true;
@@ -2965,6 +3112,19 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
     }
 
     if (initialAudioTrackIndex !== forcedAudioIdx) {
+      const isFlStream = Boolean(
+        hlsUrl && hlsUrl.includes('/api/filelist/stream')
+      );
+      if (
+        isFlStream &&
+        (audioTrackLabels.length <= 1 ||
+          (forcedAudioIdx === -1 &&
+            initialAudioTrackIndex === 0 &&
+            !isForeign))
+      ) {
+        setActiveAudioTrack(initialAudioTrackIndex);
+        return;
+      }
       const v = videoRef.current;
       if (v && v.currentTime > 3) {
         const isFl = Boolean(
@@ -3747,6 +3907,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         flSeekDebounceRef.current = null;
       }
       cleanupFileListMse();
+      flBufferingTimerRef.current = window.setTimeout(() => {
+        if (isSeekingFileListRef.current) {
+          setStatus('loading');
+        }
+      }, 700);
       loadFileListStreamIntoVideo(
         v,
         `${cleanBase}${sep}start=${nextSec}&audio=${audioParam}`
@@ -5318,13 +5483,33 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   const isNarrowPortraitMobile =
     isMobilePhone && !isLandscapeMobile && !isCustomFullscreen;
 
+  const handleStageTapToggleOsd = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const vid = videoRef.current;
+    if (vid && vid.muted && isAutoMuted) {
+      vid.muted = false;
+      vid.volume = 1;
+      setIsAutoMuted(false);
+    }
+    if (openMenu !== 'none') {
+      setOpenMenu('none');
+    } else if (isMobilePhone && isOsdVisible && onHideOsd) {
+      onHideOsd();
+    } else {
+      onWakeOsd?.();
+    }
+  };
+
   return (
     <div
       ref={playerRootRef}
       data-vod-open-menu={openMenu}
       className="relative z-10 w-full h-full bg-black flex flex-col select-none"
     >
-      <div className="relative flex-1 w-full h-full bg-black flex items-center justify-center overflow-hidden">
+      <div
+        onClick={handleStageTapToggleOsd}
+        className="relative flex-1 w-full h-full bg-black flex items-center justify-center overflow-hidden"
+      >
         <video
           ref={videoRef}
           controls={false}
@@ -5368,22 +5553,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           onTouchEnd={() => {
             pinchStartDistRef.current = null;
           }}
-          onClick={(e) => {
-            e.stopPropagation();
-            const vid = e.currentTarget;
-            if (vid.muted && isAutoMuted) {
-              vid.muted = false;
-              vid.volume = 1;
-              setIsAutoMuted(false);
-            }
-            if (openMenu !== 'none') {
-              setOpenMenu('none');
-            } else if (isMobilePhone && isOsdVisible && onHideOsd) {
-              onHideOsd();
-            } else {
-              onWakeOsd?.();
-            }
-          }}
+          onClick={handleStageTapToggleOsd}
           onPlay={(e) => {
             userIntentionallyPausedRef.current = false;
             lastTimeUpdateWallMsRef.current = Date.now();
@@ -6225,12 +6395,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     : 'Format Ecran: Original 16:9'
               }
               aria-label="Schimbă formatul ecranului (Original / Zoom Cinema / Ecran Plin)"
-              className={`h-8 w-8 rounded-full ${videoFitMode !== 'contain'
+              className={`h-9 w-9 rounded-full ${videoFitMode !== 'contain'
                 ? 'bg-[#2563eb] text-white border border-blue-400/70'
-                : 'tahoe-emerald-card hover:bg-white/20 text-white/95'
+                : 'bg-zinc-950/90 hover:bg-zinc-900 border border-white/25 text-white'
                 } inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer`}
             >
-              <Expand className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <Expand className="w-4 h-4 shrink-0" aria-hidden="true" />
             </button>
 
             <button
@@ -6239,7 +6409,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               onClick={handleTriggerAirPlay}
               title="AirPlay / Redare pe TV"
               aria-label="AirPlay / Redare pe TV"
-              className="h-8 w-8 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer"
+              className="h-9 w-9 rounded-full bg-zinc-950/90 hover:bg-zinc-900 border border-white/25 text-white inline-flex items-center justify-center shrink-0 shadow-md cursor-pointer"
             >
               <SfAirPlayIcon className="w-4 h-4 shrink-0" />
             </button>
@@ -6817,7 +6987,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   >
                     <div className="flex items-center justify-between px-1">
                       <span className="text-xs font-semibold text-white/75">
-                        Sursă & Calitate Video · {resolutionReport.badgeLabel}
+                        Calitate & Sursă Video · {resolutionReport.badgeLabel}
                       </span>
                       <button
                         type="button"
@@ -6832,7 +7002,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     {!offlineItem && externalQualityOptions.length > 0 && (
                       <div className="space-y-1.5">
                         <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
-                          Stream-uri Video ({externalQualityOptions.length})
+                          Calitate Video Disponibilă
                         </div>
                         {externalQualityOptions.map((opt) => (
                           <button
@@ -6875,7 +7045,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     )}
 
                     {/* 2. Native Stream Resolutions (HLS / DASH Levels) */}
-                    {qualityLevels.length > 0 && (
+                    {qualityLevels.length > 0 &&
+                      (qualityLevels.length > 1 ||
+                        externalQualityOptions.length === 0) && (
                       <div
                         className={`space-y-1 ${!offlineItem && externalQualityOptions.length > 0
                           ? 'pt-1.5 border-t border-white/10'
@@ -6936,11 +7108,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       </div>
                     )}
 
-                    {/* 3. Video Servers (Unified inside the same menu) */}
-                    {!offlineItem && serverOptions.length > 0 && onSelectServer && (
+                    {/* 3. Video Servers (Only shown when multiple servers are actually available) */}
+                    {!offlineItem && serverOptions.length > 1 && onSelectServer && (
                       <div className="space-y-1 pt-1.5 border-t border-white/10">
                         <div className="px-2 py-0.5 text-[11px] font-semibold text-white/60">
-                          Servere Alternative ({serverOptions.length})
+                          Schimbă Sursa Video
                         </div>
                         {serverOptions.map((srv) => {
                           const active = srv.id === activeServerId;
@@ -7047,9 +7219,6 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                             onFocus={() => onWakeOsd?.()}
                             onClick={() => {
                               setActiveSubTrackId(null);
-                              saveActiveProfileMediaPrefs({
-                                defaultSubLang: 'off',
-                              });
                               onClearSubtitle?.();
                               setOpenMenu('none');
                             }}
@@ -7369,7 +7538,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                         <SfSpeakerWaveIcon className="w-3.5 h-3.5 text-[#0A84FF] shrink-0" />
                         <span>Pistă Audio</span>
                       </div>
-                      {audioTracks.map((trk, idx) => {
+                      {filterDisplayAudioItems(
+                        audioTracks.map((trk, idx) => ({ trk, idx })),
+                        (item) => item.trk.name,
+                        isForeign
+                      ).map(({ trk, idx }) => {
                         const active =
                           trk.id === activeAudioTrack || idx === forcedAudioIdx;
                         return (
@@ -7466,11 +7639,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                           </button>
                         )}
                       {isMobilePhone &&
-                        serverOptions.length > 0 &&
+                        serverOptions.length > 1 &&
                         onSelectServer && (
                           <div className="pt-1.5 mt-1.5 border-t border-white/10 space-y-1">
                             <div className="px-3 py-0.5 text-[10px] font-semibold text-white/55 uppercase tracking-wider">
-                              Sursă Video
+                              Schimbă Sursa Video
                             </div>
                             {serverOptions.map((srv) => {
                               const active = srv.id === activeServerId;

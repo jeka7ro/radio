@@ -109,7 +109,7 @@ export const CastCardsSection: React.FC<CastCardsSectionProps> = ({
       {isLoading && castList.length === 0 ? (
         <div className="space-y-3">
           <div className="h-6 w-32 bg-white/10 rounded animate-pulse" />
-          <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-1">
+          <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-2.5 px-2 -mx-2">
             {[1, 2, 3, 4].map((n) => (
               <div
                 key={n}
@@ -131,7 +131,7 @@ export const CastCardsSection: React.FC<CastCardsSectionProps> = ({
               <h3 className="text-xl sm:text-[22px] font-normal text-white/95 tracking-normal">
                 {tr('Regizor', 'Director', 'Режиссер')}
               </h3>
-              <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-1">
+              <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-2.5 px-2 -mx-2">
                 {directors.map((dir, idx) => renderPersonCard(dir, idx))}
               </div>
             </div>
@@ -142,7 +142,7 @@ export const CastCardsSection: React.FC<CastCardsSectionProps> = ({
               <h3 className="text-xl sm:text-[22px] font-normal text-white/95 tracking-normal">
                 {tr('Actori', 'Actors', 'Актеры')}
               </h3>
-              <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-1">
+              <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-2.5 px-2 -mx-2">
                 {actors.map((act, idx) => renderPersonCard(act, idx))}
               </div>
             </div>

@@ -2952,30 +2952,34 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         : ''}
                     </div>
                     <p className="text-xs text-zinc-400 max-w-md">
-                      Acest titlu românesc (FileList.io 1080p) se redă direct prin serverul local P2P pentru a garanta episodul real.
+                      Streamul Cloud HD pentru acest episod este temporar ocupat. Reîncearcă încărcarea redării directe.
                     </p>
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <a
-                        href={`http://192.168.2.57:8769/?playVod=${encodeURIComponent(
-                          activeVodItem.id
-                        )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                          resumeStartSeconds || 0
-                        )}`}
-                        className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-600 text-white font-bold text-xs"
-                      >
-                        Deschide pe Wi-Fi Local (192.168.2.57)
-                      </a>
-                      <a
-                        href={`http://100.79.113.57:8769/?playVod=${encodeURIComponent(
-                          activeVodItem.id
-                        )}&s=${selectedSeason}&e=${selectedEpisode}&t=${Math.floor(
-                          resumeStartSeconds || 0
-                        )}`}
-                        className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs"
-                      >
-                        Deschide prin Tailscale (100.79.113.57)
-                      </a>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsDirectStreamLoading(true);
+                        resolveDirectVodStreamClient({
+                          imdb: activeVodItem.imdbId || (activeVodItem.id.startsWith('tt') ? activeVodItem.id : ''),
+                          title: activeVodItem.name,
+                          type: activeVodItem.type,
+                          season: selectedSeason,
+                          episode: selectedEpisode,
+                        })
+                          .then((res) => {
+                            if (res) {
+                              setResolvedDirectStream(res);
+                              if (res.ok) {
+                                setActiveServer('kinogram_hls');
+                              }
+                            }
+                          })
+                          .catch(() => { })
+                          .finally(() => setIsDirectStreamLoading(false));
+                      }}
+                      className="h-10 px-4 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-extrabold text-xs cursor-pointer"
+                    >
+                      Reîncearcă Cloud HD
+                    </button>
                   </div>
                   ) : (
                   <div className="relative w-full h-full">
@@ -2993,7 +2997,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         resumeStartSeconds
                       )}
                       title={activeVodItem.name}
-                      className="w-full h-full border-0"
+                      className="w-full h-full border-0 bg-black"
+                      style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
                       referrerPolicy="origin"
                       allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                       allowFullScreen
@@ -3067,7 +3072,8 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         resumeStartSeconds
                       )}
                       title={activeVodItem.name}
-                      className="w-full h-full border-0"
+                      className="w-full h-full border-0 bg-black"
+                      style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
                       referrerPolicy="origin"
                       allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                       allowFullScreen

@@ -163,10 +163,10 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
               <div className="absolute inset-0 bg-gradient-to-r from-[#0e1015] via-[#0e1015]/80 to-transparent pointer-events-none" />
 
               {/* Top Bar: Brand Emblem & Label */}
-              <div className="relative z-10 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
+              <div className="relative z-10 flex items-center justify-between gap-3 pr-36 sm:pr-48">
+                <div className="flex items-center gap-2 min-w-0">
                   <StreamingPlatformLogo platformId={heroPlatId} size="sm" />
-                  <span className="text-[11px] sm:text-xs font-black uppercase tracking-[0.22em] text-zinc-200 drop-shadow">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-[0.12em] sm:tracking-[0.22em] text-zinc-200 drop-shadow truncate">
                     {heroPlatLabel} •{' '}
                     {heroItem.type === 'series'
                       ? tr(
@@ -319,7 +319,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
 
         {/* Top Spotlight Selector Dots (persistent at z-30, instant click without reload) */}
         {count > 1 && (
-          <div className="absolute top-3 sm:top-5 lg:top-8 right-3 sm:right-5 lg:right-8 z-30 flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15">
+          <div className="absolute top-3 sm:top-5 lg:top-8 right-3 sm:right-5 lg:right-8 z-30 flex items-center gap-1 sm:gap-1.5 bg-black/50 backdrop-blur-md px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-white/15">
             {heroBillboardItems.map((hItem, idx) => {
               const isCurrent = idx === safeIdx;
               return (
@@ -328,10 +328,10 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
                   type="button"
                   title={`${hItem.name} (${hItem.imdbRating || '8.5'})`}
                   onClick={() => setActiveIdx(idx)}
-                  className={`h-2.5 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
+                  className={`h-2 sm:h-2.5 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
                     isCurrent
-                      ? 'w-7 bg-[#E50914]'
-                      : 'w-2.5 bg-white/35 hover:bg-white/70'
+                      ? 'w-5 sm:w-7 bg-[#E50914]'
+                      : 'w-2 sm:w-2.5 bg-white/35 hover:bg-white/70'
                   }`}
                 />
               );
