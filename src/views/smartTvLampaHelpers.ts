@@ -138,6 +138,7 @@ export interface CinemetaItem {
   slogan?: string;
   seasonsCount?: number;
   episodesCount?: number;
+  savedAt?: number;
   klubnichkaRawId?: string;
   klubnichkaEmbedUrl?: string;
   isAdultKlubnichka?: boolean;
@@ -1062,6 +1063,7 @@ export interface EpisodeProgress {
   currentTime: number;
   duration: number;
   updatedAt: number;
+  isWatched?: boolean;
 }
 
 export interface VodWatchProgressEntry {
@@ -1076,10 +1078,47 @@ export interface VodWatchProgressEntry {
   deviceName?: string;
   deviceId?: string;
   isPlayingNow?: boolean;
+  isWatched?: boolean;
   totalEpisodesInSeason?: number;
   totalSeasons?: number;
   episodeProgressMap?: Record<string, EpisodeProgress>;
   episodesSortDesc?: boolean;
+}
+
+export function isEpisodeProgressWatched(epProg?: EpisodeProgress | null): boolean {
+  if (!epProg) return false;
+  if (typeof epProg.isWatched === 'boolean') return epProg.isWatched;
+  const d = epProg.duration && epProg.duration > 60 ? epProg.duration : 2700;
+  return (epProg.currentTime || 0) >= d * 0.85;
+}
+
+export function getSeriesWatchedEpisodesCount(
+  entry?: VodWatchProgressEntry | null
+): number {
+  if (!entry?.episodeProgressMap) return 0;
+  return Object.values(entry.episodeProgressMap).filter((ep) =>
+    isEpisodeProgressWatched(ep)
+  ).length;
+}
+
+export function isVodEntryWatched(
+  entry?: VodWatchProgressEntry | null,
+  stats?: SeriesEpisodeStats | null
+): boolean {
+  if (!entry) return false;
+  if (typeof entry.isWatched === 'boolean') return entry.isWatched;
+  if (entry.item?.type === 'series') {
+    const watchedCount = getSeriesWatchedEpisodesCount(entry);
+    if (watchedCount === 0) return false;
+    const totalKnown =
+      (stats?.episodesCount && stats.episodesCount > 0 ? stats.episodesCount : 0) ||
+      ((entry.totalSeasons || 1) === 1 && (entry.totalEpisodesInSeason || 0) > 0
+        ? entry.totalEpisodesInSeason || 0
+        : 0);
+    return totalKnown > 0 && watchedCount >= totalKnown;
+  }
+  const movDur = entry.duration && entry.duration > 60 ? entry.duration : 5400;
+  return (entry.currentTime || 0) >= movDur * 0.88;
 }
 
 export const SERIES_EPISODE_SORT_STORAGE_KEY = 'aether_series_episode_sort_v1';
@@ -1509,15 +1548,23 @@ export function mergeTwoProgressEntries(
     primary.season === secondary.season && primary.episode === secondary.episode;
   const primaryCur = primary.currentTime || 0;
   const secondaryCur = secondary.currentTime || 0;
-  const targetCurrentTime = sameEp
-    ? Math.max(primaryCur, secondaryCur)
-    : (primaryCur <= 10 && secondaryCur > 10 ? secondaryCur : primaryCur);
+  const strictlyNewer = Math.abs(incTime - baseTime) > 1500;
+  const targetCurrentTime = strictlyNewer
+    ? primaryCur
+    : sameEp
+      ? Math.max(primaryCur, secondaryCur)
+      : primaryCur <= 10 && secondaryCur > 10
+        ? secondaryCur
+        : primaryCur;
 
   return {
     ...secondary,
     ...primary,
     item: mergedItem,
     currentTime: targetCurrentTime,
+    isWatched: strictlyNewer
+      ? primary.isWatched
+      : primary.isWatched ?? secondary.isWatched,
     duration: Math.max(primary.duration || 0, secondary.duration || 0),
     totalEpisodesInSeason:
       primary.totalEpisodesInSeason || secondary.totalEpisodesInSeason,
@@ -1936,22 +1983,30 @@ export function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
     const storageKey = getSavedVodKeyForProfile(profileId);
     const seedSavedKey = `filmio_seed_saved_v3_${profileId}`;
     const raw = localStorage.getItem(storageKey);
+    const removedMap = loadRemovedSavedVodMap(profileId);
+    const notRemoved = (it: CinemetaItem | null | undefined): it is CinemetaItem => {
+      if (!it || !it.id) return false;
+      const remTs = Number(removedMap[it.id]) || 0;
+      const itemTs = Number(it.savedAt) || 0;
+      return remTs === 0 || itemTs > remTs;
+    };
     const parsed = raw ? JSON.parse(raw) : null;
-    if (!Array.isArray(parsed) || (parsed.length === 0 && seedList.length > 0)) {
-      if (seedList.length > 0) {
-        const cloned = [...seedList];
+    const seedAlreadyApplied = Boolean(localStorage.getItem(seedSavedKey));
+    if (!Array.isArray(parsed) || (parsed.length === 0 && seedList.length > 0 && !seedAlreadyApplied)) {
+      if (seedList.length > 0 && !seedAlreadyApplied) {
+        const cloned = seedList.filter(notRemoved);
         localStorage.setItem(storageKey, JSON.stringify(cloned));
         localStorage.setItem(seedSavedKey, '1');
         return cloned;
       }
-      return [];
+      return Array.isArray(parsed) ? parsed.filter(notRemoved) : [];
     }
-    if (!localStorage.getItem(seedSavedKey) && seedList.length > 0) {
+    if (!seedAlreadyApplied && seedList.length > 0) {
       const seen = new Set(parsed.map((x: CinemetaItem) => x?.id).filter(Boolean));
-      const merged = [...parsed];
-      let added = false;
+      const merged = parsed.filter(notRemoved);
+      let added = merged.length !== parsed.length;
       for (const item of seedList) {
-        if (item && item.id && !seen.has(item.id)) {
+        if (notRemoved(item) && !seen.has(item.id)) {
           seen.add(item.id);
           merged.push(item);
           added = true;
@@ -1960,16 +2015,55 @@ export function loadSavedVodItems(profileId = 'p1'): CinemetaItem[] {
       localStorage.setItem(seedSavedKey, '1');
       if (added) {
         localStorage.setItem(storageKey, JSON.stringify(merged));
-        return merged;
       }
+      return merged;
     }
-    return parsed;
+    return parsed.filter(notRemoved);
   } catch {
     return [...seedList];
   }
 }
 
-export function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void {
+export function loadRemovedSavedVodMap(profileId = 'p1'): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(`aether_saved_vod_removed_v1_${profileId}`);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function markSavedVodRemoved(
+  id: string,
+  removed: boolean,
+  profileId = 'p1'
+): Record<string, number> {
+  const map = { ...loadRemovedSavedVodMap(profileId) };
+  if (id) {
+    if (removed) {
+      map[id] = Date.now();
+    } else {
+      delete map[id];
+    }
+    try {
+      localStorage.setItem(
+        `aether_saved_vod_removed_v1_${profileId}`,
+        JSON.stringify(map)
+      );
+    } catch {
+      // ignore
+    }
+  }
+  return map;
+}
+
+export function saveSavedVodItems(
+  items: CinemetaItem[],
+  profileId = 'p1',
+  removedMapOverride?: Record<string, number>
+): void {
   const cleanProf = encodeURIComponent(profileId || 'p1');
   try {
     localStorage.setItem(
@@ -1980,21 +2074,31 @@ export function saveSavedVodItems(items: CinemetaItem[], profileId = 'p1'): void
   } catch {
     // ignore
   }
+  const removedMap = removedMapOverride || loadRemovedSavedVodMap(profileId);
+  const removedHeader = JSON.stringify(removedMap);
   const payload = JSON.stringify(items);
   try {
     fetch(`/api/tv-saved?profileId=${cleanProf}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Removed-Vod-Ids': removedHeader,
+      },
       body: payload,
     }).catch(() => { });
   } catch {
     // ignore
   }
-  if (isLocalHomeServer()) {
+  const servedByLocalNode =
+    typeof window !== 'undefined' && window.location.port === '8769';
+  if (isLocalHomeServer() && !servedByLocalNode) {
     try {
       fetch(`https://filmio.my/api/tv-saved?profileId=${cleanProf}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Removed-Vod-Ids': removedHeader,
+        },
         body: payload,
       }).catch(() => { });
     } catch {

@@ -17,12 +17,16 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   deletedProfileMap: {},
   progressByProfile: { ...(SEED_PROGRESS_BY_PROFILE || {}) },
   savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
+  savedRemovedByProfile: {},
   radioFavsByProfile: {},
   tvFavChannelsByProfile: {},
   musicByProfile: {},
   blobReadCache: {},
   lastBlobWrittenJson: {},
 };
+if (!globalStore.savedRemovedByProfile) {
+  globalStore.savedRemovedByProfile = {};
+}
 if (!globalStore.deletedProfileMap || typeof globalStore.deletedProfileMap !== 'object') {
   globalStore.deletedProfileMap = {};
 }
@@ -196,7 +200,11 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
     }
     const vCleared =
       (v.currentTime || 0) === 0 &&
-      (!v.episodeProgressMap || Object.keys(v.episodeProgressMap).length === 0);
+      v.isWatched === false &&
+      (!v.episodeProgressMap ||
+        Object.values(v.episodeProgressMap).every(
+          (ep) => (ep?.currentTime || 0) === 0 && !ep?.isWatched
+        ));
     if (vCleared && (v.updatedAt || 0) >= (existing.updatedAt || 0)) {
       merged[k] = v;
       continue;
@@ -271,12 +279,20 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
         const itm = { ...(sec.item || {}), ...(prim.item || {}) };
         const cImdb = prim.item?.imdbId || sec.item?.imdbId || (String(prim.item?.id || '').startsWith('tt') ? prim.item.id : String(sec.item?.id || '').startsWith('tt') ? sec.item.id : undefined);
         if (cImdb) { itm.imdbId = cImdb; itm.id = cImdb; }
+        const strictlyNewer = Math.abs(oT - fT) > 1500;
         fin = {
           ...sec,
           ...prim,
           item: itm,
           episodeProgressMap: epMap,
-          currentTime: prim.season === sec.season && prim.episode === sec.episode ? Math.max(prim.currentTime || 0, sec.currentTime || 0) : prim.currentTime,
+          currentTime: strictlyNewer
+            ? prim.currentTime || 0
+            : prim.season === sec.season && prim.episode === sec.episode
+              ? Math.max(prim.currentTime || 0, sec.currentTime || 0)
+              : prim.currentTime,
+          isWatched: strictlyNewer
+            ? prim.isWatched
+            : prim.isWatched ?? sec.isWatched,
           updatedAt: Math.max(fT, oT),
         };
       }
@@ -377,16 +393,27 @@ function mergeMusicProfileData(existing, incoming) {
   }
   recentTracks.sort((a, b) => (Number(b.playedAt) || 0) - (Number(a.playedAt) || 0));
 
-  const prevPb = prev.playbackState && typeof prev.playbackState === 'object' ? prev.playbackState : null;
-  const nextPb = next.playbackState && typeof next.playbackState === 'object' ? next.playbackState : null;
+  const normalizePb = (raw) => {
+    if (!raw || typeof raw !== 'object') return null;
+    const ts = Number(raw.updatedAt) || 0;
+    if (raw.closed || raw.track === null) {
+      return ts > 0
+        ? { track: null, elapsedSec: 0, durationSec: 0, updatedAt: ts, closed: true }
+        : null;
+    }
+    if (raw.track && typeof raw.track === 'object' && raw.track.id && raw.track.title) {
+      return raw;
+    }
+    return null;
+  };
+  const prevPb = normalizePb(prev.playbackState);
+  const nextPb = normalizePb(next.playbackState);
   const prevPbTs = Number(prevPb?.updatedAt) || 0;
   const nextPbTs = Number(nextPb?.updatedAt) || 0;
   const playbackState =
-    nextPb && nextPb.track && nextPbTs >= prevPbTs
+    nextPb && nextPbTs >= prevPbTs
       ? nextPb
-      : prevPb && prevPb.track
-      ? prevPb
-      : null;
+      : prevPb || null;
 
   return {
     updatedAt: Math.max(Number(prev.updatedAt) || 0, baseTs),
@@ -411,8 +438,8 @@ globalStore.musicByProfile.p1 = mergeMusicProfileData(
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Deleted-Profile-Ids, X-Replace-Profiles',
-  'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Deleted-Profile-Ids, X-Replace-Profiles, X-Removed-Vod-Ids',
+  'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store, X-Server-Removed-Vod-Ids',
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-cache, no-store',
 };
@@ -522,22 +549,89 @@ export default async (req) => {
     // 2. /api/tv-saved
     if (path.includes('tv-saved')) {
       const { data: blobSaved } = await readBlobState(blobStore, `saved_v1_${profileId}`);
-      let currentSaved = dedupeAndMergeSavedLists([
-        globalStore.savedByProfile[profileId] || [],
-        Array.isArray(blobSaved) ? blobSaved : [],
-      ]);
-      globalStore.savedByProfile[profileId] = currentSaved;
-      if (req.method === 'POST') {
-        const incoming = await req.json().catch(() => null);
-        if (Array.isArray(incoming) && incoming.length > 0) {
-          currentSaved = dedupeAndMergeSavedLists([currentSaved, incoming]);
-          globalStore.savedByProfile[profileId] = currentSaved;
-          await writeBlobState(blobStore, `saved_v1_${profileId}`, currentSaved);
+      const blobItems = Array.isArray(blobSaved)
+        ? blobSaved
+        : Array.isArray(blobSaved?.items)
+          ? blobSaved.items
+          : [];
+      const mergedRemovedMap = {
+        ...(globalStore.savedRemovedByProfile[profileId] || {}),
+        ...(blobSaved && !Array.isArray(blobSaved) && blobSaved.removedMap && typeof blobSaved.removedMap === 'object'
+          ? blobSaved.removedMap
+          : {}),
+      };
+      let incomingRemoved = {};
+      try {
+        const rawRem = req.headers.get('x-removed-vod-ids');
+        if (rawRem) {
+          const parsedRem = JSON.parse(rawRem);
+          if (parsedRem && typeof parsedRem === 'object') {
+            incomingRemoved = parsedRem;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      for (const [rid, rts] of Object.entries(incomingRemoved)) {
+        const tsNum = Number(rts) || 0;
+        if (rid && tsNum > (Number(mergedRemovedMap[rid]) || 0)) {
+          mergedRemovedMap[rid] = tsNum;
         }
       }
+
+      let currentSaved = dedupeAndMergeSavedLists([
+        globalStore.savedByProfile[profileId] || [],
+        blobItems,
+      ]).filter((it) => {
+        const remTs = Number(mergedRemovedMap[it.id]) || 0;
+        const savedTs = Number(it.savedAt) || 1;
+        return remTs === 0 || savedTs > remTs;
+      });
+
+      if (req.method === 'POST') {
+        const incoming = await req.json().catch(() => null);
+        if (Array.isArray(incoming)) {
+          const incomingIds = new Set(incoming.map((x) => x?.id).filter(Boolean));
+          for (const it of incoming) {
+            if (!it?.id) continue;
+            const remTs = Number(mergedRemovedMap[it.id]) || 0;
+            const incSavedTs = Number(it.savedAt) || 0;
+            if (remTs > 0 && (incSavedTs > remTs || (!incomingRemoved[it.id] && incSavedTs > 0))) {
+              delete mergedRemovedMap[it.id];
+            }
+          }
+          for (const prevIt of currentSaved) {
+            if (prevIt?.id && !incomingIds.has(prevIt.id) && incomingRemoved[prevIt.id]) {
+              mergedRemovedMap[prevIt.id] = Math.max(
+                Number(mergedRemovedMap[prevIt.id]) || 0,
+                Number(incomingRemoved[prevIt.id]) || Date.now()
+              );
+            }
+          }
+          currentSaved = dedupeAndMergeSavedLists([incoming, currentSaved]).filter((it) => {
+            const remTs = Number(mergedRemovedMap[it.id]) || 0;
+            const savedTs = Number(it.savedAt) || 1;
+            return remTs === 0 || savedTs > remTs;
+          });
+          globalStore.savedByProfile[profileId] = currentSaved;
+          globalStore.savedRemovedByProfile[profileId] = mergedRemovedMap;
+          const payloadToStore =
+            Object.keys(mergedRemovedMap).length > 0
+              ? { items: currentSaved, removedMap: mergedRemovedMap }
+              : currentSaved;
+          await writeBlobState(blobStore, `saved_v1_${profileId}`, payloadToStore);
+        }
+      } else {
+        globalStore.savedByProfile[profileId] = currentSaved;
+        globalStore.savedRemovedByProfile[profileId] = mergedRemovedMap;
+      }
+
       return new Response(JSON.stringify(currentSaved), {
         status: 200,
-        headers: corsHeaders,
+        headers: {
+          ...corsHeaders,
+          'X-Server-Removed-Vod-Ids': JSON.stringify(mergedRemovedMap),
+        },
       });
     }
 

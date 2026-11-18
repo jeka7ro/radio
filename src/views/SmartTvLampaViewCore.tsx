@@ -50,6 +50,7 @@ import {
   Moon,
   ArrowDownToLine,
   Download,
+  Check,
   CheckCircle2,
   ChevronDown,
   HardDriveDownload,
@@ -203,6 +204,7 @@ import { CrossDeviceHandoffModal } from '../components/tv/CrossDeviceHandoffModa
 import { TvPlayerModal } from '../components/tv/TvPlayerModal';
 import { FilmioStartupLoader } from '../components/common/FilmioStartupLoader';
 import { VodCardProducerBadge } from '../components/common/VodCardProducerBadge';
+import { VodPosterWatchedControl } from '../components/common/VodPosterWatchedControl';
 import { setActiveTvPlaylistContext } from '../components/tv/TvOsdChannelList';
 import { RadioPipPlayer } from '../components/player/RadioPipPlayer';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -284,6 +286,11 @@ import {
   saveSeriesEpisodeSortDesc,
   loadSavedVodItems,
   saveSavedVodItems,
+  loadRemovedSavedVodMap,
+  markSavedVodRemoved,
+  isEpisodeProgressWatched,
+  getSeriesWatchedEpisodesCount,
+  isVodEntryWatched,
   buildVodEmbedUrl,
   SMART_TV_SETTINGS_STORAGE_KEY,
   SmartTvSettings,
@@ -539,13 +546,19 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   musicDurationSecRef.current = musicDurationSec;
 
   const persistAndSyncMusicState = useCallback(
-    (overrides?: Partial<ProfileMusicSyncState>) => {
+    (
+      overrides?: Partial<ProfileMusicSyncState>,
+      opts?: { forceCloud?: boolean }
+    ) => {
       const targetProfId = activeProfileIdForMusicRef.current || 'p1';
       const now = Date.now();
-      const curTrack =
-        overrides?.playbackState !== undefined
-          ? overrides.playbackState?.track
-          : currentMusicTrackRef.current;
+      const hasPlaybackOverride = Boolean(
+        overrides &&
+          Object.prototype.hasOwnProperty.call(overrides, 'playbackState')
+      );
+      const curTrack = hasPlaybackOverride
+        ? overrides?.playbackState?.track
+        : currentMusicTrackRef.current;
       const fallbackPlayback = curTrack
         ? {
             track: curTrack,
@@ -564,13 +577,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         likedTracks: overrides?.likedTracks ?? likedMusicTracksRef.current,
         removedMap: overrides?.removedMap ?? removedMusicMapRef.current,
         recentTracks: overrides?.recentTracks ?? recentMusicTracksRef.current,
-        playbackState:
-          overrides?.playbackState !== undefined
-            ? overrides.playbackState
-            : fallbackPlayback,
+        playbackState: hasPlaybackOverride
+          ? (overrides?.playbackState ?? null)
+          : fallbackPlayback,
       };
       saveLocalProfileMusicState(targetProfId, nextState);
-      void pushProfileMusicState(targetProfId, nextState);
+      void pushProfileMusicState(
+        targetProfId,
+        nextState,
+        opts?.forceCloud ? { force: true } : undefined
+      );
     },
     []
   );
@@ -601,8 +617,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         setIsMusicPlaying(false);
       }
       if (currentMusicTrack) {
+        currentMusicTrackRef.current = null;
+        isMusicPlayingRef.current = false;
+        musicElapsedSecRef.current = 0;
         setCurrentMusicTrack(null);
         setMusicElapsedSec(0);
+        persistAndSyncMusicState(
+          {
+            playbackState: {
+              track: null,
+              elapsedSec: 0,
+              durationSec: 0,
+              updatedAt: Date.now(),
+              closed: true,
+            },
+          },
+          { forceCloud: true }
+        );
       }
     }
   }, [
@@ -611,6 +642,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     currentTvChannel,
     isMusicPlaying,
     currentMusicTrack,
+    persistAndSyncMusicState,
   ]);
 
   const musicPlaybackSeqRef = useRef<number>(0);
@@ -1017,11 +1049,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       musicAudioRef.current.pause();
       musicAudioRef.current.removeAttribute('src');
     }
+    currentMusicTrackRef.current = null;
+    isMusicPlayingRef.current = false;
+    musicElapsedSecRef.current = 0;
     setIsMusicPlaying(false);
     setCurrentMusicTrack(null);
     setMusicElapsedSec(0);
     releaseMediaSession('music');
-  }, []);
+    persistAndSyncMusicState(
+      {
+        playbackState: {
+          track: null,
+          elapsedSec: 0,
+          durationSec: 0,
+          updatedAt: Date.now(),
+          closed: true,
+        },
+      },
+      { forceCloud: true }
+    );
+  }, [persistAndSyncMusicState]);
 
   // Apple CarPlay Now Playing + Mercedes GLE Steering-Wheel & Cluster MediaSession for Music
   useEffect(() => {
@@ -1477,22 +1524,29 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         (!el || el.paused) &&
         !currentStation &&
         !currentTvChannel;
-      if (pb?.track && isIdle) {
+      if (pb?.closed || pb?.track === null) {
+        if (isIdle && currentMusicTrackRef.current) {
+          currentMusicTrackRef.current = null;
+          setCurrentMusicTrack(null);
+          setMusicElapsedSec(0);
+        }
+      } else if (pb?.track && isIdle) {
+        const activeTrack = pb.track;
         setCurrentMusicTrack((prev) => {
           if (
             prev &&
-            prev.id === pb.track.id &&
+            prev.id === activeTrack.id &&
             Math.abs((musicElapsedSecRef.current || 0) - (pb.elapsedSec || 0)) < 5
           ) {
             return prev;
           }
-          return pb.track;
+          return activeTrack;
         });
         setMusicElapsedSec(pb.elapsedSec || 0);
         const syncedDur =
-          pb.durationSec && (pb.durationSec >= 45 || (pb.track.durationSec || 0) < 45)
+          pb.durationSec && (pb.durationSec >= 45 || (activeTrack.durationSec || 0) < 45)
             ? pb.durationSec
-            : pb.track.durationSec || pb.durationSec || 200;
+            : activeTrack.durationSec || pb.durationSec || 200;
         setMusicDurationSec(syncedDur);
       }
     };
@@ -2473,8 +2527,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         setIsMusicPlaying(false);
       }
       if (currentMusicTrack) {
+        currentMusicTrackRef.current = null;
+        isMusicPlayingRef.current = false;
+        musicElapsedSecRef.current = 0;
         setCurrentMusicTrack(null);
         setMusicElapsedSec(0);
+        persistAndSyncMusicState(
+          {
+            playbackState: {
+              track: null,
+              elapsedSec: 0,
+              durationSec: 0,
+              updatedAt: Date.now(),
+              closed: true,
+            },
+          },
+          { forceCloud: true }
+        );
       }
     }
   }, [
@@ -2485,6 +2554,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     stopRadio,
     isMusicPlaying,
     currentMusicTrack,
+    persistAndSyncMusicState,
   ]);
 
   useEffect(() => {
@@ -10551,6 +10621,51 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         mergedItem.kpId = '5354824';
         delete mergedItem.nameOriginal;
       }
+      const isEpDoneNow = cleanDur > 60 && cleanTime >= cleanDur * 0.85;
+      const existingEpProg = existing?.episodeProgressMap?.[epKey];
+      const nextEpWatched = isEpDoneNow
+        ? true
+        : cleanTime >= 15
+          ? false
+          : existingEpProg?.isWatched;
+      const updatedEpProgressMap: Record<string, EpisodeProgress> = {
+        ...(existing?.episodeProgressMap || {}),
+        [epKey]: {
+          currentTime: cleanTime,
+          duration: cleanDur,
+          updatedAt: Date.now(),
+          ...(typeof nextEpWatched === 'boolean' ? { isWatched: nextEpWatched } : {}),
+        },
+      };
+      let nextWholeWatched: boolean | undefined = existing?.isWatched;
+      if (mergedItem.type === 'series') {
+        if (
+          seasonsMap.size > 0 &&
+          detailedMeta &&
+          (detailedMeta.id === mergedItem.id || areVodItemsSame(detailedMeta as any, mergedItem))
+        ) {
+          let totalKnown = 0;
+          let watchedKnown = 0;
+          seasonsMap.forEach((epsList, sN) => {
+            for (const epItem of epsList) {
+              totalKnown += 1;
+              if (isEpisodeProgressWatched(updatedEpProgressMap[`S${sN}E${epItem.episode}`])) {
+                watchedKnown += 1;
+              }
+            }
+          });
+          nextWholeWatched = totalKnown > 0 && watchedKnown >= totalKnown;
+        } else if (nextEpWatched === false && cleanTime >= 15) {
+          nextWholeWatched = false;
+        }
+      } else {
+        nextWholeWatched = isEpDoneNow
+          ? true
+          : cleanTime >= 15
+            ? false
+            : existing?.isWatched;
+      }
+
       const nextEntry: VodWatchProgressEntry = {
         item: mergedItem,
         season,
@@ -10563,6 +10678,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         deviceName: detectCurrentDeviceName(),
         deviceId: getOrCreateCurrentDeviceId(),
         isPlayingNow: typeof forcePlayingState === 'boolean' ? forcePlayingState : isPlayingVodRef.current,
+        ...(typeof nextWholeWatched === 'boolean' ? { isWatched: nextWholeWatched } : {}),
         totalEpisodesInSeason:
           seasonEpsCount > 0
             ? seasonEpsCount
@@ -10573,14 +10689,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           typeof episodesSortDesc === 'boolean'
             ? episodesSortDesc
             : existing?.episodesSortDesc,
-        episodeProgressMap: {
-          ...(existing?.episodeProgressMap || {}),
-          [epKey]: {
-            currentTime: cleanTime,
-            duration: cleanDur,
-            updatedAt: Date.now(),
-          },
-        },
+        episodeProgressMap: updatedEpProgressMap,
       };
       const next: Record<string, VodWatchProgressEntry> = {};
       for (const [k, v] of Object.entries(prev)) {
@@ -10927,48 +11036,81 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         .catch(() => { });
 
       const localSaved = loadSavedVodItems(currentProf);
+      const removedSavedMap = loadRemovedSavedVodMap(currentProf);
+      const removedSavedStr = JSON.stringify(removedSavedMap);
       const savedBodyStr = JSON.stringify(localSaved);
-      const savedDirty = lastSyncedSavedHashRef.current[currentProf] !== savedBodyStr;
+      const savedSyncSignature = `${savedBodyStr}|${removedSavedStr}`;
+      const savedDirty = lastSyncedSavedHashRef.current[currentProf] !== savedSyncSignature;
+      let serverRemovedSavedMap: Record<string, number> = {};
       fetch(`/api/tv-saved?profileId=${cleanProf}`, {
         ...(savedDirty
           ? {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Removed-Vod-Ids': removedSavedStr,
+              },
               body: savedBodyStr,
             }
           : { cache: 'no-store' as RequestCache }),
       })
-        .then((r) => (r.ok ? r.json() : null))
+        .then(async (r) => {
+          if (!r.ok) return null;
+          try {
+            const rawRem = r.headers.get('X-Server-Removed-Vod-Ids');
+            if (rawRem) {
+              const parsed = JSON.parse(rawRem);
+              if (parsed && typeof parsed === 'object') {
+                serverRemovedSavedMap = parsed;
+              }
+            }
+          } catch {
+            // ignore
+          }
+          return r.json();
+        })
         .then((remoteSaved: CinemetaItem[] | null) => {
           if (activeProfileId !== currentProf) return;
           if (Array.isArray(remoteSaved)) {
-            lastSyncedSavedHashRef.current[currentProf] = savedBodyStr;
-          }
-          if (Array.isArray(remoteSaved) && remoteSaved.length > 0) {
+            lastSyncedSavedHashRef.current[currentProf] = savedSyncSignature;
             setSavedVodItems((prev) => {
               const currentLocalSaved = loadSavedVodItems(currentProf);
-              const seen = new Set(currentLocalSaved.map((x) => x.id));
-              const merged = [...currentLocalSaved];
-              let changed = false;
+              const mergedRemoved: Record<string, number> = {
+                ...loadRemovedSavedVodMap(currentProf),
+                ...serverRemovedSavedMap,
+              };
+              const seen = new Set<string>();
+              const nextMerged: CinemetaItem[] = [];
               for (const item of remoteSaved) {
-                if (item && item.id && !seen.has(item.id)) {
-                  seen.add(item.id);
-                  merged.push(item);
-                  changed = true;
-                }
+                if (!item || !item.id || seen.has(item.id)) continue;
+                const remTs = mergedRemoved[item.id] || 0;
+                const itemTs = item.savedAt || 0;
+                if (remTs > 0 && remTs > itemTs) continue;
+                seen.add(item.id);
+                nextMerged.push(item);
               }
-              if (!changed) {
+              for (const item of currentLocalSaved) {
+                if (!item || !item.id || seen.has(item.id)) continue;
+                const remTs = serverRemovedSavedMap[item.id] || 0;
+                const itemTs = item.savedAt || 0;
+                if (remTs > 0 && remTs > itemTs) continue;
+                seen.add(item.id);
+                nextMerged.push(item);
+              }
+              const prevIds = prev.map((x) => x.id).join(',');
+              const nextIds = nextMerged.map((x) => x.id).join(',');
+              if (prevIds === nextIds && prev.length === nextMerged.length) {
                 return prev;
               }
               try {
                 localStorage.setItem(
                   getSavedVodKeyForProfile(currentProf),
-                  JSON.stringify(merged)
+                  JSON.stringify(nextMerged)
                 );
               } catch {
                 // ignore
               }
-              return merged;
+              return nextMerged;
             });
           }
         })
@@ -11047,22 +11189,40 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }
   }, [activeProfileId, handleOpenVod, handleSelectProfile, watchProgressMap]);
 
-  const [favToast, setFavToast] = useState<{ message: string; isFav: boolean } | null>(null);
+  const [favToast, setFavToast] = useState<{
+    message: string;
+    isFav: boolean;
+    kind?: 'fav' | 'watched';
+  } | null>(null);
   const favToastTimerRef = useRef<number | null>(null);
+
+  const showVodActionToast = useCallback(
+    (message: string, isActive = true, kind: 'fav' | 'watched' = 'fav') => {
+      if (favToastTimerRef.current) {
+        window.clearTimeout(favToastTimerRef.current);
+      }
+      setFavToast({ message, isFav: isActive, kind });
+      favToastTimerRef.current = window.setTimeout(() => {
+        setFavToast(null);
+      }, 1900);
+    },
+    []
+  );
 
   const toggleSaveVodItem = useCallback((item: CinemetaItem) => {
     setSavedVodItems((prev) => {
       const exists = prev.some((x) => x.id === item.id);
+      const stampedItem: CinemetaItem = exists
+        ? item
+        : { ...item, savedAt: Date.now() };
       const next = exists
         ? prev.filter((x) => x.id !== item.id)
-        : [item, ...prev];
-      saveSavedVodItems(next, activeProfileId);
+        : [stampedItem, ...prev];
+      const nextRemovedMap = markSavedVodRemoved(item.id, exists, activeProfileId);
+      saveSavedVodItems(next, activeProfileId, nextRemovedMap);
 
-      if (favToastTimerRef.current) {
-        window.clearTimeout(favToastTimerRef.current);
-      }
-      setFavToast({
-        message: exists
+      showVodActionToast(
+        exists
           ? tr(
               `Eliminat din Favorite · ${item.name}`,
               `Removed from Favorites · ${item.name}`,
@@ -11073,15 +11233,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               `Saved to Favorites · ${item.name}`,
               `В избранном · ${item.name}`
             ),
-        isFav: !exists,
-      });
-      favToastTimerRef.current = window.setTimeout(() => {
-        setFavToast(null);
-      }, 1800);
+        !exists,
+        'fav'
+      );
 
       return next;
     });
-  }, [activeProfileId, tr]);
+  }, [activeProfileId, tr, showVodActionToast]);
 
   toggleSaveVodItemRef.current = toggleSaveVodItem;
 
@@ -11093,10 +11251,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         (e) =>
           e &&
           e.item &&
-          (e.currentTime > 0 ||
+          (e.isWatched === true ||
+            e.currentTime > 0 ||
             (e.episodeProgressMap &&
               Object.values(e.episodeProgressMap).some(
-                (epProg) => (epProg?.currentTime || 0) > 0
+                (epProg) => isEpisodeProgressWatched(epProg) || (epProg?.currentTime || 0) > 0
               ))) &&
           (isAdultAllowed ||
             (!e.item?.isAdultKlubnichka &&
@@ -11277,6 +11436,15 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [seriesEpStatsMap, setSeriesEpStatsMap] = useState<
     Record<string, SeriesEpisodeStats>
   >({});
+
+  const continueWatchingList = useMemo<VodWatchProgressEntry[]>(() => {
+    return historyList.filter((e) => {
+      const stats =
+        seriesEpStatsMap[e.item.id] ||
+        (e.item.imdbId ? seriesEpStatsMap[e.item.imdbId] : undefined);
+      return !isVodEntryWatched(e, stats);
+    });
+  }, [historyList, seriesEpStatsMap]);
   const attemptedSeriesStatsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -11361,67 +11529,145 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   ]);
 
   const handleToggleWatchedStatus = useCallback(
-    (targetItem?: CinemetaItem | null, targetSeason?: number, targetEpisode?: number) => {
+    (
+      targetItem?: CinemetaItem | null,
+      targetSeason?: number,
+      targetEpisode?: number,
+      options?: { wholeSeries?: boolean }
+    ) => {
       const item = targetItem || activeVodItem || lastFocusedVodItemRef.current;
       if (!item) return;
 
-      const id = item.id;
       const isSeries = item.type === 'series';
+      const isWholeSeries = isSeries && Boolean(options?.wholeSeries);
+      const prevSnapshot = watchProgressMapRef.current;
+      const existingSnap = findWatchProgressEntry(prevSnapshot, item);
+      const statsSnap =
+        seriesEpStatsMap[item.id] ||
+        (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined);
+
+      let toastMsg = '';
+      let toastActive = false;
+
+      if (isWholeSeries) {
+        const wasWatched = isVodEntryWatched(existingSnap, statsSnap);
+        toastActive = !wasWatched;
+        toastMsg = wasWatched
+          ? tr(
+              `Anulat din văzute · ${item.name}`,
+              `Unmarked watched · ${item.name}`,
+              `Снята отметка · ${item.name}`
+            )
+          : tr(
+              `Serial marcat văzut ✓ · ${item.name}`,
+              `Series marked watched ✓ · ${item.name}`,
+              `Сериал просмотрен ✓ · ${item.name}`
+            );
+      } else if (isSeries) {
+        const sNum = targetSeason ?? selectedSeason ?? 1;
+        const epNum = targetEpisode ?? selectedEpisode ?? 1;
+        const epProg = existingSnap?.episodeProgressMap?.[`S${sNum}E${epNum}`];
+        const wasEpWatched = isEpisodeProgressWatched(epProg);
+        toastActive = !wasEpWatched;
+        toastMsg = wasEpWatched
+          ? tr(
+              `S${sNum}:E${epNum} anulat din văzute · ${item.name}`,
+              `S${sNum}:E${epNum} unmarked · ${item.name}`,
+              `S${sNum}:E${epNum} снято · ${item.name}`
+            )
+          : tr(
+              `S${sNum}:E${epNum} marcat văzut ✓ · ${item.name}`,
+              `S${sNum}:E${epNum} watched ✓ · ${item.name}`,
+              `S${sNum}:E${epNum} просмотрено ✓ · ${item.name}`
+            );
+      } else {
+        const wasMovieWatched = isVodEntryWatched(existingSnap);
+        toastActive = !wasMovieWatched;
+        toastMsg = wasMovieWatched
+          ? tr(
+              `Anulat din văzute · ${item.name}`,
+              `Unmarked watched · ${item.name}`,
+              `Снята отметка · ${item.name}`
+            )
+          : tr(
+              `Marcat ca văzut ✓ · ${item.name}`,
+              `Marked as watched ✓ · ${item.name}`,
+              `Отмечено просмотренным ✓ · ${item.name}`
+            );
+      }
 
       setWatchProgressMap((prev) => {
-        const existing = prev[id];
+        const existing = findWatchProgressEntry(prev, item);
         const now = Date.now();
+        const resolvedImdb =
+          item.imdbId ||
+          item.imdb_id ||
+          existing?.item?.imdbId ||
+          existing?.item?.imdb_id;
+        const canonicalKey =
+          resolvedImdb && resolvedImdb.startsWith('tt')
+            ? resolvedImdb
+            : getVodCanonicalKey(item, prev) ||
+              getVodCanonicalKey(existing, prev) ||
+              item.id;
 
-        if (isSeries) {
-          const s = targetSeason ?? selectedSeason ?? 1;
-          const ep = targetEpisode ?? selectedEpisode ?? 1;
-          const epKey = `S${s}E${ep}`;
-          const currentEpProg = existing?.episodeProgressMap?.[epKey];
-          const epDur = currentEpProg?.duration && currentEpProg.duration > 60 ? currentEpProg.duration : 2700;
-          const isCurrentlyWatched = Boolean(currentEpProg && currentEpProg.currentTime >= epDur * 0.85);
-          const newEpTime = isCurrentlyWatched ? 0 : epDur;
+        const baseItem: CinemetaItem = {
+          ...(existing?.item || item),
+          ...item,
+          id: canonicalKey,
+          imdbId: canonicalKey.startsWith('tt')
+            ? canonicalKey
+            : item.imdbId || existing?.item?.imdbId,
+        };
+        if (baseItem.type === 'series') {
+          baseItem.name =
+            baseItem.name.replace(/\s*\(S\d+[^)]*\)\s*/gi, '').trim() ||
+            baseItem.name;
+        }
 
-          const updatedEpMap = {
-            ...(existing?.episodeProgressMap || {}),
-            [epKey]: {
-              currentTime: newEpTime,
-              duration: epDur,
-              updatedAt: now,
-            },
-          };
+        const isActiveDetailedSeries =
+          isSeries &&
+          seasonsMap.size > 0 &&
+          (activeVodItem?.id === item.id ||
+            (detailedMeta &&
+              (detailedMeta.id === item.id || areVodItemsSame(detailedMeta as any, item))));
 
-          const nextEntry: VodWatchProgressEntry = {
+        let nextEntry: VodWatchProgressEntry;
+
+        if (isWholeSeries) {
+          const wasSeriesWatched = isVodEntryWatched(existing, statsSnap);
+          const nextWatchedFlag = !wasSeriesWatched;
+          const updatedEpMap: Record<string, EpisodeProgress> = {};
+          if (existing?.episodeProgressMap) {
+            for (const [k, prevEp] of Object.entries(existing.episodeProgressMap)) {
+              const d = prevEp?.duration && prevEp.duration > 60 ? prevEp.duration : 2700;
+              updatedEpMap[k] = {
+                currentTime: nextWatchedFlag ? d : 0,
+                duration: d,
+                updatedAt: now,
+                isWatched: nextWatchedFlag,
+              };
+            }
+          }
+          if (isActiveDetailedSeries) {
+            seasonsMap.forEach((epsList, sN) => {
+              for (const epItem of epsList) {
+                const k = `S${sN}E${epItem.episode}`;
+                const prevEp = updatedEpMap[k] || existing?.episodeProgressMap?.[k];
+                const d = prevEp?.duration && prevEp.duration > 60 ? prevEp.duration : 2700;
+                updatedEpMap[k] = {
+                  currentTime: nextWatchedFlag ? d : 0,
+                  duration: d,
+                  updatedAt: now,
+                  isWatched: nextWatchedFlag,
+                };
+              }
+            });
+          }
+          const lastEpDur = existing?.duration && existing.duration > 60 ? existing.duration : 2700;
+          nextEntry = {
             ...(existing || {
-              item,
-              season: s,
-              episode: ep,
-              currentTime: 0,
-              duration: epDur,
-              server: activeServer,
-              subLang: preferredSubLang,
-              deviceName: detectCurrentDeviceName(),
-              deviceId: getOrCreateCurrentDeviceId(),
-            }),
-            item: existing?.item || item,
-            season: s,
-            episode: ep,
-            updatedAt: now,
-            episodeProgressMap: updatedEpMap,
-          };
-
-          const next = { ...prev, [id]: nextEntry };
-          watchProgressMapRef.current = next;
-          saveWatchProgressMap(next, activeProfileId);
-          return next;
-        } else {
-          // Movie
-          const movDur = existing?.duration && existing.duration > 60 ? existing.duration : 5400;
-          const isCurrentlyWatched = Boolean(existing && existing.currentTime >= movDur * 0.85);
-          const newTime = isCurrentlyWatched ? 0 : movDur;
-
-          const nextEntry: VodWatchProgressEntry = {
-            ...(existing || {
-              item,
+              item: baseItem,
               season: 1,
               episode: 1,
               server: activeServer,
@@ -11429,20 +11675,174 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               deviceName: detectCurrentDeviceName(),
               deviceId: getOrCreateCurrentDeviceId(),
             }),
-            item: existing?.item || item,
-            currentTime: newTime,
-            duration: movDur,
+            item: baseItem,
+            season: nextWatchedFlag ? existing?.season || 1 : 1,
+            episode: nextWatchedFlag ? existing?.episode || 1 : 1,
+            currentTime: nextWatchedFlag ? lastEpDur : 0,
+            duration: lastEpDur,
+            isWatched: nextWatchedFlag,
+            isPlayingNow: false,
             updatedAt: now,
+            deviceName: detectCurrentDeviceName(),
+            deviceId: getOrCreateCurrentDeviceId(),
+            episodeProgressMap: updatedEpMap,
+          };
+        } else if (isSeries) {
+          const s = targetSeason ?? selectedSeason ?? 1;
+          const ep = targetEpisode ?? selectedEpisode ?? 1;
+          const epKey = `S${s}E${ep}`;
+          const currentEpProg = existing?.episodeProgressMap?.[epKey];
+          const epDur =
+            currentEpProg?.duration && currentEpProg.duration > 60
+              ? currentEpProg.duration
+              : 2700;
+          const isCurrentlyWatched = isEpisodeProgressWatched(currentEpProg);
+          const nextEpWatched = !isCurrentlyWatched;
+          const newEpTime = nextEpWatched ? epDur : 0;
+
+          const updatedEpMap: Record<string, EpisodeProgress> = {
+            ...(existing?.episodeProgressMap || {}),
+            [epKey]: {
+              currentTime: newEpTime,
+              duration: epDur,
+              updatedAt: now,
+              isWatched: nextEpWatched,
+            },
           };
 
-          const next = { ...prev, [id]: nextEntry };
-          watchProgressMapRef.current = next;
-          saveWatchProgressMap(next, activeProfileId);
-          return next;
+          let wholeSeriesWatched = false;
+          if (isActiveDetailedSeries) {
+            let totalKnown = 0;
+            let watchedKnown = 0;
+            seasonsMap.forEach((epsList, sN) => {
+              for (const epItem of epsList) {
+                totalKnown += 1;
+                if (isEpisodeProgressWatched(updatedEpMap[`S${sN}E${epItem.episode}`])) {
+                  watchedKnown += 1;
+                }
+              }
+            });
+            wholeSeriesWatched = totalKnown > 0 && watchedKnown >= totalKnown;
+          }
+
+          let pointerSeason = s;
+          let pointerEpisode = ep;
+          let pointerCurrentTime = newEpTime;
+          if (nextEpWatched && isActiveDetailedSeries) {
+            const sortedSeasons = [...availableSeasons].sort((a, b) => a - b);
+            const curSeasonEps = seasonsMap.get(s) || [];
+            const nextInSeason = curSeasonEps.find(
+              (cand) => cand.episode > ep && !isEpisodeProgressWatched(updatedEpMap[`S${s}E${cand.episode}`])
+            );
+            if (nextInSeason) {
+              pointerSeason = s;
+              pointerEpisode = nextInSeason.episode;
+              pointerCurrentTime = updatedEpMap[`S${s}E${nextInSeason.episode}`]?.currentTime || 0;
+            } else {
+              for (const sN of sortedSeasons.filter((x) => x > s)) {
+                const eps = seasonsMap.get(sN) || [];
+                const nextUnwatched = eps.find(
+                  (cand) => !isEpisodeProgressWatched(updatedEpMap[`S${sN}E${cand.episode}`])
+                );
+                if (nextUnwatched) {
+                  pointerSeason = sN;
+                  pointerEpisode = nextUnwatched.episode;
+                  pointerCurrentTime = updatedEpMap[`S${sN}E${nextUnwatched.episode}`]?.currentTime || 0;
+                  break;
+                }
+              }
+            }
+          }
+
+          nextEntry = {
+            ...(existing || {
+              item: baseItem,
+              season: pointerSeason,
+              episode: pointerEpisode,
+              currentTime: pointerCurrentTime,
+              duration: epDur,
+              server: activeServer,
+              subLang: preferredSubLang,
+              deviceName: detectCurrentDeviceName(),
+              deviceId: getOrCreateCurrentDeviceId(),
+            }),
+            item: baseItem,
+            season: pointerSeason,
+            episode: pointerEpisode,
+            currentTime: pointerCurrentTime,
+            duration: epDur,
+            isWatched: wholeSeriesWatched,
+            isPlayingNow: false,
+            updatedAt: now,
+            deviceName: detectCurrentDeviceName(),
+            deviceId: getOrCreateCurrentDeviceId(),
+            episodeProgressMap: updatedEpMap,
+          };
+        } else {
+          const movDur =
+            existing?.duration && existing.duration > 60 ? existing.duration : 5400;
+          const isCurrentlyWatched = isVodEntryWatched(existing);
+          const nextMovieWatched = !isCurrentlyWatched;
+          const newTime = nextMovieWatched ? movDur : 0;
+
+          nextEntry = {
+            ...(existing || {
+              item: baseItem,
+              season: 1,
+              episode: 1,
+              server: activeServer,
+              subLang: preferredSubLang,
+              deviceName: detectCurrentDeviceName(),
+              deviceId: getOrCreateCurrentDeviceId(),
+            }),
+            item: baseItem,
+            currentTime: newTime,
+            duration: movDur,
+            isWatched: nextMovieWatched,
+            isPlayingNow: false,
+            updatedAt: now,
+            deviceName: detectCurrentDeviceName(),
+            deviceId: getOrCreateCurrentDeviceId(),
+          };
         }
+
+        const next: Record<string, VodWatchProgressEntry> = {};
+        for (const [k, v] of Object.entries(prev)) {
+          if (!v || typeof v !== 'object') continue;
+          if (k !== canonicalKey && (k === item.id || areVodItemsSame(v.item, item))) {
+            continue;
+          }
+          next[k] = v;
+        }
+        next[canonicalKey] = nextEntry;
+        const cleanMap = deduplicateProgressMap(next);
+        watchProgressMapRef.current = cleanMap;
+        saveWatchProgressMap(cleanMap, activeProfileId, { immediateCloud: true });
+        return cleanMap;
       });
+
+      if (!toastActive && activeVodItem && (activeVodItem.id === item.id || areVodItemsSame(activeVodItem, item))) {
+        setResumeStartSeconds(0);
+        setPendingResumePromptSec(null);
+      }
+      if (toastMsg) {
+        showVodActionToast(toastMsg, toastActive, 'watched');
+      }
     },
-    [activeVodItem, selectedSeason, selectedEpisode, activeServer, preferredSubLang, activeProfileId]
+    [
+      activeVodItem,
+      detailedMeta,
+      seasonsMap,
+      availableSeasons,
+      seriesEpStatsMap,
+      selectedSeason,
+      selectedEpisode,
+      activeServer,
+      preferredSubLang,
+      activeProfileId,
+      tr,
+      showVodActionToast,
+    ]
   );
 
   const handleToggleSeasonWatched = useCallback(
@@ -11475,9 +11875,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         };
         const allCurrentlyWatched = seasonEpisodes.every((ep) => {
           const k = `S${sNum}E${ep.episode}`;
-          const p = existingEpMap[k];
-          const d = p?.duration && p.duration > 60 ? p.duration : 2700;
-          return Boolean(p && p.currentTime >= d * 0.85);
+          return isEpisodeProgressWatched(existingEpMap[k]);
         });
 
         const updatedEpMap: Record<string, EpisodeProgress> = {
@@ -11491,15 +11889,24 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             currentTime: allCurrentlyWatched ? 0 : d,
             duration: d,
             updatedAt: now,
+            isWatched: !allCurrentlyWatched,
           };
         }
 
         const sortedSeasons = [...availableSeasons].sort((a, b) => a - b);
         const isEpWatchedInMap = (s: number, e: number): boolean => {
-          const p = updatedEpMap[`S${s}E${e}`];
-          const d = p?.duration && p.duration > 60 ? p.duration : 2700;
-          return Boolean(p && p.currentTime >= d * 0.85);
+          return isEpisodeProgressWatched(updatedEpMap[`S${s}E${e}`]);
         };
+        const isWholeSeriesNowWatched =
+          !allCurrentlyWatched &&
+          sortedSeasons.length > 0 &&
+          sortedSeasons.every((sCheck) => {
+            const sList = seasonsMap.get(sCheck) || [];
+            return (
+              sList.length > 0 &&
+              sList.every((epItem) => isEpWatchedInMap(sCheck, epItem.episode))
+            );
+          });
 
         let pointerSeason = sNum;
         let pointerEpisode = 1;
@@ -11646,6 +12053,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           episode: pointerEpisode,
           currentTime: pointerCurrentTime,
           duration: pointerDuration,
+          isWatched: isWholeSeriesNowWatched,
+          isPlayingNow: false,
           server: existing?.server || activeServer,
           subLang: existing?.subLang || preferredSubLang,
           updatedAt: now,
@@ -11673,7 +12082,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         next[canonicalKey] = nextEntry;
         const cleanMap = deduplicateProgressMap(next);
         watchProgressMapRef.current = cleanMap;
-        saveWatchProgressMap(cleanMap, activeProfileId);
+        saveWatchProgressMap(cleanMap, activeProfileId, { immediateCloud: true });
         return cleanMap;
       });
       setResumeStartSeconds(0);
@@ -12015,7 +12424,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     entry?: VodWatchProgressEntry,
     isLiveActive = false
   ) => {
-    if (!entry || entry.currentTime <= 5) return null;
+    if (!entry) return null;
+    const entryStats =
+      seriesEpStatsMap[entry.item.id] ||
+      (entry.item.imdbId ? seriesEpStatsMap[entry.item.imdbId] : undefined);
+    if (isVodEntryWatched(entry, entryStats) && !isLiveActive) {
+      return (
+        <div className="absolute inset-x-0 bottom-0 z-10 h-1 bg-emerald-500/95 shadow-[0_0_8px_rgba(16,185,129,0.65)]" />
+      );
+    }
+    if (entry.currentTime <= 5) return null;
     const rawDur =
       entry.duration && entry.duration > 60
         ? entry.duration
@@ -15172,8 +15590,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             const drawerEpMap = drawerSavedProg?.episodeProgressMap || {};
                             const drawerWatchedInCur = episodesForSeason.filter((ep) => {
                               const p = drawerEpMap[`S${selectedSeason}E${ep.episode}`];
-                              const d = p?.duration && p.duration > 60 ? p.duration : 2700;
-                              return Boolean(p && p.currentTime >= d * 0.85);
+                              return isEpisodeProgressWatched(p);
                             }).length;
                             const drawerIsCurWatched =
                               episodesForSeason.length > 0 &&
@@ -15190,9 +15607,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   sEps.length > 0 &&
                                   sEps.every((ep) => {
                                     const p = drawerEpMap[`S${sNum}E${ep.episode}`];
-                                    const d =
-                                      p?.duration && p.duration > 60 ? p.duration : 2700;
-                                    return Boolean(p && p.currentTime >= d * 0.85);
+                                    return isEpisodeProgressWatched(p);
                                   });
                                 return (
                                 <button
@@ -15343,7 +15758,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     )
                                   )
                                   : 0;
-                              const isWatched = epPct >= 85;
+                              const isWatched = isEpisodeProgressWatched(epProg);
                               const resolvedImdb = activeVodItem.id.startsWith(
                                 'tt'
                               )
@@ -15438,11 +15853,41 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     <span className="absolute top-1 left-1 z-20 px-1.5 py-0.5 rounded bg-black/80 text-[10px] font-black text-white">
                                       E{ep.episode}
                                     </span>
-                                    {isWatched && (
-                                      <span className="absolute top-1 right-1 z-20 px-1.5 py-0.5 rounded bg-[#1e3a8a] text-white text-[9px] font-black">
-                                        Văzut
-                                      </span>
-                                    )}
+                                    <span
+                                      role="button"
+                                      tabIndex={-1}
+                                      data-ep-watched-toggle="true"
+                                      title={
+                                        isWatched
+                                          ? tr(
+                                              'Marcat văzut (apasă pentru a anula)',
+                                              'Watched (click to unmark)',
+                                              'Просмотрено (снять)'
+                                            )
+                                          : tr(
+                                              'Marchează episodul văzut',
+                                              'Mark episode watched',
+                                              'Отметить серию просмотренной'
+                                            )
+                                      }
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        handleToggleWatchedStatus(
+                                          activeVodItem,
+                                          selectedSeason,
+                                          ep.episode
+                                        );
+                                      }}
+                                      className={`absolute top-1 right-1 z-20 inline-flex items-center gap-0.5 transition-all cursor-pointer ${
+                                        isWatched
+                                          ? 'px-1.5 py-0.5 rounded bg-emerald-600/95 hover:bg-emerald-500 text-white text-[9px] font-black shadow'
+                                          : 'p-1 rounded-full bg-black/70 hover:bg-emerald-600 text-zinc-300 hover:text-white border border-white/20 opacity-0 group-hover:opacity-100 max-md:opacity-85'
+                                      }`}
+                                    >
+                                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                      {isWatched && <span>{tr('Văzut', 'Watched', 'Просм.')}</span>}
+                                    </span>
                                     {epPct > 0 && (
                                       <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-black/60">
                                         <div
@@ -15833,6 +16278,83 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                     {downloadedForSeason.length}/{totalSeasonEps}
                                   </span>
                                 )}
+                              </button>
+                            );
+                          })()}
+
+                          {/* Watched Status Toggle Pill */}
+                          {(() => {
+                            const detailProg = findWatchProgressEntry(
+                              watchProgressMap,
+                              activeVodItem
+                            );
+                            const detailStats =
+                              seriesEpStatsMap[activeVodItem.id] ||
+                              (activeVodItem.imdbId
+                                ? seriesEpStatsMap[activeVodItem.imdbId]
+                                : undefined);
+                            const isDetailWatched = isVodEntryWatched(
+                              detailProg,
+                              detailStats
+                            );
+                            const detailWatchedEps =
+                              activeVodItem.type === 'series'
+                                ? getSeriesWatchedEpisodesCount(detailProg)
+                                : 0;
+                            return (
+                              <button
+                                type="button"
+                                data-vod-watched-btn="true"
+                                title={
+                                  isDetailWatched
+                                    ? tr(
+                                        'Marcat ca văzut (apasă pentru a anula)',
+                                        'Marked as watched (click to unmark)',
+                                        'Просмотрено (нажмите, чтобы снять)'
+                                      )
+                                    : tr(
+                                        activeVodItem.type === 'series'
+                                          ? 'Marchează tot serialul ca văzut'
+                                          : 'Marchează filmul ca văzut',
+                                        activeVodItem.type === 'series'
+                                          ? 'Mark entire series as watched'
+                                          : 'Mark movie as watched',
+                                        activeVodItem.type === 'series'
+                                          ? 'Отметить весь сериал просмотренным'
+                                          : 'Отметить фильм просмотренным'
+                                      )
+                                }
+                                aria-label={tr(
+                                  isDetailWatched ? 'Văzut' : 'Marchează văzut',
+                                  isDetailWatched ? 'Watched' : 'Mark watched',
+                                  isDetailWatched ? 'Просмотрено' : 'Отметить'
+                                )}
+                                onClick={() =>
+                                  handleToggleWatchedStatus(
+                                    activeVodItem,
+                                    undefined,
+                                    undefined,
+                                    { wholeSeries: activeVodItem.type === 'series' }
+                                  )
+                                }
+                                className={`h-9 sm:h-11 px-3 sm:px-4 rounded-full border flex items-center justify-center gap-1.5 shrink-0 text-xs sm:text-sm font-bold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
+                                  isDetailWatched
+                                    ? 'bg-emerald-600/95 hover:bg-emerald-500 text-white border-emerald-300/75 shadow-[0_6px_20px_rgba(16,185,129,0.35)]'
+                                    : 'bg-white/10 backdrop-blur-xl border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] text-white'
+                                }`}
+                              >
+                                <CheckCircle2 className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+                                <span>
+                                  {isDetailWatched
+                                    ? tr('Văzut', 'Watched', 'Просм.')
+                                    : detailWatchedEps > 0 && activeVodItem.type === 'series'
+                                      ? tr(
+                                          `Văzut (${detailWatchedEps})`,
+                                          `Watched (${detailWatchedEps})`,
+                                          `Просм. (${detailWatchedEps})`
+                                        )
+                                      : tr('Marchează văzut', 'Mark watched', 'Просмотрено')}
+                                </span>
                               </button>
                             );
                           })()}
@@ -17027,9 +17549,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           (ep) => {
                             const p =
                               epProgressMap[`S${selectedSeason}E${ep.episode}`];
-                            const d =
-                              p?.duration && p.duration > 60 ? p.duration : 2700;
-                            return Boolean(p && p.currentTime >= d * 0.85);
+                            return isEpisodeProgressWatched(p);
                           }
                         ).length;
                         const isCurrentSeasonWatched =
@@ -17050,9 +17570,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             sEps.length > 0 &&
                             sEps.every((ep) => {
                               const p = epProgressMap[`S${sNum}E${ep.episode}`];
-                              const d =
-                                p?.duration && p.duration > 60 ? p.duration : 2700;
-                              return Boolean(p && p.currentTime >= d * 0.85);
+                              return isEpisodeProgressWatched(p);
                             });
                           return (
                           <button
@@ -17196,7 +17714,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 )
                               )
                               : 0;
-                          const isWatched = epPct >= 85;
+                          const isWatched = isEpisodeProgressWatched(epProg);
                           const epLabel = tr(
                             `Episodul ${ep.episode}`,
                             `Episode ${ep.episode}`,
@@ -17287,11 +17805,41 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 <span className="absolute top-2.5 left-2.5 z-20 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/15 text-[11px] font-black text-white">
                                   S{selectedSeason}:E{ep.episode}
                                 </span>
-                                {isWatched && (
-                                  <span className="absolute top-2.5 right-2.5 z-20 px-2.5 py-0.5 rounded-full bg-[#1e3a8a] text-white text-[10px] font-black shadow">
-                                    {tr('Văzut', 'Watched', 'Просмотрено')}
-                                  </span>
-                                )}
+                                <span
+                                  role="button"
+                                  tabIndex={-1}
+                                  data-ep-watched-toggle="true"
+                                  title={
+                                    isWatched
+                                      ? tr(
+                                          'Marcat văzut (apasă pentru a anula)',
+                                          'Watched (click to unmark)',
+                                          'Просмотрено (снять)'
+                                        )
+                                      : tr(
+                                          'Marchează episodul văzut',
+                                          'Mark episode watched',
+                                          'Отметить серию просмотренной'
+                                        )
+                                  }
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleToggleWatchedStatus(
+                                      activeVodItem,
+                                      selectedSeason,
+                                      ep.episode
+                                    );
+                                  }}
+                                  className={`absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 rounded-full transition-all cursor-pointer shadow ${
+                                    isWatched
+                                      ? 'px-2.5 py-0.5 bg-emerald-600/95 hover:bg-emerald-500 text-white border border-emerald-300/70 text-[10px] font-black'
+                                      : 'p-1.5 bg-black/75 hover:bg-emerald-600 text-zinc-200 hover:text-white border border-white/25 opacity-0 group-hover:opacity-100 max-md:opacity-90'
+                                  }`}
+                                >
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                  {isWatched && <span>{tr('Văzut', 'Watched', 'Просмотрено')}</span>}
+                                </span>
                                 <div className="absolute bottom-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2">
                                   <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-white/95 text-zinc-950 text-[11px] font-extrabold shadow">
                                     <span>
@@ -17429,18 +17977,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           />
                         )}
 
-                        {/* Optional Shelf 0: Continuă vizionarea (Toate intrările din istoric, derulare orizontală continuă cu săgeți) */}
-                        {historyList.length > 0 && (
+                        {/* Optional Shelf 0: Continuă vizionarea (doar titlurile nefinalizate; cele văzute rămân în Istoric) */}
+                        {continueWatchingList.length > 0 && (
                           <div className="space-y-3.5">
                             <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
                               {tr(
-                                `Continuă vizionarea — ${activeProfile.name} (${historyList.length})`,
-                                `Continue Watching for ${activeProfile.name} (${historyList.length})`,
-                                `Продолжить просмотр — ${activeProfile.name} (${historyList.length})`
+                                `Continuă vizionarea — ${activeProfile.name} (${continueWatchingList.length})`,
+                                `Continue Watching for ${activeProfile.name} (${continueWatchingList.length})`,
+                                `Продолжить просмотр — ${activeProfile.name} (${continueWatchingList.length})`
                               )}
                             </h2>
                             <div className="flex items-start gap-3 sm:gap-4 overflow-x-auto pt-2 pb-4 px-3 -mx-3 no-scrollbar scroll-smooth">
-                              {historyList.map((entry) => {
+                              {continueWatchingList.map((entry) => {
                                 const item = entry.item;
                                 const isLiveCard = false;
                                 const devLabel =
@@ -17531,6 +18079,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           entry,
                                           isLiveCard
                                         )}
+                                        <VodPosterWatchedControl
+                                          item={item}
+                                          entry={entry}
+                                          stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                          onToggleWatched={handleToggleWatchedStatus}
+                                          tr={tr}
+                                          positionClass="top-9 left-2.5"
+                                        />
                                       </div>
                                       <div className="mt-2 px-0.5">
                                         <div
@@ -17641,6 +18197,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
                                       </button>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -17723,6 +18286,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         <span className="absolute top-9 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                           </span>
                                       )}
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -17828,6 +18398,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
                                       </button>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -17933,6 +18510,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
                                       </button>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -18038,6 +18622,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
                                       </button>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -18138,6 +18729,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
                                       </button>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || (item.imdbId ? seriesEpStatsMap[item.imdbId] : undefined)}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5 h-[58px] flex flex-col justify-start overflow-hidden">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2 h-[40px] flex items-start">
@@ -18722,6 +19320,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   vodItems={vodItems}
                   savedVodItems={savedVodItems}
                   toggleSaveVodItem={toggleSaveVodItem}
+                  handleToggleWatchedStatus={handleToggleWatchedStatus}
                   handleFocusVodItem={handleFocusVodItem}
                   handleOpenVod={handleOpenVod}
                   hasMoreVod={hasMoreVod}
@@ -19134,10 +19733,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       {favToast && (
         <div className="fixed bottom-7 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none transition-all duration-200 animate-in fade-in slide-in-from-bottom-2">
           <div className="h-10 px-4 rounded-full bg-[#12151e]/92 backdrop-blur-2xl border border-white/[0.14] shadow-[0_14px_40px_rgba(0,0,0,0.78),inset_0_1px_0_rgba(255,255,255,0.14)] flex items-center gap-2.5 max-w-[min(90vw,440px)]">
-            <SfBookmarkIcon
-              className={`w-4 h-4 shrink-0 ${favToast.isFav ? 'text-[#60a5fa]' : 'text-zinc-400'}`}
-              filled={favToast.isFav}
-            />
+            {favToast.kind === 'watched' ? (
+              <CheckCircle2
+                className={`w-4 h-4 shrink-0 ${favToast.isFav ? 'text-emerald-400' : 'text-zinc-400'}`}
+              />
+            ) : (
+              <SfBookmarkIcon
+                className={`w-4 h-4 shrink-0 ${favToast.isFav ? 'text-[#60a5fa]' : 'text-zinc-400'}`}
+                filled={favToast.isFav}
+              />
+            )}
             <span className="text-[13px] font-semibold tracking-tight text-zinc-100 truncate">
               {favToast.message}
             </span>

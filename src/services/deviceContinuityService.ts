@@ -826,12 +826,10 @@ if (typeof window !== 'undefined') {
 export function isLocalHomeServer(): boolean {
   if (typeof window === 'undefined') return false;
   if (isDirectLocalHost()) return true;
-  if (activeBridgeOrigin) return true;
+  if (localBridgeAvailable === false) return false;
+  if (activeBridgeOrigin && localBridgeAvailable === true) return true;
   try {
-    if (
-      sessionStorage.getItem('filmio_local_bridge_ok') === '1' ||
-      Boolean(localStorage.getItem('filmio_local_bridge_origin'))
-    ) {
+    if (sessionStorage.getItem('filmio_local_bridge_ok') === '1') {
       return true;
     }
   } catch {

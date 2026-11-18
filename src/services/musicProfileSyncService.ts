@@ -10,10 +10,11 @@ export interface SyncedMusicTrack extends SpotifyTrackItem {
 }
 
 export interface SyncedMusicPlaybackState {
-  track: SyncedMusicTrack;
+  track: SyncedMusicTrack | null;
   elapsedSec: number;
   durationSec: number;
   updatedAt: number;
+  closed?: boolean;
 }
 
 export interface ProfileMusicSyncState {
@@ -146,14 +147,32 @@ export function mergeMusicSyncStates(
   }
   recentTracks.sort((x, y) => (Number(y.playedAt) || 0) - (Number(x.playedAt) || 0));
 
-  const prevPb = prev.playbackState?.track ? prev.playbackState : null;
-  const nextPb = next.playbackState?.track ? next.playbackState : null;
+  const normalizePb = (
+    raw: SyncedMusicPlaybackState | null | undefined
+  ): SyncedMusicPlaybackState | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const ts = Number(raw.updatedAt) || 0;
+    if (raw.closed || raw.track === null) {
+      return ts > 0
+        ? { track: null, elapsedSec: 0, durationSec: 0, updatedAt: ts, closed: true }
+        : null;
+    }
+    if (raw.track && typeof raw.track === 'object' && raw.track.id && raw.track.title) {
+      return {
+        track: healTrackCoverUrl(raw.track),
+        elapsedSec: Number(raw.elapsedSec) || 0,
+        durationSec: Number(raw.durationSec) || 0,
+        updatedAt: ts,
+      };
+    }
+    return null;
+  };
+  const prevPb = normalizePb(prev.playbackState);
+  const nextPb = normalizePb(next.playbackState);
   const playbackState =
-    nextPb && (Number(nextPb.updatedAt) || 0) >= (Number(prevPb?.updatedAt) || 0)
-      ? { ...nextPb, track: healTrackCoverUrl(nextPb.track) }
-      : prevPb
-      ? { ...prevPb, track: healTrackCoverUrl(prevPb.track) }
-      : null;
+    nextPb && (nextPb.updatedAt || 0) >= (prevPb?.updatedAt || 0)
+      ? nextPb
+      : prevPb || null;
 
   return {
     updatedAt: Math.max(Number(prev.updatedAt) || 0, Number(next.updatedAt) || 0),
@@ -304,6 +323,7 @@ function shouldAlsoMirrorToCloudOrigin(): boolean {
 
 const lastRemotePushAtByProf: Record<string, number> = {};
 const lastLikedSigByProf: Record<string, string> = {};
+const lastClosedByProf: Record<string, boolean | undefined> = {};
 
 export async function pullAndMergeProfileMusicState(
   profileId: string
@@ -325,11 +345,18 @@ export async function pullAndMergeProfileMusicState(
       localState.likedTracks.length > 0 ||
       localState.recentTracks.length > 0 ||
       Boolean(localState.playbackState);
+    const remoteHasStaleOpenPlayback = Boolean(
+      localState.playbackState?.closed &&
+        remote.playbackState?.track &&
+        (Number(localState.playbackState.updatedAt) || 0) >=
+          (Number(remote.playbackState.updatedAt) || 0)
+    );
     const remoteMissingLocalTracks =
       hasLocalRealData &&
       ((localState.likedTracks.length > (remote.likedTracks?.length || 0)) ||
         (localState.recentTracks.length > (remote.recentTracks?.length || 0)) ||
-        Boolean(localState.playbackState && !remote.playbackState));
+        Boolean(localState.playbackState && !remote.playbackState) ||
+        remoteHasStaleOpenPlayback);
 
     saveLocalProfileMusicState(cleanId, {
       ...merged,
@@ -337,11 +364,15 @@ export async function pullAndMergeProfileMusicState(
     });
 
     if (remoteMissingLocalTracks || localState.needsInitialCloudPush) {
-      void pushProfileMusicState(cleanId, {
-        ...merged,
-        updatedAt: Math.max(merged.updatedAt || 0, Date.now()),
-        needsInitialCloudPush: false,
-      });
+      void pushProfileMusicState(
+        cleanId,
+        {
+          ...merged,
+          updatedAt: Math.max(merged.updatedAt || 0, Date.now()),
+          needsInitialCloudPush: false,
+        },
+        remoteHasStaleOpenPlayback ? { force: true } : undefined
+      );
     }
     return merged;
   } catch {
@@ -351,18 +382,24 @@ export async function pullAndMergeProfileMusicState(
 
 export async function pushProfileMusicState(
   profileId: string,
-  state: ProfileMusicSyncState
+  state: ProfileMusicSyncState,
+  options?: { force?: boolean }
 ): Promise<ProfileMusicSyncState | null> {
   const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
   const likedSig = `${(state.likedTracks || []).map((t) => t.id).join(',')}|${Object.keys(state.removedMap || {}).sort().join(',')}`;
   const now = Date.now();
   const likedChanged = likedSig !== lastLikedSigByProf[cleanId];
+  const closedFlag = Boolean(state.playbackState?.closed);
+  const closedChanged =
+    lastClosedByProf[cleanId] !== undefined &&
+    closedFlag !== lastClosedByProf[cleanId];
   const lastPushAt = lastRemotePushAtByProf[cleanId] || 0;
 
-  if (!likedChanged && now - lastPushAt < 180000) {
+  if (!options?.force && !likedChanged && !closedChanged && now - lastPushAt < 180000) {
     return state;
   }
   lastLikedSigByProf[cleanId] = likedSig;
+  lastClosedByProf[cleanId] = closedFlag;
   lastRemotePushAtByProf[cleanId] = now;
 
   const bodyStr = JSON.stringify({

@@ -339,7 +339,7 @@
         if ('caches' in window) {
           caches.keys().then(function(keys) {
             for (var i = 0; i < keys.length; i++) {
-              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v54') {
+              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v56') {
                 caches.delete(keys[i]);
               }
             }

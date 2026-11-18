@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "🔒 [Pre-Push Gatekeeper] Verificare automată obligatorie în 6 Vectori (Build, Date, Securitate & Anti-Loop Consum Netlify)..."
+python3 "$REPO_ROOT/.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py"

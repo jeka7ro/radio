@@ -31,6 +31,7 @@ import { FilmioStartupLoader } from "../common/FilmioStartupLoader";
 import { toggleRadioPip } from "../player/RadioPipPlayer";
 import { StreamingPlatformLogo } from "../common/StreamingPlatformLogo";
 import { VodCardProducerBadge } from "../common/VodCardProducerBadge";
+import { VodPosterWatchedControl } from "../common/VodPosterWatchedControl";
 import { StreamingPlatformView } from "./StreamingPlatformView";
 import {
   getCountryFlagEmoji,
@@ -63,6 +64,8 @@ import {
   resolveSafeVodPosterUrl,
   handleVodPosterImgError,
   isAdminJekaProfile,
+  findWatchProgressEntry,
+  isVodEntryWatched,
 } from "../../views/smartTvLampaHelpers";
 
 let persistedIsKlubnichkaOpen = false;
@@ -173,6 +176,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   handleToggleLikeMusicTrack,
   seriesEpStatsMap = {},
   toggleSaveVodItem,
+  handleToggleWatchedStatus,
 }: Record<string, any> & {
   vodItems: any[];
   savedVodItems: any[];
@@ -793,6 +797,8 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     return uhdItems.filter((item) => item.type === uhdMediaFilter);
   }, [uhdItems, uhdMediaFilter]);
 
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'in_progress' | 'watched'>('all');
+
   return (
     <>
                 {/* SECTION 0A: AUTHENTIC STREAMING PLATFORM EXPERIENCES (Netflix, Apple TV+, Max, Prime Video, Disney+, SkyShowtime) */}
@@ -812,6 +818,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                     handleOpenVod={handleOpenVod}
                     handleCardPlayKey={handleCardPlayKey}
                     toggleSaveVodItem={toggleSaveVodItem}
+                    handleToggleWatchedStatus={handleToggleWatchedStatus}
                     tr={tr}
                   />
                 )}
@@ -1331,6 +1338,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                         </span>
                                     )}
+                                    <VodPosterWatchedControl
+                                      item={item}
+                                      entry={findWatchProgressEntry(watchProgressMap, item)}
+                                      stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                      onToggleWatched={handleToggleWatchedStatus}
+                                      tr={tr}
+                                    />
                                   </div>
                                   <div className="mt-2.5 px-0.5">
                                     <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -1411,6 +1425,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           </span>
                                         )}
                                       </div>
+                                      <VodPosterWatchedControl
+                                        item={item}
+                                        entry={findWatchProgressEntry(watchProgressMap, item)}
+                                        stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                        onToggleWatched={handleToggleWatchedStatus}
+                                        tr={tr}
+                                      />
                                     </div>
                                     <div className="mt-2.5 px-0.5">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -1671,6 +1692,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     ★
                                   </span>
                                 )}
+                                <VodPosterWatchedControl
+                                  item={item}
+                                  entry={findWatchProgressEntry(watchProgressMap, item)}
+                                  stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                  onToggleWatched={handleToggleWatchedStatus}
+                                  tr={tr}
+                                />
                               </div>
 
                               <div className="mt-2.5 px-0.5">
@@ -1843,6 +1871,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-black/75 text-rose-500 text-xs font-bold">
                                       </span>
                                   )}
+                                  <VodPosterWatchedControl
+                                    item={item}
+                                    entry={findWatchProgressEntry(watchProgressMap, item)}
+                                    stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                    onToggleWatched={handleToggleWatchedStatus}
+                                    tr={tr}
+                                  />
                                 </div>
                                 <div className="mt-2.5 px-0.5">
                                   <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -3217,20 +3252,30 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           : 'bg-amber-500/90 text-zinc-950'
                                       }`}
                                     >
-                                      {item.type === 'series'
-                                        ? formatSeriesCardBadgeText(
-                                            item,
-                                            seriesEpStatsMap[item.id] ||
-                                              uhdSeriesEpStats[item.id],
-                                            tr
-                                          )
-                                        : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
-                                    </span>
+                                        {item.type === 'series'
+                                          ? formatSeriesCardBadgeText(
+                                              item,
+                                              seriesEpStatsMap[item.id] ||
+                                                uhdSeriesEpStats[item.id],
+                                              tr
+                                            )
+                                          : tr('FILM', 'MOVIE', 'ФИЛЬМ')}
+                                      </span>
+                                    </div>
+                                    <VodPosterWatchedControl
+                                      item={item}
+                                      entry={findWatchProgressEntry(watchProgressMap, item)}
+                                      stats={
+                                        seriesEpStatsMap[item.id] ||
+                                        uhdSeriesEpStats[item.id]
+                                      }
+                                      onToggleWatched={handleToggleWatchedStatus}
+                                      tr={tr}
+                                    />
                                   </div>
-                                </div>
-                                <div className="mt-2.5 px-0.5">
-                                  <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
-                                    {item.name}
+                                  <div className="mt-2.5 px-0.5">
+                                    <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
+                                      {item.name}
                                   </div>
                                   <div className="text-xs text-zinc-400 mt-0.5">
                                     {formatSeriesCardSubtitleText(
@@ -4108,7 +4153,36 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                 )}
 
                 {/* SECTION 6: WATCH HISTORY ("История / Continuă vizionarea / Watch History" — All Watched Items + TV Remote Delete Buttons) */}
-                {section === 'history' && (
+                {section === 'history' && (() => {
+                  const watchedEntriesCount = historyList.filter((entry) =>
+                    isVodEntryWatched(
+                      entry,
+                      seriesEpStatsMap[entry.item?.id] ||
+                        uhdSeriesEpStats[entry.item?.id]
+                    )
+                  ).length;
+                  const inProgressEntriesCount =
+                    historyList.length - watchedEntriesCount;
+                  const displayedHistoryList =
+                    historyFilter === 'watched'
+                      ? historyList.filter((entry) =>
+                          isVodEntryWatched(
+                            entry,
+                            seriesEpStatsMap[entry.item?.id] ||
+                              uhdSeriesEpStats[entry.item?.id]
+                          )
+                        )
+                      : historyFilter === 'in_progress'
+                        ? historyList.filter(
+                            (entry) =>
+                              !isVodEntryWatched(
+                                entry,
+                                seriesEpStatsMap[entry.item?.id] ||
+                                  uhdSeriesEpStats[entry.item?.id]
+                              )
+                          )
+                        : historyList;
+                  return (
                   <div className="space-y-4 pb-16">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight flex items-center gap-2.5">
@@ -4126,34 +4200,89 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                         </span>
                       </h2>
 
-                      {historyList.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleClearAllWatchProgress}
-                          className="h-9 px-4 rounded-full bg-rose-500/15 hover:bg-rose-600 focus:bg-rose-600 text-rose-300 hover:text-white focus:text-white border border-rose-500/35 focus:border-white focus:ring-2 focus:ring-white focus:outline-none text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer"
-                        >
-                          <X className="w-4 h-4" />
-                          <span>
-                            {tr(
-                              `Șterge tot istoricul (${historyList.length})`,
-                              `Clear All History (${historyList.length})`,
-                              `Очистить всю историю (${historyList.length})`
-                            )}
-                          </span>
-                        </button>
-                      )}
-                    </div>
-                    {historyList.length === 0 ? (
-                      <p className="text-sm text-zinc-400">
-                        {tr(
-                          `Profilul „${activeProfile.name}” nu are niciun film sau serial început încă.`,
-                          `Profile "${activeProfile.name}" has no movies or series in progress yet.`,
-                          `В профиле «${activeProfile.name}» пока нет начатых фильмов или сериалов.`
+                      <div className="flex flex-wrap items-center gap-2">
+                        {historyList.length > 0 && (
+                          <div className="inline-flex items-center p-1 rounded-full bg-white/[0.06] border border-white/15">
+                            {(
+                              [
+                                {
+                                  id: 'all',
+                                  label: tr(
+                                    `Toate (${historyList.length})`,
+                                    `All (${historyList.length})`,
+                                    `Все (${historyList.length})`
+                                  ),
+                                },
+                                {
+                                  id: 'in_progress',
+                                  label: tr(
+                                    `În curs (${inProgressEntriesCount})`,
+                                    `In Progress (${inProgressEntriesCount})`,
+                                    `В процессе (${inProgressEntriesCount})`
+                                  ),
+                                },
+                                {
+                                  id: 'watched',
+                                  label: tr(
+                                    `Văzute ✓ (${watchedEntriesCount})`,
+                                    `Watched ✓ (${watchedEntriesCount})`,
+                                    `Просмотрено ✓ (${watchedEntriesCount})`
+                                  ),
+                                },
+                              ] as const
+                            ).map((tab) => (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setHistoryFilter(tab.id)}
+                                className={`h-7 px-3 rounded-full text-xs font-extrabold transition-all cursor-pointer ${
+                                  historyFilter === tab.id
+                                    ? tab.id === 'watched'
+                                      ? 'bg-emerald-500 text-zinc-950 shadow-sm'
+                                      : 'bg-white text-zinc-950 shadow-sm'
+                                    : 'text-zinc-300 hover:text-white'
+                                }`}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
                         )}
+                        {historyList.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleClearAllWatchProgress}
+                            className="h-9 px-4 rounded-full bg-rose-500/15 hover:bg-rose-600 focus:bg-rose-600 text-rose-300 hover:text-white focus:text-white border border-rose-500/35 focus:border-white focus:ring-2 focus:ring-white focus:outline-none text-xs font-semibold inline-flex items-center gap-2 transition-all cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                            <span>
+                              {tr(
+                                `Șterge tot istoricul (${historyList.length})`,
+                                `Clear All History (${historyList.length})`,
+                                `Очистить всю историю (${historyList.length})`
+                              )}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {displayedHistoryList.length === 0 ? (
+                      <p className="text-sm text-zinc-400">
+                        {historyList.length === 0
+                          ? tr(
+                              `Profilul „${activeProfile.name}” nu are niciun film sau serial început încă.`,
+                              `Profile "${activeProfile.name}" has no movies or series in progress yet.`,
+                              `В профиле «${activeProfile.name}» пока нет начатых фильмов или сериалов.`
+                            )
+                          : tr(
+                              'Niciun titlu în această categorie încă.',
+                              'No titles in this filter yet.',
+                              'В этой категории пока пусто.'
+                            )}
                       </p>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
-                        {historyList.map((entry) => {
+                        {displayedHistoryList.map((entry) => {
                           const item = entry.item;
                           const isLiveCard = false;
                           const devLabel =
@@ -4194,6 +4323,14 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                     loading="lazy"
                                     onError={(e) => handleVodPosterImgError(e, item)}
                                     className="w-full h-full object-cover"
+                                  />
+                                  <VodPosterWatchedControl
+                                    item={item}
+                                    entry={entry}
+                                    stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                    onToggleWatched={handleToggleWatchedStatus}
+                                    tr={tr}
+                                    positionClass="top-2.5 left-2.5"
                                   />
                                   {isLiveCard && (
                                     <div className="absolute top-2.5 left-2.5 z-10 px-2 py-0.5 rounded-md bg-zinc-950/90 border border-blue-400/75 backdrop-blur-md shadow-[0_2px_12px_rgba(0,0,0,0.7)] inline-flex items-center gap-1.5 max-w-[66%]">
@@ -4264,7 +4401,8 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       </div>
                     )}
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* SECTION 7: UNIFIED SMART TV FAVORITES HUB ("Избранное / My List / Favorite") */}
                 {section === 'saved' && (
@@ -4352,6 +4490,13 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       </div>
                                     );
                                   })()}
+                                  <VodPosterWatchedControl
+                                    item={item}
+                                    entry={findWatchProgressEntry(watchProgressMap, item)}
+                                    stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+                                    onToggleWatched={handleToggleWatchedStatus}
+                                    tr={tr}
+                                  />
                                 </div>
                                 <div className="mt-2.5 px-0.5">
                                   <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">

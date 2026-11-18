@@ -1586,8 +1586,11 @@ function tvStreamProxyPlugin(): Plugin {
           }
           const vCleared =
             (cleanV.currentTime || 0) === 0 &&
+            cleanV.isWatched === false &&
             (!cleanV.episodeProgressMap ||
-              Object.keys(cleanV.episodeProgressMap).length === 0);
+              Object.values(cleanV.episodeProgressMap).every(
+                (ep: any) => (ep?.currentTime || 0) === 0 && !ep?.isWatched
+              ));
           if (vCleared && (cleanV.updatedAt || 0) >= (prev.updatedAt || 0)) {
             merged[k] = cleanV;
             continue;
@@ -1706,15 +1709,21 @@ function tvStreamProxyPlugin(): Plugin {
                 mergedItem.imdbId = canonImdb;
                 mergedItem.id = canonImdb;
               }
+              const strictlyNewer = Math.abs(oTime - fTime) > 1500;
               finalEntry = {
                 ...secondary,
                 ...primary,
                 item: mergedItem,
                 episodeProgressMap: mergedEpMap,
-                currentTime:
-                  primary.season === secondary.season && primary.episode === secondary.episode
+                currentTime: strictlyNewer
+                  ? primary.currentTime || 0
+                  : primary.season === secondary.season &&
+                      primary.episode === secondary.episode
                     ? Math.max(primary.currentTime || 0, secondary.currentTime || 0)
                     : primary.currentTime,
+                isWatched: strictlyNewer
+                  ? primary.isWatched
+                  : primary.isWatched ?? secondary.isWatched,
                 updatedAt: Math.max(fTime, oTime),
               };
             }
@@ -1863,6 +1872,22 @@ function tvStreamProxyPlugin(): Plugin {
         }
         const diskProgress = readDiskProgress();
         if (Object.keys(diskProgress).length === 0) {
+          if (profileId !== 'p1' && !fs.existsSync(targetProgressFile)) {
+            void pullCloudJsonIfMissingOnDisk<Record<string, unknown>>(
+              `prog:${profileId}`,
+              `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(
+                profileId
+              )}`,
+              diskProgress
+            ).then((cloudProg) => {
+              res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store',
+              });
+              res.end(JSON.stringify(cloudProg || {}));
+            });
+            return;
+          }
           void syncProfileProgressWithCloud(profileId, false);
         }
         res.writeHead(200, {
@@ -1872,6 +1897,37 @@ function tvStreamProxyPlugin(): Plugin {
         res.end(JSON.stringify(diskProgress));
       });
 
+      const lanCloudGetCache = new Map<string, { ts: number; data: unknown }>();
+      const pullCloudJsonIfMissingOnDisk = async <T>(
+        cacheKey: string,
+        cloudUrl: string,
+        fallbackVal: T
+      ): Promise<T> => {
+        const cached = lanCloudGetCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < 60_000) {
+          return (cached.data as T) ?? fallbackVal;
+        }
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3200);
+        try {
+          const r = await fetch(cloudUrl, {
+            cache: 'no-store',
+            signal: ctrl.signal,
+          });
+          clearTimeout(timer);
+          if (r.ok) {
+            const parsed = (await r.json()) as T;
+            lanCloudGetCache.set(cacheKey, { ts: Date.now(), data: parsed });
+            return parsed;
+          }
+        } catch {
+          clearTimeout(timer);
+        }
+        return fallbackVal;
+      };
+
+      const inMemoryRemovedSavedByProf: Record<string, Record<string, number>> = {};
+
       const getTvSavedFileForProfile = (profileId: string) => {
         const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
         return path.resolve(__dirname, `.tv-saved-${cleanId}.json`);
@@ -1880,7 +1936,8 @@ function tvStreamProxyPlugin(): Plugin {
       server.middlewares.use('/api/tv-saved', (req, res) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Removed-Vod-Ids');
+        res.setHeader('Access-Control-Expose-Headers', 'X-Server-Removed-Vod-Ids');
         if (req.method === 'OPTIONS') {
           res.writeHead(204);
           res.end();
@@ -1889,6 +1946,9 @@ function tvStreamProxyPlugin(): Plugin {
         const reqUrl = new URL(req.url || '', 'http://localhost');
         const profileId = reqUrl.searchParams.get('profileId') || 'p1';
         const targetSavedFile = getTvSavedFileForProfile(profileId);
+        if (!inMemoryRemovedSavedByProf[profileId]) {
+          inMemoryRemovedSavedByProf[profileId] = {};
+        }
 
         const readDiskSaved = (): unknown[] => {
           try {
@@ -1910,12 +1970,45 @@ function tvStreamProxyPlugin(): Plugin {
             body += chunk;
           });
           req.on('end', () => {
+            lanCloudGetCache.delete(`saved:${profileId}`);
+            const removedMap = inMemoryRemovedSavedByProf[profileId];
+            let incomingRemovedHeader = '{}';
+            try {
+              const rawRem = String(req.headers['x-removed-vod-ids'] || '{}');
+              const parsedRem = JSON.parse(rawRem);
+              if (parsedRem && typeof parsedRem === 'object') {
+                for (const [rid, rts] of Object.entries(parsedRem)) {
+                  const tsNum = Number(rts) || 0;
+                  if (rid && tsNum > (removedMap[rid] || 0)) {
+                    removedMap[rid] = tsNum;
+                  }
+                }
+              }
+              incomingRemovedHeader = JSON.stringify(removedMap);
+            } catch {
+              // ignore
+            }
             try {
               const incoming = JSON.parse(body || '[]');
               if (Array.isArray(incoming)) {
+                for (const it of incoming) {
+                  if (it && it.id && removedMap[it.id]) {
+                    const incTs = Number(it.savedAt) || 0;
+                    if (incTs > removedMap[it.id]) {
+                      delete removedMap[it.id];
+                    }
+                  }
+                }
+                const filtered = incoming.filter((it: any) => {
+                  if (!it || !it.id) return false;
+                  const remTs = Number(removedMap[it.id]) || 0;
+                  const savedTs = Number(it.savedAt) || 1;
+                  return remTs === 0 || savedTs > remTs;
+                });
+                incomingRemovedHeader = JSON.stringify(removedMap);
                 fs.writeFileSync(
                   targetSavedFile,
-                  JSON.stringify(incoming),
+                  JSON.stringify(filtered),
                   'utf-8'
                 );
                 fetch(
@@ -1924,14 +2017,18 @@ function tvStreamProxyPlugin(): Plugin {
                   )}`,
                   {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(incoming),
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'X-Removed-Vod-Ids': incomingRemovedHeader,
+                    },
+                    body: JSON.stringify(filtered),
                   }
                 ).catch(() => { });
               }
             } catch {
               // ignore
             }
+            res.setHeader('X-Server-Removed-Vod-Ids', incomingRemovedHeader);
             res.writeHead(200, {
               'Content-Type': 'application/json; charset=utf-8',
               'Cache-Control': 'no-cache, no-store',
@@ -1941,11 +2038,37 @@ function tvStreamProxyPlugin(): Plugin {
           return;
         }
 
+        const localSaved = readDiskSaved();
+        if (profileId !== 'p1' && !fs.existsSync(targetSavedFile)) {
+          void pullCloudJsonIfMissingOnDisk<unknown[]>(
+            `saved:${profileId}`,
+            `https://filmio.my/api/tv-saved?profileId=${encodeURIComponent(
+              profileId
+            )}`,
+            localSaved
+          ).then((cloudSaved) => {
+            res.setHeader(
+              'X-Server-Removed-Vod-Ids',
+              JSON.stringify(inMemoryRemovedSavedByProf[profileId] || {})
+            );
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(JSON.stringify(Array.isArray(cloudSaved) ? cloudSaved : []));
+          });
+          return;
+        }
+
+        res.setHeader(
+          'X-Server-Removed-Vod-Ids',
+          JSON.stringify(inMemoryRemovedSavedByProf[profileId] || {})
+        );
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-cache, no-store',
         });
-        res.end(JSON.stringify(readDiskSaved()));
+        res.end(JSON.stringify(localSaved));
       });
 
       const getTvRadioFavsFileForProfile = (profileId: string) => {
@@ -2012,6 +2135,7 @@ function tvStreamProxyPlugin(): Plugin {
                     updatedAt: incomingTs,
                     stations: incoming.stations.slice(0, 300),
                   };
+                  lanCloudGetCache.delete(`radio:${profileId}`);
                   fs.writeFileSync(
                     targetFile,
                     JSON.stringify(nextPayload),
@@ -2039,6 +2163,29 @@ function tvStreamProxyPlugin(): Plugin {
             res.end(
               JSON.stringify(
                 readDiskRadioFavs() || { updatedAt: 0, stations: [] }
+              )
+            );
+          });
+          return;
+        }
+
+        if (profileId !== 'p1' && !fs.existsSync(targetFile)) {
+          void pullCloudJsonIfMissingOnDisk<{ updatedAt: number; stations: unknown[] }>(
+            `radio:${profileId}`,
+            `https://filmio.my/api/tv-radio-favorites?profileId=${encodeURIComponent(
+              profileId
+            )}`,
+            { updatedAt: 0, stations: [] }
+          ).then((cloudRadio) => {
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(
+              JSON.stringify(
+                cloudRadio && Array.isArray(cloudRadio.stations)
+                  ? cloudRadio
+                  : { updatedAt: 0, stations: [] }
               )
             );
           });
@@ -2120,6 +2267,7 @@ function tvStreamProxyPlugin(): Plugin {
                     updatedAt: incomingTs,
                     channels: incoming.channels.slice(0, 300),
                   };
+                  lanCloudGetCache.delete(`tvch:${profileId}`);
                   fs.writeFileSync(
                     targetFile,
                     JSON.stringify(nextPayload),
@@ -2147,6 +2295,29 @@ function tvStreamProxyPlugin(): Plugin {
             res.end(
               JSON.stringify(
                 readDiskChannelFavs() || { updatedAt: 0, channels: [] }
+              )
+            );
+          });
+          return;
+        }
+
+        if (profileId !== 'p1' && !fs.existsSync(targetFile)) {
+          void pullCloudJsonIfMissingOnDisk<{ updatedAt: number; channels: unknown[] }>(
+            `tvch:${profileId}`,
+            `https://filmio.my/api/tv-channel-favorites?profileId=${encodeURIComponent(
+              profileId
+            )}`,
+            { updatedAt: 0, channels: [] }
+          ).then((cloudCh) => {
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store',
+            });
+            res.end(
+              JSON.stringify(
+                cloudCh && Array.isArray(cloudCh.channels)
+                  ? cloudCh
+                  : { updatedAt: 0, channels: [] }
               )
             );
           });
@@ -2232,22 +2403,25 @@ function tvStreamProxyPlugin(): Plugin {
         recentTracks.sort(
           (a, b) => (Number(b.playedAt) || 0) - (Number(a.playedAt) || 0)
         );
-        const prevPb =
-          prev.playbackState && typeof prev.playbackState === 'object'
-            ? prev.playbackState
-            : null;
-        const nextPb =
-          next.playbackState && typeof next.playbackState === 'object'
-            ? next.playbackState
-            : null;
-        const playbackState =
-          nextPb &&
-            nextPb.track &&
-            (Number(nextPb.updatedAt) || 0) >= (Number(prevPb?.updatedAt) || 0)
-            ? nextPb
-            : prevPb && prevPb.track
-              ? prevPb
+        const normalizePb = (raw: any) => {
+          if (!raw || typeof raw !== 'object') return null;
+          const ts = Number(raw.updatedAt) || 0;
+          if (raw.closed || raw.track === null) {
+            return ts > 0
+              ? { track: null, elapsedSec: 0, durationSec: 0, updatedAt: ts, closed: true }
               : null;
+          }
+          if (raw.track && typeof raw.track === 'object' && raw.track.id && raw.track.title) {
+            return raw;
+          }
+          return null;
+        };
+        const prevPb = normalizePb(prev.playbackState);
+        const nextPb = normalizePb(next.playbackState);
+        const playbackState =
+          nextPb && (Number(nextPb.updatedAt) || 0) >= (Number(prevPb?.updatedAt) || 0)
+            ? nextPb
+            : prevPb || null;
         return {
           updatedAt: Math.max(Number(prev.updatedAt) || 0, baseTs),
           likedTracks: likedTracks.slice(0, 500),
@@ -2310,7 +2484,7 @@ function tvStreamProxyPlugin(): Plugin {
                 const nextStr = JSON.stringify(merged);
                 if (nextStr !== prevStr) {
                   fs.writeFileSync(targetFile, nextStr, 'utf-8');
-                  const likedSig = `${(merged.likedTracks || []).length}:${Object.keys(merged.removedMap || {}).length}`;
+                  const likedSig = `${(merged.likedTracks || []).length}:${Object.keys(merged.removedMap || {}).length}:${merged.playbackState?.closed ? 1 : 0}`;
                   const nowTs = Date.now();
                   const shouldPushMusicCloud =
                     likedSig !== lastMusicLikedSigByProf[profileId] ||

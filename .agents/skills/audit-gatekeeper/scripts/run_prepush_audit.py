@@ -400,6 +400,117 @@ for (const kpId of requiredShows) {
   }
 }
 
+// Etalon D: Persistare închidere player muzică (tombstone `closed: true`, nu reapare la refresh)
+const musicProf = 'audit_music_close';
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-music-sync?profileId=${musicProf}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    updatedAt: 1000,
+    likedTracks: [],
+    removedMap: {},
+    recentTracks: [],
+    playbackState: {
+      track: {
+        id: 'dz_test',
+        title: 'Your Latest Trick',
+        artist: 'Dire Straits',
+        cover: '',
+        durationSec: 389,
+        year: 1985,
+        genre: 'Rock',
+      },
+      elapsedSec: 180,
+      durationSec: 389,
+      updatedAt: 1000,
+    },
+  }),
+}));
+
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-music-sync?profileId=${musicProf}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    updatedAt: 2000,
+    playbackState: {
+      track: null,
+      elapsedSec: 0,
+      durationSec: 0,
+      updatedAt: 2000,
+      closed: true,
+    },
+  }),
+}));
+
+const resMusicClosed = await tvSyncHandler(new Request(`https://filmio.my/api/tv-music-sync?profileId=${musicProf}`));
+const closedData = await resMusicClosed.json();
+if (!closedData?.playbackState?.closed || closedData?.playbackState?.track !== null) {
+  throw new Error('Etalon D eșuat: tombstone-ul de închidere muzică nu a fost păstrat: ' + JSON.stringify(closedData?.playbackState));
+}
+
+// Etalon E: Testează marcarea/anularea Văzut (isWatched: false, currentTime: 0) în /api/tv-progress și ștergerea Favorite prin X-Removed-Vod-Ids în /api/tv-saved
+const watchedProf = 'audit_watched_etalon';
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-progress?profileId=${watchedProf}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    'tt0499549': {
+      item: { id: 'tt0499549', imdbId: 'tt0499549', name: 'Avatar', type: 'movie', poster: '' },
+      season: 1,
+      episode: 1,
+      currentTime: 5400,
+      duration: 5400,
+      isWatched: true,
+      updatedAt: 1000,
+    },
+  }),
+}));
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-progress?profileId=${watchedProf}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    'tt0499549': {
+      item: { id: 'tt0499549', imdbId: 'tt0499549', name: 'Avatar', type: 'movie', poster: '' },
+      season: 1,
+      episode: 1,
+      currentTime: 0,
+      duration: 5400,
+      isWatched: false,
+      updatedAt: 5000,
+    },
+  }),
+}));
+const resUnmarked = await tvSyncHandler(new Request(`https://filmio.my/api/tv-progress?profileId=${watchedProf}`));
+const unmarkedMap = await resUnmarked.json();
+if (!unmarkedMap?.tt0499549 || unmarkedMap.tt0499549.currentTime !== 0 || unmarkedMap.tt0499549.isWatched !== false) {
+  throw new Error('Etalon E eșuat (/api/tv-progress unmark): ' + JSON.stringify(unmarkedMap?.tt0499549));
+}
+
+const savedProf = 'audit_saved_etalon';
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-saved?profileId=${savedProf}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify([
+    { id: 'fav_1', name: 'Film 1', type: 'movie', poster: '', savedAt: 1000 },
+    { id: 'fav_2', name: 'Film 2', type: 'movie', poster: '', savedAt: 1000 },
+  ]),
+}));
+await tvSyncHandler(new Request(`https://filmio.my/api/tv-saved?profileId=${savedProf}`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Removed-Vod-Ids': JSON.stringify({ fav_2: 5000 }),
+  },
+  body: JSON.stringify([
+    { id: 'fav_1', name: 'Film 1', type: 'movie', poster: '', savedAt: 1000 },
+  ]),
+}));
+const resSavedCheck = await tvSyncHandler(new Request(`https://filmio.my/api/tv-saved?profileId=${savedProf}`));
+const savedCheckArr = await resSavedCheck.json();
+if (!Array.isArray(savedCheckArr) || savedCheckArr.length !== 1 || savedCheckArr[0]?.id !== 'fav_1') {
+  throw new Error('Etalon E eșuat (/api/tv-saved X-Removed-Vod-Ids): ' + JSON.stringify(savedCheckArr));
+}
+
 console.log('VECTOR3_NODE_OK');
 """
     code, out, err = run_cmd(["node", "--input-type=module", "-e", node_invariants_script])
@@ -914,7 +1025,7 @@ def vector6_anti_loop_and_netlify_consumption() -> Tuple[bool, str, List[str]]:
     if re.search(r"precacheShellAndBundles[\s\S]*cache\.add\(", sw_txt) or "/assets/" in sw_txt and "cache.add(" in sw_txt:
         errors.append("public/sw.js descarcă dublu bundle-urile `/assets/` în faza `install`")
     else:
-        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v54'` fără re-descărcarea bundle-urilor în `install`")
+        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v56'` fără re-descărcarea bundle-urilor în `install`")
 
     helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
     rse_m = re.search(r"export\s+async\s+function\s+resolveSeriesEpisodeStats\b([\s\S]*?)\nexport\s+function\s+formatSeriesCardBadgeText\b", helpers_txt)

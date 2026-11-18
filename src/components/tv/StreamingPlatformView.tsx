@@ -17,9 +17,11 @@ import {
   getVodCardRatingInfo,
   formatSeriesCardBadgeText,
   formatSeriesCardSubtitleText,
+  findWatchProgressEntry,
 } from '../../views/smartTvLampaHelpers';
 import { StreamingPlatformLogo } from '../common/StreamingPlatformLogo';
 import { VodCardProducerBadge } from '../common/VodCardProducerBadge';
+import { VodPosterWatchedControl } from '../common/VodPosterWatchedControl';
 
 interface StreamingPlatformViewProps {
   section: StreamingPlatformId | string;
@@ -36,6 +38,12 @@ interface StreamingPlatformViewProps {
   handleOpenVod: (item: CinemetaItem, autoplay?: boolean, s?: number, ep?: number) => void;
   handleCardPlayKey: (e: React.KeyboardEvent, item: CinemetaItem, s?: number, ep?: number) => void;
   toggleSaveVodItem?: (item: CinemetaItem) => void;
+  handleToggleWatchedStatus?: (
+    item: CinemetaItem,
+    season?: number,
+    episode?: number,
+    options?: { wholeSeries?: boolean }
+  ) => void;
   tr: (ro: string, en: string, ru: string) => string;
 }
 
@@ -54,6 +62,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
   handleOpenVod,
   handleCardPlayKey,
   toggleSaveVodItem,
+  handleToggleWatchedStatus,
   tr,
 }) => {
   const currentPlat = useMemo(() => {
@@ -306,6 +315,14 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
             >
               <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
             </button>
+
+            <VodPosterWatchedControl
+              item={item}
+              entry={findWatchProgressEntry(watchProgressMap, item)}
+              stats={seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id]}
+              onToggleWatched={handleToggleWatchedStatus}
+              tr={tr}
+            />
           </div>
 
           {/* Title & Metadata below card */}

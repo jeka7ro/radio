@@ -6,6 +6,40 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-18 — Sistem Complet „Văzut ✓” (Filme, Sezoane, Episoade & Carduri) + Audit/Hardening Sincronizare Cloud↔LAN (`aether-radio-v56`)
+- **Autor**: Antigravity
+- **Ce s-a schimbat**:
+  - Implementat sistem complet și persistent **„✓ Văzut”** pentru filme, seriale întregi, sezoane și episoade individuale:
+    - Componentă nouă `VodPosterWatchedControl` (`src/components/common/VodPosterWatchedControl.tsx`) afișată pe posterele din Home Shelves 0–6, platforme de streaming, catalog, căutare, favorite și istoric (badge verde `✓ Văzut`, badge albastru `✓ X ep.` sau buton rapid `✓` la hover/tap).
+    - Buton vizibil `[data-vod-watched-btn="true"]` („Marchează văzut / Văzut”) în bara principală a paginii de detalii Film/Serial, buton per-sezon „Marchează sezonul văzut / Sezon văzut” și badge interactiv `[data-ep-watched-toggle="true"]` pe fiecare card de episod (atât în Drawer cât și în grid-ul din detalii).
+    - Tab-uri de filtrare (`Toate` | `În curs` | `Văzute ✓`) în `Istoric vizionare` (`src/components/tv/SmartTvCatalogSections.tsx`) și filtrare `continueWatchingList` pe Home astfel încât titlurile finalizate să iasă din `Continuă vizionarea`, dar să rămână accesibile în `Istoric vizionare`.
+    - Flag explicit `isWatched` în `EpisodeProgress` și `VodWatchProgressEntry` (`src/views/smartTvLampaHelpers.ts`), reguli `vCleared` + `strictlyNewer` (> 1500ms) în `mergeTwoProgressEntries`, `vite.config.ts` și `netlify/functions/tv-sync.mjs` pentru ca anularea marcajului (`isWatched: false, currentTime: 0`) să bată timestamp-urile vechi din cloud.
+  - Întărit sincronizarea multi-device LAN (`:8769`) ↔ Cloud (`filmio.my` `@netlify/blobs`):
+    - Adăugat tombstones `X-Removed-Vod-Ids` / `X-Server-Removed-Vod-Ids` pe `/api/tv-saved` în `netlify/functions/tv-sync.mjs`, `vite.config.ts`, `smartTvLampaHelpers.ts` și `SmartTvLampaViewCore.tsx` (inclusiv protecție împotriva re-seed-ului la ștergerea completă).
+    - Adăugat pull read-only din Cloud pe `:8769` (`pullCloudJsonIfMissingOnDisk`, cache 60s) pentru profilurile secundare (non-`p1`) fără fișier local pe disk.
+    - Hardening `isLocalHomeServer()` în `src/services/deviceContinuityService.ts` pentru a preveni modul LAN fals când `:8769` este offline.
+  - Bumped SW cache la `'aether-radio-v56'` (`public/sw.js`, `index.html`) și adăugat **Etalon E** în `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`.
+  - Instalat Git hook obligatoriu `.git/hooks/pre-push` și copie versionată `.githooks/pre-push` care blochează automat orice `git push` dacă auditul în 6 vectori nu trece cu `🟢 VERDE`.
+- **De ce**: Utilizatorul a cerut opțiune vizibilă de marcare a filmelor/serialelor ca văzute și un audit cap-coadă al sincronizării conturilor și datelor între serverul local și producție, plus blocaj hard pe `git push`.
+- **Fișiere**: `src/components/common/VodPosterWatchedControl.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/components/tv/SmartTvCatalogSections.tsx`, `src/components/tv/StreamingPlatformView.tsx`, `src/services/deviceContinuityService.ts`, `netlify/functions/tv-sync.mjs`, `vite.config.ts`, `public/sw.js`, `index.html`, `.githooks/pre-push`, `.git/hooks/pre-push`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`.
+
+### 2026-11-18 15:54 — Persistare Închidere (`✕`) Player Muzică la Refresh & Sync Multi-Device (`aether-radio-v55`)
+- **Autor:** Antigravity
+- **Ce s-a făcut:**
+  1. **Persistare tombstone `closed: true` la închiderea mini-playerului Muzică ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):**
+     - Actualizat `persistAndSyncMusicState` să accepte `{ forceCloud?: boolean }` și override explicit pe `playbackState`.
+     - Actualizat `handleStopAndCloseMusic` (butonul `✕`) precum și auto-închiderea muzicii la pornirea Radio/Live TV/VOD/Trailer să salveze imediat în `localStorage` și să forțeze sync-ul `/api/tv-music-sync` cu `{ track: null, elapsedSec: 0, durationSec: 0, updatedAt: Date.now(), closed: true }`.
+     - În `applySyncedMusicState`, dacă `pb?.closed || pb?.track === null`, playerul rămâne închis (și curăță eventuala stare locală rămasă) fără a reapărea după refresh.
+  2. **Suport timestamped close-tombstone la fuziune ([musicProfileSyncService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/musicProfileSyncService.ts), [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts), [tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs)):**
+     - Adăugat `normalizePb()` bazat pe `updatedAt` în `mergeMusicSyncStates`, `mergeLocalMusicSyncData` și `mergeMusicProfileData`: un tombstone `closed: true` mai nou suprascrie starea activă veche, iar o piesă pornită mai târziu suprascrie tombstone-ul vechi.
+     - Permis push-ul imediat în `pushProfileMusicState` la schimbarea `closed` sau cu `{ force: true }`, plus detecție `remoteHasStaleOpenPlayback` în `pullAndMergeProfileMusicState` și semnare `closed` în `vite.config.ts` (`likedSig`).
+  3. **Test Etalon Pre-Push & Cache SW ([run_prepush_audit.py](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py), [sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html)):**
+     - Adăugat **Etalon D** în Vectorul 3 al `run_prepush_audit.py` pentru verificarea păstrării tombstone-ului `closed: true` pe `/api/tv-music-sync` și actualizat `CACHE_NAME` la `'aether-radio-v55'`.
+- **De ce:** Apăsarea `✕` pe mini-playerul de Muzică din header ștergea doar starea din memorie (`setCurrentMusicTrack(null)`), iar `mergeMusicSyncStates` ignora `playbackState: null`, astfel încât la fiecare refresh se restaura automat ultima piesă ascultată (`Your Latest Trick` — *Dire Straits*).
+- **Fișiere modificate:** `src/views/SmartTvLampaViewCore.tsx`, `src/services/musicProfileSyncService.ts`, `vite.config.ts`, `netlify/functions/tv-sync.mjs`, `public/sw.js`, `index.html`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`.
+
+---
+
 ### 2026-11-18 10:05 — Eliminare Loop Refresh pe Home, Eliminare Consum Inutil Netlify/Blobs, Hardening Securitate & Upgrade Audit Gatekeeper Vector 6 (`aether-radio-v54`)
 - **Autor:** Antigravity
 - **Ce s-a făcut:**
