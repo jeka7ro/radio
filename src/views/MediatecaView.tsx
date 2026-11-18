@@ -584,6 +584,8 @@ function loadWatchProgressMap(
   }
 }
 
+const lastMediatecaCloudPayloadByProf = new Map<string, string>();
+
 function saveWatchProgressMap(
   map: Record<string, VodWatchProgressEntry>,
   profileId = 'p1',
@@ -600,6 +602,10 @@ function saveWatchProgressMap(
     }
     if (syncServer) {
       const cleanProf = encodeURIComponent(profileId);
+      if (lastMediatecaCloudPayloadByProf.get(cleanProf) === payload) {
+        return;
+      }
+      lastMediatecaCloudPayloadByProf.set(cleanProf, payload);
       fetch(`/api/tv-progress?profileId=${cleanProf}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1168,13 +1174,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     };
   }, []);
 
-  // Real-time Cross-Device Continuity Sync (4s on Home Wi-Fi, 120s smart sync on Netlify / 4G / 5G)
+  // Throttled Cross-Device Continuity Sync (60s on Home Wi-Fi, 300s on Netlify / Mobile)
   useEffect(() => {
-    const syncCrossDeviceState = () => {
-      syncSharedProfilesFromServer()
+    let lastCrossDeviceSyncAt = 0;
+    const syncCrossDeviceState = (force = false) => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      const now = Date.now();
+      if (!force && now - lastCrossDeviceSyncAt < 60_000) {
+        return;
+      }
+      lastCrossDeviceSyncAt = now;
+      syncSharedProfilesFromServer(force)
         .then((merged) => {
           if (Array.isArray(merged) && merged.length > 0) {
-            setProfiles(merged);
+            const nextJson = JSON.stringify(merged);
+            setProfiles((prev) =>
+              JSON.stringify(prev) === nextJson ? prev : merged
+            );
           }
         })
         .catch(() => { });
@@ -1273,12 +1291,12 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
         .catch(() => { });
     };
 
-    syncCrossDeviceState();
-    const intervalMs = isLocalHomeServer() ? 4000 : 120000;
-    const timer = window.setInterval(syncCrossDeviceState, intervalMs);
-    const onFocus = () => syncCrossDeviceState();
+    syncCrossDeviceState(true);
+    const intervalMs = isLocalHomeServer() ? 60_000 : 300_000;
+    const timer = window.setInterval(() => syncCrossDeviceState(false), intervalMs);
+    const onFocus = () => syncCrossDeviceState(false);
     const onVis = () => {
-      if (document.visibilityState === 'visible') syncCrossDeviceState();
+      if (document.visibilityState === 'visible') syncCrossDeviceState(false);
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVis);

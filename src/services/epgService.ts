@@ -131,11 +131,6 @@ if (typeof window !== 'undefined') {
       notifyListeners();
     }
   }, 30_000);
-
-  window.setTimeout(() => {
-    void fetchEpgForCountry('RO');
-    void fetchEpgForCountry('RU');
-  }, 150);
 }
 
 function findRawEpgEntryInStore(

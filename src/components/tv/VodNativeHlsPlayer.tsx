@@ -2190,8 +2190,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         window.location.pathname.toLowerCase().startsWith('/tv') ||
         isHardwareSmartTv);
 
+    const isLocalDevLog =
+      typeof window !== 'undefined' &&
+      (window.location.port === '8769' ||
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1');
+
     const logTvVod = (evt: string, detail = '') => {
-      if (!isSmartTvEnv) return;
+      if (!isSmartTvEnv || !isLocalDevLog) return;
       try {
         fetch(
           `/api/tv-log?vod=${encodeURIComponent(evt)}&d=${encodeURIComponent(
@@ -5797,6 +5803,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             hasInitialPlayWokenOsdRef.current = true;
             if (
               typeof window !== 'undefined' &&
+              (window.location.port === '8769' ||
+                window.location.hostname === 'localhost' ||
+                window.location.hostname === '127.0.0.1') &&
               (document.documentElement.classList.contains('smart-tv-mode') ||
                 window.location.pathname.toLowerCase().startsWith('/tv'))
             ) {

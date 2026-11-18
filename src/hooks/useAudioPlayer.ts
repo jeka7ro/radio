@@ -340,9 +340,9 @@ export function useAudioPlayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStation, streamReloadToken]);
 
-  // Poll live ICY / Icecast metadata & Deezer/iTunes cover + artist avatar while station is active
+  // Poll live ICY / Icecast metadata & Deezer/iTunes cover + artist avatar only while station is actively playing/loading
   useEffect(() => {
-    if (!currentStation) {
+    if (!currentStation || (playerStatus !== 'playing' && playerStatus !== 'loading')) {
       return;
     }
 
@@ -351,8 +351,17 @@ export function useAudioPlayer() {
 
     let cancelled = false;
     let quickRetryTimer: number | null = null;
+    let lastMetaFetchAt = 0;
 
-    const fetchMetadata = async (isQuickRetry = false) => {
+    const fetchMetadata = async (isQuickRetry = false, force = false) => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      const now = Date.now();
+      if (!force && !isQuickRetry && now - lastMetaFetchAt < 15_000) {
+        return;
+      }
+      lastMetaFetchAt = now;
       try {
         const res = await fetch(
           `/api/radio-meta?url=${encodeURIComponent(
@@ -380,7 +389,7 @@ export function useAudioPlayer() {
           );
         } else if (!isQuickRetry && !useRadioStore.getState().nowPlayingMeta) {
           quickRetryTimer = window.setTimeout(() => {
-            if (!cancelled) void fetchMetadata(true);
+            if (!cancelled) void fetchMetadata(true, true);
           }, 2500);
         }
       } catch {
@@ -388,12 +397,12 @@ export function useAudioPlayer() {
       }
     };
 
-    void fetchMetadata();
-    const intervalId = window.setInterval(() => void fetchMetadata(), 10000);
+    void fetchMetadata(false, true);
+    const intervalId = window.setInterval(() => void fetchMetadata(false, false), 30_000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
-        void fetchMetadata();
+        void fetchMetadata(false, false);
       }
     };
     window.addEventListener('focus', handleVisibilityOrFocus);

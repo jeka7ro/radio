@@ -17,6 +17,6 @@
    python3 .agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py
    ```
    *(sau cu `--skip-build` pentru verificări intermediare rapide).*
-3. Agentul are voie să ceară permisiunea utilizatorului pentru `git commit` / `git push` **DOAR** atunci când rezultatul auditului este **`🟢 VERDE — 100% SIGUR PENTRU PUSH`**. Dacă verdictul este **`🔴 BLOCAT`**, orice operațiune de commit/push este oprită până la remedierea tuturor vectorilor eșuați.
+3. Agentul are voie să ceară permisiunea utilizatorului pentru `git commit` / `git push` **DOAR** atunci când rezultatul auditului este **`🟢 VERDE — 100% SIGUR PENTRU PUSH`** și toți cei 6 vectori au trecut (inclusiv **Vector 5: Securitate & Anti-SSRF** și **Vector 6: Anti-Loop & Protecție Consum Netlify** — zero bucle de refresh, zero bucle `useEffect`, polling cloud `>= 60s`, fără `.reload()` automat și fără scrieri redundante în `@netlify/blobs`). Dacă verdictul este **`🔴 BLOCAT`**, orice operațiune de commit/push este oprită până la remedierea tuturor vectorilor eșuați.
 
 

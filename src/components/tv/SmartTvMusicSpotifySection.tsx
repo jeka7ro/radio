@@ -819,6 +819,10 @@ export const SmartTvMusicSpotifySection: React.FC<
                 ? rawArt.replace(/\d+x\d+bb/, '300x300bb')
                 : pl.cover;
               const audioQuery = `${item.artistName} - ${item.trackName} Official Audio`;
+              const durSec = Math.max(
+                45,
+                Math.round((Number(item.trackTimeMillis) || 200000) / 1000)
+              );
               assembled.push({
                 id: `sp_${item.trackId || assembled.length}`,
                 title: String(item.trackName),
@@ -828,10 +832,7 @@ export const SmartTvMusicSpotifySection: React.FC<
                 albumId: item.collectionId ? `it_alb_${item.collectionId}` : undefined,
                 cover,
                 coverSmall,
-                durationSec: Math.max(
-                  45,
-                  Math.round((Number(item.trackTimeMillis) || 200000) / 1000)
-                ),
+                durationSec: durSec,
                 year: item.releaseDate
                   ? Number(String(item.releaseDate).slice(0, 4)) || 2025
                   : 2025,
@@ -839,7 +840,7 @@ export const SmartTvMusicSpotifySection: React.FC<
                 previewUrl: String(item.previewUrl || ''),
                 fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(
                   audioQuery
-                )}`,
+                )}&dur=${durSec}`,
                 videoQuery: `${item.artistName} - ${item.trackName}`,
               });
               if (assembled.length >= 50) break;

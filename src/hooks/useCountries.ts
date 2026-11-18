@@ -13,9 +13,9 @@ export interface EnrichedCountry extends Country {
   flag: string;
 }
 
-export function useCountries() {
+export function useCountries(enabled = true) {
   const [countries, setCountries] = useState<Country[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(enabled);
   const [error, setError] = useState<string | null>(null);
 
   const selectedCountryCode = useRadioStore((state) => state.selectedCountryCode);
@@ -35,8 +35,12 @@ export function useCountries() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setIsLoading(false);
+      return;
+    }
     loadCountries(false);
-  }, [loadCountries]);
+  }, [enabled, loadCountries]);
 
   const totalGlobalStations = useMemo(() => {
     return countries.reduce((sum, c) => sum + (c.stationcount || 0), 0);

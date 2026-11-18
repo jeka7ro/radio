@@ -339,7 +339,7 @@
         if ('caches' in window) {
           caches.keys().then(function(keys) {
             for (var i = 0; i < keys.length; i++) {
-              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v53') {
+              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v54') {
                 caches.delete(keys[i]);
               }
             }
@@ -347,10 +347,15 @@
         }
       } catch (e) {}
 
+      var _tvErrLogCount = 0;
       window.addEventListener('error', function (ev) {
         try {
           var msg = (ev && ev.message ? ev.message : 'Script error') + ' (' + (ev && ev.filename ? ev.filename : '') + ':' + (ev && ev.lineno ? ev.lineno : '') + ')';
-          fetch('/api/tv-log?err=' + encodeURIComponent(msg) + '&ua=' + encodeURIComponent(navigator.userAgent)).catch(function(){});
+          var isLocalDevLog = window.location.port === '8769' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+          if (isLocalDevLog && _tvErrLogCount < 3) {
+            _tvErrLogCount++;
+            fetch('/api/tv-log?err=' + encodeURIComponent(msg) + '&ua=' + encodeURIComponent(navigator.userAgent)).catch(function(){});
+          }
           var bootEl = document.getElementById('tv-boot-status');
           if (bootEl) {
             bootEl.innerHTML = 'Eroare pornire TV: ' + msg;

@@ -147,14 +147,25 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
     return () => window.clearInterval(timer);
   }, [topBannerItems.length, debouncedQuery]);
 
+  const attemptedEpCountsRef = React.useRef<Set<number>>(new Set());
+
   useEffect(() => {
     const seriesToFetch = items
-      .filter((it) => it.type === 'multistream' && it.fid > 0 && seriesEpCounts[it.fid] === undefined)
+      .filter(
+        (it) =>
+          it.type === 'multistream' &&
+          it.fid > 0 &&
+          !attemptedEpCountsRef.current.has(it.fid)
+      )
       .slice(0, 40);
     if (seriesToFetch.length === 0) return;
 
     let cancelled = false;
+    for (const it of seriesToFetch) {
+      attemptedEpCountsRef.current.add(it.fid);
+    }
     void (async () => {
+      const collected: Array<{ fid: number; count: number }> = [];
       const batchSize = 6;
       for (let i = 0; i < seriesToFetch.length; i += batchSize) {
         if (cancelled) break;
@@ -171,20 +182,26 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           })
         );
         if (cancelled) break;
-        setSeriesEpCounts((prev) => {
-          const next = { ...prev };
-          for (const r of results) {
-            next[r.fid] = r.count;
-          }
-          return next;
-        });
+        collected.push(...results);
       }
+      if (cancelled || collected.length === 0) return;
+      setSeriesEpCounts((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const r of collected) {
+          if (prev[r.fid] !== r.count) {
+            next[r.fid] = r.count;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [items, seriesEpCounts]);
+  }, [items]);
 
   // Verify real release years & Russian origin via Kinopoisk for visible items
   useEffect(() => {

@@ -52,21 +52,18 @@ if ('serviceWorker' in navigator) {
         .catch(() => {});
     }
   } else {
-    let isSwRefreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!isSwRefreshing) {
-        isSwRefreshing = true;
-        window.location.reload();
-      }
-    });
+    let lastSwUpdateCheckAt = Date.now();
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js', { updateViaCache: 'none' })
         .then((reg) => {
-          void reg.update();
           document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-              void reg.update();
+              const now = Date.now();
+              if (now - lastSwUpdateCheckAt >= 30 * 60 * 1000) {
+                lastSwUpdateCheckAt = now;
+                void reg.update();
+              }
             }
           });
         })

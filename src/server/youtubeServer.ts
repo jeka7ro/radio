@@ -50,7 +50,7 @@ interface ResolvedYouTubeStream {
 const IOS_PRODUCER_UA =
   'com.google.ios.youtube.producer/0.145.1 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)';
 const IOS_MAIN_UA =
-  'com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)';
+  'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)';
 const DESKTOP_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
@@ -138,16 +138,41 @@ function extractYouTubeVideoItems(data: unknown): YouTubeVideoItem[] {
   return items;
 }
 
-function pickBestMusicVideoMatch(results: YouTubeVideoItem[]): YouTubeVideoItem | undefined {
+function pickBestMusicVideoMatch(
+  results: YouTubeVideoItem[],
+  targetDurationSec = 0
+): YouTubeVideoItem | undefined {
+  const minDur =
+    targetDurationSec >= 75
+      ? Math.max(48, Math.floor(targetDurationSec * 0.45))
+      : 48;
+  const maxDur = Math.max((targetDurationSec || 240) * 2.8, 1200);
+  const scored: Array<{ item: YouTubeVideoItem; score: number }> = [];
+  for (const r of results) {
+    const dur = Number(r?.durationSec || 0);
+    if (!r?.videoId || r.isLive || dur === 0) continue;
+    if (SHORT_SNIPPET_RE.test(r.title || '')) continue;
+    if (dur < minDur || dur > maxDur) continue;
+    let score = 0;
+    if (targetDurationSec > 0) {
+      const diff = Math.abs(dur - targetDurationSec);
+      if (diff <= 5) score += 60;
+      else if (diff <= 15) score += 40;
+      else if (diff <= 35) score += 20;
+      else if (diff > 120) score -= 20;
+    }
+    if (/\b(official\s*audio|topic|lyrics?|audio)\b/i.test(`${r.title || ''} ${r.channel || ''}`)) {
+      score += 25;
+    }
+    if (/\b(karaoke|8d|nightcore|slowed)\b/i.test(r.title || '')) {
+      score -= 35;
+    }
+    scored.push({ item: r, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
   return (
-    results.find(
-      (r) =>
-        !r.isLive &&
-        r.durationSec >= 65 &&
-        r.durationSec <= 1200 &&
-        !SHORT_SNIPPET_RE.test(r.title || '')
-    ) ||
-    results.find((r) => !r.isLive && r.durationSec >= 45) ||
+    scored[0]?.item ||
+    results.find((r) => !r.isLive && r.durationSec >= 48 && !SHORT_SNIPPET_RE.test(r.title || '')) ||
     results[0]
   );
 }
@@ -308,11 +333,11 @@ export async function resolveYouTubeStream(
           context: {
             client: {
               clientName: 'IOS',
-              clientVersion: '20.03.02',
+              clientVersion: '20.10.4',
               deviceMake: 'Apple',
               deviceModel: 'iPhone16,2',
               osName: 'iPhone',
-              osVersion: '18.2.1.22C161',
+              osVersion: '18.3.2.22D82',
               hl: 'ro',
               gl: 'RO',
             },
@@ -381,7 +406,7 @@ export async function resolveYouTubeStream(
     adaptive.find((f) => f.itag === 139 && f.url);
 
   const hlsManifestUrl = playerData?.streamingData?.hlsManifestUrl || undefined;
-  if (!bestVideo?.url && !hlsManifestUrl) {
+  if (!bestVideo?.url && !bestAudio?.url && !hlsManifestUrl) {
     throw new Error(
       playerData?.playabilityStatus?.reason ||
         'Nu s-a putut extrage fluxul video YouTube.'
@@ -464,7 +489,7 @@ function mapDeezerTrack(
     year: albumOverride?.year || 2025,
     genre: 'TIDAL MAX • Pop / Hits',
     previewUrl: String(d?.preview || ''),
-    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}`,
+    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}&dur=${durationSec}`,
     videoQuery: `${artistName} - ${rawTitle}`,
     qualityTier: isHiRes ? 'MAX' : 'HIFI',
     qualityLabel: isHiRes
@@ -503,7 +528,7 @@ function mapItunesTrack(r: any, indexHint = 0) {
     year,
     genre: String(r.primaryGenreName || 'Music'),
     previewUrl: String(r.previewUrl || ''),
-    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}`,
+    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}&dur=${durationSec}`,
     videoQuery: `${artist} - ${title}`,
     qualityTier: isHiRes ? 'MAX' : 'HIFI',
     qualityLabel: isHiRes
@@ -1568,6 +1593,10 @@ export async function handleYouTubeRequest(
   if (pathname === '/api/youtube/audio') {
     let id = (parsedUrl.searchParams.get('id') || '').trim();
     const q = (parsedUrl.searchParams.get('q') || '').trim();
+    const targetDurationSec = Math.max(
+      0,
+      Number(parsedUrl.searchParams.get('dur') || 0) || 0
+    );
     const startSec = Math.max(
       0,
       parseFloat(parsedUrl.searchParams.get('start') || '0') || 0
@@ -1576,7 +1605,7 @@ export async function handleYouTubeRequest(
     try {
       if (!id && q) {
         const results = await searchYouTubeVideos(q);
-        const bestMatch = pickBestMusicVideoMatch(results);
+        const bestMatch = pickBestMusicVideoMatch(results, targetDurationSec);
         if (bestMatch?.videoId) {
           id = bestMatch.videoId;
         }
@@ -1608,9 +1637,20 @@ export async function handleYouTubeRequest(
         if (totalSize <= 0) {
           try {
             const sep = baseUrl.includes('?') ? '&' : '?';
-            const probeRes = await fetch(`${baseUrl}${sep}range=0-65535`, {
+            let probeRes = await fetch(`${baseUrl}${sep}range=0-65535`, {
               headers: { 'User-Agent': activeInfo.userAgent },
             });
+            if (probeRes.status === 403) {
+              await probeRes.body?.cancel().catch(() => {});
+              activeInfo = await resolveYouTubeStream(id, true);
+              if (activeInfo.audioUrl) {
+                baseUrl = stripRangeParam(activeInfo.audioUrl);
+                const retrySep = baseUrl.includes('?') ? '&' : '?';
+                probeRes = await fetch(`${baseUrl}${retrySep}range=0-65535`, {
+                  headers: { 'User-Agent': activeInfo.userAgent },
+                });
+              }
+            }
             const cr = probeRes.headers.get('content-range') || '';
             const mTotal = /\/(\d+)$/.exec(cr);
             if (mTotal?.[1]) totalSize = Number(mTotal[1]) || 0;
@@ -1638,6 +1678,7 @@ export async function handleYouTubeRequest(
             'Content-Length': String(reqEnd - reqStart + 1),
             ...(isPartial ? { 'Content-Range': `bytes ${reqStart}-${reqEnd}/${totalSize}` } : {}),
             'Cache-Control': 'public, max-age=600',
+            Vary: 'Range',
             'Access-Control-Allow-Origin': '*',
             ...(activeInfo.durationSec > 0
               ? {
@@ -1658,14 +1699,13 @@ export async function handleYouTubeRequest(
 
           let closed = false;
           const markClosed = () => {
-            closed = true;
+            if (!res.writableEnded) closed = true;
           };
-          req.on('close', markClosed);
           res.on('close', markClosed);
 
-          const CHUNK_SIZE = 1048576;
+          const CHUNK_SIZE = 524288;
           let pos = reqStart;
-          let refreshedOnce = false;
+          let refreshCount = 0;
           let headersWritten = false;
 
           while (pos <= reqEnd && !closed) {
@@ -1673,13 +1713,13 @@ export async function handleYouTubeRequest(
             const sep = baseUrl.includes('?') ? '&' : '?';
             let chunkBuf: Buffer | null = null;
 
-            for (let attempt = 0; attempt < 3 && !closed; attempt++) {
+            for (let attempt = 0; attempt < 4 && !closed; attempt++) {
               try {
                 const cRes = await fetch(`${baseUrl}${sep}range=${pos}-${chunkEnd}`, {
                   headers: { 'User-Agent': activeInfo.userAgent },
                 });
-                if (cRes.status === 403 && !refreshedOnce) {
-                  refreshedOnce = true;
+                if ((cRes.status === 403 || (!cRes.ok && attempt >= 1)) && refreshCount < 2) {
+                  refreshCount += 1;
                   activeInfo = await resolveYouTubeStream(id, true);
                   if (activeInfo.audioUrl) {
                     baseUrl = stripRangeParam(activeInfo.audioUrl);
@@ -1694,7 +1734,17 @@ export async function handleYouTubeRequest(
                   }
                 }
               } catch {
-                // retry short transient socket/timeout error
+                if (attempt >= 1 && refreshCount < 2) {
+                  refreshCount += 1;
+                  try {
+                    activeInfo = await resolveYouTubeStream(id, true);
+                    if (activeInfo.audioUrl) {
+                      baseUrl = stripRangeParam(activeInfo.audioUrl);
+                    }
+                  } catch {
+                    // ignore stream refresh error
+                  }
+                }
               }
               if (!closed) {
                 await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
@@ -1723,7 +1773,6 @@ export async function handleYouTubeRequest(
             pos += chunkBuf.byteLength;
           }
 
-          req.off('close', markClosed);
           res.off('close', markClosed);
           if (headersWritten) {
             if (!res.writableEnded) res.end();

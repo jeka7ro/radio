@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v53';
+const CACHE_NAME = 'aether-radio-v54';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -39,22 +39,8 @@ async function getOfflineBlobSw(key) {
 async function precacheShellAndBundles(cache) {
   try {
     await cache.addAll(STATIC_ASSETS);
-    const res = await fetch('/index.html', { cache: 'no-store' });
-    if (res && res.ok) {
-      await cache.put('/index.html', res.clone());
-      await cache.put('/', res.clone());
-      const html = await res.text();
-      const assetMatches = html.match(/\/assets\/[^"'\s>]+/g) || [];
-      for (const assetPath of assetMatches) {
-        try {
-          await cache.add(assetPath);
-        } catch {
-          // ignore individual asset error
-        }
-      }
-    }
   } catch {
-    // ignore offline install error
+    // ignore offline install error (bundles are cached lazily on fetch)
   }
 }
 

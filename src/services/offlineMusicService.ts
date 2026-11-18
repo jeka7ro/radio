@@ -1,5 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import type { SpotifyTrackItem } from '../components/tv/spotifyMusicPremiumViews';
+import {
+  buildResidentialFullAudioUrl,
+  canUseResidentialDirectAudio,
+} from './musicStreamEngine';
 
 export interface OfflineMusicTrackRecord {
   offlineKey: string;
@@ -209,6 +213,12 @@ function notifySubscribers(): void {
   });
 }
 
+export function getMinValidOfflineBytes(
+  track?: Pick<SpotifyTrackItem, 'durationSec'> | null
+): number {
+  return (track?.durationSec || 180) >= 75 ? 650_000 : 120_000;
+}
+
 let hydratePromise: Promise<void> | null = null;
 export function ensureOfflineMusicHydrated(): Promise<void> {
   if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
@@ -221,6 +231,11 @@ export function ensureOfflineMusicHydrated(): Promise<void> {
     .then((list) => {
       for (const rec of list) {
         if (rec?.offlineKey && rec?.track) {
+          const minBytes = getMinValidOfflineBytes(rec.track);
+          if ((Number(rec.sizeBytes) || 0) < minBytes) {
+            void idbDeleteTrack(rec.offlineKey).catch(() => {});
+            continue;
+          }
           recordsMap.set(rec.offlineKey, rec);
         }
       }
@@ -315,7 +330,8 @@ async function cacheCoverAsDataUrl(rawUrl?: string): Promise<string | null> {
 async function fetchAudioBufferWithProgress(
   url: string,
   offlineKey: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  minBytes: number
 ): Promise<{ buffer: ArrayBuffer; mimeType: string } | null> {
   const res = await fetch(url, { signal });
   if (!res.ok) return null;
@@ -326,7 +342,7 @@ async function fetchAudioBufferWithProgress(
   const expectedTotal = Number(res.headers.get('content-length') || 0) || 3_200_000;
   if (!res.body) {
     const ab = await res.arrayBuffer();
-    if (ab.byteLength < 25_000) return null;
+    if (ab.byteLength < minBytes) return null;
     return { buffer: ab, mimeType: contentType || 'audio/mp4' };
   }
 
@@ -350,7 +366,7 @@ async function fetchAudioBufferWithProgress(
     }
   }
 
-  if (loaded < 25_000) return null;
+  if (loaded < minBytes) return null;
   const out = new Uint8Array(loaded);
   let offset = 0;
   for (const ch of chunks) {
@@ -371,15 +387,21 @@ async function performSingleDownload(track: SpotifyTrackItem): Promise<boolean> 
   notifySubscribers();
 
   try {
-    const candidates = [track.fullAudioUrl, track.previewUrl].filter(
-      (u): u is string => Boolean(u && typeof u === 'string')
-    );
+    const minBytes = getMinValidOfflineBytes(track);
+    let primaryUrl = canUseResidentialDirectAudio()
+      ? buildResidentialFullAudioUrl(track)
+      : String(track.fullAudioUrl || '');
+    if (primaryUrl && !primaryUrl.includes('dur=') && track.durationSec > 0) {
+      const sep = primaryUrl.includes('?') ? '&' : '?';
+      primaryUrl = `${primaryUrl}${sep}dur=${Math.round(track.durationSec)}`;
+    }
+    const candidates = primaryUrl ? [primaryUrl] : [];
 
     let fetched: { buffer: ArrayBuffer; mimeType: string } | null = null;
     for (const url of candidates) {
       if (ctrl.signal.aborted) break;
       try {
-        fetched = await fetchAudioBufferWithProgress(url, offlineKey, ctrl.signal);
+        fetched = await fetchAudioBufferWithProgress(url, offlineKey, ctrl.signal, minBytes);
         if (fetched) break;
       } catch {
         if (ctrl.signal.aborted) break;
@@ -601,6 +623,13 @@ export async function resolveOfflineMusicObjectUrl(
       stored instanceof Blob
         ? stored
         : new Blob([stored], { type: meta?.mimeType || 'audio/mp4' });
+    const minBytes = getMinValidOfflineBytes(meta?.track);
+    if (blob.size < minBytes || (meta && Number(meta.sizeBytes || 0) < minBytes)) {
+      recordsMap.delete(key);
+      notifySubscribers();
+      void idbDeleteTrack(key).catch(() => {});
+      return null;
+    }
     const nextUrl = URL.createObjectURL(blob);
     const prevUrl = activeOfflineObjectUrl;
     activeOfflineObjectUrl = nextUrl;

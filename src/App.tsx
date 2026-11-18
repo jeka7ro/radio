@@ -20,12 +20,6 @@ import { SmartTvLampaView } from './views/SmartTvLampaViewCore';
 export const App: React.FC = () => {
   useTheme();
   const { t } = useTranslation();
-  const { countries, selectedCountry, isLoading: isCountriesLoading } = useCountries();
-
-  const activeTab = useRadioStore((state) => state.activeTab);
-  const setActiveTab = useRadioStore((state) => state.setActiveTab);
-  const currentStation = useRadioStore((state) => state.currentStation);
-  const playerStatus = useRadioStore((state) => state.playerStatus);
 
   const [isSmartTvMode, setIsSmartTvMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -42,6 +36,13 @@ export const App: React.FC = () => {
     }
     return true;
   });
+
+  const { countries, selectedCountry, isLoading: isCountriesLoading } = useCountries(!isSmartTvMode);
+
+  const activeTab = useRadioStore((state) => state.activeTab);
+  const setActiveTab = useRadioStore((state) => state.setActiveTab);
+  const currentStation = useRadioStore((state) => state.currentStation);
+  const playerStatus = useRadioStore((state) => state.playerStatus);
 
   useEffect(() => {
     const handleEnterSmartTv = () => {

@@ -93,7 +93,10 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   useEffect(() => {
     if (Array.isArray(profilesProp) && profilesProp.length > 0) {
-      setLocalProfiles(profilesProp);
+      const nextJson = JSON.stringify(profilesProp);
+      setLocalProfiles((prev) =>
+        JSON.stringify(prev) === nextJson ? prev : profilesProp
+      );
     }
   }, [profilesProp]);
 
@@ -103,22 +106,33 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     const syncLocal = () => {
       const latest = loadSharedProfiles();
       if (latest.length > 0 && active) {
-        setLocalProfiles(latest);
+        const latestJson = JSON.stringify(latest);
+        setLocalProfiles((prev) =>
+          JSON.stringify(prev) === latestJson ? prev : latest
+        );
       }
     };
-    const runServerSync = () => {
-      syncSharedProfilesFromServer()
+    const runServerSync = (force = false) => {
+      syncSharedProfilesFromServer(force)
         .then((fresh) => {
           if (active && Array.isArray(fresh) && fresh.length > 0) {
-            setLocalProfiles(fresh);
-            onProfilesChangeRef.current?.(fresh);
+            const freshJson = JSON.stringify(fresh);
+            setLocalProfiles((prev) => {
+              if (JSON.stringify(prev) === freshJson) return prev;
+              onProfilesChangeRef.current?.(fresh);
+              return fresh;
+            });
           }
         })
         .catch(() => {});
     };
     syncLocal();
-    runServerSync();
-    const pollTimer = window.setInterval(runServerSync, 10_000);
+    runServerSync(false);
+    const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        runServerSync(false);
+      }
+    }, 60_000);
     window.addEventListener('aether:profiles-updated', syncLocal);
     return () => {
       active = false;
@@ -693,7 +707,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
     setIsSavingAccount(true);
     try {
       const fresh = await Promise.race([
-        syncSharedProfilesFromServer().catch(() => null),
+        syncSharedProfilesFromServer(true).catch(() => null),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 2200)),
       ]);
       const latestList =
@@ -1185,7 +1199,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               disabled={isSyncingProfiles}
               onClick={() => {
                 setIsSyncingProfiles(true);
-                syncSharedProfilesFromServer()
+                syncSharedProfilesFromServer(true)
                   .then((fresh) => {
                     if (Array.isArray(fresh) && fresh.length > 0) {
                       setLocalProfiles(fresh);

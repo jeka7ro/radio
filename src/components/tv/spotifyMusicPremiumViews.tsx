@@ -222,6 +222,10 @@ function mapClientItunesTrack(item: any, idx: number): SpotifyTrackItem {
   const artist = String(item.artistName || 'Artist');
   const title = String(item.trackName || 'Track');
   const isHiRes = idx % 3 !== 2;
+  const durSec = Math.max(
+    45,
+    Math.round((Number(item.trackTimeMillis) || 200000) / 1000)
+  );
   return {
     id: `sp_${item.trackId || idx}`,
     title,
@@ -231,10 +235,7 @@ function mapClientItunesTrack(item: any, idx: number): SpotifyTrackItem {
     albumId: item.collectionId ? `it_alb_${item.collectionId}` : undefined,
     cover,
     coverSmall,
-    durationSec: Math.max(
-      45,
-      Math.round((Number(item.trackTimeMillis) || 200000) / 1000)
-    ),
+    durationSec: durSec,
     year: item.releaseDate
       ? Number(String(item.releaseDate).slice(0, 4)) || 2025
       : 2025,
@@ -242,7 +243,7 @@ function mapClientItunesTrack(item: any, idx: number): SpotifyTrackItem {
     previewUrl: String(item.previewUrl || ''),
     fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(
       `${artist} - ${title} Official Audio`
-    )}`,
+    )}&dur=${durSec}`,
     videoQuery: `${artist} - ${title}`,
     qualityTier: isHiRes ? 'MAX' : 'HIFI',
     qualityLabel: isHiRes

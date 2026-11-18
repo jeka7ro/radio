@@ -34,6 +34,10 @@ function fetchVkRangeHttp1(
       reject(err);
       return;
     }
+    if (isDisallowedProxyTarget(parsedU)) {
+      reject(new Error('Forbidden proxy target'));
+      return;
+    }
     const isHttps = parsedU.protocol === 'https:';
     const transport = isHttps ? https : http;
     const reqHdrs = {
@@ -65,6 +69,13 @@ function fetchVkRangeHttp1(
           clearTimeout(timer);
           signal?.removeEventListener('abort', onAbort);
           const nextUrl = new URL(resIn.headers.location, urlStr).toString();
+          if (isDisallowedProxyTarget(new URL(nextUrl))) {
+            settled = true;
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            reject(new Error('Forbidden proxy redirect target'));
+            return;
+          }
           fetchVkRangeHttp1(
             nextUrl,
             start,
@@ -364,6 +375,115 @@ async function refreshVkSignedTargetUrl(
 
 const vkMetaCache = new Map();
 
+function isPrivateOrReservedIpv4(ipv4Str) {
+  const m = ipv4Str.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 127 || a === 10 || a === 0) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+function isDisallowedProxyTarget(parsedUrl, reqHost = '') {
+  if (!parsedUrl || (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:')) {
+    return true;
+  }
+  const host = String(parsedUrl.hostname || '')
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase()
+    .trim();
+  if (!host || /\s/.test(host)) return true;
+
+  const cleanReqHost = String(reqHost || '')
+    .split(':')[0]
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase()
+    .trim();
+
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host === '::' ||
+    host === 'metadata' ||
+    host === 'metadata.google.internal' ||
+    host.endsWith('.internal') ||
+    host === 'fd00:ec2::254' ||
+    host.startsWith('fe80:') ||
+    host.startsWith('fc00:') ||
+    host.startsWith('fd00:')
+  ) {
+    return true;
+  }
+
+  if (isPrivateOrReservedIpv4(host)) {
+    return true;
+  }
+
+  if (host.startsWith('::ffff:')) {
+    const mapped = host.slice(7);
+    if (isPrivateOrReservedIpv4(mapped)) return true;
+    const hexMatch = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (hexMatch) {
+      const hi = parseInt(hexMatch[1], 16);
+      const lo = parseInt(hexMatch[2], 16);
+      const dotted = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+      if (isPrivateOrReservedIpv4(dotted)) return true;
+    }
+  }
+
+  const lowerPath = String(parsedUrl.pathname || '').toLowerCase();
+  if (lowerPath.includes('/api/tv-proxy')) {
+    return true;
+  }
+  const isSelfOrigin =
+    host === 'filmio.my' ||
+    host === 'www.filmio.my' ||
+    host.endsWith('.netlify.app') ||
+    (cleanReqHost && host === cleanReqHost);
+  if (isSelfOrigin && lowerPath.startsWith('/api/')) {
+    return true;
+  }
+
+  return false;
+}
+
+async function fetchSafeUpstream(targetUrl, fetchInit, reqHost = '', maxRedirects = 5) {
+  let currentUrl = targetUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const parsed = new URL(currentUrl);
+    if (isDisallowedProxyTarget(parsed, reqHost)) {
+      throw new Error('Forbidden proxy target');
+    }
+    const res = await fetch(currentUrl, {
+      ...fetchInit,
+      redirect: 'manual',
+    });
+    if (
+      res.status >= 300 &&
+      res.status < 400 &&
+      res.headers.get('location') &&
+      hop < maxRedirects
+    ) {
+      try {
+        res.body?.cancel();
+      } catch {
+        // ignore cancel error
+      }
+      const nextUrl = new URL(res.headers.get('location'), currentUrl).toString();
+      currentUrl = nextUrl;
+      continue;
+    }
+    return { res, finalUrl: res.url || currentUrl };
+  }
+  throw new Error('Too many proxy redirects');
+}
+
 export default async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
@@ -378,6 +498,7 @@ export default async (req) => {
 
   try {
     const reqUrl = new URL(req.url);
+    const reqHost = req.headers.get('host') || reqUrl.hostname || '';
     const rawTargetUrl = reqUrl.searchParams.get('url');
     let targetUrl = rawTargetUrl
       ? rawTargetUrl.replace(
@@ -408,7 +529,27 @@ export default async (req) => {
       });
     }
 
-    let parsedTarget = new URL(targetUrl);
+    let parsedTarget;
+    try {
+      parsedTarget = new URL(targetUrl);
+    } catch {
+      return new Response('Invalid url parameter', {
+        status: 400,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'text/plain; charset=utf-8',
+        },
+      });
+    }
+    if (isDisallowedProxyTarget(parsedTarget, reqHost)) {
+      return new Response('Forbidden proxy target', {
+        status: 403,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'text/plain; charset=utf-8',
+        },
+      });
+    }
     const refererHeader = customRef || `${parsedTarget.origin}/`;
     let originHeader = parsedTarget.origin;
     if (customRef) {
@@ -452,17 +593,21 @@ export default async (req) => {
         let meta = vkMetaCache.get(targetUrl);
         if (!meta || Date.now() - meta.ts > 10 * 60 * 1000) {
           const headTimer = setTimeout(() => accelCtrl.abort(), 6500);
-          let headRes = await fetch(targetUrl, {
-            method: 'HEAD',
-            headers: {
-              'User-Agent': effectiveUa,
-              Referer: refererHeader,
-              Origin: originHeader,
-              Accept: '*/*',
+          const headWrap = await fetchSafeUpstream(
+            targetUrl,
+            {
+              method: 'HEAD',
+              headers: {
+                'User-Agent': effectiveUa,
+                Referer: refererHeader,
+                Origin: originHeader,
+                Accept: '*/*',
+              },
+              signal: accelCtrl.signal,
             },
-            redirect: 'follow',
-            signal: accelCtrl.signal,
-          });
+            reqHost
+          );
+          let headRes = headWrap.res;
           clearTimeout(headTimer);
 
           if (
@@ -482,41 +627,49 @@ export default async (req) => {
             if (healedUrl && healedUrl !== targetUrl) {
               targetUrl = healedUrl;
               parsedTarget = new URL(targetUrl);
-              headRes = await fetch(targetUrl, {
-                method: 'HEAD',
-                headers: {
-                  'User-Agent': effectiveUa,
-                  Referer: refererHeader,
-                  Origin: originHeader,
-                  Accept: '*/*',
+              const healedHead = await fetchSafeUpstream(
+                targetUrl,
+                {
+                  method: 'HEAD',
+                  headers: {
+                    'User-Agent': effectiveUa,
+                    Referer: refererHeader,
+                    Origin: originHeader,
+                    Accept: '*/*',
+                  },
                 },
-                redirect: 'follow',
-              });
+                reqHost
+              );
+              headRes = healedHead.res;
             }
           }
 
           let headCt = (headRes.headers.get('content-type') || '').toLowerCase();
           let totalBytes = Number(headRes.headers.get('content-length') || 0);
-          let resolvedMediaUrl = headRes.url || targetUrl;
+          let resolvedMediaUrl = headRes.url || headWrap.finalUrl || targetUrl;
 
           if ((!headRes.ok || totalBytes <= 0) && headRes.status !== 404) {
-            const probeRes = await fetch(targetUrl, {
-              method: 'GET',
-              headers: {
-                'User-Agent': effectiveUa,
-                Referer: refererHeader,
-                Origin: originHeader,
-                Accept: '*/*',
-                Range: 'bytes=0-0',
+            const probeWrap = await fetchSafeUpstream(
+              targetUrl,
+              {
+                method: 'GET',
+                headers: {
+                  'User-Agent': effectiveUa,
+                  Referer: refererHeader,
+                  Origin: originHeader,
+                  Accept: '*/*',
+                  Range: 'bytes=0-0',
+                },
               },
-              redirect: 'follow',
-            });
+              reqHost
+            );
+            const probeRes = probeWrap.res;
             const cr = probeRes.headers.get('content-range') || '';
             const crMatch = cr.match(/\/(\d+)\s*$/);
             if (probeRes.status === 206 && crMatch) {
               totalBytes = Number(crMatch[1]);
               headCt = (probeRes.headers.get('content-type') || '').toLowerCase();
-              resolvedMediaUrl = probeRes.url || targetUrl;
+              resolvedMediaUrl = probeRes.url || probeWrap.finalUrl || targetUrl;
             }
             try {
               probeRes.body?.cancel();
@@ -829,18 +982,23 @@ export default async (req) => {
       }
     }
 
-    let upstreamRes = await fetch(targetUrl, {
-      method: req.method === 'HEAD' ? 'HEAD' : 'GET',
-      headers: {
-        'User-Agent': effectiveUa,
-        Referer: refererHeader,
-        Origin: originHeader,
-        Accept: '*/*',
-        ...(rangeHeader ? { Range: rangeHeader } : {}),
+    const upWrap = await fetchSafeUpstream(
+      targetUrl,
+      {
+        method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+        headers: {
+          'User-Agent': effectiveUa,
+          Referer: refererHeader,
+          Origin: originHeader,
+          Accept: '*/*',
+          ...(rangeHeader ? { Range: rangeHeader } : {}),
+        },
+        signal: controller.signal,
       },
-      redirect: 'follow',
-      signal: controller.signal,
-    });
+      reqHost
+    );
+    let upstreamRes = upWrap.res;
+    let resolvedUpstreamFinalUrl = upWrap.finalUrl;
 
     if (
       !upstreamRes.ok &&
@@ -861,18 +1019,23 @@ export default async (req) => {
       if (healedUrl && healedUrl !== targetUrl) {
         targetUrl = healedUrl;
         parsedTarget = new URL(targetUrl);
-        upstreamRes = await fetch(targetUrl, {
-          method: req.method === 'HEAD' ? 'HEAD' : 'GET',
-          headers: {
-            'User-Agent': effectiveUa,
-            Referer: refererHeader,
-            Origin: originHeader,
-            Accept: '*/*',
-            ...(rangeHeader ? { Range: rangeHeader } : {}),
+        const healedWrap = await fetchSafeUpstream(
+          targetUrl,
+          {
+            method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+            headers: {
+              'User-Agent': effectiveUa,
+              Referer: refererHeader,
+              Origin: originHeader,
+              Accept: '*/*',
+              ...(rangeHeader ? { Range: rangeHeader } : {}),
+            },
+            signal: controller.signal,
           },
-          redirect: 'follow',
-          signal: controller.signal,
-        });
+          reqHost
+        );
+        upstreamRes = healedWrap.res;
+        resolvedUpstreamFinalUrl = healedWrap.finalUrl;
       }
     }
 
@@ -888,7 +1051,16 @@ export default async (req) => {
       });
     }
 
-    const finalUrl = upstreamRes.url || targetUrl;
+    const finalUrl = upstreamRes.url || resolvedUpstreamFinalUrl || targetUrl;
+    if (isDisallowedProxyTarget(new URL(finalUrl), reqHost)) {
+      return new Response('Forbidden proxy redirect target', {
+        status: 403,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Content-Type': 'text/plain; charset=utf-8',
+        },
+      });
+    }
     const contentType = (
       upstreamRes.headers.get('content-type') || ''
     ).toLowerCase();
@@ -973,18 +1145,22 @@ export default async (req) => {
       if (text.includes('#EXT-X-') && !hasSegmentOrVariant(text)) {
         await new Promise((r) => setTimeout(r, 450));
         try {
-          const retryRes = await fetch(targetUrl, {
-            method: 'GET',
-            headers: {
-              'User-Agent':
-                customUa ||
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-              Referer: refererHeader,
-              Origin: originHeader,
-              Accept: '*/*',
+          const retryWrap = await fetchSafeUpstream(
+            targetUrl,
+            {
+              method: 'GET',
+              headers: {
+                'User-Agent':
+                  customUa ||
+                  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                Referer: refererHeader,
+                Origin: originHeader,
+                Accept: '*/*',
+              },
             },
-            redirect: 'follow',
-          });
+            reqHost
+          );
+          const retryRes = retryWrap.res;
           if (retryRes.ok) {
             text = await retryRes.text();
           }

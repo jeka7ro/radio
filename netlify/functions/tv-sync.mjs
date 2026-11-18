@@ -20,6 +20,8 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   radioFavsByProfile: {},
   tvFavChannelsByProfile: {},
   musicByProfile: {},
+  blobReadCache: {},
+  lastBlobWrittenJson: {},
 };
 if (!globalStore.deletedProfileMap || typeof globalStore.deletedProfileMap !== 'object') {
   globalStore.deletedProfileMap = {};
@@ -33,9 +35,20 @@ if (!globalStore.tvFavChannelsByProfile) {
 if (!globalStore.musicByProfile) {
   globalStore.musicByProfile = {};
 }
+if (!globalStore.blobReadCache) {
+  globalStore.blobReadCache = {};
+}
+if (!globalStore.lastBlobWrittenJson) {
+  globalStore.lastBlobWrittenJson = {};
+}
 globalThis.__aetherCloudSyncStore = globalStore;
 
+const BLOB_READ_CACHE_TTL_MS = 15_000;
+
 function getCloudBlobStore() {
+  if (globalThis.__aetherTestBlobStore) {
+    return globalThis.__aetherTestBlobStore;
+  }
   try {
     return getStore({ name: 'filmio-tv-sync-v1', consistency: 'strong' });
   } catch {
@@ -45,9 +58,24 @@ function getCloudBlobStore() {
 
 async function readBlobState(store, key) {
   if (!store) return { active: false, data: null };
+  const storeScopeKey = `${globalThis.__aetherTestBlobStore ? 'test:' : ''}${key}`;
+  const cached = globalStore.blobReadCache[storeScopeKey];
+  if (cached && Date.now() - cached.ts < BLOB_READ_CACHE_TTL_MS) {
+    return { active: true, data: cached.data };
+  }
   try {
     const data = await store.get(key, { type: 'json' });
-    return { active: true, data: data && typeof data === 'object' ? data : null };
+    const cleanData = data && typeof data === 'object' ? data : null;
+    globalStore.blobReadCache[storeScopeKey] = {
+      ts: Date.now(),
+      data: cleanData,
+    };
+    if (cleanData) {
+      globalStore.lastBlobWrittenJson[storeScopeKey] = JSON.stringify(cleanData);
+    } else {
+      delete globalStore.lastBlobWrittenJson[storeScopeKey];
+    }
+    return { active: true, data: cleanData };
   } catch {
     return { active: false, data: null };
   }
@@ -56,7 +84,17 @@ async function readBlobState(store, key) {
 async function writeBlobState(store, key, value) {
   if (!store) return false;
   try {
+    const nextJson = JSON.stringify(value);
+    const storeScopeKey = `${globalThis.__aetherTestBlobStore ? 'test:' : ''}${key}`;
+    if (globalStore.lastBlobWrittenJson[storeScopeKey] === nextJson) {
+      return false;
+    }
     await store.setJSON(key, value);
+    globalStore.lastBlobWrittenJson[storeScopeKey] = nextJson;
+    globalStore.blobReadCache[storeScopeKey] = {
+      ts: Date.now(),
+      data: JSON.parse(nextJson),
+    };
     return true;
   } catch {
     return false;
@@ -173,17 +211,21 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
         }
       }
     }
+    const hasEpMap =
+      Object.keys(mergedEpMap).length > 0 ||
+      Boolean(v.episodeProgressMap) ||
+      Boolean(existing.episodeProgressMap);
     if ((v.updatedAt || 0) >= (existing.updatedAt || 0)) {
       merged[k] = {
         ...existing,
         ...v,
-        episodeProgressMap: mergedEpMap,
+        ...(hasEpMap ? { episodeProgressMap: mergedEpMap } : {}),
       };
     } else {
       merged[k] = {
         ...v,
         ...existing,
-        episodeProgressMap: mergedEpMap,
+        ...(hasEpMap ? { episodeProgressMap: mergedEpMap } : {}),
       };
     }
   }

@@ -350,20 +350,26 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
     const stationsToPoll =
       section === 'favorites'
-        ? favorites.slice(0, 24)
+        ? favorites.slice(0, 12)
         : [
-            ...favorites.slice(0, 16),
+            ...favorites.slice(0, 8),
             ...radioStations
               .filter(
                 (r: any) =>
                   !favorites.some((f: any) => f.stationuuid === r.stationuuid)
               )
-              .slice(0, 16),
-          ];
+              .slice(0, 4),
+          ].slice(0, 12);
 
     if (stationsToPoll.length === 0) return;
 
     const pollStations = async () => {
+      if (
+        cancelled ||
+        (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+      ) {
+        return;
+      }
       const batchSize = 6;
       for (let i = 0; i < stationsToPoll.length; i += batchSize) {
         if (cancelled) return;
@@ -381,22 +387,39 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
               if (!res.ok || cancelled) return;
               const data = await res.json();
               if (!cancelled && data?.track?.title) {
-                setStationLiveTracks((prev) => ({
-                  ...prev,
-                  [st.stationuuid]: {
-                    title: data.track.title,
-                    artist: data.track.artist || undefined,
-                    album: data.track.album || undefined,
-                    coverUrl:
-                      data.track.coverUrl ||
-                      data.track.artistAvatarUrl ||
-                      undefined,
-                    artistAvatarUrl:
-                      data.track.artistAvatarUrl ||
-                      data.track.coverUrl ||
-                      undefined,
-                  },
-                }));
+                const nextCover =
+                  data.track.coverUrl ||
+                  data.track.artistAvatarUrl ||
+                  undefined;
+                const nextAvatar =
+                  data.track.artistAvatarUrl ||
+                  data.track.coverUrl ||
+                  undefined;
+                const nextArtist = data.track.artist || undefined;
+                const nextAlbum = data.track.album || undefined;
+                setStationLiveTracks((prev) => {
+                  const cur = prev[st.stationuuid];
+                  if (
+                    cur &&
+                    cur.title === data.track.title &&
+                    cur.artist === nextArtist &&
+                    cur.album === nextAlbum &&
+                    cur.coverUrl === nextCover &&
+                    cur.artistAvatarUrl === nextAvatar
+                  ) {
+                    return prev;
+                  }
+                  return {
+                    ...prev,
+                    [st.stationuuid]: {
+                      title: data.track.title,
+                      artist: nextArtist,
+                      album: nextAlbum,
+                      coverUrl: nextCover,
+                      artistAvatarUrl: nextAvatar,
+                    },
+                  };
+                });
               }
             } catch {
               // ignore individual station error
@@ -409,7 +432,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     void pollStations();
     const timer = window.setInterval(() => {
       void pollStations();
-    }, 18000);
+    }, 60_000);
 
     return () => {
       cancelled = true;
@@ -425,6 +448,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   const [isUhdLoading, setIsUhdLoading] = React.useState<boolean>(false);
   const uhdSearchInputRef = React.useRef<HTMLInputElement | null>(null);
   const [uhdSeriesEpStats, setUhdSeriesEpStats] = React.useState<Record<string, SeriesEpisodeStats>>({});
+  const uhdAttemptedStatsRef = React.useRef<Set<string>>(new Set());
 
   React.useEffect(() => {
     if (section !== 'uhd_4k' || uhdItems.length === 0) return;
@@ -433,12 +457,16 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
         (it) =>
           it.type === 'series' &&
           !seriesEpStatsMap[it.id] &&
-          !uhdSeriesEpStats[it.id]
+          !uhdAttemptedStatsRef.current.has(it.id)
       )
       .slice(0, 36);
     if (toFetch.length === 0) return;
     let cancelled = false;
+    for (const it of toFetch) {
+      uhdAttemptedStatsRef.current.add(it.id);
+    }
     void (async () => {
+      const collected: Array<{ id: string; stats: SeriesEpisodeStats | null }> = [];
       const batchSize = 6;
       for (let i = 0; i < toFetch.length; i += batchSize) {
         if (cancelled) break;
@@ -450,19 +478,32 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
           }))
         );
         if (cancelled) break;
-        setUhdSeriesEpStats((prev) => {
-          const next = { ...prev };
-          for (const r of res) {
-            if (r.stats) next[r.id] = r.stats;
-          }
-          return next;
-        });
+        collected.push(...res);
       }
+      if (cancelled || collected.length === 0) return;
+      setUhdSeriesEpStats((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const r of collected) {
+          if (r.stats) {
+            const cur = prev[r.id];
+            if (
+              !cur ||
+              cur.episodesCount !== r.stats.episodesCount ||
+              cur.seasonsCount !== r.stats.seasonsCount
+            ) {
+              next[r.id] = r.stats;
+              changed = true;
+            }
+          }
+        }
+        return changed ? next : prev;
+      });
     })();
     return () => {
       cancelled = true;
     };
-  }, [section, uhdItems, seriesEpStatsMap, uhdSeriesEpStats]);
+  }, [section, uhdItems, seriesEpStatsMap]);
 
   React.useEffect(() => {
     if (section !== 'uhd_4k') return;

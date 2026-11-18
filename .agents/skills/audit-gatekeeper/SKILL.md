@@ -23,7 +23,7 @@ Acest skill definește arhitectura obligatorie de audit Pre-Push în **6 faze**,
 2. Verifică sincronizarea cu `.agents/CHANGELOG.md` conform regulii Paperclip din `.agents/AGENTS.md`.
 3. Calculează amprenta SHA-256 inițială a tuturor fișierelor de date (`.tv-*.json`, `netlify/functions/_seedData.mjs`) pentru a garanta că auditul este **100% READ-ONLY**.
 
-### Faza 2: Hunting pe 5 Vectori Critici
+### Faza 2: Hunting pe 6 Vectori Critici
 
 #### Vector 1: Reziliența Formularelor și Validarea Datelor (Fără 422 / 500 / Crash)
 - Testează parsarea și sanitizarea inputurilor numerice și text din formulare și query-uri API (`season`, `episode`, `year`, `currentTime`, `duration`, `start`, `audio`, `profileId`):
@@ -59,10 +59,18 @@ Rulează teste etalon deterministe cu valori cunoscute pentru regulile de busine
 - **Protecție Sandbox pe Iframe-uri**: Toate elementele `<iframe` din playerul VOD trebuie să aibă atributul `sandbox` fără `allow-popups` (blocând reclamele tip Booking / AliExpress).
 - **Compilare curată**: `npm run build` (`tsc -b && vite build`) trebuie să se finalizeze cu cod `0` (poate fi omis doar în modul rapid `--skip-build`).
 
-#### Vector 5: Securitate (Auth, Anti-IDOR, Anti-SSRF, Secrete)
+#### Vector 5: Securitate (Auth, Anti-IDOR, Anti-SSRF, Conturi Duplicate, Secrete)
 - **Sanitizare `profileId` (Anti-IDOR / Path Traversal)**: Verifică sanitizarea `profileId.replace(/[^a-zA-Z0-9_-]/g, '')` în `netlify/functions/tv-sync.mjs` și `vite.config.ts` (un `profileId` malițios precum `../../etc/passwd` nu poate accesa fișiere din afara profilului).
-- **Protecție PIN Profil Principal (`p1`)**: În `netlify/functions/tv-sync.mjs`, un payload neautorizat fără PIN nu poate suprascrie profilul `p1` (`Eugeniu`).
-- **Fără secrete / chei private expuse în Frontend (`src/`)**: Scanează `src/` pentru chei private (`BEGIN PRIVATE KEY`), token-uri secrete (`sk_live_`, `ghp_`, `AKIA`, `xoxb-`) sau fișiere `.env` urmărite în Git.
+- **Protecție PIN Profil Principal (`p1`) & Conturi Duplicate**: În `netlify/functions/tv-sync.mjs`, un payload neautorizat fără PIN nu poate suprascrie profilul `p1` (`Eugeniu`), iar crearea unui profil cu nume normalizat duplicat este respinsă.
+- **Protecție Anti-SSRF & Anti-Recursivitate (`/api/tv-proxy`)**: `netlify/functions/tv-proxy.mjs` blochează (`400`/`403`) scheme non-HTTP(S), localhost/loopback, adrese RFC1918, metadata cloud (`169.254.169.254`, `metadata.google.internal`) și apelurile recursive către `/api/tv-proxy` sau `/api/*` proprii (inclusiv prin redirect HTTP).
+- **Fără secrete / chei private expuse**: Scanează `src/`, `netlify/functions/`, `public/` și `index.html` pentru chei private (`BEGIN PRIVATE KEY`), token-uri secrete (`sk_live_`, `ghp_`, `github_pat_`, `nfp_`, `AKIA`, `xoxb-`) sau fișiere `.env` urmărite în Git.
+
+#### Vector 6: Anti-Loop & Protecție Consum Netlify *(OBLIGATORIU Pre-Push)*
+- **Zero Auto-Reload Loops**: Scanează `src/`, `public/` și `index.html` pentru `.reload(`. Este strict interzis în `src/main.tsx`, `public/sw.js`, `index.html` (`controllerchange` sau efecte automate) și permis exclusiv pe butoane manuale `onClick`.
+- **Zero Self-Triggering `useEffect` Loops**: Verifică să nu existe `useEffect` care apelează `setSeriesEpStatsMap` având `seriesEpStatsMap` în dependențe sau orice `setX(...)` necondiționat cu `x` în propriul array de dependențe.
+- **Zero Polling Agresiv Cloud (`< 60.000 ms`)**: Orice `setInterval` care apelează sync-uri cloud (`syncSharedProfilesFromServer`, `syncProgressAndSaved`, `syncCrossDeviceState`, `/api/tv-*`) trebuie să folosească interval `>= 60000 ms`.
+- **Zero Eager Startup Burners**: `epgService.ts` nu pornește `fetchEpgForCountry` automat la încărcarea Home; `public/sw.js` nu re-descarcă toate `/assets/` în `install`; `resolveSeriesEpisodeStats` izolează `/api/vod-stream` sub `allowHeavyBackendScrape`.
+- **Idempotență Scrieri `@netlify/blobs` (Test în Memorie)**: 2 cereri `POST` identice consecutive către `/api/tv-progress` sau `/api/tv-profiles` trebuie să execute exact `1` scriere `setJSON` (`0` scrieri redundante când datele nu s-au schimbat).
 
 ---
 
@@ -82,7 +90,8 @@ Orice rulare a auditului se încheie cu tabelul standardizat de raportare și Se
 | **Vector 2** | Integritate Date & Izolare Multi-Profil (100% READ-ONLY) | `PASS` / `FAIL` | Integritate `.tv-*.json`, `_seedData.mjs` & SHA-256 intact |
 | **Vector 3** | Invarianți Business (Rezoluție 4K/1080p, Sortare Ep., Sync) | `PASS` / `FAIL` | Teste etalon rezoluție, HLS sort, `episodesSortDesc`, Emisiuni RU |
 | **Vector 4** | Reguli UI & Arhitectură (Fără `alert()`, Fără `vidspark`, Build) | `PASS` / `FAIL` | Scanare AST/Regex UI + `sandbox` iframe + `npm run build` |
-| **Vector 5** | Securitate (Anti-Path-Traversal, PIN `p1`, Fără Secrete) | `PASS` / `FAIL` | Sanitizare `profileId`, protecție PIN, scanare secrete |
+| **Vector 5** | Securitate (Anti-SSRF, Duplicate, PIN `p1`, Secrete) | `PASS` / `FAIL` | Sanitizare `profileId`, blocare SSRF, conturi duplicate, secrete |
+| **Vector 6** | Anti-Loop & Protecție Consum Netlify | `PASS` / `FAIL` | 0 `.reload()` automate, 0 bucle `useEffect`, polling `>= 60s`, Blobs dedupe |
 
 #### Verdict Semafor:
 - Dacă **toți** vectorii sunt `PASS`:

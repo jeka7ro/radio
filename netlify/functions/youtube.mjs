@@ -1,7 +1,7 @@
 const IOS_PRODUCER_UA =
   'com.google.ios.youtube.producer/0.145.1 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)';
 const IOS_MAIN_UA =
-  'com.google.ios.youtube/20.03.02 (iPhone16,2; U; CPU iOS 18_2_1 like Mac OS X;)';
+  'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)';
 const DESKTOP_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
@@ -88,16 +88,38 @@ function extractYouTubeVideoItems(data) {
   return items;
 }
 
-function pickBestMusicVideoMatch(results) {
+function pickBestMusicVideoMatch(results, targetDurationSec = 0) {
+  const minDur =
+    targetDurationSec >= 75
+      ? Math.max(48, Math.floor(targetDurationSec * 0.45))
+      : 48;
+  const maxDur = Math.max((targetDurationSec || 240) * 2.8, 1200);
+  const scored = [];
+  for (const r of results || []) {
+    const dur = Number(r?.durationSec || 0);
+    if (!r?.videoId || r.isLive || dur === 0) continue;
+    if (SHORT_SNIPPET_RE.test(r.title || '')) continue;
+    if (dur < minDur || dur > maxDur) continue;
+    let score = 0;
+    if (targetDurationSec > 0) {
+      const diff = Math.abs(dur - targetDurationSec);
+      if (diff <= 5) score += 60;
+      else if (diff <= 15) score += 40;
+      else if (diff <= 35) score += 20;
+      else if (diff > 120) score -= 20;
+    }
+    if (/\b(official\s*audio|topic|lyrics?|audio)\b/i.test(`${r.title || ''} ${r.channel || ''}`)) {
+      score += 25;
+    }
+    if (/\b(karaoke|8d|nightcore|slowed)\b/i.test(r.title || '')) {
+      score -= 35;
+    }
+    scored.push({ item: r, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
   return (
-    results.find(
-      (r) =>
-        !r.isLive &&
-        r.durationSec >= 65 &&
-        r.durationSec <= 1200 &&
-        !SHORT_SNIPPET_RE.test(r.title || '')
-    ) ||
-    results.find((r) => !r.isLive && r.durationSec >= 45) ||
+    scored[0]?.item ||
+    results.find((r) => !r.isLive && r.durationSec >= 48 && !SHORT_SNIPPET_RE.test(r.title || '')) ||
     results[0]
   );
 }
@@ -183,8 +205,8 @@ function selectBestAudioFormat(adaptive = []) {
       const mp4A = String(a.mimeType || '').startsWith('audio/mp4') || a.itag === 140 || a.itag === 139 ? 1 : 0;
       const mp4B = String(b.mimeType || '').startsWith('audio/mp4') || b.itag === 140 || b.itag === 139 ? 1 : 0;
       if (mp4B !== mp4A) return mp4B - mp4A;
-      const tagScoreA = a.itag === 139 ? 2 : a.itag === 140 ? 1 : 0;
-      const tagScoreB = b.itag === 139 ? 2 : b.itag === 140 ? 1 : 0;
+      const tagScoreA = a.itag === 140 ? 2 : a.itag === 139 ? 0 : 1;
+      const tagScoreB = b.itag === 140 ? 2 : b.itag === 139 ? 0 : 1;
       if (tagScoreB !== tagScoreA) return tagScoreB - tagScoreA;
       return (Number(b.bitrate || b.averageBitrate) || 0) - (Number(a.bitrate || a.averageBitrate) || 0);
     });
@@ -218,11 +240,11 @@ async function resolveYouTubeAudioStream(videoId, forceRefresh = false) {
       ua: IOS_MAIN_UA,
       client: {
         clientName: 'IOS',
-        clientVersion: '20.03.02',
+        clientVersion: '20.10.4',
         deviceMake: 'Apple',
         deviceModel: 'iPhone16,2',
         osName: 'iPhone',
-        osVersion: '18.2.1.22C161',
+        osVersion: '18.3.2.22D82',
         hl: 'ro',
         gl: 'RO',
       },
@@ -317,7 +339,7 @@ function mapDeezerTrack(d, indexHint = 0, albumOverride = null) {
     year: albumOverride?.year || 2025,
     genre: 'TIDAL MAX • Pop / Hits',
     previewUrl: String(d?.preview || ''),
-    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}`,
+    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}&dur=${durationSec}`,
     videoQuery: `${artistName} - ${title}`,
     qualityTier: isHiRes ? 'MAX' : 'HIFI',
     qualityLabel: isHiRes
@@ -354,7 +376,7 @@ function mapItunesTrack(r, indexHint = 0) {
     year,
     genre: String(r.primaryGenreName || 'Music'),
     previewUrl: String(r.previewUrl || ''),
-    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}`,
+    fullAudioUrl: `/api/youtube/audio?q=${encodeURIComponent(audioQuery)}&dur=${durationSec}`,
     videoQuery: `${artist} - ${title}`,
     qualityTier: isHiRes ? 'MAX' : 'HIFI',
     qualityLabel: isHiRes
@@ -1176,11 +1198,12 @@ export async function handler(event) {
   if (path.includes('/audio') || params.action === 'audio') {
     let id = (params.id || '').trim();
     const q = (params.q || '').trim();
+    const targetDurationSec = Math.max(0, Number(params.dur || 0) || 0);
 
     try {
       if (!id && q) {
         const results = await searchYouTubeVideos(q);
-        const bestMatch = pickBestMusicVideoMatch(results);
+        const bestMatch = pickBestMusicVideoMatch(results, targetDurationSec);
         if (bestMatch?.videoId) {
           id = bestMatch.videoId;
         }
@@ -1268,8 +1291,8 @@ export async function handler(event) {
                   ? { 'Content-Range': `bytes ${reqStart}-${actualEnd}/${totalSize}` }
                   : {}),
                 'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'public, max-age=86400',
-                'Netlify-CDN-Cache-Control': 'public, max-age=86400, durable',
+                'Cache-Control': 'private, no-store',
+                Vary: 'Range',
                 ...(streamInfo.durationSec > 0
                   ? {
                       'X-Content-Duration': String(streamInfo.durationSec),
@@ -1284,34 +1307,6 @@ export async function handler(event) {
             };
           }
         }
-      }
-
-      // Fallback: search Deezer 30s preview URL so audio NEVER dies
-      const searchDeezerFallback = async (term) => {
-        try {
-          const r = await fetch(
-            `https://api.deezer.com/search?q=${encodeURIComponent(term)}&limit=1`,
-            { headers: { 'User-Agent': DESKTOP_UA } }
-          );
-          if (!r.ok) return null;
-          const d = await r.json();
-          return d?.data?.[0]?.preview || null;
-        } catch {
-          return null;
-        }
-      };
-
-      const fallbackPreview = await searchDeezerFallback(q || id);
-      if (fallbackPreview) {
-        return {
-          statusCode: 302,
-          headers: {
-            Location: fallbackPreview,
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=1800',
-          },
-          body: '',
-        };
       }
 
       return {

@@ -408,9 +408,42 @@ console.log('VECTOR3_NODE_OK');
     else:
         details.append("Teste etalon HLS 4K/1080p sort, fuziune episodeProgressMap și catalog Emisiuni RU (6/6 show-uri cheie) trecute")
 
+    # 3c. Verifică integritatea redării Muzică Full-Track (fără trunchiere 10-15s / preview 30s)
+    yt_fn_txt = (ROOT_DIR / "netlify" / "functions" / "youtube.mjs").read_text(encoding="utf-8", errors="ignore")
+    if "searchDeezerFallback" in yt_fn_txt or "Netlify-CDN-Cache-Control" in yt_fn_txt:
+        errors.append("netlify/functions/youtube.mjs conține încă `searchDeezerFallback` (preview 30s) sau `Netlify-CDN-Cache-Control` fără Vary:Range pe `/api/youtube/audio`!")
+    else:
+        details.append("netlify/functions/youtube.mjs: fără fallback 30s Deezer și fără cache CDN care amestecă range-urile audio")
+
+    offline_music_txt = (ROOT_DIR / "src" / "services" / "offlineMusicService.ts").read_text(encoding="utf-8", errors="ignore")
+    perform_m = re.search(r"async function performSingleDownload\b([\s\S]*?)\nconst singleWaiters\b", offline_music_txt)
+    if not perform_m or "track.previewUrl" in perform_m.group(1) or "650_000" not in offline_music_txt:
+        errors.append("src/services/offlineMusicService.ts permite fallback la preview 30s în descărcări sau nu impune pragul minim de 650_000 bytes!")
+    else:
+        details.append("offlineMusicService.ts: prag minim 650 KB pentru piese complete + zero salvare offline a preview-ului de 30s")
+
+    music_engine_path = ROOT_DIR / "src" / "services" / "musicStreamEngine.ts"
+    if not music_engine_path.exists():
+        errors.append("Lipsește src/services/musicStreamEngine.ts pentru redare completă în Cloud!")
+    else:
+        me_txt = music_engine_path.read_text(encoding="utf-8", errors="ignore")
+        if (
+            "youtube.com/iframe_api" not in me_txt
+            or ("YT.Player" not in me_txt and "PlayerCtor" not in me_txt)
+            or "width: '200'" not in me_txt
+            or "height: '200'" not in me_txt
+        ):
+            errors.append(
+                "src/services/musicStreamEngine.ts nu inițializează engine-ul oficial YT IFrame (`youtube.com/iframe_api` 200x200)"
+            )
+        else:
+            details.append(
+                "musicStreamEngine.ts activ (motor hibrid: Residential Direct Audio + YouTube `iframe_api` YT.Player 200x200 full-track)"
+            )
+
     if errors:
         return False, "; ".join(errors), details
-    return True, "Toți invarianții de business (Rezoluție 4K/1080p, Sortare Episoade, Sync Multi-Episod, Emisiuni RU) validați", details
+    return True, "Toți invarianții de business (Rezoluție 4K/1080p, Sortare Episoade, Sync Multi-Episod, Emisiuni RU, Muzică Full-Track) validați", details
 
 
 # ============================================================================
@@ -495,16 +528,22 @@ def vector4_ui_and_architecture(skip_build: bool = False) -> Tuple[bool, str, Li
 
 
 # ============================================================================
-# VECTOR 5: Securitate (Anti-Path-Traversal / IDOR, PIN p1, Fără Secrete Expuse)
+# VECTOR 5: Securitate (Anti-Path-Traversal / IDOR, Anti-SSRF, Duplicate Accounts, Secrete)
 # ============================================================================
 def vector5_security() -> Tuple[bool, str, List[str]]:
     details: List[str] = []
     errors: List[str] = []
 
-    # 1. Verifică în memorie protecția profilului principal p1 (Eugeniu) împotriva suprascrierii fără PIN
-    #    și sanitizarea profileId împotriva Path Traversal (../../etc/passwd)
+    # 1. Verifică în memorie protecția PIN pe p1, sanitizarea profileId, blocarea conturilor duplicate,
+    #    și protecția Anti-SSRF & Anti-Recursivitate pe /api/tv-proxy
     node_sec_test = r"""
 import tvSyncHandler from './netlify/functions/tv-sync.mjs';
+import tvProxyMod from './netlify/functions/tv-proxy.mjs';
+
+const tvProxyHandler = typeof tvProxyMod === 'function' ? tvProxyMod : tvProxyMod?.handler || tvProxyMod?.default;
+if (typeof tvProxyHandler !== 'function') {
+  throw new Error('tv-proxy.mjs nu exportă handler default/named valid');
+}
 
 // Test A: Încercare de suprascriere a profilului p1 ('Eugeniu') fără PIN -> trebuie respinsă!
 const resP1 = await tvSyncHandler(new Request('https://filmio.my/api/tv-profiles', {
@@ -518,10 +557,47 @@ if (p1 && p1.name === 'Eugeniu' && !p1.pin) {
   throw new Error('Securitate încălcată: profilul p1 (Eugeniu) a putut fi suprascris fără PIN!');
 }
 
-// Test B: Sanitizare profileId cu caractere de Path Traversal (../../etc/passwd)
+// Test B: Blocare creare cont duplicat cu același nume (inclusiv spații/majuscule diferite)
+const resFirstAcc = await tvSyncHandler(new Request('https://filmio.my/api/tv-profiles', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify([{ id: 'acc_audit_unique_1', name: 'AuditSashaTest', updatedAt: Date.now() }]),
+}));
+const afterFirst = await resFirstAcc.json();
+const hasFirst = afterFirst.some((p) => p && p.id === 'acc_audit_unique_1');
+const resDupAcc = await tvSyncHandler(new Request('https://filmio.my/api/tv-profiles', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify([{ id: 'acc_audit_unique_2', name: ' auditsashatest ', updatedAt: Date.now() + 1000 }]),
+}));
+const afterDup = await resDupAcc.json();
+if (!hasFirst || afterDup.some((p) => p && p.id === 'acc_audit_unique_2')) {
+  throw new Error('Securitate conturi: profilul duplicat (nume identic normalizat) nu a fost respins!');
+}
+
+// Test C: Sanitizare profileId cu caractere de Path Traversal (../../etc/passwd)
 const resTrav = await tvSyncHandler(new Request('https://filmio.my/api/tv-progress?profileId=../../etc/passwd'));
 if (resTrav.status !== 200) {
   throw new Error('Eroare la sanitizarea profileId cu path traversal');
+}
+
+// Test D: Protecție Anti-SSRF & Anti-Recursivitate pe /api/tv-proxy
+const blockedUrls = [
+  'http://169.254.169.254/latest/meta-data/',
+  'http://127.0.0.1:8769/api/tv-profiles',
+  'http://192.168.1.1/',
+  'https://filmio.my/api/tv-proxy?url=https://example.com',
+  'file:///etc/passwd',
+];
+for (const badUrl of blockedUrls) {
+  const ssrfRes = await tvProxyHandler(
+    new Request('https://filmio.my/api/tv-proxy?url=' + encodeURIComponent(badUrl), {
+      headers: { host: 'filmio.my' },
+    })
+  );
+  if (ssrfRes.status !== 400 && ssrfRes.status !== 403) {
+    throw new Error(`SSRF permis pentru ${badUrl} (status ${ssrfRes.status})`);
+  }
 }
 
 console.log('VECTOR5_NODE_OK');
@@ -530,29 +606,38 @@ console.log('VECTOR5_NODE_OK');
     if code != 0 or "VECTOR5_NODE_OK" not in out:
         errors.append(f"Eroare teste securitate în Node: {err or out}")
     else:
-        details.append("Protecție PIN pe profilul `p1` și sanitizare anti-Path-Traversal pe `profileId` confirmate")
+        details.append("Protecție PIN `p1`, blocare conturi duplicate, sanitizare `profileId` și Anti-SSRF `/api/tv-proxy` (5/5 ținte blocate 400/403) confirmate")
 
-    # 2. Scanare secrete critice expuse în `src/` (Private Keys, AWS, Stripe, GitHub PAT, Slack)
+    # 2. Scanare secrete critice expuse în frontend & serverless (src/, netlify/functions/, public/, index.html)
     secret_patterns = [
         (r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "Cheie privată PEM"),
         (r"\bsk_live_[0-9a-zA-Z]{24,}\b", "Cheie secretă Stripe Live"),
         (r"\bAKIA[0-9A-Z]{16}\b", "AWS Access Key ID"),
         (r"\bghp_[0-9a-zA-Z]{36}\b", "GitHub Personal Access Token"),
+        (r"\bgithub_pat_[0-9a-zA-Z_]{22,}\b", "GitHub Fine-Grained PAT"),
+        (r"\bnfp_[0-9a-zA-Z]{24,}\b", "Netlify Personal Access Token"),
+        (r"\bxox[baprs]-[0-9a-zA-Z-]{10,}\b", "Slack Token"),
     ]
+    scan_files: List[Path] = []
+    for folder in ("src", "netlify/functions", "public"):
+        for path_str in sorted(glob.glob(str(ROOT_DIR / folder / "**" / "*.*"), recursive=True)):
+            if path_str.endswith((".ts", ".tsx", ".js", ".mjs", ".cjs")):
+                scan_files.append(Path(path_str))
+    index_html_p = ROOT_DIR / "index.html"
+    if index_html_p.exists():
+        scan_files.append(index_html_p)
+
     leaked_secrets: List[str] = []
-    for path_str in sorted(glob.glob(str(ROOT_DIR / "src" / "**" / "*.*"), recursive=True)):
-        if not path_str.endswith((".ts", ".tsx", ".js", ".mjs")):
-            continue
-        p = Path(path_str)
+    for p in scan_files:
         txt = p.read_text(encoding="utf-8", errors="ignore")
         for pat, label in secret_patterns:
             if re.search(pat, txt):
                 leaked_secrets.append(f"{p.relative_to(ROOT_DIR)} ({label})")
 
     if leaked_secrets:
-        errors.append(f"Secrete expuse în src/: {', '.join(leaked_secrets)}")
+        errors.append(f"Secrete expuse: {', '.join(leaked_secrets)}")
     else:
-        details.append("0 chei private sau token-uri cloud expuse în `src/`")
+        details.append(f"0 chei private sau token-uri cloud expuse în {len(scan_files)} fișiere (src/netlify/public/index.html)")
 
     # 3. Verifică că niciun fișier .env nu este urmărit în Git
     code_env, out_env, _ = run_cmd(["git", "ls-files", ".env", ".env.*"])
@@ -563,11 +648,362 @@ console.log('VECTOR5_NODE_OK');
 
     if errors:
         return False, "; ".join(errors), details
-    return True, "Sanitizare profileId activă, protecție PIN p1 activă, 0 secrete expuse în frontend", details
+    return True, "Anti-SSRF activ, conturi duplicate blocate, PIN p1 activ, 0 secrete expuse", details
+
+
+# ============================================================================
+# VECTOR 6: Anti-Loop & Protecție Consum Netlify (Reload Loops, useEffect Loops, Polling & Blobs Dedupe)
+# ============================================================================
+def _extract_js_block(txt: str, open_brace_idx: int) -> int:
+    depth = 0
+    i = open_brace_idx
+    in_str = None
+    while i < len(txt):
+        ch = txt[i]
+        if in_str:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        else:
+            if ch in ("'", '"', "`"):
+                in_str = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return -1
+
+
+def _extract_call_args(txt: str, open_paren_idx: int) -> str:
+    depth = 0
+    i = open_paren_idx
+    in_str = None
+    while i < len(txt):
+        ch = txt[i]
+        if in_str:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        else:
+            if ch in ("'", '"', "`"):
+                in_str = ch
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return txt[open_paren_idx + 1 : i]
+        i += 1
+    return ""
+
+
+def _split_top_level_comma(expr: str) -> List[str]:
+    parts: List[str] = []
+    cur: List[str] = []
+    depth = 0
+    in_str = None
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if in_str:
+            cur.append(ch)
+            if ch == "\\" and i + 1 < len(expr):
+                cur.append(expr[i + 1])
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        else:
+            if ch in ("'", '"', "`"):
+                in_str = ch
+                cur.append(ch)
+            elif ch in ("(", "[", "{"):
+                depth += 1
+                cur.append(ch)
+            elif ch in (")", "]", "}"):
+                depth = max(0, depth - 1)
+                cur.append(ch)
+            elif ch == "," and depth == 0:
+                parts.append("".join(cur).strip())
+                cur = []
+                i += 1
+                continue
+            else:
+                cur.append(ch)
+        i += 1
+    tail = "".join(cur).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def vector6_anti_loop_and_netlify_consumption() -> Tuple[bool, str, List[str]]:
+    details: List[str] = []
+    errors: List[str] = []
+
+    # 1. Zero Auto-Reload Loops (.reload() permis EXCLUSIV pe butoane explicit onClick, interzis în main.tsx / sw.js / controllerchange)
+    reload_violations: List[str] = []
+    reload_targets: List[Path] = []
+    for path_str in sorted(glob.glob(str(ROOT_DIR / "src" / "**" / "*.*"), recursive=True)):
+        if path_str.endswith((".ts", ".tsx", ".js", ".mjs")):
+            reload_targets.append(Path(path_str))
+    for path_str in sorted(glob.glob(str(ROOT_DIR / "public" / "**" / "*.js"), recursive=True)):
+        reload_targets.append(Path(path_str))
+    idx_html = ROOT_DIR / "index.html"
+    if idx_html.exists():
+        reload_targets.append(idx_html)
+
+    for p in reload_targets:
+        rel = str(p.relative_to(ROOT_DIR))
+        lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for idx, line in enumerate(lines, 1):
+            if ".reload(" in line:
+                window_ctx = "\n".join(lines[max(0, idx - 8) : idx])
+                is_user_click = "onClick" in window_ctx
+                if rel in ("src/main.tsx", "public/sw.js", "index.html") or not is_user_click:
+                    reload_violations.append(f"{rel}:{idx}")
+
+    if reload_violations:
+        errors.append(f"Auto-reload neautorizat (.reload() în afara onClick): {', '.join(reload_violations)}")
+    else:
+        details.append("0 apeluri automate `.reload()` (permis doar pe butoane explicite `onClick`)")
+
+    # 2. Zero Self-Triggering useEffect Loops (seriesEpStatsMap / uhdSeriesEpStats / seriesEpCounts în deps sau setX({...prev}) necondiționat cu x în deps)
+    effect_loops: List[str] = []
+    for path_str in sorted(glob.glob(str(ROOT_DIR / "src" / "**" / "*.*"), recursive=True)):
+        if not path_str.endswith((".ts", ".tsx")):
+            continue
+        p = Path(path_str)
+        rel = str(p.relative_to(ROOT_DIR))
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"(?:React\.)?useEffect\s*\(\s*\(\)\s*=>\s*\{", txt):
+            brace_start = txt.find("{", m.start())
+            brace_end = _extract_js_block(txt, brace_start)
+            if brace_end == -1:
+                continue
+            body = txt[brace_start : brace_end + 1]
+            tail = txt[brace_end + 1 : brace_end + 550]
+            deps_m = re.match(r"\s*,\s*\[([^\]]*)\]", tail, re.DOTALL)
+            if not deps_m:
+                continue
+            deps_raw = deps_m.group(1)
+            deps = [d.strip() for d in deps_raw.split(",") if d.strip()]
+            line_no = txt[: m.start()].count("\n") + 1
+            for forbidden_self_dep, setter_name in (
+                ("seriesEpStatsMap", "setSeriesEpStatsMap"),
+                ("uhdSeriesEpStats", "setUhdSeriesEpStats"),
+                ("seriesEpCounts", "setSeriesEpCounts"),
+            ):
+                if forbidden_self_dep in deps and f"{setter_name}(" in body:
+                    effect_loops.append(f"{rel}:{line_no} ({forbidden_self_dep} self-loop)")
+            for d in deps:
+                if not re.match(r"^[a-z][A-Za-z0-9_]*$", d):
+                    continue
+                setter = "set" + d[0].upper() + d[1:]
+                # Blochează mutațiile top-level necondiționate setX(...) sau setX((prev) => { const next = { ...prev }; ... return next; }) fără bail-out
+                if re.search(rf"\b{setter}\s*\(", body):
+                    has_guard = bool(
+                        re.search(r"\bif\s*\(|return\s+prev|JSON\.stringify|===|!==|\?\.", body)
+                    )
+                    if not has_guard:
+                        effect_loops.append(f"{rel}:{line_no} ({setter} necondiționat cu {d} în deps)")
+                    for sm in re.finditer(rf"\b{setter}\s*\(\s*\(\s*prev\s*\)\s*=>\s*\{{", body):
+                        sb_start = body.find("{", sm.start())
+                        sb_end = _extract_js_block(body, sb_start)
+                        if sb_end != -1:
+                            sb = body[sb_start : sb_end + 1]
+                            if "{ ...prev" in sb and "return next" in sb and "return prev" not in sb and "changed ?" not in sb:
+                                effect_loops.append(f"{rel}:{line_no} ({setter}(prev=>next) fără return prev cu {d} în deps)")
+
+    if effect_loops:
+        errors.append(f"Bucle `useEffect` auto-declanșate detectate: {', '.join(effect_loops[:5])}")
+    else:
+        details.append("0 bucle `useEffect` auto-declanșate (fără `seriesEpStatsMap`/`uhdSeriesEpStats`/`seriesEpCounts` sau mutații `prev=>next` fără bail-out în deps)")
+
+    # 3. Zero Polling Agresiv Cloud (< 60000 ms)
+    cloud_poll_keywords = (
+        "syncSharedProfilesFromServer",
+        "syncProgressAndSaved",
+        "syncCrossDeviceState",
+        "/api/tv-profiles",
+        "/api/tv-progress",
+        "/api/tv-saved",
+        "/api/tv-music-sync",
+        "/api/tv-epg",
+    )
+    bad_intervals: List[str] = []
+    for path_str in sorted(glob.glob(str(ROOT_DIR / "src" / "**" / "*.*"), recursive=True)):
+        if not path_str.endswith((".ts", ".tsx", ".js", ".mjs")):
+            continue
+        p = Path(path_str)
+        rel = str(p.relative_to(ROOT_DIR))
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"setInterval\s*\(", txt):
+            open_paren = txt.find("(", m.start())
+            call_args = _extract_call_args(txt, open_paren)
+            args = _split_top_level_comma(call_args)
+            if len(args) < 2:
+                continue
+            delay_expr = args[1]
+            cb_expr = args[0]
+            # Verifică exclusiv corpul callback-ului + definițiile locale ale funcțiilor apelate sau referite ca identifier
+            call_names = set(re.findall(r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(", cb_expr))
+            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", cb_expr):
+                call_names.add(cb_expr)
+            lookup_parts = [cb_expr]
+            for fn_name in call_names:
+                for fn_m in re.finditer(
+                    rf"(?:const|let|var)\s+{re.escape(fn_name)}\s*=|function\s+{re.escape(fn_name)}\s*\(",
+                    txt,
+                ):
+                    brace_idx = txt.find("{", fn_m.end())
+                    if brace_idx != -1 and brace_idx - fn_m.start() < 260:
+                        end_idx = _extract_js_block(txt, brace_idx)
+                        if end_idx != -1:
+                            lookup_parts.append(txt[fn_m.start() : end_idx + 1])
+            effective_ctx = "\n".join(lookup_parts)
+            matched_kw = [kw for kw in cloud_poll_keywords if kw in effective_ctx]
+            if not matched_kw:
+                continue
+            line_no = txt[: m.start()].count("\n") + 1
+            num_vals: List[int] = []
+            if re.fullmatch(r"[\d_]+", delay_expr):
+                num_vals.append(int(delay_expr.replace("_", "")))
+            elif re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", delay_expr):
+                # Caută declararea variabilei în ultimele 12 linii / 600 caractere
+                pre_ctx = txt[max(0, m.start() - 600) : m.start()]
+                var_m = re.search(rf"\b(?:const|let|var)\s+{re.escape(delay_expr)}\s*=\s*([^;\n]+)", pre_ctx)
+                if var_m:
+                    for nm in re.findall(r"\b\d[\d_]*\b", var_m.group(1)):
+                        num_vals.append(int(nm.replace("_", "")))
+            if not num_vals:
+                bad_intervals.append(f"{rel}:{line_no} (interval necunoscut '{delay_expr}' pentru {matched_kw[0]})")
+            else:
+                too_fast = [v for v in num_vals if v < 60000]
+                if too_fast:
+                    bad_intervals.append(f"{rel}:{line_no} ({too_fast[0]}ms < 60000ms pe {matched_kw[0]})")
+
+    if bad_intervals:
+        errors.append(f"Polling cloud agresiv (< 60s): {', '.join(bad_intervals[:5])}")
+    else:
+        details.append("Toate intervalele de sincronizare cloud respectă pragul >= 60.000 ms (0 polling agresiv)")
+
+    # 4. Zero Startup Burners (epgService, sw.js bundle double-download, resolveSeriesEpisodeStats /api/vod-stream)
+    epg_path = ROOT_DIR / "src" / "services" / "epgService.ts"
+    epg_txt = epg_path.read_text(encoding="utf-8", errors="ignore")
+    # Verifică blocurile top-level `if (typeof window !== 'undefined')` să nu apeleze eager fetchEpgForCountry
+    epg_eager_found = False
+    for wm in re.finditer(r"if\s*\(\s*typeof\s+window\s*!==\s*'undefined'\s*\)\s*\{", epg_txt):
+        w_start = epg_txt.find("{", wm.start())
+        w_end = _extract_js_block(epg_txt, w_start)
+        if w_end != -1 and "fetchEpgForCountry" in epg_txt[w_start : w_end + 1]:
+            epg_eager_found = True
+    if epg_eager_found:
+        errors.append("src/services/epgService.ts apelează eager `fetchEpgForCountry` la pornirea modulului")
+    else:
+        details.append("epgService.ts nu mai pornește apeluri automate `/api/tv-epg` la încărcarea paginii Home")
+
+    sw_txt = (ROOT_DIR / "public" / "sw.js").read_text(encoding="utf-8", errors="ignore")
+    if re.search(r"precacheShellAndBundles[\s\S]*cache\.add\(", sw_txt) or "/assets/" in sw_txt and "cache.add(" in sw_txt:
+        errors.append("public/sw.js descarcă dublu bundle-urile `/assets/` în faza `install`")
+    else:
+        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v54'` fără re-descărcarea bundle-urilor în `install`")
+
+    helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
+    rse_m = re.search(r"export\s+async\s+function\s+resolveSeriesEpisodeStats\b([\s\S]*?)\nexport\s+function\s+formatSeriesCardBadgeText\b", helpers_txt)
+    if not rse_m or "allowHeavyBackendScrape" not in rse_m.group(1):
+        errors.append("resolveSeriesEpisodeStats() nu izolează apelul `/api/vod-stream` sub opțiunea `allowHeavyBackendScrape`")
+    else:
+        details.append("resolveSeriesEpisodeStats() protejat cu `allowHeavyBackendScrape` + cache persistent `sessionStorage`")
+
+    # 5. Test Netlify Blobs Idempotency în memorie (2x POST identic -> exact 1x setJSON, 0 scrieri duplicate!)
+    node_blob_dedupe_test = r"""
+let setJsonCalls = 0;
+const backingMap = new Map();
+globalThis.__aetherTestBlobStore = {
+  async get(key) {
+    return backingMap.has(key) ? backingMap.get(key) : null;
+  },
+  async setJSON(key, val) {
+    setJsonCalls += 1;
+    backingMap.set(key, JSON.parse(JSON.stringify(val)));
+  },
+};
+
+const { default: tvSyncHandler } = await import('./netlify/functions/tv-sync.mjs?dedupTest=' + Date.now());
+
+try {
+  // 5a: 2x POST identic /api/tv-progress -> 1 singură scriere Blobs
+  const beforeProg = setJsonCalls;
+  const progBody = JSON.stringify({
+    audit_blob_movie: {
+      id: 'audit_blob_movie',
+      currentTime: 320,
+      duration: 2400,
+      updatedAt: 5000000,
+      item: { id: 'audit_blob_movie', name: 'Test Film', type: 'movie' },
+    },
+  });
+  await tvSyncHandler(new Request('https://filmio.my/api/tv-progress?profileId=audit_blob_dedup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: progBody,
+  }));
+  const afterProg1 = setJsonCalls - beforeProg;
+  await tvSyncHandler(new Request('https://filmio.my/api/tv-progress?profileId=audit_blob_dedup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: progBody,
+  }));
+  const afterProg2 = setJsonCalls - beforeProg;
+  if (afterProg1 !== 1 || afterProg2 !== 1) {
+    throw new Error(`tv-progress a executat ${afterProg2} scrieri Blobs la 2x POST identic (așteptat exact 1)`);
+  }
+
+  // 5b: 2x POST identic /api/tv-profiles -> 1 singură scriere Blobs
+  const beforeProf = setJsonCalls;
+  const profBody = JSON.stringify([{ id: 'acc_blob_audit', name: 'BlobAuditUser', updatedAt: 5100000 }]);
+  await tvSyncHandler(new Request('https://filmio.my/api/tv-profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: profBody,
+  }));
+  const afterProf1 = setJsonCalls - beforeProf;
+  await tvSyncHandler(new Request('https://filmio.my/api/tv-profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: profBody,
+  }));
+  const afterProf2 = setJsonCalls - beforeProf;
+  if (afterProf1 !== 1 || afterProf2 !== 1) {
+    throw new Error(`tv-profiles a executat ${afterProf2} scrieri Blobs la 2x POST identic (așteptat exact 1)`);
+  }
+} finally {
+  delete globalThis.__aetherTestBlobStore;
+}
+
+console.log('VECTOR6_BLOB_DEDUPE_OK');
+"""
+    code, out, err = run_cmd(["node", "--input-type=module", "-e", node_blob_dedupe_test])
+    if code != 0 or "VECTOR6_BLOB_DEDUPE_OK" not in out:
+        errors.append(f"Eroare test idempotență Netlify Blobs: {err or out}")
+    else:
+        details.append("Netlify Blobs write-dedupe verificat în memorie: 2x POST identic (`/api/tv-progress` & `/api/tv-profiles`) = 1 scriere (`0` scrieri redundante)")
+
+    if errors:
+        return False, "; ".join(errors), details
+    return True, "0 reload loops, 0 useEffect loops, polling >= 60s, 0 burners Home, Blobs write-dedupe activ", details
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Audit Gatekeeper Pre-Push (6 Faze)")
+    parser = argparse.ArgumentParser(description="Audit Gatekeeper Pre-Push (6 Faze / 6 Vectori)")
     parser.add_argument(
         "--skip-build",
         action="store_true",
@@ -596,8 +1032,9 @@ def main() -> int:
     v3_ok, v3_sum, v3_det = vector3_business_invariants()
     results.append(("Vector 3: Invarianți de Business", v3_ok, v3_sum, v3_det))
 
-    # Vector 5 (rulat înainte de build pentru a valida instantaneu SHA-256 READ-ONLY pe toate testele Node)
+    # Vector 5 & Vector 6 (rulate înainte de build pentru a valida instantaneu SHA-256 READ-ONLY pe toate testele Node)
     v5_ok, v5_sum, v5_det = vector5_security()
+    v6_ok, v6_sum, v6_det = vector6_anti_loop_and_netlify_consumption()
 
     # Verificare READ-ONLY după toate testele de cod/API (înainte de cele ~8s de `npm run build` în care TV-ul live poate trimite heartbeat)
     post_tests_snapshots = snapshot_data_files()
@@ -613,6 +1050,7 @@ def main() -> int:
     v4_ok, v4_sum, v4_det = vector4_ui_and_architecture(skip_build=args.skip_build)
     results.append(("Vector 4: Reguli UI & Arhitectură", v4_ok, v4_sum, v4_det))
     results.append(("Vector 5: Securitate & Secrete", v5_ok, v5_sum, v5_det))
+    results.append(("Vector 6: Anti-Loop & Consum Netlify", v6_ok, v6_sum, v6_det))
 
     elapsed = time.time() - start_time
     all_passed = all(ok for _, ok, _, _ in results)

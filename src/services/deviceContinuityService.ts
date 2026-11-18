@@ -944,6 +944,9 @@ const SAVED_VOD_PREFIX = 'aether_saved_vod_items_v1_';
 
 let profileSaveEpoch = 0;
 let inFlightProfileSavePromise: Promise<unknown> | null = null;
+let inFlightProfileSyncPromise: Promise<SharedTvProfile[]> | null = null;
+let lastProfileServerSyncAt = 0;
+let lastSelfHealedPayloadHash = '';
 
 function getCanonicalProfileRank(p: Partial<SharedTvProfile>): number {
   const id = String(p?.id || '');
@@ -1229,179 +1232,228 @@ export function saveSharedProfiles(
   }
 }
 
-export async function syncSharedProfilesFromServer(): Promise<SharedTvProfile[]> {
-  try {
-    if (inFlightProfileSavePromise) {
-      await inFlightProfileSavePromise.catch(() => {});
-    }
-    const epochAtFetchStart = profileSaveEpoch;
-    const local = loadSharedProfiles();
-    const fetchEndpoint = async (url: string, timeoutMs = 4500) => {
-      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
-      try {
-        const res = await fetch(url, {
-          cache: 'no-store',
-          signal: ctrl?.signal,
-        });
-        if (timer) clearTimeout(timer);
-        if (!res.ok) return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
-        let serverDel: string[] = [];
-        const rawDel = res.headers.get('x-server-deleted-ids');
-        if (rawDel) {
-          try {
-            const parsed = JSON.parse(rawDel);
-            if (Array.isArray(parsed)) {
-              serverDel = parsed.filter((x): x is string => typeof x === 'string' && x !== 'p1');
-            }
-          } catch {
-            // ignore
-          }
-        }
-        const data = await res.json().catch(() => null);
-        return {
-          profiles: Array.isArray(data) ? (data as SharedTvProfile[]) : null,
-          deletedIds: serverDel,
-        };
-      } catch {
-        if (timer) clearTimeout(timer);
-        return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
-      }
-    };
+export async function syncSharedProfilesFromServer(
+  force = false
+): Promise<SharedTvProfile[]> {
+  if (inFlightProfileSyncPromise) {
+    return inFlightProfileSyncPromise;
+  }
+  if (
+    !force &&
+    lastProfileServerSyncAt > 0 &&
+    Date.now() - lastProfileServerSyncAt < 20_000
+  ) {
+    return loadSharedProfiles();
+  }
 
-    const peerPromise = isDirectLocalHost()
-      ? fetchEndpoint('https://filmio.my/api/tv-profiles', 3500)
-      : localBridgeAvailable && getFileListServerBase()
-        ? fetchEndpoint(`${getFileListServerBase()}/api/tv-profiles`, 2000)
-        : Promise.resolve({ profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] });
-
-    const [primaryRes, peerRes] = await Promise.all([
-      fetchEndpoint('/api/tv-profiles', 4500),
-      peerPromise,
-    ]);
-
-    if (profileSaveEpoch !== epochAtFetchStart || inFlightProfileSavePromise) {
+  const runPromise = (async (): Promise<SharedTvProfile[]> => {
+    try {
+      lastProfileServerSyncAt = Date.now();
       if (inFlightProfileSavePromise) {
         await inFlightProfileSavePromise.catch(() => {});
       }
-      return loadSharedProfiles();
-    }
+      const epochAtFetchStart = profileSaveEpoch;
+      const local = loadSharedProfiles();
+      const fetchEndpoint = async (url: string, timeoutMs = 4500) => {
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+        try {
+          const res = await fetch(url, {
+            cache: 'no-store',
+            signal: ctrl?.signal,
+          });
+          if (timer) clearTimeout(timer);
+          if (!res.ok) return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
+          let serverDel: string[] = [];
+          const rawDel = res.headers.get('x-server-deleted-ids');
+          if (rawDel) {
+            try {
+              const parsed = JSON.parse(rawDel);
+              if (Array.isArray(parsed)) {
+                serverDel = parsed.filter((x): x is string => typeof x === 'string' && x !== 'p1');
+              }
+            } catch {
+              // ignore
+            }
+          }
+          const data = await res.json().catch(() => null);
+          return {
+            profiles: Array.isArray(data) ? (data as SharedTvProfile[]) : null,
+            deletedIds: serverDel,
+          };
+        } catch {
+          if (timer) clearTimeout(timer);
+          return { profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] };
+        }
+      };
 
-    const combinedRemote: SharedTvProfile[] = [
-      ...(Array.isArray(primaryRes.profiles) ? primaryRes.profiles : []),
-      ...(Array.isArray(peerRes.profiles) ? peerRes.profiles : []),
-    ];
-    if (combinedRemote.length === 0) return local;
+      const peerPromise = isDirectLocalHost()
+        ? fetchEndpoint('https://filmio.my/api/tv-profiles', 3500)
+        : localBridgeAvailable && getFileListServerBase()
+          ? fetchEndpoint(`${getFileListServerBase()}/api/tv-profiles`, 2000)
+          : Promise.resolve({ profiles: null as SharedTvProfile[] | null, deletedIds: [] as string[] });
 
-    const serverDeletedSet = new Set<string>([
-      ...primaryRes.deletedIds,
-      ...peerRes.deletedIds,
-    ]);
-    const localMap = new Map(local.map((p) => [p.id, p]));
-    const remoteTimestamps = new Map<string, number>();
-    for (const p of combinedRemote) {
-      if (p?.id) {
-        remoteTimestamps.set(
-          p.id,
-          Math.max(remoteTimestamps.get(p.id) || 0, Number(p.updatedAt) || 0)
-        );
+      const [primaryRes, peerRes] = await Promise.all([
+        fetchEndpoint('/api/tv-profiles', 4500),
+        peerPromise,
+      ]);
+
+      if (profileSaveEpoch !== epochAtFetchStart || inFlightProfileSavePromise) {
+        if (inFlightProfileSavePromise) {
+          await inFlightProfileSavePromise.catch(() => {});
+        }
+        return loadSharedProfiles();
       }
-    }
-    for (const delId of serverDeletedSet) {
-      const localMatch = localMap.get(delId);
-      // Do not tombstone if local created/updated a fresh profile record cleanly
-      if (!localMatch || !localMatch.updatedAt) {
-        markProfileDeleted(delId);
+
+      const combinedRemote: SharedTvProfile[] = [
+        ...(Array.isArray(primaryRes.profiles) ? primaryRes.profiles : []),
+        ...(Array.isArray(peerRes.profiles) ? peerRes.profiles : []),
+      ];
+      if (combinedRemote.length === 0) return local;
+
+      const serverDeletedSet = new Set<string>([
+        ...primaryRes.deletedIds,
+        ...peerRes.deletedIds,
+      ]);
+      const localMap = new Map(local.map((p) => [p.id, p]));
+      const remoteTimestamps = new Map<string, number>();
+      const remoteOwnerByNormName = new Map<string, string>();
+      for (const p of combinedRemote) {
+        if (p?.id) {
+          remoteTimestamps.set(
+            p.id,
+            Math.max(remoteTimestamps.get(p.id) || 0, Number(p.updatedAt) || 0)
+          );
+          const normName = normalizeProfileUniqueName(p.name);
+          if (normName && !remoteOwnerByNormName.has(normName)) {
+            remoteOwnerByNormName.set(normName, p.id);
+          }
+        }
       }
-    }
+      for (const delId of serverDeletedSet) {
+        const localMatch = localMap.get(delId);
+        // Do not tombstone if local created/updated a fresh profile record cleanly
+        if (!localMatch || !localMatch.updatedAt) {
+          markProfileDeleted(delId);
+        }
+      }
 
-    const filteredLocal = local.filter((p) => !serverDeletedSet.has(p.id) || p.id === 'p1');
-    const authoritative = mergeSharedProfiles(filteredLocal, combinedRemote);
-    const authoritativeIds = new Set(authoritative.map((p) => p.id));
+      const filteredLocal = local.filter((p) => {
+        if (!p || !p.id) return false;
+        if (serverDeletedSet.has(p.id) && p.id !== 'p1') return false;
+        if (p.id !== 'p1') {
+          const normName = normalizeProfileUniqueName(p.name);
+          const remoteOwner = normName ? remoteOwnerByNormName.get(normName) : undefined;
+          if (remoteOwner && remoteOwner !== p.id) {
+            return false;
+          }
+        }
+        return true;
+      });
+      const authoritative = mergeSharedProfiles(filteredLocal, combinedRemote);
+      const authoritativeIds = new Set(authoritative.map((p) => p.id));
 
-    for (const delId of loadDeletedProfileIds()) {
-      if (delId === 'p1' || authoritativeIds.has(delId)) continue;
-      forgetProfileOnDevice(delId);
+      for (const delId of loadDeletedProfileIds()) {
+        if (delId === 'p1' || authoritativeIds.has(delId)) continue;
+        forgetProfileOnDevice(delId);
+        try {
+          localStorage.removeItem(`${WATCH_PROGRESS_PREFIX}${delId}`);
+          localStorage.removeItem(`${SAVED_VOD_PREFIX}${delId}`);
+          localStorage.removeItem(`aether_radio_favorites_v2_${delId}`);
+          localStorage.removeItem(`aether_tv_channel_favorites_v2_${delId}`);
+          localStorage.removeItem(`filmio_seed_progress_v3_${delId}`);
+          localStorage.removeItem(`filmio_seed_saved_v3_${delId}`);
+        } catch {
+          // ignore
+        }
+      }
+
+      const nextJson = JSON.stringify(authoritative);
+      let prevStoredJson: string | null = null;
       try {
-        localStorage.removeItem(`${WATCH_PROGRESS_PREFIX}${delId}`);
-        localStorage.removeItem(`${SAVED_VOD_PREFIX}${delId}`);
-        localStorage.removeItem(`aether_radio_favorites_v2_${delId}`);
-        localStorage.removeItem(`aether_tv_channel_favorites_v2_${delId}`);
-        localStorage.removeItem(`filmio_seed_progress_v3_${delId}`);
-        localStorage.removeItem(`filmio_seed_saved_v3_${delId}`);
+        prevStoredJson = localStorage.getItem(TV_PROFILES_STORAGE_KEY);
       } catch {
         // ignore
       }
-    }
-
-    try {
-      localStorage.setItem(TV_PROFILES_STORAGE_KEY, JSON.stringify(authoritative));
-    } catch {
-      // ignore
-    }
-
-    // Self-healing push: if primary or peer server missed any valid local/merged profile, heal it immediately!
-    const primaryIds = new Set(
-      (primaryRes.profiles || []).map((p) => p?.id).filter(Boolean)
-    );
-    const peerIds = new Set(
-      (peerRes.profiles || []).map((p) => p?.id).filter(Boolean)
-    );
-    const missingOnPrimary = authoritative.some((p) => !primaryIds.has(p.id));
-    const missingOnPeer =
-      peerRes.profiles !== null && authoritative.some((p) => !peerIds.has(p.id));
-    if (missingOnPrimary || missingOnPeer) {
-      const healBody = JSON.stringify(authoritative);
-      const healDelHeader = JSON.stringify(Array.from(loadDeletedProfileIds()));
-      if (missingOnPrimary) {
-        fetch('/api/tv-profiles', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Deleted-Profile-Ids': healDelHeader,
-          },
-          body: healBody,
-        }).catch(() => {});
+      const profilesChanged = prevStoredJson !== nextJson;
+      if (profilesChanged) {
+        try {
+          localStorage.setItem(TV_PROFILES_STORAGE_KEY, nextJson);
+        } catch {
+          // ignore
+        }
       }
-      if (missingOnPeer) {
-        const peerUrl = isDirectLocalHost()
-          ? 'https://filmio.my/api/tv-profiles'
-          : `${getFileListServerBase()}/api/tv-profiles`;
-        if (peerUrl) {
-          fetch(peerUrl, {
+
+      // Self-healing push: if primary or peer server missed any valid local/merged profile, heal at most once per payload hash
+      const primaryIds = new Set(
+        (primaryRes.profiles || []).map((p) => p?.id).filter(Boolean)
+      );
+      const peerIds = new Set(
+        (peerRes.profiles || []).map((p) => p?.id).filter(Boolean)
+      );
+      const missingOnPrimary = authoritative.some((p) => !primaryIds.has(p.id));
+      const missingOnPeer =
+        peerRes.profiles !== null && authoritative.some((p) => !peerIds.has(p.id));
+      if ((missingOnPrimary || missingOnPeer) && nextJson !== lastSelfHealedPayloadHash) {
+        lastSelfHealedPayloadHash = nextJson;
+        const healDelHeader = JSON.stringify(Array.from(loadDeletedProfileIds()));
+        if (missingOnPrimary) {
+          fetch('/api/tv-profiles', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Deleted-Profile-Ids': healDelHeader,
             },
-            body: healBody,
+            body: nextJson,
           }).catch(() => {});
         }
+        if (missingOnPeer) {
+          const peerUrl = isDirectLocalHost()
+            ? 'https://filmio.my/api/tv-profiles'
+            : `${getFileListServerBase()}/api/tv-profiles`;
+          if (peerUrl) {
+            fetch(peerUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Deleted-Profile-Ids': healDelHeader,
+              },
+              body: nextJson,
+            }).catch(() => {});
+          }
+        }
       }
-    }
 
-    const currentActiveId = loadSharedActiveProfileId();
-    if (!authoritativeIds.has(currentActiveId)) {
-      const fallbackId =
-        authoritative.find((p) => p.id === 'p1')?.id ||
-        authoritative[0]?.id ||
-        'p1';
-      try {
-        localStorage.setItem(ACTIVE_TV_PROFILE_STORAGE_KEY, fallbackId);
-      } catch {
-        // ignore
+      const currentActiveId = loadSharedActiveProfileId();
+      if (!authoritativeIds.has(currentActiveId)) {
+        const fallbackId =
+          authoritative.find((p) => p.id === 'p1')?.id ||
+          authoritative[0]?.id ||
+          'p1';
+        try {
+          localStorage.setItem(ACTIVE_TV_PROFILE_STORAGE_KEY, fallbackId);
+        } catch {
+          // ignore
+        }
       }
-    }
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('aether:profiles-updated', { detail: authoritative })
-      );
+      if (profilesChanged && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('aether:profiles-updated', { detail: authoritative })
+        );
+      }
+      return authoritative;
+    } catch {
+      return loadSharedProfiles();
     }
-    return authoritative;
-  } catch {
-    return loadSharedProfiles();
-  }
+  })().finally(() => {
+    if (inFlightProfileSyncPromise === runPromise) {
+      inFlightProfileSyncPromise = null;
+    }
+  });
+
+  inFlightProfileSyncPromise = runPromise;
+  return runPromise;
 }
 
 export function loadSharedActiveProfileId(): string {

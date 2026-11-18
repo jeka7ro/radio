@@ -151,10 +151,79 @@ export interface SeriesEpisodeStats {
 
 const SERIES_EP_STATS_MEM_CACHE = new Map<string, SeriesEpisodeStats>();
 const SERIES_EP_STATS_INFLIGHT = new Map<string, Promise<SeriesEpisodeStats | null>>();
+const SERIES_EP_STATS_STORAGE_KEY = 'aether_series_ep_stats_v1';
+const SERIES_EP_STATS_TTL_MS = 6 * 60 * 60 * 1000;
+let seriesEpStatsHydrated = false;
+
+function hydrateSeriesEpStatsCache(): void {
+  if (seriesEpStatsHydrated) return;
+  seriesEpStatsHydrated = true;
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    const raw = sessionStorage.getItem(SERIES_EP_STATS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      { stats?: SeriesEpisodeStats; ts?: number }
+    >;
+    if (!parsed || typeof parsed !== 'object') return;
+    const now = Date.now();
+    for (const [k, entry] of Object.entries(parsed)) {
+      if (
+        entry?.stats &&
+        entry.stats.episodesCount > 0 &&
+        typeof entry.ts === 'number' &&
+        now - entry.ts < SERIES_EP_STATS_TTL_MS
+      ) {
+        SERIES_EP_STATS_MEM_CACHE.set(k, entry.stats);
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function storeSeriesEpStatsCache(
+  keys: string[],
+  stats: SeriesEpisodeStats
+): void {
+  hydrateSeriesEpStatsCache();
+  for (const key of keys) {
+    if (key) {
+      SERIES_EP_STATS_MEM_CACHE.set(key, stats);
+    }
+  }
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    const raw = sessionStorage.getItem(SERIES_EP_STATS_STORAGE_KEY);
+    const parsed = raw
+      ? (JSON.parse(raw) as Record<string, { stats: SeriesEpisodeStats; ts: number }>)
+      : {};
+    const now = Date.now();
+    for (const key of keys) {
+      if (key) {
+        parsed[key] = { stats, ts: now };
+      }
+    }
+    const entries = Object.entries(parsed);
+    if (entries.length > 250) {
+      entries.sort((a, b) => (b[1]?.ts || 0) - (a[1]?.ts || 0));
+      sessionStorage.setItem(
+        SERIES_EP_STATS_STORAGE_KEY,
+        JSON.stringify(Object.fromEntries(entries.slice(0, 200)))
+      );
+    } else {
+      sessionStorage.setItem(SERIES_EP_STATS_STORAGE_KEY, JSON.stringify(parsed));
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
 export function getCachedSeriesEpisodeStats(
   itemOrId?: CinemetaItem | string | null
 ): SeriesEpisodeStats | null {
+  hydrateSeriesEpStatsCache();
   if (!itemOrId) return null;
   const id = typeof itemOrId === 'string' ? itemOrId : itemOrId.id;
   if (!id) return null;
@@ -188,8 +257,10 @@ export function getCachedSeriesEpisodeStats(
 }
 
 export async function resolveSeriesEpisodeStats(
-  item: CinemetaItem
+  item: CinemetaItem,
+  options?: { allowHeavyBackendScrape?: boolean }
 ): Promise<SeriesEpisodeStats | null> {
+  hydrateSeriesEpStatsCache();
   if (!item || item.type !== 'series' || !item.id) return null;
   const cached = SERIES_EP_STATS_MEM_CACHE.get(item.id);
   if (cached && cached.episodesCount > 0) return cached;
@@ -301,10 +372,10 @@ export async function resolveSeriesEpisodeStats(
                 episodesBySeason,
               });
               if (!rawKp && !isRussianVodItem(item) && bestStats) {
-                SERIES_EP_STATS_MEM_CACHE.set(item.id, bestStats);
-                if (targetImdb !== item.id) {
-                  SERIES_EP_STATS_MEM_CACHE.set(targetImdb, bestStats);
-                }
+                storeSeriesEpStatsCache(
+                  targetImdb !== item.id ? [item.id, targetImdb] : [item.id],
+                  bestStats
+                );
                 return bestStats;
               }
             }
@@ -353,7 +424,7 @@ export async function resolveSeriesEpisodeStats(
         }
       }
 
-      if (rawKp || isRussianVodItem(item)) {
+      if (options?.allowHeavyBackendScrape && (rawKp || isRussianVodItem(item))) {
         const qs = new URLSearchParams({
           type: 'series',
           season: '1',
@@ -392,10 +463,10 @@ export async function resolveSeriesEpisodeStats(
       }
 
       if (bestStats) {
-        SERIES_EP_STATS_MEM_CACHE.set(item.id, bestStats);
-        if (targetImdb && targetImdb !== item.id) {
-          SERIES_EP_STATS_MEM_CACHE.set(targetImdb, bestStats);
-        }
+        storeSeriesEpStatsCache(
+          targetImdb && targetImdb !== item.id ? [item.id, targetImdb] : [item.id],
+          bestStats
+        );
         return bestStats;
       }
     } catch {
@@ -1740,24 +1811,24 @@ export function loadWatchProgressMap(
   }
 }
 
-export function saveWatchProgressMap(
-  map: Record<string, VodWatchProgressEntry>,
-  profileId = 'p1'
-): void {
-  const cleanProf = encodeURIComponent(profileId || 'p1');
-  const cleanMap = deduplicateProgressMap(map);
-  const payload = JSON.stringify(cleanMap);
-  try {
-    localStorage.setItem(getWatchProgressKeyForProfile(profileId), payload);
-    localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
-  } catch {
-    // ignore
-  }
+const CLOUD_PROGRESS_MIN_INTERVAL_MS = 60_000;
+const lastCloudProgressPayloadByProf = new Map<string, string>();
+const lastCloudProgressSentAtByProf = new Map<string, number>();
+const pendingCloudProgressTimerByProf = new Map<string, number>();
+const pendingCloudProgressPayloadByProf = new Map<string, string>();
+let cloudProgressFlushListenersAttached = false;
+
+function dispatchCloudProgressPost(cleanProf: string, payload: string): void {
+  if (lastCloudProgressPayloadByProf.get(cleanProf) === payload) return;
+  lastCloudProgressPayloadByProf.set(cleanProf, payload);
+  lastCloudProgressSentAtByProf.set(cleanProf, Date.now());
+  pendingCloudProgressPayloadByProf.delete(cleanProf);
   try {
     fetch(`/api/tv-progress?profileId=${cleanProf}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
+      keepalive: true,
     }).catch(() => { });
   } catch {
     // ignore
@@ -1770,10 +1841,91 @@ export function saveWatchProgressMap(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
+        keepalive: true,
       }).catch(() => { });
     } catch {
       // ignore
     }
+  }
+}
+
+function ensureCloudProgressFlushListeners(): void {
+  if (cloudProgressFlushListenersAttached || typeof window === 'undefined') return;
+  cloudProgressFlushListenersAttached = true;
+  const flushAllPending = () => {
+    for (const [cleanProf, timerId] of pendingCloudProgressTimerByProf.entries()) {
+      window.clearTimeout(timerId);
+      pendingCloudProgressTimerByProf.delete(cleanProf);
+      const pendingPayload = pendingCloudProgressPayloadByProf.get(cleanProf);
+      if (pendingPayload) {
+        dispatchCloudProgressPost(cleanProf, pendingPayload);
+      }
+    }
+  };
+  window.addEventListener('pagehide', flushAllPending);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushAllPending();
+    }
+  });
+}
+
+export function saveWatchProgressMap(
+  map: Record<string, VodWatchProgressEntry>,
+  profileId = 'p1',
+  options?: { immediateCloud?: boolean }
+): void {
+  const cleanProf = encodeURIComponent(profileId || 'p1');
+  const cleanMap = deduplicateProgressMap(map);
+  const payload = JSON.stringify(cleanMap);
+  try {
+    localStorage.setItem(getWatchProgressKeyForProfile(profileId), payload);
+    localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
+  } catch {
+    // ignore
+  }
+  if (payload === lastCloudProgressPayloadByProf.get(cleanProf)) {
+    return;
+  }
+
+  ensureCloudProgressFlushListeners();
+  const immediateCloud = options?.immediateCloud !== false;
+  if (immediateCloud) {
+    const existingTimer = pendingCloudProgressTimerByProf.get(cleanProf);
+    if (existingTimer !== undefined && typeof window !== 'undefined') {
+      window.clearTimeout(existingTimer);
+      pendingCloudProgressTimerByProf.delete(cleanProf);
+    }
+    dispatchCloudProgressPost(cleanProf, payload);
+    return;
+  }
+
+  const lastSentAt = lastCloudProgressSentAtByProf.get(cleanProf) || 0;
+  const elapsed = Date.now() - lastSentAt;
+  if (elapsed >= CLOUD_PROGRESS_MIN_INTERVAL_MS) {
+    const existingTimer = pendingCloudProgressTimerByProf.get(cleanProf);
+    if (existingTimer !== undefined && typeof window !== 'undefined') {
+      window.clearTimeout(existingTimer);
+      pendingCloudProgressTimerByProf.delete(cleanProf);
+    }
+    dispatchCloudProgressPost(cleanProf, payload);
+    return;
+  }
+
+  pendingCloudProgressPayloadByProf.set(cleanProf, payload);
+  if (
+    !pendingCloudProgressTimerByProf.has(cleanProf) &&
+    typeof window !== 'undefined'
+  ) {
+    const waitMs = Math.max(1000, CLOUD_PROGRESS_MIN_INTERVAL_MS - elapsed);
+    const timerId = window.setTimeout(() => {
+      pendingCloudProgressTimerByProf.delete(cleanProf);
+      const queued = pendingCloudProgressPayloadByProf.get(cleanProf);
+      if (queued) {
+        dispatchCloudProgressPost(cleanProf, queued);
+      }
+    }, waitMs);
+    pendingCloudProgressTimerByProf.set(cleanProf, timerId);
   }
 }
 

@@ -63,6 +63,17 @@ import {
   resolveOfflineMusicObjectUrl,
   useOfflineMusicState,
 } from '../services/offlineMusicService';
+import {
+  buildResidentialFullAudioUrl,
+  canUseResidentialDirectAudio,
+  pauseYoutubeMusicTrack,
+  playYoutubeMusicTrack,
+  prewarmYoutubeMusicEngine,
+  resumeYoutubeMusicTrack,
+  seekYoutubeMusicTrack,
+  setYoutubeMusicVolume,
+  stopYoutubeMusicTrack,
+} from '../services/musicStreamEngine';
 import { OfflineDownloadedBadgeIcon } from '../components/tv/spotifyMusicPremiumViews';
 import {
   downloadHlsToOfflineDb,
@@ -564,6 +575,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     []
   );
 
+  const activeMusicBackendRef = useRef<'none' | 'audio' | 'yt'>('none');
+  const audioFallbackOnlyRef = useRef<boolean>(false);
+  const isMusicRepeatRef = useRef<boolean>(isMusicRepeat);
+  isMusicRepeatRef.current = isMusicRepeat;
+  const handleNextMusicTrackRef = useRef<() => void>(() => {});
+  const lastMusicPosSyncMsRef = useRef<number>(0);
+
   // If Radio Live or Live TV starts playing, stop and close Spotify Music completely so only the current source is active
   useEffect(() => {
     if (
@@ -572,6 +590,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       playerStatus === 'loading' ||
       currentTvChannel
     ) {
+      activeMusicBackendRef.current = 'none';
+      audioFallbackOnlyRef.current = false;
+      stopYoutubeMusicTrack();
       if (musicAudioRef.current) {
         musicAudioRef.current.pause();
         musicAudioRef.current.removeAttribute('src');
@@ -594,8 +615,70 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const musicPlaybackSeqRef = useRef<number>(0);
 
+  const startYtTrackPlayback = useCallback(
+    (track: SpotifyTrackItem, startSec = 0) => {
+      activeMusicBackendRef.current = 'yt';
+      audioFallbackOnlyRef.current = false;
+      if (musicAudioRef.current) {
+        musicAudioRef.current.pause();
+        musicAudioRef.current.removeAttribute('src');
+      }
+      setYoutubeMusicVolume(musicVolume, isMusicMuted);
+      void playYoutubeMusicTrack(
+        track,
+        {
+          onProgress: (ct, dur) => {
+            setMusicElapsedSec(ct);
+            if (dur >= 45) {
+              setMusicDurationSec(dur);
+            }
+            if (Date.now() - lastMusicPosSyncMsRef.current >= 2000) {
+              lastMusicPosSyncMsRef.current = Date.now();
+              updateMediaSessionPosition(
+                'music',
+                ct,
+                dur >= 45 ? dur : track.durationSec || musicDurationSecRef.current || 200
+              );
+            }
+          },
+          onStateChange: (playing) => {
+            setIsMusicPlaying(playing);
+            updateMediaSessionPlaybackState('music', playing ? 'playing' : 'paused');
+          },
+          onEnded: () => {
+            if (isMusicRepeatRef.current) {
+              seekYoutubeMusicTrack(0);
+              resumeYoutubeMusicTrack();
+            } else {
+              handleNextMusicTrackRef.current();
+            }
+          },
+          onAllCandidatesFailed: () => {
+            const el = musicAudioRef.current;
+            if (el && track.previewUrl) {
+              activeMusicBackendRef.current = 'audio';
+              audioFallbackOnlyRef.current = true;
+              el.src = track.previewUrl;
+              el.volume = isMusicMuted ? 0 : musicVolume;
+              el.play().catch(() => {});
+            } else {
+              activeMusicBackendRef.current = 'none';
+              setIsMusicPlaying(false);
+            }
+          },
+        },
+        { startSec }
+      );
+    },
+    [isMusicMuted, musicVolume]
+  );
+
   const handlePlayMusicTrack = useCallback(
     (track: SpotifyTrackItem, queueList?: SpotifyTrackItem[]) => {
+      prewarmYoutubeMusicEngine();
+      stopYoutubeMusicTrack();
+      activeMusicBackendRef.current = 'none';
+      audioFallbackOnlyRef.current = false;
       stopRadio();
       setIsTvRadioPlayerOpen(false);
       if (currentTvChannel) {
@@ -633,45 +716,50 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
       const playbackSeq = ++musicPlaybackSeqRef.current;
       const audioEl = musicAudioRef.current;
-      if (audioEl) {
-        const playFromUrl = (srcUrl: string, allowPreviewFallback: boolean) => {
-          if (musicPlaybackSeqRef.current !== playbackSeq) return;
-          audioEl.src = srcUrl;
+      const startOnlinePlayback = () => {
+        if (musicPlaybackSeqRef.current !== playbackSeq) return;
+        if (canUseResidentialDirectAudio() && audioEl) {
+          activeMusicBackendRef.current = 'audio';
+          audioFallbackOnlyRef.current = false;
+          audioEl.src = buildResidentialFullAudioUrl(track);
           audioEl.volume = isMusicMuted ? 0 : musicVolume;
           const playPromise = audioEl.play();
           if (playPromise !== undefined) {
             playPromise.catch(() => {
-              if (
-                allowPreviewFallback &&
-                track.previewUrl &&
-                audioEl.src !== track.previewUrl
-              ) {
-                audioEl.src = track.previewUrl;
-                audioEl.play().catch(() => {});
-              }
+              if (musicPlaybackSeqRef.current !== playbackSeq) return;
+              startYtTrackPlayback(track, 0);
             });
           }
-        };
+          return;
+        }
+        startYtTrackPlayback(track, 0);
+      };
 
-        if (!isTrackOfflineSync(track)) {
-          const targetSrc = track.fullAudioUrl || track.previewUrl || '';
-          playFromUrl(targetSrc, true);
-        } else {
+      if (!isTrackOfflineSync(track)) {
+        startOnlinePlayback();
+      } else {
+        if (audioEl) {
           try {
             audioEl.load();
           } catch {
             // ignore gesture unlock load errors
           }
-          void resolveOfflineMusicObjectUrl(track).then((offlineBlobUrl) => {
-            if (musicPlaybackSeqRef.current !== playbackSeq) return;
-            if (offlineBlobUrl) {
-              playFromUrl(offlineBlobUrl, false);
-            } else {
-              const targetSrc = track.fullAudioUrl || track.previewUrl || '';
-              playFromUrl(targetSrc, true);
-            }
-          });
         }
+        void resolveOfflineMusicObjectUrl(track).then((offlineBlobUrl) => {
+          if (musicPlaybackSeqRef.current !== playbackSeq) return;
+          if (offlineBlobUrl && audioEl) {
+            activeMusicBackendRef.current = 'audio';
+            audioFallbackOnlyRef.current = false;
+            audioEl.src = offlineBlobUrl;
+            audioEl.volume = isMusicMuted ? 0 : musicVolume;
+            audioEl.play().catch(() => {
+              if (musicPlaybackSeqRef.current !== playbackSeq) return;
+              startOnlinePlayback();
+            });
+          } else {
+            startOnlinePlayback();
+          }
+        });
       }
     },
     [
@@ -681,16 +769,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       isMusicMuted,
       musicVolume,
       persistAndSyncMusicState,
+      startYtTrackPlayback,
     ]
   );
 
   const handleToggleMusicPlayPause = useCallback(() => {
     const audioEl = musicAudioRef.current;
-    if (!audioEl) return;
     if (!currentMusicTrack) {
       handlePlayMusicTrack(INITIAL_SPOTIFY_TRACKS[0], INITIAL_SPOTIFY_TRACKS);
       return;
     }
+
+    if (activeMusicBackendRef.current === 'yt') {
+      if (isMusicPlayingRef.current) {
+        pauseYoutubeMusicTrack();
+        setIsMusicPlaying(false);
+        persistAndSyncMusicState();
+      } else {
+        stopRadio();
+        setIsTvRadioPlayerOpen(false);
+        if (currentTvChannel) {
+          closeTvPlayer();
+        }
+        setYoutubeMusicVolume(musicVolume, isMusicMuted);
+        resumeYoutubeMusicTrack();
+        setIsMusicPlaying(true);
+      }
+      return;
+    }
+
+    if (!audioEl) return;
     if (audioEl.paused) {
       stopRadio();
       setIsTvRadioPlayerOpen(false);
@@ -700,36 +808,34 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (!audioEl.getAttribute('src')) {
         const seq = ++musicPlaybackSeqRef.current;
         const resumeAt = Math.max(0, Math.floor(musicElapsedSecRef.current || 0));
-        const attachResumeAndPlay = (srcUrl: string, allowPreviewFallback: boolean) => {
+        const resumeOnline = () => {
           if (musicPlaybackSeqRef.current !== seq) return;
-          audioEl.src = srcUrl;
-          audioEl.volume = isMusicMuted ? 0 : musicVolume;
-          if (resumeAt > 2) {
-            const seekOnce = () => {
-              try {
-                audioEl.currentTime = resumeAt;
-              } catch {
-                // ignore seek before ready
-              }
-            };
-            audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
-          }
-          audioEl.play().catch(() => {
-            if (
-              allowPreviewFallback &&
-              currentMusicTrack.previewUrl &&
-              audioEl.src !== currentMusicTrack.previewUrl
-            ) {
-              audioEl.src = currentMusicTrack.previewUrl;
-              audioEl.play().catch(() => {});
+          if (canUseResidentialDirectAudio()) {
+            activeMusicBackendRef.current = 'audio';
+            audioFallbackOnlyRef.current = false;
+            audioEl.src = buildResidentialFullAudioUrl(currentMusicTrack);
+            audioEl.volume = isMusicMuted ? 0 : musicVolume;
+            if (resumeAt > 2) {
+              const seekOnce = () => {
+                try {
+                  audioEl.currentTime = resumeAt;
+                } catch {
+                  // ignore seek before ready
+                }
+              };
+              audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
             }
-          });
+            audioEl.play().catch(() => {
+              if (musicPlaybackSeqRef.current !== seq) return;
+              startYtTrackPlayback(currentMusicTrack, resumeAt);
+            });
+            return;
+          }
+          startYtTrackPlayback(currentMusicTrack, resumeAt);
         };
 
         if (!isTrackOfflineSync(currentMusicTrack)) {
-          const targetSrc =
-            currentMusicTrack.fullAudioUrl || currentMusicTrack.previewUrl || '';
-          attachResumeAndPlay(targetSrc, true);
+          resumeOnline();
         } else {
           try {
             audioEl.load();
@@ -739,25 +845,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           void resolveOfflineMusicObjectUrl(currentMusicTrack).then((offlineBlobUrl) => {
             if (musicPlaybackSeqRef.current !== seq) return;
             if (offlineBlobUrl) {
-              attachResumeAndPlay(offlineBlobUrl, false);
+              activeMusicBackendRef.current = 'audio';
+              audioFallbackOnlyRef.current = false;
+              audioEl.src = offlineBlobUrl;
+              audioEl.volume = isMusicMuted ? 0 : musicVolume;
+              if (resumeAt > 2) {
+                const seekOnce = () => {
+                  try {
+                    audioEl.currentTime = resumeAt;
+                  } catch {
+                    // ignore
+                  }
+                };
+                audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
+              }
+              audioEl.play().catch(() => {
+                if (musicPlaybackSeqRef.current !== seq) return;
+                resumeOnline();
+              });
             } else {
-              const targetSrc =
-                currentMusicTrack.fullAudioUrl || currentMusicTrack.previewUrl || '';
-              attachResumeAndPlay(targetSrc, true);
+              resumeOnline();
             }
           });
         }
         setIsMusicPlaying(true);
         return;
       }
+      activeMusicBackendRef.current = 'audio';
       audioEl.play().catch(() => {
-        if (
-          currentMusicTrack.previewUrl &&
-          audioEl.src !== currentMusicTrack.previewUrl
-        ) {
-          audioEl.src = currentMusicTrack.previewUrl;
-          audioEl.play().catch(() => {});
-        }
+        startYtTrackPlayback(currentMusicTrack, Math.floor(musicElapsedSecRef.current || 0));
       });
       setIsMusicPlaying(true);
     } else {
@@ -774,6 +890,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     isMusicMuted,
     musicVolume,
     persistAndSyncMusicState,
+    startYtTrackPlayback,
   ]);
 
   const handleNextMusicTrack = useCallback(() => {
@@ -790,14 +907,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const nextTrack = list[(idx + 1) % list.length] || list[0];
     handlePlayMusicTrack(nextTrack, list);
   }, [musicQueue, isMusicShuffle, currentMusicTrack, handlePlayMusicTrack]);
+  handleNextMusicTrackRef.current = handleNextMusicTrack;
 
   const handlePrevMusicTrack = useCallback(() => {
     const list = musicQueue.length > 0 ? musicQueue : INITIAL_SPOTIFY_TRACKS;
     if (list.length === 0) return;
-    if (musicElapsedSec > 5 && musicAudioRef.current) {
-      musicAudioRef.current.currentTime = 0;
-      setMusicElapsedSec(0);
-      return;
+    if (musicElapsedSec > 5) {
+      if (activeMusicBackendRef.current === 'yt') {
+        seekYoutubeMusicTrack(0);
+        setMusicElapsedSec(0);
+        return;
+      }
+      if (musicAudioRef.current) {
+        musicAudioRef.current.currentTime = 0;
+        setMusicElapsedSec(0);
+        return;
+      }
     }
     const idx = list.findIndex((t) => t.id === currentMusicTrack?.id);
     const prevIdx = idx <= 0 ? list.length - 1 : idx - 1;
@@ -806,11 +931,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const handleSeekMusic = useCallback(
     (targetSec: number) => {
-      const audioEl = musicAudioRef.current;
-      if (!audioEl) return;
       const clamped = Math.max(0, targetSec);
-      if (audioEl.getAttribute('src')) {
-        audioEl.currentTime = clamped;
+      if (activeMusicBackendRef.current === 'yt') {
+        seekYoutubeMusicTrack(clamped);
+      } else {
+        const audioEl = musicAudioRef.current;
+        if (audioEl && audioEl.getAttribute('src')) {
+          audioEl.currentTime = clamped;
+        }
       }
       setMusicElapsedSec(clamped);
       musicElapsedSecRef.current = clamped;
@@ -864,6 +992,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const clamped = Math.min(1, Math.max(0, Number(nextVol.toFixed(2))));
     setMusicVolume(clamped);
     setIsMusicMuted(clamped === 0);
+    setYoutubeMusicVolume(clamped, clamped === 0);
     if (musicAudioRef.current) {
       musicAudioRef.current.volume = clamped;
     }
@@ -872,6 +1001,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const handleToggleMusicMute = useCallback(() => {
     setIsMusicMuted((prev) => {
       const next = !prev;
+      setYoutubeMusicVolume(musicVolume, next);
       if (musicAudioRef.current) {
         musicAudioRef.current.volume = next ? 0 : musicVolume;
       }
@@ -880,6 +1010,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   }, [musicVolume]);
 
   const handleStopAndCloseMusic = useCallback(() => {
+    activeMusicBackendRef.current = 'none';
+    audioFallbackOnlyRef.current = false;
+    stopYoutubeMusicTrack();
     if (musicAudioRef.current) {
       musicAudioRef.current.pause();
       musicAudioRef.current.removeAttribute('src');
@@ -889,8 +1022,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     setMusicElapsedSec(0);
     releaseMediaSession('music');
   }, []);
-
-  const lastMusicPosSyncMsRef = useRef<number>(0);
 
   // Apple CarPlay Now Playing + Mercedes GLE Steering-Wheel & Cluster MediaSession for Music
   useEffect(() => {
@@ -916,17 +1047,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       },
       {
         onPlay: () => {
+          stopRadio();
+          setIsTvRadioPlayerOpen(false);
+          if (currentTvChannel) closeTvPlayer();
+          if (activeMusicBackendRef.current === 'yt') {
+            resumeYoutubeMusicTrack();
+            setIsMusicPlaying(true);
+            return;
+          }
           const el = musicAudioRef.current;
           if (el) {
-            stopRadio();
-            setIsTvRadioPlayerOpen(false);
-            if (currentTvChannel) closeTvPlayer();
             el.play().catch(() => { });
             setIsMusicPlaying(true);
           }
         },
         onPause: () => {
-          musicAudioRef.current?.pause();
+          if (activeMusicBackendRef.current === 'yt') {
+            pauseYoutubeMusicTrack();
+          } else {
+            musicAudioRef.current?.pause();
+          }
           setIsMusicPlaying(false);
         },
         onStop: () => {
@@ -1130,7 +1270,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           effectiveList = [...baseList, preserved];
         }
       }
-      setTvProfiles(effectiveList);
+      const nextProfilesJson = JSON.stringify(effectiveList);
+      setTvProfiles((prev) =>
+        JSON.stringify(prev) === nextProfilesJson ? prev : effectiveList
+      );
       const fallbackId =
         effectiveList.find((p) => p.id === storedActive)?.id ||
         effectiveList.find((p) => p.id === 'p1')?.id ||
@@ -1152,9 +1295,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
     const runAuthoritativeProfileSync = (force = false) => {
       const now = Date.now();
-      if (!force && now - lastSyncAt < 15_000) return;
+      if (!force && now - lastSyncAt < 60_000) return;
       lastSyncAt = now;
-      syncSharedProfilesFromServer()
+      syncSharedProfilesFromServer(force)
         .then((authoritative) => {
           applyLatestProfiles(authoritative);
         })
@@ -1167,7 +1310,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (document.visibilityState === 'visible') {
         runAuthoritativeProfileSync(false);
       }
-    }, 25_000);
+    }, 300_000);
 
     const onProfilesUpdated = () => {
       applyLatestProfiles();
@@ -1300,6 +1443,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     }
   }, [activeProfile?.id, activeProfileId, tvProfiles]);
 
+  const lastMusicPullByProfRef = useRef<Record<string, number>>({});
+
   // Cross-device per-profile sync for Liked Music Tracks, Listening History & Track Progress
   useEffect(() => {
     let cancelled = false;
@@ -1307,20 +1452,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (cancelled || !state) return;
       removedMusicMapRef.current = state.removedMap || {};
       const hasAnyRemoved = Object.keys(removedMusicMapRef.current).length > 0;
-      if (state.likedTracks.length > 0 || hasAnyRemoved) {
-        likedMusicTracksRef.current = state.likedTracks;
-        setLikedMusicTracks(state.likedTracks);
-      } else {
-        const defaults = INITIAL_SPOTIFY_TRACKS.slice(0, 3);
-        likedMusicTracksRef.current = defaults;
-        setLikedMusicTracks(defaults);
+      const nextLiked =
+        state.likedTracks.length > 0 || hasAnyRemoved
+          ? state.likedTracks
+          : INITIAL_SPOTIFY_TRACKS.slice(0, 3);
+      if (
+        likedMusicTracksRef.current.length !== nextLiked.length ||
+        likedMusicTracksRef.current.some((t, i) => t?.id !== nextLiked[i]?.id)
+      ) {
+        likedMusicTracksRef.current = nextLiked;
+        setLikedMusicTracks(nextLiked);
       }
-      if (state.recentTracks.length > 0) {
+      if (
+        recentMusicTracksRef.current.length !== state.recentTracks.length ||
+        recentMusicTracksRef.current.some((t, i) => t?.id !== state.recentTracks[i]?.id)
+      ) {
         recentMusicTracksRef.current = state.recentTracks;
         setRecentMusicTracks(state.recentTracks);
-      } else {
-        recentMusicTracksRef.current = [];
-        setRecentMusicTracks([]);
       }
       const pb = state.playbackState;
       const el = musicAudioRef.current;
@@ -1341,23 +1489,31 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           return pb.track;
         });
         setMusicElapsedSec(pb.elapsedSec || 0);
-        setMusicDurationSec(pb.durationSec || pb.track.durationSec || 200);
+        const syncedDur =
+          pb.durationSec && (pb.durationSec >= 45 || (pb.track.durationSec || 0) < 45)
+            ? pb.durationSec
+            : pb.track.durationSec || pb.durationSec || 200;
+        setMusicDurationSec(syncedDur);
       }
     };
 
     const localInit = loadLocalProfileMusicState(effectiveProfileId);
     applySyncedMusicState(localInit);
 
-    const runPull = () => {
+    const runPull = (force = false) => {
+      const now = Date.now();
+      const prevAt = lastMusicPullByProfRef.current[effectiveProfileId] || 0;
+      if (!force && now - prevAt < 120_000) return;
+      lastMusicPullByProfRef.current[effectiveProfileId] = now;
       void pullAndMergeProfileMusicState(effectiveProfileId).then((merged) => {
         applySyncedMusicState(merged);
       });
     };
-    runPull();
+    runPull(false);
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
-        runPull();
+        runPull(false);
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
@@ -1365,9 +1521,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       section === 'music'
         ? window.setInterval(() => {
             if (document.visibilityState === 'visible') {
-              runPull();
+              runPull(false);
             }
-          }, 180000)
+          }, 300_000)
         : null;
 
     return () => {
@@ -1422,6 +1578,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   useEffect(() => {
     const syncProfileSettings = () => {
       const next = loadSmartTvSettings(effectiveProfileId);
+      if (JSON.stringify(tvSettingsRef.current) === JSON.stringify(next)) {
+        return;
+      }
       tvSettingsRef.current = next;
       setTvSettings(next);
       if (next.defaultSubLang && next.defaultSubLang !== 'off') {
@@ -2304,6 +2463,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         stopRadio();
         setIsTvRadioPlayerOpen(false);
       }
+      activeMusicBackendRef.current = 'none';
+      audioFallbackOnlyRef.current = false;
+      stopYoutubeMusicTrack();
       if (musicAudioRef.current && !musicAudioRef.current.paused) {
         musicAudioRef.current.pause();
       }
@@ -2324,6 +2486,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     isMusicPlaying,
     currentMusicTrack,
   ]);
+
+  useEffect(() => {
+    if (section === 'music' || currentMusicTrack !== null) {
+      prewarmYoutubeMusicEngine();
+    }
+  }, [section, currentMusicTrack]);
 
   // Listen for direct jumps from Radio Song/Artist/Album clicks to the Music section
   useEffect(() => {
@@ -10425,8 +10593,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       next[canonicalKey] = nextEntry;
       const cleanMap = deduplicateProgressMap(next);
       watchProgressMapRef.current = cleanMap;
-      saveWatchProgressMap(cleanMap, activeProfileId);
       const isStillPlaying = typeof forcePlayingState === 'boolean' ? forcePlayingState : isPlayingVodRef.current;
+      saveWatchProgressMap(cleanMap, activeProfileId, { immediateCloud: !isStillPlaying });
       if (
         !isStillPlaying ||
         !isPlayingVodRef.current ||
@@ -10576,7 +10744,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       };
       const cleanNext = deduplicateProgressMap(next);
       watchProgressMapRef.current = cleanNext;
-      saveWatchProgressMap(cleanNext, activeProfileId);
+      saveWatchProgressMap(cleanNext, activeProfileId, {
+        immediateCloud: !playing || !fromHeartbeat,
+      });
       if (!playing || !fromHeartbeat) {
         setWatchProgressMap(cleanNext);
       }
@@ -10585,7 +10755,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     markPlayingState(true, false);
     const hb = window.setInterval(() => {
       markPlayingState(true, true);
-    }, 15000);
+    }, 30000);
 
     const handlePageUnload = () => {
       markPlayingState(false, false);
@@ -10608,7 +10778,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     return () => window.clearTimeout(t);
   }, [pendingResumePromptSec, isPlayingVod]);
 
-  // Sync watch progress & saved favorites across devices (local + cloud filmio.my real-time continuity)
+  const lastSyncedProgressHashRef = useRef<Record<string, string>>({});
+  const lastSyncedSavedHashRef = useRef<Record<string, string>>({});
+  const lastFullSyncAtRef = useRef<Record<string, number>>({});
+
+  // Sync watch progress & saved favorites across devices (GET when unchanged, 300s cloud poll, 120s focus cooldown)
   useEffect(() => {
     const applyRemoteProgress = (
       remote: Record<string, VodWatchProgressEntry> | null,
@@ -10616,7 +10790,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     ) => {
       if (!remote || typeof remote !== 'object') return;
       if (activeProfileId !== targetProfileId) return;
-      setWatchProgressMap(() => {
+      setWatchProgressMap((prev) => {
         const currentLocal = loadWatchProgressMap(targetProfileId);
         const merged = { ...currentLocal };
         let changed = false;
@@ -10675,22 +10849,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             changed = true;
           }
         }
-        if (changed) {
-          try {
-            localStorage.setItem(
-              getWatchProgressKeyForProfile(targetProfileId),
-              JSON.stringify(merged)
-            );
-          } catch {
-            // ignore
-          }
+        if (!changed) {
+          return prev;
+        }
+        try {
+          localStorage.setItem(
+            getWatchProgressKeyForProfile(targetProfileId),
+            JSON.stringify(merged)
+          );
+        } catch {
+          // ignore
         }
         watchProgressMapRef.current = merged;
         return merged;
       });
     };
 
-    const syncProgressAndSaved = () => {
+    const syncProgressAndSaved = (force = false) => {
       if (
         isPlayingVodRef.current ||
         (typeof document !== 'undefined' && document.visibilityState === 'hidden')
@@ -10698,28 +10873,48 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         return;
       }
       const currentProf = activeProfileId;
+      const now = Date.now();
+      const lastAt = lastFullSyncAtRef.current[currentProf] || 0;
+      if (!force && now - lastAt < 120_000) {
+        return;
+      }
+      lastFullSyncAtRef.current[currentProf] = now;
+
       const cleanProf = encodeURIComponent(currentProf);
       const local = loadWatchProgressMap(currentProf);
       const bodyStr = JSON.stringify(local);
+      const progressDirty = lastSyncedProgressHashRef.current[currentProf] !== bodyStr;
       const servedByLocalNode =
         typeof window !== 'undefined' && window.location.port === '8769';
       fetch(`/api/tv-progress?profileId=${cleanProf}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: bodyStr,
+        ...(progressDirty
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: bodyStr,
+            }
+          : { cache: 'no-store' as RequestCache }),
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((remote: Record<string, VodWatchProgressEntry> | null) => {
           if (activeProfileId !== currentProf) return;
+          if (remote && typeof remote === 'object') {
+            lastSyncedProgressHashRef.current[currentProf] = bodyStr;
+          }
           applyRemoteProgress(remote, currentProf);
           if (isLocalHomeServer() && !servedByLocalNode) {
             const payloadToCloud = JSON.stringify(
               remote && typeof remote === 'object' ? remote : local
             );
+            const cloudDirty = progressDirty || payloadToCloud !== bodyStr;
             fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: payloadToCloud,
+              ...(cloudDirty
+                ? {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: payloadToCloud,
+                  }
+                : { cache: 'no-store' as RequestCache }),
             })
               .then((cr) => (cr.ok ? cr.json() : null))
               .then((cloudRemote) => {
@@ -10732,16 +10927,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         .catch(() => { });
 
       const localSaved = loadSavedVodItems(currentProf);
+      const savedBodyStr = JSON.stringify(localSaved);
+      const savedDirty = lastSyncedSavedHashRef.current[currentProf] !== savedBodyStr;
       fetch(`/api/tv-saved?profileId=${cleanProf}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(localSaved),
+        ...(savedDirty
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: savedBodyStr,
+            }
+          : { cache: 'no-store' as RequestCache }),
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((remoteSaved: CinemetaItem[] | null) => {
           if (activeProfileId !== currentProf) return;
+          if (Array.isArray(remoteSaved)) {
+            lastSyncedSavedHashRef.current[currentProf] = savedBodyStr;
+          }
           if (Array.isArray(remoteSaved) && remoteSaved.length > 0) {
-            setSavedVodItems(() => {
+            setSavedVodItems((prev) => {
               const currentLocalSaved = loadSavedVodItems(currentProf);
               const seen = new Set(currentLocalSaved.map((x) => x.id));
               const merged = [...currentLocalSaved];
@@ -10753,18 +10957,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   changed = true;
                 }
               }
-              if (changed) {
-                try {
-                  localStorage.setItem(
-                    getSavedVodKeyForProfile(currentProf),
-                    JSON.stringify(merged)
-                  );
-                } catch {
-                  // ignore
-                }
-                return merged;
+              if (!changed) {
+                return prev;
               }
-              return currentLocalSaved;
+              try {
+                localStorage.setItem(
+                  getSavedVodKeyForProfile(currentProf),
+                  JSON.stringify(merged)
+                );
+              } catch {
+                // ignore
+              }
+              return merged;
             });
           }
         })
@@ -10774,12 +10978,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
 
     switchRadioFavoritesProfile(activeProfileId);
-    syncProgressAndSaved();
-    const intervalMs = isLocalHomeServer() ? 60000 : 180000;
-    const timer = window.setInterval(syncProgressAndSaved, intervalMs);
+    syncProgressAndSaved(true);
+    const intervalMs = isLocalHomeServer() ? 90_000 : 300_000;
+    const timer = window.setInterval(() => syncProgressAndSaved(false), intervalMs);
     const onFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        syncProgressAndSaved();
+        syncProgressAndSaved(false);
       }
     };
     window.addEventListener('focus', onFocusOrVisible);
@@ -10791,10 +10995,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
   }, [
     activeProfileId,
-    section === 'history' ||
-    section === 'saved' ||
-    section === 'home' ||
-    section === 'radio',
     switchRadioFavoritesProfile,
     syncRadioFavoritesWithServer,
   ]);
@@ -11077,6 +11277,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [seriesEpStatsMap, setSeriesEpStatsMap] = useState<
     Record<string, SeriesEpisodeStats>
   >({});
+  const attemptedSeriesStatsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const candidates: CinemetaItem[] = [];
@@ -11084,7 +11285,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const pushIfSeries = (it?: CinemetaItem | null) => {
       if (!it || it.type !== 'series' || !it.id || seen.has(it.id)) return;
       seen.add(it.id);
-      if (seriesEpStatsMap[it.id] === undefined) {
+      if (!attemptedSeriesStatsRef.current.has(it.id)) {
         candidates.push(it);
       }
     };
@@ -11101,30 +11302,53 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     if (toFetch.length === 0) return;
 
     let cancelled = false;
-    void (async () => {
-      const batchSize = 6;
-      for (let i = 0; i < toFetch.length; i += batchSize) {
-        if (cancelled) break;
-        const batch = toFetch.slice(i, i + batchSize);
-        const results = await Promise.all(
-          batch.map(async (it) => ({
-            id: it.id,
-            stats: await resolveSeriesEpisodeStats(it),
-          }))
-        );
-        if (cancelled) break;
-        setSeriesEpStatsMap((prev) => {
-          const next = { ...prev };
-          for (const r of results) {
-            next[r.id] = r.stats || { episodesCount: 0, seasonsCount: 0 };
-          }
-          return next;
-        });
+    const debounceTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      for (const it of toFetch) {
+        attemptedSeriesStatsRef.current.add(it.id);
       }
-    })();
+      void (async () => {
+        const collected: Record<string, SeriesEpisodeStats> = {};
+        const batchSize = 6;
+        for (let i = 0; i < toFetch.length; i += batchSize) {
+          if (cancelled) break;
+          const batch = toFetch.slice(i, i + batchSize);
+          const results = await Promise.all(
+            batch.map(async (it) => ({
+              id: it.id,
+              stats: await resolveSeriesEpisodeStats(it),
+            }))
+          );
+          if (cancelled) break;
+          for (const r of results) {
+            collected[r.id] = r.stats || { episodesCount: 0, seasonsCount: 0 };
+          }
+        }
+        if (cancelled) return;
+        const collectedEntries = Object.entries(collected);
+        if (collectedEntries.length === 0) return;
+        setSeriesEpStatsMap((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const [id, st] of collectedEntries) {
+            const cur = prev[id];
+            if (
+              !cur ||
+              cur.episodesCount !== st.episodesCount ||
+              cur.seasonsCount !== st.seasonsCount
+            ) {
+              next[id] = st;
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      })();
+    }, 350);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(debounceTimer);
     };
   }, [
     historyList,
@@ -11134,7 +11358,6 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     vodItems,
     savedVodItems,
     searchResults,
-    seriesEpStatsMap,
   ]);
 
   const handleToggleWatchedStatus = useCallback(
@@ -18818,6 +19041,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           'x-webkit-airplay': 'allow',
         } as Record<string, string>)}
         onTimeUpdate={(e) => {
+          if (activeMusicBackendRef.current !== 'audio') return;
           const ct = e.currentTarget.currentTime || 0;
           setMusicElapsedSec(ct);
           if (Date.now() - lastMusicPosSyncMsRef.current >= 2000) {
@@ -18830,7 +19054,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         }}
         onLoadedMetadata={(e) => {
+          if (activeMusicBackendRef.current !== 'audio') return;
           const dur = e.currentTarget.duration;
+          const expDur = currentMusicTrackRef.current?.durationSec || 0;
+          if (
+            !audioFallbackOnlyRef.current &&
+            dur &&
+            Number.isFinite(dur) &&
+            dur > 0 &&
+            dur < 45 &&
+            expDur >= 75 &&
+            currentMusicTrackRef.current
+          ) {
+            e.currentTarget.pause();
+            e.currentTarget.removeAttribute('src');
+            startYtTrackPlayback(currentMusicTrackRef.current, 0);
+            return;
+          }
           if (dur && Number.isFinite(dur) && dur > 5) {
             setMusicDurationSec(dur);
             updateMediaSessionPosition(
@@ -18841,14 +19081,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         }}
         onPlay={() => {
+          if (activeMusicBackendRef.current !== 'audio') return;
           setIsMusicPlaying(true);
           updateMediaSessionPlaybackState('music', 'playing');
         }}
         onPause={() => {
+          if (activeMusicBackendRef.current !== 'audio') return;
           setIsMusicPlaying(false);
           updateMediaSessionPlaybackState('music', 'paused');
         }}
-        onEnded={() => {
+        onEnded={(e) => {
+          if (activeMusicBackendRef.current !== 'audio') return;
+          const ct = e.currentTarget.currentTime || 0;
+          const expDur = currentMusicTrackRef.current?.durationSec || 0;
+          if (
+            !audioFallbackOnlyRef.current &&
+            expDur >= 75 &&
+            ct < Math.max(45, expDur - 18) &&
+            currentMusicTrackRef.current
+          ) {
+            e.currentTarget.pause();
+            e.currentTarget.removeAttribute('src');
+            startYtTrackPlayback(currentMusicTrackRef.current, ct > 3 && ct < 40 ? ct : 0);
+            return;
+          }
           if (isMusicRepeat && musicAudioRef.current) {
             musicAudioRef.current.currentTime = 0;
             musicAudioRef.current.play().catch(() => {});
@@ -18857,30 +19113,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           }
         }}
         onError={(e) => {
+          if (activeMusicBackendRef.current !== 'audio') return;
           const el = e.currentTarget;
-          const fullUrl = currentMusicTrack?.fullAudioUrl || '';
-          if (fullUrl && !el.src.includes('retry=1')) {
-            const sep = fullUrl.includes('?') ? '&' : '?';
-            const resumeAt = Math.floor(musicElapsedSecRef.current || 0);
-            if (resumeAt > 2) {
-              const seekOnce = () => {
-                try {
-                  el.currentTime = resumeAt;
-                } catch {
-                  // ignore seek before ready
-                }
-              };
-              el.addEventListener('loadedmetadata', seekOnce, { once: true });
-            }
-            el.src = `${fullUrl}${sep}retry=1`;
-            el.play().catch(() => {});
+          const curTrack = currentMusicTrackRef.current;
+          if (!audioFallbackOnlyRef.current && curTrack) {
+            el.pause();
+            el.removeAttribute('src');
+            startYtTrackPlayback(curTrack, Math.floor(musicElapsedSecRef.current || 0));
             return;
           }
-          if (
-            currentMusicTrack?.previewUrl &&
-            el.src !== currentMusicTrack.previewUrl
-          ) {
-            el.src = currentMusicTrack.previewUrl;
+          if (curTrack?.previewUrl && el.src !== curTrack.previewUrl) {
+            el.src = curTrack.previewUrl;
             el.play().catch(() => {});
           }
         }}
