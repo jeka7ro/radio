@@ -179,7 +179,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
           >
             {filterSubMenu === null ? (
               <>
-                <div className="px-4 py-3.5 flex items-center justify-between border-b border-white/10 mb-2">
+                <div className="shrink-0 px-4 py-3 flex items-center justify-between border-b border-white/10 mb-2">
                   <h2 className="text-[22px] font-bold text-white tracking-tight">
                     {tr('Filtru', 'Filter', 'Фильтр')}
                   </h2>
@@ -193,7 +193,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
                   {/* 1. Начать поиск */}
                   <button
                     type="button"
@@ -332,7 +332,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             ) : (
               /* SUB-MENU WITH CHECKBOXES ON THE RIGHT (Язык оригинала / Жанр / Тип / Рейтинг / Год) */
               <>
-                <div className="px-4 py-3.5 flex items-center justify-between border-b border-white/10 mb-2">
+                <div className="shrink-0 px-4 py-3 flex items-center justify-between border-b border-white/10 mb-2">
                   <button
                     type="button"
                     data-drawer-close="true"
@@ -354,7 +354,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
                   {filterSubMenu === 'type' &&
                     (
                       [
@@ -561,7 +561,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             className="w-80 sm:w-[390px] m-3 sm:m-4 h-[calc(100%-1.5rem)] sm:h-[calc(100%-2rem)] rounded-[32px] tahoe-glass text-zinc-100 shadow-2xl flex flex-col overflow-hidden border border-white/15 p-3"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3.5 flex items-center justify-between border-b border-white/10 mb-2">
+            <div className="shrink-0 px-4 py-3 flex items-center justify-between border-b border-white/10 mb-2">
               <h2 className="text-[22px] font-bold text-white tracking-tight">
                 {tr('Catalog', 'Catalog', 'Каталог')}
               </h2>
@@ -575,7 +575,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-1.5 px-1">
               {TV_GENRE_PILLS.filter(
                 (g) => g.id !== 'top' && (adultContentEnabled || g.id !== 'Adult')
               ).map((g, idx) => {
@@ -631,7 +631,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
           >
             {settingsSubMenu === null ? (
               <>
-                <div className="px-4 py-3.5 flex items-center justify-between border-b border-white/10 mb-2">
+                <div className="shrink-0 px-4 py-3 flex items-center justify-between border-b border-white/10 mb-2">
                   <div>
                     <h2 className="text-[22px] font-bold text-white tracking-tight">
                       {tr('Setări Smart TV', 'Smart TV Settings', 'Настройки')}
@@ -1661,7 +1661,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             paddingLeft: 'max(1.25rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
             paddingRight: 'max(1.25rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
           }}
-          className="fixed inset-0 z-[125] w-full max-w-[100vw] bg-[#101010]/95 backdrop-blur-2xl flex flex-col justify-between p-5 sm:p-10 overflow-y-auto overflow-x-hidden overscroll-x-none"
+          className="fixed inset-0 z-[125] w-full max-w-[100vw] bg-[#101010]/95 flex flex-col justify-between p-3 sm:p-8 overflow-y-auto overflow-x-hidden overscroll-x-none"
           onClick={() => setIsTvRadioPlayerOpen(false)}
         >
           {/* Ambient Blurred Cover Art Background */}
@@ -2124,7 +2124,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {isTrailerModalOpen && activeVodItem && (
         <div
           data-trailer-fullscreen-box="true"
-          className="fixed inset-0 w-screen h-screen z-[260] bg-black flex flex-col overflow-hidden select-none"
+          className="fixed inset-0 w-full h-[100dvh] z-[260] bg-black flex flex-col overflow-hidden select-none"
           onClick={() => setIsTrailerModalOpen(false)}
         >
           {/* Floating Cinema Top HUD */}

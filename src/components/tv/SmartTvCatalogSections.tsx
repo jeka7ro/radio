@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Loader2,
   SlidersHorizontal,
@@ -21,6 +21,8 @@ import {
   Sparkles,
   Star,
   Lock,
+  ChevronDown,
+  Check,
 } from "lucide-react";
 import { isAdultTvChannel } from "../../services/tvApi";
 import { resolveChannelEpg, getEpgTimingStats } from "../../services/epgService";
@@ -69,6 +71,323 @@ import {
 } from "../../views/smartTvLampaHelpers";
 
 let persistedIsKlubnichkaOpen = false;
+
+interface TopImdbSmartBannerProps {
+  imdbMediaType?: 'all' | 'movie' | 'series';
+  setImdbMediaType?: (v: 'all' | 'movie' | 'series') => void;
+  imdbYear?: string;
+  setImdbYear?: (v: string) => void;
+  imdbGenre?: string;
+  setImdbGenre?: (v: string) => void;
+  tr: (ro: string, en: string, ru: string) => string;
+}
+
+const focusElSafely = (el: HTMLElement | null | undefined) => {
+  if (!el) return;
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
+};
+
+/** Compact single-row Top IMDb smart filter banner with segmented format tabs and accessible Year/Genre droplists. */
+const TopImdbSmartBanner: React.FC<TopImdbSmartBannerProps> = ({
+  imdbMediaType,
+  setImdbMediaType,
+  imdbYear,
+  setImdbYear,
+  imdbGenre,
+  setImdbGenre,
+  tr,
+}) => {
+  const [openDropdown, setOpenDropdown] = useState<'year' | 'genre' | null>(null);
+  const bannerRef = useRef<HTMLDivElement | null>(null);
+  const yearBtnRef = useRef<HTMLButtonElement | null>(null);
+  const genreBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const activeMedia = imdbMediaType || 'all';
+  const activeYear = imdbYear || 'any';
+  const activeGenre = imdbGenre || 'top';
+  const hasActiveFilters =
+    activeMedia !== 'all' || activeYear !== 'any' || activeGenre !== 'top';
+
+  const mediaOptions = [
+    { id: 'all' as const, label: tr('Toate', 'All', 'Все') },
+    { id: 'movie' as const, label: tr('Filme', 'Movies', 'Фильмы') },
+    { id: 'series' as const, label: tr('Seriale', 'Series', 'Сериалы') },
+  ];
+
+  const yearOptions = [
+    { id: 'any', label: tr('Toți anii', 'All Years', 'Все годы') },
+    { id: '2026', label: '2026' },
+    { id: '2025', label: '2025' },
+    { id: '2024', label: '2024' },
+    { id: '2020-2027', label: '2020–2027' },
+    { id: '2010-2019', label: '2010–2019' },
+    { id: '2000-2009', label: '2000–2009' },
+    { id: '1990-1999', label: '1990–1999' },
+    { id: '<1990', label: '< 1990' },
+  ];
+
+  const genreOptions = [
+    { id: 'top', label: tr('Toate genurile', 'All Genres', 'Все жанры') },
+    { id: 'Action', label: tr('Acțiune', 'Action', 'Боевик') },
+    { id: 'Comedy', label: tr('Comedie', 'Comedy', 'Комедия') },
+    { id: 'Drama', label: tr('Dramă', 'Drama', 'Драма') },
+    { id: 'Sci-Fi', label: tr('SF & Fantasy', 'Sci-Fi', 'Фантастика') },
+    { id: 'Crime', label: tr('Crimă', 'Crime', 'Криминал') },
+    { id: 'Animation', label: tr('Animație', 'Animation', 'Мультфильм') },
+    { id: 'Thriller', label: tr('Thriller', 'Thriller', 'Триллер') },
+    { id: 'Horror', label: tr('Horror', 'Horror', 'Ужасы') },
+    { id: 'Adventure', label: tr('Aventură', 'Adventure', 'Приключения') },
+  ];
+
+  useEffect(() => {
+    if (openDropdown === null) return;
+    const closeAndRestoreFocus = () => {
+      const prev = openDropdown;
+      setOpenDropdown(null);
+      window.requestAnimationFrame(() => {
+        focusElSafely(prev === 'year' ? yearBtnRef.current : genreBtnRef.current);
+      });
+    };
+    const handlePointerDown = (e: PointerEvent) => {
+      if (!bannerRef.current?.contains(e.target as Node)) {
+        setOpenDropdown(null);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeAndRestoreFocus();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('aether:imdb-close-dropdown', closeAndRestoreFocus);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('aether:imdb-close-dropdown', closeAndRestoreFocus);
+    };
+  }, [openDropdown]);
+
+  const toggleDropdown = (kind: 'year' | 'genre') => {
+    const next = openDropdown === kind ? null : kind;
+    setOpenDropdown(next);
+    if (next !== null) {
+      window.requestAnimationFrame(() => {
+        const popover = bannerRef.current?.querySelector<HTMLElement>(
+          '[data-imdb-dropdown-popover="true"]'
+        );
+        focusElSafely(
+          popover?.querySelector<HTMLElement>('[data-imdb-dropdown-option="active"]') ||
+            popover?.querySelector<HTMLElement>('[data-imdb-dropdown-option]')
+        );
+      });
+    }
+  };
+
+  const droplists = [
+    {
+      kind: 'year' as const,
+      btnRef: yearBtnRef,
+      activeVal: activeYear,
+      defaultVal: 'any',
+      options: yearOptions,
+      mobileIdleLabel: tr('An', 'Year', 'Год'),
+      desktopPrefix: tr('An:', 'Year:', 'Год:'),
+      mobileMaxW: 'max-w-[46px]',
+      desktopMaxW: '',
+      widthClass: 'w-48 sm:w-52',
+      ariaLabel: tr('Filtrează după an', 'Filter by year', 'Фильтр по году'),
+      activeBtnClass: 'bg-white text-[#141414] shadow-md font-black border border-white',
+      activeOptClass: 'bg-[#f5c518] text-black font-black',
+      onSelect: (val: string) => setImdbYear?.(val),
+    },
+    {
+      kind: 'genre' as const,
+      btnRef: genreBtnRef,
+      activeVal: activeGenre,
+      defaultVal: 'top',
+      options: genreOptions,
+      mobileIdleLabel: tr('Gen', 'Genre', 'Жанр'),
+      desktopPrefix: tr('Gen:', 'Genre:', 'Жанр:'),
+      mobileMaxW: 'max-w-[52px]',
+      desktopMaxW: 'max-w-[130px] truncate',
+      widthClass: 'w-52 sm:w-56',
+      ariaLabel: tr('Filtrează după gen', 'Filter by genre', 'Фильтр по жанру'),
+      activeBtnClass:
+        'bg-[#2563eb] text-white shadow-md font-black border border-[#60a5fa]/60 focus:bg-white focus:text-[#141414]',
+      activeOptClass: 'bg-[#2563eb] text-white font-black',
+      onSelect: (val: string) => setImdbGenre?.(val),
+    },
+  ];
+
+  return (
+    <div
+      ref={bannerRef}
+      data-imdb-smart-banner="true"
+      className="relative z-30 px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl tahoe-glass border border-white/15 flex items-center justify-between gap-1 sm:gap-3 flex-nowrap"
+    >
+      {/* Left: IMDb badge + responsive single-line title */}
+      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+        <span className="hidden min-[380px]:inline-flex px-2 py-0.5 sm:px-2.5 rounded-md bg-[#f5c518] text-black font-black text-[11px] sm:text-xs tracking-wider shadow shrink-0">
+          IMDb
+        </span>
+        <h2 className="hidden sm:block text-sm lg:text-base font-bold text-white tracking-tight truncate">
+          {tr('Top IMDb', 'Top IMDb', 'Топ IMDb')}
+          <span className="hidden xl:inline text-zinc-300 font-medium">
+            {' '}
+            —{' '}
+            {tr(
+              'Cele mai bune Filme și Seriale',
+              'Best Movies & TV Series',
+              'Лучшие Фильмы и Сериалы'
+            )}
+          </span>
+        </h2>
+      </div>
+
+      {/* Right: Segmented Format Switch + Year & Genre Droplists + Reset */}
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        <div className="inline-flex items-center p-0.5 rounded-full bg-white/[0.07] border border-white/15 shrink-0">
+          {mediaOptions.map((mTab) => {
+            const isActive = activeMedia === mTab.id;
+            return (
+              <button
+                key={`imdb_m_${mTab.id}`}
+                type="button"
+                tabIndex={0}
+                data-imdb-pill="true"
+                onClick={() => {
+                  setOpenDropdown(null);
+                  setImdbMediaType?.(mTab.id);
+                }}
+                className={`h-7 sm:h-8 px-1.5 sm:px-3.5 rounded-full text-[11px] sm:text-xs font-extrabold transition-all cursor-pointer whitespace-nowrap focus:outline-none focus:ring-2 sm:focus:ring-4 focus:ring-white ${
+                  isActive
+                    ? 'bg-[#f5c518] text-black shadow font-black'
+                    : 'text-zinc-200 hover:text-white hover:bg-white/10 focus:bg-white focus:text-[#141414]'
+                }`}
+              >
+                {mTab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {droplists.map((dl) => {
+          const isOpen = openDropdown === dl.kind;
+          const isFiltered = dl.activeVal !== dl.defaultVal;
+          const activeObj =
+            dl.options.find((o) => o.id === dl.activeVal) || dl.options[0];
+          const triggerAttr =
+            dl.kind === 'year'
+              ? { 'data-imdb-year-trigger': 'true' }
+              : { 'data-imdb-genre-trigger': 'true' };
+
+          return (
+            <div key={dl.kind} className="relative shrink-0">
+              <button
+                ref={dl.btnRef}
+                type="button"
+                tabIndex={0}
+                data-imdb-pill="true"
+                {...triggerAttr}
+                aria-haspopup="listbox"
+                aria-expanded={isOpen}
+                onClick={() => toggleDropdown(dl.kind)}
+                className={`h-8 sm:h-9 px-2 sm:px-3.5 rounded-full text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 sm:gap-1.5 transition-all cursor-pointer whitespace-nowrap focus:outline-none focus:ring-2 sm:focus:ring-4 focus:ring-white ${
+                  isFiltered
+                    ? dl.activeBtnClass
+                    : 'bg-white/[0.08] hover:bg-white/15 text-zinc-200 border border-white/15 focus:bg-white focus:text-[#141414]'
+                }`}
+              >
+                <span className={`sm:hidden ${dl.mobileMaxW} truncate`}>
+                  {isFiltered ? activeObj.label : dl.mobileIdleLabel}
+                </span>
+                <span className="hidden sm:inline-flex items-center gap-1">
+                  <span className="hidden md:inline opacity-75 font-semibold">
+                    {dl.desktopPrefix}
+                  </span>
+                  <span className={dl.desktopMaxW}>{activeObj.label}</span>
+                </span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${
+                    isOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {isOpen && (
+                <div
+                  data-imdb-dropdown-popover="true"
+                  role="listbox"
+                  aria-label={dl.ariaLabel}
+                  className={`absolute right-0 mt-2 ${dl.widthClass} max-h-[65vh] overflow-y-auto p-1.5 rounded-2xl bg-[#121621] border border-white/20 shadow-[0_20px_50px_rgba(0,0,0,0.85)] z-50 space-y-0.5`}
+                >
+                  {dl.options.map((opt) => {
+                    const isSelected = dl.activeVal === opt.id;
+                    return (
+                      <button
+                        key={`imdb_${dl.kind}_${opt.id}`}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        data-imdb-dropdown-option={isSelected ? 'active' : 'item'}
+                        onClick={() => {
+                          dl.onSelect(opt.id);
+                          setOpenDropdown(null);
+                          window.requestAnimationFrame(() =>
+                            focusElSafely(dl.btnRef.current)
+                          );
+                        }}
+                        className={`w-full h-9 px-3 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-colors cursor-pointer focus:outline-none focus:bg-white focus:text-[#141414] ${
+                          isSelected
+                            ? dl.activeOptClass
+                            : 'text-zinc-200 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <span className="truncate">{opt.label}</span>
+                        {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {hasActiveFilters && (
+          <button
+            type="button"
+            tabIndex={0}
+            data-imdb-pill="true"
+            data-imdb-reset-btn="true"
+            title={tr('Resetează filtrele', 'Reset filters', 'Сбросить фильтры')}
+            aria-label={tr('Resetează filtrele', 'Reset filters', 'Сбросить фильтры')}
+            onClick={() => {
+              setOpenDropdown(null);
+              setImdbMediaType?.('all');
+              setImdbYear?.('any');
+              setImdbGenre?.('top');
+            }}
+            className="h-7 w-7 sm:h-8 sm:w-auto sm:px-2.5 rounded-full bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-400/30 inline-flex items-center justify-center gap-1 text-xs font-bold shrink-0 cursor-pointer focus:outline-none focus:ring-2 sm:focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414]"
+          >
+            <X className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden lg:inline">
+              {tr('Reset', 'Reset', 'Сброс')}
+            </span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   section,
@@ -1103,7 +1422,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                   <div className="space-y-6 pb-16">
                     {/* Top Header + Filter Tabs (Same Lampa dark colors as Filme / Seriale / Căutare) */}
                     <div className="flex flex-wrap items-center justify-between">
-                      <div className="mr-4 mb-3">
+                      <div data-mobile-hide-banner="true" className="hidden md:block mr-4 mb-3">
                         <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
                           {tr(
                             'Filme și Seriale 4K Ultra HD',
@@ -1179,7 +1498,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           )}
                         </div>
 
-                        <div className="flex items-center">
+                        <div data-mobile-hide-banner="true" className="hidden md:flex items-center">
                           <button
                             type="button"
                             onClick={() => setIsUhdKeyboardOpen((prev) => !prev)}
@@ -1454,136 +1773,16 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
                 {/* DEDICATED TOP IMDB SECTION (BEST MOVIES & SERIES SORTED DESCENDING BY RATING) */}
                 {section === 'imdb' && (
-                  <div className="space-y-6 pb-16">
-                    {/* Top Header + Filter Controls */}
-                    <div className="p-4 sm:p-6 rounded-[28px] tahoe-glass border border-white/15 space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-                            <span className="px-2.5 py-0.5 rounded-lg bg-[#f5c518] text-black font-black text-sm tracking-wider shadow">
-                              IMDb
-                            </span>
-                            <span>{tr('Top IMDb — Cele mai bune Filme și Seriale', 'Top IMDb — Best Movies & TV Series', 'Топ IMDb — Лучшие Фильмы и Сериалы')}</span>
-                          </h2>
-                          <p className="text-xs sm:text-sm text-zinc-300 mt-1">
-                            {tr(
-                              'Sortate descrescător după nota IMDb (10.0 → 1.0) • Navigabil complet cu telecomanda TV',
-                              'Sorted descending by IMDb score (10.0 → 1.0) • Fully navigable with Smart TV remote',
-                              'Сортировка по рейтингу IMDb от лучших к худшим (10.0 → 1.0) • Управление пультом'
-                            )}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Row 1: Tip Conținut (All / Movies / Series) */}
-                      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/10">
-                        <span className="text-xs font-black uppercase tracking-wider text-amber-400 mr-2 shrink-0">
-                          {tr('Format:', 'Format:', 'Тип:')}
-                        </span>
-                        {[
-                          { id: 'all' as const, label: tr('Toate', 'All', 'Все') },
-                          { id: 'movie' as const, label: tr('Filme', 'Movies', 'Фильмы') },
-                          { id: 'series' as const, label: tr('Seriale', 'Series', 'Сериалы') },
-                        ].map((mTab) => {
-                          const isActive = (imdbMediaType || 'all') === mTab.id;
-                          return (
-                            <button
-                              key={`imdb_m_${mTab.id}`}
-                              type="button"
-                              tabIndex={0}
-                              data-imdb-pill="true"
-                              onClick={() => {
-                                if (setImdbMediaType) setImdbMediaType(mTab.id);
-                              }}
-                              className={`h-9 px-4 rounded-full text-xs font-extrabold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
-                                isActive
-                                  ? 'bg-[#f5c518] text-black shadow-lg font-black'
-                                  : 'bg-white/10 hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-200 border border-white/15'
-                              }`}
-                            >
-                              {mTab.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Row 2: Filtru An (Year) */}
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/10">
-                        <span className="text-xs font-black uppercase tracking-wider text-zinc-300 mr-2 shrink-0">
-                          {tr('An:', 'Year:', 'Год:')}
-                        </span>
-                        {[
-                          { id: 'any', label: tr('Toți anii', 'All Years', 'Все годы') },
-                          { id: '2026', label: '2026' },
-                          { id: '2025', label: '2025' },
-                          { id: '2024', label: '2024' },
-                          { id: '2020-2027', label: '2020–2027' },
-                          { id: '2010-2019', label: '2010–2019' },
-                          { id: '2000-2009', label: '2000–2009' },
-                          { id: '1990-1999', label: '1990–1999' },
-                          { id: '<1990', label: '< 1990' },
-                        ].map((yTab) => {
-                          const isActive = (imdbYear || 'any') === yTab.id;
-                          return (
-                            <button
-                              key={`imdb_y_${yTab.id}`}
-                              type="button"
-                              tabIndex={0}
-                              data-imdb-pill="true"
-                              onClick={() => {
-                                if (setImdbYear) setImdbYear(yTab.id);
-                              }}
-                              className={`h-8 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
-                                isActive
-                                  ? 'bg-white text-[#141414] shadow-md font-black'
-                                  : 'bg-white/[0.08] hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/10'
-                              }`}
-                            >
-                              {yTab.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Row 3: Filtru Gen (Genre) */}
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-white/10">
-                        <span className="text-xs font-black uppercase tracking-wider text-zinc-300 mr-2 shrink-0">
-                          {tr('Gen:', 'Genre:', 'Жанр:')}
-                        </span>
-                        {[
-                          { id: 'top', label: tr('Toate genurile', 'All Genres', 'Все жанры') },
-                          { id: 'Action', label: tr('Acțiune', 'Action', 'Боевик') },
-                          { id: 'Comedy', label: tr('Comedie', 'Comedy', 'Комедия') },
-                          { id: 'Drama', label: tr('Dramă', 'Drama', 'Драма') },
-                          { id: 'Sci-Fi', label: tr('SF & Fantasy', 'Sci-Fi', 'Фантастика') },
-                          { id: 'Crime', label: tr('Crimă', 'Crime', 'Криминал') },
-                          { id: 'Animation', label: tr('Animație', 'Animation', 'Мультфильм') },
-                          { id: 'Thriller', label: tr('Thriller', 'Thriller', 'Триллер') },
-                          { id: 'Horror', label: tr('Horror', 'Horror', 'Ужасы') },
-                          { id: 'Adventure', label: tr('Aventură', 'Adventure', 'Приключения') },
-                        ].map((gTab) => {
-                          const isActive = (imdbGenre || 'top') === gTab.id;
-                          return (
-                            <button
-                              key={`imdb_g_${gTab.id}`}
-                              type="button"
-                              tabIndex={0}
-                              data-imdb-pill="true"
-                              onClick={() => {
-                                if (setImdbGenre) setImdbGenre(gTab.id);
-                              }}
-                              className={`h-8 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-white ${
-                                isActive
-                                  ? 'bg-[#60a5fa] text-white shadow-md font-black'
-                                  : 'bg-white/[0.08] hover:bg-white/20 focus:bg-white focus:text-[#141414] text-zinc-300 border border-white/10'
-                              }`}
-                            >
-                              {gTab.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                  <div className="space-y-4 sm:space-y-5 pb-16">
+                    <TopImdbSmartBanner
+                      imdbMediaType={imdbMediaType}
+                      setImdbMediaType={setImdbMediaType}
+                      imdbYear={imdbYear}
+                      setImdbYear={setImdbYear}
+                      imdbGenre={imdbGenre}
+                      setImdbGenre={setImdbGenre}
+                      tr={tr}
+                    />
 
                     {/* VOD Cards Grid */}
                     {isVodLoading ? (
@@ -3574,7 +3773,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                     </div>
 
                     {/* YouTube Premium Header Banner */}
-                    <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-[#FF0033]/25 via-[#FF0033]/5 to-transparent border border-white/15 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+                    <div data-mobile-hide-banner="true" className="hidden md:flex md:flex-wrap p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-[#FF0033]/25 via-[#FF0033]/5 to-transparent border border-white/15 items-center justify-between gap-4 shadow-xl">
                       <div className="flex items-center gap-3.5">
                         <span className="h-11 px-4 rounded-2xl text-sm sm:text-base font-black tracking-tight inline-flex items-center justify-center gap-1.5 shadow-lg bg-[#FF0033] text-white">
                           <span>▶</span>

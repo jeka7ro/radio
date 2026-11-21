@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { SpotifyTrackItem } from '../components/tv/spotifyMusicPremiumViews';
 import {
-  buildResidentialFullAudioUrl,
+  buildDirectFullAudioUrl,
   canUseResidentialDirectAudio,
 } from './musicStreamEngine';
 
@@ -339,30 +339,61 @@ async function fetchAudioBufferWithProgress(
   if (contentType.includes('text/html') || contentType.includes('application/json')) {
     return null;
   }
-  const expectedTotal = Number(res.headers.get('content-length') || 0) || 3_200_000;
-  if (!res.body) {
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength < minBytes) return null;
-    return { buffer: ab, mimeType: contentType || 'audio/mp4' };
-  }
 
-  const reader = res.body.getReader();
+  const crHeader = res.headers.get('content-range') || '';
+  const crMatch = /\/(\d+)$/.exec(crHeader.trim());
+  const totalFromRange = crMatch?.[1] ? Number(crMatch[1]) || 0 : 0;
+  const expectedTotal =
+    totalFromRange ||
+    Number(res.headers.get('content-length') || 0) ||
+    3_200_000;
+
   const chunks: Uint8Array[] = [];
   let loaded = 0;
   let lastReportedPct = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value && value.byteLength > 0) {
-      chunks.push(value);
-      loaded += value.byteLength;
-      const pct = Math.min(95, Math.max(2, Math.round((loaded / expectedTotal) * 100)));
-      if (pct - lastReportedPct >= 8) {
-        lastReportedPct = pct;
-        progressMap.set(offlineKey, pct);
-        notifySubscribers();
+  const consumeResponse = async (response: Response): Promise<boolean> => {
+    if (!response.body) {
+      const ab = await response.arrayBuffer();
+      if (ab.byteLength <= 0) return false;
+      chunks.push(new Uint8Array(ab));
+      loaded += ab.byteLength;
+      return true;
+    }
+    const reader = response.body.getReader();
+    let gotAny = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength > 0) {
+        gotAny = true;
+        chunks.push(value);
+        loaded += value.byteLength;
+        const pct = Math.min(95, Math.max(2, Math.round((loaded / expectedTotal) * 100)));
+        if (pct - lastReportedPct >= 8) {
+          lastReportedPct = pct;
+          progressMap.set(offlineKey, pct);
+          notifySubscribers();
+        }
       }
+    }
+    return gotAny;
+  };
+
+  await consumeResponse(res);
+
+  if (res.status === 206 && totalFromRange > loaded && !signal.aborted) {
+    for (let part = 0; part < 6 && loaded < totalFromRange && !signal.aborted; part++) {
+      const prevLoaded = loaded;
+      const nextRes = await fetch(url, {
+        signal,
+        headers: { Range: `bytes=${loaded}-${totalFromRange - 1}` },
+      });
+      if (!nextRes.ok && nextRes.status !== 206) break;
+      const nextCt = (nextRes.headers.get('content-type') || '').toLowerCase();
+      if (nextCt.includes('text/html') || nextCt.includes('application/json')) break;
+      const gotMore = await consumeResponse(nextRes);
+      if (!gotMore || loaded <= prevLoaded) break;
     }
   }
 
@@ -388,9 +419,7 @@ async function performSingleDownload(track: SpotifyTrackItem): Promise<boolean> 
 
   try {
     const minBytes = getMinValidOfflineBytes(track);
-    let primaryUrl = canUseResidentialDirectAudio()
-      ? buildResidentialFullAudioUrl(track)
-      : String(track.fullAudioUrl || '');
+    let primaryUrl = buildDirectFullAudioUrl(track, 0) || String(track.fullAudioUrl || '');
     if (primaryUrl && !primaryUrl.includes('dur=') && track.durationSec > 0) {
       const sep = primaryUrl.includes('?') ? '&' : '?';
       primaryUrl = `${primaryUrl}${sep}dur=${Math.round(track.durationSec)}`;
@@ -603,6 +632,28 @@ export async function clearAllOfflineMusic(): Promise<void> {
   await idbClearAll().catch(() => {});
 }
 
+function isLegacyDashMp4Header(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  const ftyp = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+  const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+  if (ftyp === 'ftyp' && brand === 'dash') {
+    return true;
+  }
+  // Check for fragmented MP4 'moof' atom inside first 16 KB (clean Apple M4A has zero moof atoms)
+  const limit = Math.min(bytes.length - 4, 16384);
+  for (let i = 8; i < limit; i++) {
+    if (
+      bytes[i] === 0x6d && // 'm'
+      bytes[i + 1] === 0x6f && // 'o'
+      bytes[i + 2] === 0x6f && // 'o'
+      bytes[i + 3] === 0x66 // 'f'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 let activeOfflineObjectUrl: string | null = null;
 export async function resolveOfflineMusicObjectUrl(
   track: Pick<SpotifyTrackItem, 'id' | 'artist' | 'title'>
@@ -619,7 +670,7 @@ export async function resolveOfflineMusicObjectUrl(
       }
       return null;
     }
-    const blob =
+    let blob =
       stored instanceof Blob
         ? stored
         : new Blob([stored], { type: meta?.mimeType || 'audio/mp4' });
@@ -630,6 +681,60 @@ export async function resolveOfflineMusicObjectUrl(
       void idbDeleteTrack(key).catch(() => {});
       return null;
     }
+
+    // Auto-heal legacy pre-v74 YouTube DASH m4a blobs (which trigger Apple Safari 2x duration bug: e.g. 6:53 for 3:27!)
+    try {
+      const headAb = await blob.slice(0, 16384).arrayBuffer();
+      if (isLegacyDashMp4Header(new Uint8Array(headAb))) {
+        const isOnline =
+          typeof navigator === 'undefined' || navigator.onLine !== false;
+        if (isOnline && meta?.track && canUseResidentialDirectAudio()) {
+          try {
+            const repairUrl = buildDirectFullAudioUrl(meta.track, 0);
+            const ctrl = new AbortController();
+            const timer = window.setTimeout(() => ctrl.abort(), 8000);
+            try {
+              const res = await fetch(repairUrl, {
+                cache: 'no-store',
+                signal: ctrl.signal,
+              });
+              if (res.ok) {
+                const freshAb = await res.arrayBuffer();
+                if (
+                  freshAb.byteLength >= minBytes &&
+                  !isLegacyDashMp4Header(
+                    new Uint8Array(freshAb.slice(0, Math.min(16384, freshAb.byteLength)))
+                  )
+                ) {
+                  const updatedRecord: OfflineMusicTrackRecord = {
+                    ...meta,
+                    mimeType: 'audio/mp4',
+                    sizeBytes: freshAb.byteLength,
+                    downloadedAt: Date.now(),
+                  };
+                  await idbPutTrackAndBlob(updatedRecord, freshAb);
+                  recordsMap.set(key, updatedRecord);
+                  notifySubscribers();
+                  blob = new Blob([freshAb], { type: 'audio/mp4' });
+                } else {
+                  return null;
+                }
+              } else {
+                return null;
+              }
+            } finally {
+              window.clearTimeout(timer);
+            }
+          } catch {
+            // Online but repair failed: let live clean stream play instead of broken 2x DASH blob
+            return null;
+          }
+        }
+      }
+    } catch {
+      // ignore header probe error
+    }
+
     const nextUrl = URL.createObjectURL(blob);
     const prevUrl = activeOfflineObjectUrl;
     activeOfflineObjectUrl = nextUrl;

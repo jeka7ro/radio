@@ -376,8 +376,8 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
         </div>
 
         {/* SUB-FILTER PILLS (Seriale / Filme / Toate) */}
-        <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-end md:justify-between gap-3 border-b border-white/10 pb-3">
+          <div data-mobile-hide-banner="true" className="hidden md:flex items-center gap-2.5">
             <StreamingPlatformLogo platformId={currentPlat.id} size="md" />
             <div>
               <span className={`text-xs font-black tracking-widest uppercase ${theme.brandBadgeColor}`}>
@@ -423,7 +423,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
 
       {/* 2. DISNEY+ BRAND HUBS (Only for Disney+) */}
       {theme.disneyHubs && (
-        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5 sm:gap-3.5">
+        <div data-mobile-hide-banner="true" className="hidden md:grid md:grid-cols-6 gap-2.5 sm:gap-3.5">
           {[
             { name: 'DISNEY', color: 'from-[#001744] to-[#040714]' },
             { name: 'PIXAR', color: 'from-[#001744] to-[#040714]' },
@@ -446,7 +446,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
 
       {/* 3. AUTHENTIC HERO BILLBOARD */}
       {heroItem && (
-        <div className="relative w-full rounded-3xl overflow-hidden shadow-2xl border border-white/15 min-h-[360px] sm:min-h-[440px] flex items-end">
+        <div data-mobile-hide-banner="true" className="hidden md:flex relative w-full rounded-3xl overflow-hidden shadow-2xl border border-white/15 min-h-[360px] sm:min-h-[440px] items-end">
           {/* Hero Backdrop Image */}
           <div className="absolute inset-0 z-0">
             <img

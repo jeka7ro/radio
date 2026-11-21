@@ -224,6 +224,14 @@ export function releaseMediaSession(owner: MediaSessionOwner): void {
   try {
     navigator.mediaSession.metadata = null;
     navigator.mediaSession.playbackState = 'none';
+    safeSetActionHandler('play', null);
+    safeSetActionHandler('pause', null);
+    safeSetActionHandler('stop', null);
+    safeSetActionHandler('previoustrack', null);
+    safeSetActionHandler('nexttrack', null);
+    safeSetActionHandler('seekbackward', null);
+    safeSetActionHandler('seekforward', null);
+    safeSetActionHandler('seekto', null);
     if (typeof navigator.mediaSession.setPositionState === 'function') {
       navigator.mediaSession.setPositionState();
     }

@@ -28,10 +28,14 @@ import './index.css';
 // In development (localhost), unregister any stale Service Worker so it never
 // caches Vite HMR modules or triggers unexpected page reloads.
 if ('serviceWorker' in navigator) {
+  const devHost = window.location.hostname.toLowerCase();
   const isLocalDev =
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1' ||
-    window.location.port === '8769';
+    devHost === 'localhost' ||
+    devHost === '127.0.0.1' ||
+    window.location.port === '8769' ||
+    devHost.endsWith('.lhr.life') ||
+    devHost.endsWith('.trycloudflare.com') ||
+    devHost.endsWith('.serveousercontent.com');
   if (isLocalDev) {
     navigator.serviceWorker
       .getRegistrations()

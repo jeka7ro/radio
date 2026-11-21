@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Subtitles,
   Search,
@@ -263,17 +264,25 @@ export const OnlineSubtitleFinderModal: React.FC<
 
   if (!isOpen) return null;
 
-  return (
+  const modalContent = (
     <div
-      className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      style={{
+        paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+      }}
+      className="fixed inset-0 z-[280] bg-black/80 flex items-center justify-center p-2 sm:p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl max-h-[88vh] rounded-3xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-2xl max-h-[min(92dvh,760px)] rounded-2xl sm:rounded-3xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="px-4 py-3 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between gap-2">
+        <div className="shrink-0 px-4 py-3 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0">
               <Subtitles className="w-4 h-4" />
@@ -298,7 +307,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         </div>
 
         {/* Search & Filters Controls */}
-        <div className="p-3.5 sm:p-4 bg-zinc-900/90 border-b border-zinc-800 space-y-2.5">
+        <div className="shrink-0 p-3 sm:p-4 bg-zinc-900/90 border-b border-zinc-800 space-y-2">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -462,7 +471,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         </div>
 
         {/* Subtitles Results List */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3.5 sm:p-4 space-y-2 min-h-[220px]">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-2">
           {errorMsg && (
             <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/70 text-rose-200 text-xs font-medium">
               {errorMsg}
@@ -560,7 +569,7 @@ export const OnlineSubtitleFinderModal: React.FC<
         </div>
 
         {/* Footer: Upload Local .SRT/.VTT from Device */}
-        <div className="px-4 py-2.5 bg-zinc-950 border-t border-zinc-800 flex items-center justify-between gap-2 text-xs">
+        <div className="shrink-0 px-4 py-2.5 bg-zinc-950 border-t border-zinc-800 flex items-center justify-between gap-2 text-xs">
           <span className="text-zinc-400 truncate">
             Ai deja un fișier <code className="text-zinc-300">.srt</code> descărcat în telefon/PC?
           </span>
@@ -583,5 +592,9 @@ export const OnlineSubtitleFinderModal: React.FC<
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined'
+    ? createPortal(modalContent, document.body)
+    : modalContent;
 };
 

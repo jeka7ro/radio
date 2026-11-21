@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -16,6 +17,7 @@ import {
   Mic2,
   MoreHorizontal,
   Pause,
+  PictureInPicture2,
   Play,
   Plus,
   Radio,
@@ -39,6 +41,7 @@ import {
   downloadTrackCollectionOffline,
   cancelCollectionDownload,
 } from '../../services/offlineMusicService';
+import { toggleMusicPip } from '../player/MusicPipPlayer';
 import {
   loadMusicEncyclopedia,
   type MusicEncyclopediaData,
@@ -202,8 +205,8 @@ export function parseLrcLyrics(raw?: string | null): ParsedLyricLine[] {
         msRaw.length === 1
           ? Number(msRaw) * 0.1
           : msRaw.length === 2
-          ? Number(msRaw) * 0.01
-          : Number(msRaw) * 0.001;
+            ? Number(msRaw) * 0.01
+            : Number(msRaw) * 0.001;
       out.push({
         timeSec: mins * 60 + secs + (Number.isFinite(ms) ? ms : 0),
         text: text || '♪',
@@ -260,8 +263,7 @@ export async function loadArtistProfileData(
   const cleanName = artistName.trim();
   try {
     const res = await fetch(
-      `/api/youtube/artist-profile?name=${encodeURIComponent(cleanName)}${
-        artistId ? `&id=${encodeURIComponent(artistId)}` : ''
+      `/api/youtube/artist-profile?name=${encodeURIComponent(cleanName)}${artistId ? `&id=${encodeURIComponent(artistId)}` : ''
       }`
     );
     const cType = res.headers.get('content-type') || '';
@@ -367,8 +369,7 @@ export async function loadAlbumDetailData(
     const res = await fetch(
       `/api/youtube/album-details?album=${encodeURIComponent(
         cleanAlbum
-      )}&artist=${encodeURIComponent(cleanArtist)}${
-        albumId ? `&id=${encodeURIComponent(albumId)}` : ''
+      )}&artist=${encodeURIComponent(cleanArtist)}${albumId ? `&id=${encodeURIComponent(albumId)}` : ''
       }`
     );
     const cType = res.headers.get('content-type') || '';
@@ -478,8 +479,7 @@ export async function loadSongRadioPlaylist(
     const res = await fetch(
       `/api/youtube/song-radio?track=${encodeURIComponent(
         seedTrack.title
-      )}&artist=${encodeURIComponent(seedTrack.artist)}${
-        seedTrack.artistId ? `&artistId=${encodeURIComponent(seedTrack.artistId)}` : ''
+      )}&artist=${encodeURIComponent(seedTrack.artist)}${seedTrack.artistId ? `&artistId=${encodeURIComponent(seedTrack.artistId)}` : ''
       }&limit=40`
     );
     const cType = res.headers.get('content-type') || '';
@@ -608,19 +608,16 @@ export const EqualizerBars: React.FC<{ active?: boolean }> = ({ active = true })
     className="inline-flex items-end justify-center gap-[2px] h-3.5 w-3.5"
   >
     <span
-      className={`w-[3px] rounded-full bg-[#60a5fa] ${
-        active ? 'eq-bar h-3.5' : 'h-1.5 opacity-60'
-      }`}
+      className={`w-[3px] rounded-full bg-[#60a5fa] ${active ? 'eq-bar h-3.5' : 'h-1.5 opacity-60'
+        }`}
     />
     <span
-      className={`w-[3px] rounded-full bg-[#60a5fa] ${
-        active ? 'eq-bar eq-bar-2 h-3' : 'h-2 opacity-60'
-      }`}
+      className={`w-[3px] rounded-full bg-[#60a5fa] ${active ? 'eq-bar eq-bar-2 h-3' : 'h-2 opacity-60'
+        }`}
     />
     <span
-      className={`w-[3px] rounded-full bg-[#60a5fa] ${
-        active ? 'eq-bar eq-bar-3 h-2.5' : 'h-1 opacity-60'
-      }`}
+      className={`w-[3px] rounded-full bg-[#60a5fa] ${active ? 'eq-bar eq-bar-3 h-2.5' : 'h-1 opacity-60'
+        }`}
     />
   </span>
 );
@@ -674,8 +671,8 @@ export const TrackOfflineDownloadButton: React.FC<{
         isSaved
           ? tr('Descărcată offline (apasă pentru eliminare)', 'Downloaded offline (click to remove)', 'Скачано офлайн')
           : isDownloading
-          ? tr(`Se descarcă (${progress}%) — apasă pentru anulare`, `Downloading (${progress}%) — click to cancel`, `Загрузка (${progress}%)`)
-          : tr('Descarcă piesa offline', 'Download track offline', 'Скачать трек офлайн')
+            ? tr(`Se descarcă (${progress}%) — apasă pentru anulare`, `Downloading (${progress}%) — click to cancel`, `Загрузка (${progress}%)`)
+            : tr('Descarcă piesa offline', 'Download track offline', 'Скачать трек офлайн')
       }
       aria-label={
         isSaved
@@ -686,11 +683,10 @@ export const TrackOfflineDownloadButton: React.FC<{
         e.stopPropagation();
         void toggleTrackOffline(track);
       }}
-      className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer focus:outline-none hover:bg-white/10 ${
-        isSaved || isDownloading || alwaysVisible
-          ? 'opacity-100'
-          : 'text-[#94a3b8] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 hover:text-white'
-      }`}
+      className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer focus:outline-none hover:bg-white/10 ${isSaved || isDownloading || alwaysVisible
+        ? 'opacity-100'
+        : 'text-[#94a3b8] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 hover:text-white'
+        }`}
     >
       {isSaved ? (
         <OfflineDownloadedBadgeIcon className="w-4 h-4" />
@@ -737,14 +733,13 @@ export const CollectionOfflineDownloadButton: React.FC<{
         allDownloaded
           ? tr(`Toate cele ${total} piese sunt descărcate offline`, `All ${total} tracks downloaded offline`, `Все ${total} треков скачаны`)
           : anyDownloading
-          ? tr('Apasă pentru a opri descărcarea', 'Click to stop downloading', 'Остановить загрузку')
-          : tr(`Descarcă toate cele ${total} piese offline`, `Download all ${total} tracks offline`, `Скачать все ${total} треков`)
+            ? tr('Apasă pentru a opri descărcarea', 'Click to stop downloading', 'Остановить загрузку')
+            : tr(`Descarcă toate cele ${total} piese offline`, `Download all ${total} tracks offline`, `Скачать все ${total} треков`)
       }
-      className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-2 border transition-colors cursor-pointer disabled:opacity-50 ${
-        allDownloaded || anyDownloading
-          ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
-          : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
-      } ${className}`}
+      className={`h-9 sm:h-10 px-3 sm:px-4 rounded-full text-xs sm:text-[13px] font-semibold inline-flex items-center gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 border transition-colors cursor-pointer disabled:opacity-50 ${allDownloaded || anyDownloading
+        ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
+        : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
+        } ${className}`}
     >
       {allDownloaded ? (
         <>
@@ -802,9 +797,8 @@ export const TrackTableHeader: React.FC<{
   showAlbum?: boolean;
 }> = ({ tr, showAlbum = true }) => (
   <div
-    className={`px-3 py-2 border-b border-white/[0.08] grid items-center gap-3 text-xs font-medium text-[#94a3b8] ${
-      showAlbum ? TRACK_ROW_GRID_WITH_ALBUM : TRACK_ROW_GRID_COMPACT
-    }`}
+    className={`px-3 py-2 border-b border-white/[0.08] grid items-center gap-3 text-xs font-medium text-[#94a3b8] ${showAlbum ? TRACK_ROW_GRID_WITH_ALBUM : TRACK_ROW_GRID_COMPACT
+      }`}
   >
     <span className="text-center">#</span>
     <span className="truncate">{tr('Titlu', 'Title', 'Название')}</span>
@@ -861,14 +855,17 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
 
   return (
     <div
-      className={`group px-3 py-1.5 min-h-[52px] rounded-lg grid items-center gap-3 transition-colors ${
-        showAlbum ? TRACK_ROW_GRID_WITH_ALBUM : TRACK_ROW_GRID_COMPACT
-      } ${isCurrent ? 'bg-[#1e3a8a]/25 ring-1 ring-[#3b82f6]/30' : 'hover:bg-[#161f30]/80'}`}
+      onClick={onPlay}
+      className={`group px-3 py-1.5 min-h-[52px] rounded-lg grid items-center gap-3 transition-colors cursor-pointer active:bg-white/[0.08] ${showAlbum ? TRACK_ROW_GRID_WITH_ALBUM : TRACK_ROW_GRID_COMPACT
+        } ${isCurrent ? 'bg-[#1e3a8a]/25 ring-1 ring-[#3b82f6]/30' : 'hover:bg-[#161f30]/80'}`}
     >
       {/* Index / Equalizer / Play */}
       <button
         type="button"
-        onClick={onPlay}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlay();
+        }}
         title={tr('Redă piesa', 'Play track', 'Слушать')}
         className="w-8 h-8 inline-flex items-center justify-center text-xs font-medium tabular-nums cursor-pointer focus:outline-none rounded-full"
       >
@@ -889,7 +886,10 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         {showCover && (
           <button
             type="button"
-            onClick={onPlay}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay();
+            }}
             className="relative w-10 h-10 rounded-md overflow-hidden shrink-0 bg-[#111726] shadow cursor-pointer focus:outline-none"
           >
             <img
@@ -907,19 +907,27 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         <div className="min-w-0 flex-1">
           <button
             type="button"
-            onClick={onPlay}
-            className={`text-left text-[13px] sm:text-sm font-semibold truncate hover:underline block max-w-full cursor-pointer focus:outline-none ${
-              isCurrent ? 'text-[#60a5fa]' : 'text-white'
-            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay();
+            }}
+            className={`text-left text-[13px] sm:text-sm font-semibold truncate hover:underline block max-w-full cursor-pointer focus:outline-none ${isCurrent ? 'text-[#60a5fa]' : 'text-white'
+              }`}
           >
             {track.title}
           </button>
           <div className="flex items-center gap-1.5 min-w-0 mt-0.5">
             {isOffline && <OfflineDownloadedBadgeIcon className="w-3.5 h-3.5 shrink-0" />}
+            <span className="sm:hidden text-xs font-medium text-[#94a3b8] truncate block max-w-full">
+              {track.artist}
+            </span>
             <button
               type="button"
-              onClick={() => onOpenArtist(track.artist, track.artistId)}
-              className="text-xs font-medium text-[#94a3b8] hover:text-white hover:underline truncate block max-w-full cursor-pointer focus:outline-none text-left"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenArtist(track.artist, track.artistId);
+              }}
+              className="hidden sm:block text-xs font-medium text-[#94a3b8] hover:text-white hover:underline truncate max-w-full cursor-pointer focus:outline-none text-left"
             >
               {track.artist}
             </button>
@@ -932,9 +940,10 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         <div className="hidden md:block min-w-0">
           <button
             type="button"
-            onClick={() =>
-              onOpenAlbum(track.album || track.title, track.artist, track.albumId, track)
-            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenAlbum(track.album || track.title, track.artist, track.albumId, track);
+            }}
             className="text-xs font-medium text-[#94a3b8] hover:text-white hover:underline truncate block max-w-full text-left cursor-pointer focus:outline-none"
           >
             {cleanAlbumTitle}
@@ -947,7 +956,10 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         <button
           type="button"
           title={tr('Radio Piesă', 'Song Radio', 'Радио трека')}
-          onClick={() => onStartRadio(track)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onStartRadio(track);
+          }}
           className="hidden sm:inline-flex w-8 h-8 rounded-full items-center justify-center text-[#94a3b8] hover:text-[#93c5fd] hover:bg-white/10 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all cursor-pointer focus:outline-none"
         >
           <Radio className="w-4 h-4" />
@@ -958,12 +970,14 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         <button
           type="button"
           title={tr('Adaugă la favorite', 'Save to Liked Songs', 'В Любимые')}
-          onClick={onToggleLike}
-          className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer focus:outline-none ${
-            isLiked
-              ? 'text-[#60a5fa]'
-              : 'text-[#94a3b8] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 hover:text-white'
-          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleLike();
+          }}
+          className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all cursor-pointer focus:outline-none ${isLiked
+            ? 'text-[#60a5fa]'
+            : 'text-[#94a3b8] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 hover:text-white'
+            }`}
         >
           <Heart className={`w-4 h-4 ${isLiked ? 'fill-current' : ''}`} />
         </button>
@@ -975,7 +989,10 @@ export const PremiumTrackRow: React.FC<PremiumTrackRowProps> = ({
         <button
           type="button"
           title={tr('Opțiuni piesă', 'More options', 'Ещё')}
-          onClick={() => onOpenTrackMenu(track)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenTrackMenu(track);
+          }}
           className="w-8 h-8 rounded-full inline-flex items-center justify-center text-[#94a3b8] hover:text-white hover:bg-white/10 transition-colors cursor-pointer focus:outline-none"
         >
           <MoreHorizontal className="w-4 h-4" />
@@ -1024,354 +1041,351 @@ export const ArtistProfileView: React.FC<{
   onOpenSongStudio,
   onOpenTrackMenu,
 }) => {
-  const [showAllPopular, setShowAllPopular] = useState(false);
-  const [discogFilter, setDiscogFilter] = useState<'all' | 'album' | 'single'>('all');
-  const [encyclopedia, setEncyclopedia] = useState<MusicEncyclopediaData | null>(null);
-  const [bioExpanded, setBioExpanded] = useState(false);
+    const [showAllPopular, setShowAllPopular] = useState(false);
+    const [discogFilter, setDiscogFilter] = useState<'all' | 'album' | 'single'>('all');
+    const [encyclopedia, setEncyclopedia] = useState<MusicEncyclopediaData | null>(null);
+    const [bioExpanded, setBioExpanded] = useState(false);
 
-  const artistName = data?.artist?.name || artistNameFallback;
-  const uiLang = resolveUiLangFromTr(tr);
+    const artistName = data?.artist?.name || artistNameFallback;
+    const uiLang = resolveUiLangFromTr(tr);
 
-  useEffect(() => {
-    if (!artistName) {
-      setEncyclopedia(null);
-      return;
-    }
-    let cancelled = false;
-    setBioExpanded(false);
-    loadMusicEncyclopedia({ artist: artistName, lang: uiLang })
-      .then((res) => {
-        if (!cancelled) setEncyclopedia(res);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [artistName, uiLang]);
-  const avatar = data?.artist?.avatar || FALLBACK_MUSIC_COVER;
-  const fansLabel = formatFansCount(data?.artist?.fans);
-  const topTracks = data?.topTracks || [];
-  const albums = data?.albums || [];
-  const relatedArtists = data?.relatedArtists || [];
+    useEffect(() => {
+      if (!artistName) {
+        setEncyclopedia(null);
+        return;
+      }
+      let cancelled = false;
+      setBioExpanded(false);
+      loadMusicEncyclopedia({ artist: artistName, lang: uiLang })
+        .then((res) => {
+          if (!cancelled) setEncyclopedia(res);
+        })
+        .catch(() => { });
+      return () => {
+        cancelled = true;
+      };
+    }, [artistName, uiLang]);
+    const avatar = data?.artist?.avatar || FALLBACK_MUSIC_COVER;
+    const fansLabel = formatFansCount(data?.artist?.fans);
+    const topTracks = data?.topTracks || [];
+    const albums = data?.albums || [];
+    const relatedArtists = data?.relatedArtists || [];
 
-  const filteredAlbums = useMemo(() => {
-    if (discogFilter === 'all') return albums;
-    if (discogFilter === 'single') {
-      return albums.filter((a) => a.recordType === 'single' || a.recordType === 'ep');
-    }
-    return albums.filter((a) => a.recordType !== 'single' && a.recordType !== 'ep');
-  }, [albums, discogFilter]);
+    const filteredAlbums = useMemo(() => {
+      if (discogFilter === 'all') return albums;
+      if (discogFilter === 'single') {
+        return albums.filter((a) => a.recordType === 'single' || a.recordType === 'ep');
+      }
+      return albums.filter((a) => a.recordType !== 'single' && a.recordType !== 'ep');
+    }, [albums, discogFilter]);
 
-  const popularSlice = showAllPopular ? topTracks : topTracks.slice(0, 5);
+    const popularSlice = showAllPopular ? topTracks : topTracks.slice(0, 5);
 
-  return (
-    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Compact Horizontal Artist Hero Card */}
-      <div className="rounded-xl bg-gradient-to-br from-[#172554]/55 via-[#111622] to-[#0c101b] border border-white/[0.08] p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden ring-2 ring-white/15 shadow-xl shrink-0 bg-[#111726]">
-            <img
-              src={proxyMusicCover(avatar)}
-              alt={artistName}
-              onError={(e) => {
-                e.currentTarget.onerror = null;
-                e.currentTarget.src = FALLBACK_MUSIC_COVER;
-              }}
-              className="w-full h-full object-cover"
-            />
-          </div>
-
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400">
-              <BadgeCheck className="w-4 h-4 shrink-0" />
-              <span>{tr('Artist Verificat', 'Verified Artist', 'Подтвержденный артист')}</span>
+    return (
+      <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
+        {/* Compact Horizontal Artist Hero Card */}
+        <div className="rounded-xl bg-gradient-to-br from-[#172554]/55 via-[#111622] to-[#0c101b] border border-white/[0.08] p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden ring-2 ring-white/15 shadow-xl shrink-0 bg-[#111726]">
+              <img
+                src={proxyMusicCover(avatar)}
+                alt={artistName}
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = FALLBACK_MUSIC_COVER;
+                }}
+                className="w-full h-full object-cover"
+              />
             </div>
 
-            <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>{artistName}</h1>
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400">
+                <BadgeCheck className="w-4 h-4 shrink-0" />
+                <span>{tr('Artist Verificat', 'Verified Artist', 'Подтвержденный артист')}</span>
+              </div>
 
-            <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 ${MUSIC_TYPOGRAPHY.meta}`}>
-              {fansLabel && (
-                <span>
-                  {fansLabel} {tr('ascultători & fani', 'listeners & fans', 'слушателей')}
-                </span>
-              )}
-              {fansLabel && albums.length > 0 && <span>•</span>}
-              {albums.length > 0 && (
-                <span>
-                  {albums.length} {tr('lansări & albume', 'releases', 'релизов')}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
+              <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>{artistName}</h1>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={topTracks.length === 0}
-            onClick={() => topTracks[0] && onPlayTrack(topTracks[0], topTracks)}
-            style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
-            className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
-          >
-            <Play className="w-4 h-4 fill-current text-white" />
-            <span>{tr('Redă', 'Play', 'Слушать')}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleShuffle}
-            className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${
-              isShuffle
-                ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
-                : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
-            }`}
-          >
-            <Shuffle className="w-4 h-4" />
-            <span>Shuffle</span>
-          </button>
-
-          {topTracks[0] && (
-            <button
-              type="button"
-              onClick={() => onStartRadio(topTracks[0])}
-              className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Radio className="w-4 h-4" />
-              <span>{tr('Radio Artist', 'Artist Radio', 'Радио артиста')}</span>
-            </button>
-          )}
-
-          <CollectionOfflineDownloadButton tr={tr} tracks={topTracks} />
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
-          <Loader2 className="w-5 h-5 animate-spin text-[#60a5fa]" />
-          <span>{tr('Se încarcă profilul artistului...', 'Loading artist profile...', 'Загрузка профиля...')}</span>
-        </div>
-      ) : (
-        <>
-          {/* Popular Tracks */}
-          {topTracks.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className={MUSIC_TYPOGRAPHY.h2}>
-                  {tr('Populare', 'Popular', 'Популярные треки')}
-                </h2>
-                {topTracks.length > 5 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllPopular((v) => !v)}
-                    className="h-8 px-3 rounded-full text-xs font-semibold text-[#94a3b8] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  >
-                    {showAllPopular
-                      ? tr('Mai puțin', 'Show less', 'Свернуть')
-                      : `${tr('Vezi toate', 'See all', 'Показать все')} (${topTracks.length})`}
-                  </button>
+              <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 ${MUSIC_TYPOGRAPHY.meta}`}>
+                {fansLabel && (
+                  <span>
+                    {fansLabel} {tr('ascultători & fani', 'listeners & fans', 'слушателей')}
+                  </span>
+                )}
+                {fansLabel && albums.length > 0 && <span>•</span>}
+                {albums.length > 0 && (
+                  <span>
+                    {albums.length} {tr('lansări & albume', 'releases', 'релизов')}
+                  </span>
                 )}
               </div>
+            </div>
+          </div>
 
-              <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
-                <TrackTableHeader tr={tr} showAlbum />
-                <div className="p-1.5 space-y-0.5">
-                  {popularSlice.map((track, idx) => (
-                    <PremiumTrackRow
-                      key={`art_tr_${track.id}_${idx}`}
-                      tr={tr}
-                      track={track}
-                      index={idx}
-                      isCurrent={currentTrack?.id === track.id}
-                      isPlaying={isPlaying}
-                      isLiked={likedTracks.some((l) => l.id === track.id)}
-                      showCover
-                      showAlbum
-                      onPlay={() => onPlayTrack(track, topTracks)}
-                      onToggleLike={() => onToggleLikeTrack(track)}
-                      onOpenArtist={onOpenArtist}
-                      onOpenAlbum={onOpenAlbum}
-                      onStartRadio={onStartRadio}
-                      onOpenSongStudio={onOpenSongStudio}
-                      onOpenTrackMenu={onOpenTrackMenu}
-                    />
-                  ))}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={topTracks.length === 0}
+              onClick={() => topTracks[0] && onPlayTrack(topTracks[0], topTracks)}
+              style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+              className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-current text-white" />
+              <span>{tr('Redă', 'Play', 'Слушать')}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleShuffle}
+              className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${isShuffle
+                ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
+                : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
+                }`}
+            >
+              <Shuffle className="w-4 h-4" />
+              <span>Shuffle</span>
+            </button>
+
+            {topTracks[0] && (
+              <button
+                type="button"
+                onClick={() => onStartRadio(topTracks[0])}
+                className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Radio className="w-4 h-4" />
+                <span>{tr('Radio Artist', 'Artist Radio', 'Радио артиста')}</span>
+              </button>
+            )}
+
+            <CollectionOfflineDownloadButton tr={tr} tracks={topTracks} />
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
+            <Loader2 className="w-5 h-5 animate-spin text-[#60a5fa]" />
+            <span>{tr('Se încarcă profilul artistului...', 'Loading artist profile...', 'Загрузка профиля...')}</span>
+          </div>
+        ) : (
+          <>
+            {/* Popular Tracks */}
+            {topTracks.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className={MUSIC_TYPOGRAPHY.h2}>
+                    {tr('Populare', 'Popular', 'Популярные треки')}
+                  </h2>
+                  {topTracks.length > 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllPopular((v) => !v)}
+                      className="h-8 px-3 rounded-full text-xs font-semibold text-[#94a3b8] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
+                    >
+                      {showAllPopular
+                        ? tr('Mai puțin', 'Show less', 'Свернуть')
+                        : `${tr('Vezi toate', 'See all', 'Показать все')} (${topTracks.length})`}
+                    </button>
+                  )}
+                </div>
+
+                <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
+                  <TrackTableHeader tr={tr} showAlbum />
+                  <div className="p-1.5 space-y-0.5">
+                    {popularSlice.map((track, idx) => (
+                      <PremiumTrackRow
+                        key={`art_tr_${track.id}_${idx}`}
+                        tr={tr}
+                        track={track}
+                        index={idx}
+                        isCurrent={currentTrack?.id === track.id}
+                        isPlaying={isPlaying}
+                        isLiked={likedTracks.some((l) => l.id === track.id)}
+                        showCover
+                        showAlbum
+                        onPlay={() => onPlayTrack(track, topTracks)}
+                        onToggleLike={() => onToggleLikeTrack(track)}
+                        onOpenArtist={onOpenArtist}
+                        onOpenAlbum={onOpenAlbum}
+                        onStartRadio={onStartRadio}
+                        onOpenSongStudio={onOpenSongStudio}
+                        onOpenTrackMenu={onOpenTrackMenu}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Discography */}
-          {albums.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className={MUSIC_TYPOGRAPHY.h2}>
-                  {tr('Discografie', 'Discography', 'Дискография')}
-                </h2>
-                <div className="flex items-center gap-1.5">
-                  {(
-                    [
-                      ['all', tr('Toate', 'All', 'Все')],
-                      ['album', tr('Albume', 'Albums', 'Альбомы')],
-                      ['single', tr('Single & EP', 'Singles & EP', 'Синглы')],
-                    ] as const
-                  ).map(([val, lbl]) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => setDiscogFilter(val)}
-                      className={`h-8 px-3.5 rounded-full text-xs font-semibold transition-colors cursor-pointer ${
-                        discogFilter === val
+            {/* Discography */}
+            {albums.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className={MUSIC_TYPOGRAPHY.h2}>
+                    {tr('Discografie', 'Discography', 'Дискография')}
+                  </h2>
+                  <div className="flex items-center gap-1.5">
+                    {(
+                      [
+                        ['all', tr('Toate', 'All', 'Все')],
+                        ['album', tr('Albume', 'Albums', 'Альбомы')],
+                        ['single', tr('Single & EP', 'Singles & EP', 'Синглы')],
+                      ] as const
+                    ).map(([val, lbl]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setDiscogFilter(val)}
+                        className={`h-8 px-3.5 rounded-full text-xs font-semibold transition-colors cursor-pointer ${discogFilter === val
                           ? 'bg-white text-black'
                           : 'bg-white/[0.08] text-white hover:bg-white/[0.15]'
-                      }`}
+                          }`}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
+                  {filteredAlbums.slice(0, 12).map((alb) => (
+                    <button
+                      key={alb.id}
+                      type="button"
+                      onClick={() => onOpenAlbum(alb.title, alb.artist || artistName, alb.id)}
+                      className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-left group cursor-pointer flex flex-col"
                     >
-                      {lbl}
+                      <div className="relative aspect-square w-full rounded-lg overflow-hidden mb-2.5 shadow-lg bg-[#111726]">
+                        <img
+                          src={proxyMusicCover(alb.cover)}
+                          alt={alb.title}
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = FALLBACK_MUSIC_COVER;
+                          }}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
+                        {alb.title}
+                      </div>
+                      <div className="text-xs font-medium text-[#94a3b8] truncate mt-0.5 capitalize w-full">
+                        {alb.year ? `${alb.year} • ` : ''}
+                        {alb.recordType || 'Album'}
+                      </div>
                     </button>
                   ))}
                 </div>
               </div>
+            )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
-                {filteredAlbums.slice(0, 12).map((alb) => (
-                  <button
-                    key={alb.id}
-                    type="button"
-                    onClick={() => onOpenAlbum(alb.title, alb.artist || artistName, alb.id)}
-                    className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-left group cursor-pointer flex flex-col"
-                  >
-                    <div className="relative aspect-square w-full rounded-lg overflow-hidden mb-2.5 shadow-lg bg-[#111726]">
-                      <img
-                        src={proxyMusicCover(alb.cover)}
-                        alt={alb.title}
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = FALLBACK_MUSIC_COVER;
-                        }}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    </div>
-                    <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
-                      {alb.title}
-                    </div>
-                    <div className="text-xs font-medium text-[#94a3b8] truncate mt-0.5 capitalize w-full">
-                      {alb.year ? `${alb.year} • ` : ''}
-                      {alb.recordType || 'Album'}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Artist Biography & Career History */}
-          {encyclopedia?.artistBio && (
-            <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] p-4 sm:p-5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-[#60a5fa] shrink-0" />
-                  <h2 className={MUSIC_TYPOGRAPHY.h2}>
-                    {tr('Biografie & Istoric Carieră', 'Biography & Career History', 'Биография и история')}
-                  </h2>
-                </div>
-                {encyclopedia.artistBio.length > 360 && (
-                  <button
-                    type="button"
-                    onClick={() => setBioExpanded((v) => !v)}
-                    className="h-8 px-3 rounded-full text-xs font-semibold text-[#60a5fa] hover:bg-white/[0.06] transition-colors cursor-pointer"
-                  >
-                    {bioExpanded
-                      ? tr('Restrânge', 'Show less', 'Свернуть')
-                      : tr('Citește toată biografia', 'Read full biography', 'Читать полностью')}
-                  </button>
-                )}
-              </div>
-
-              {(encyclopedia.artistOrigin ||
-                encyclopedia.artistActiveYears ||
-                encyclopedia.artistTypeLabel ||
-                encyclopedia.artistStyles.length > 0) && (
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  {encyclopedia.artistOrigin && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                      <Globe className="w-3.5 h-3.5 text-[#60a5fa]" />
-                      <span>{encyclopedia.artistOrigin}</span>
-                    </span>
-                  )}
-                  {encyclopedia.artistActiveYears && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                      <Calendar className="w-3.5 h-3.5 text-[#60a5fa]" />
-                      <span>{encyclopedia.artistActiveYears}</span>
-                    </span>
-                  )}
-                  {encyclopedia.artistTypeLabel && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                      <Users className="w-3.5 h-3.5 text-[#60a5fa]" />
-                      <span>{encyclopedia.artistTypeLabel}</span>
-                    </span>
-                  )}
-                  {encyclopedia.artistStyles.slice(0, 3).map((st) => (
-                    <span
-                      key={st}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
+            {/* Artist Biography & Career History */}
+            {encyclopedia?.artistBio && (
+              <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] p-4 sm:p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-[#60a5fa] shrink-0" />
+                    <h2 className={MUSIC_TYPOGRAPHY.h2}>
+                      {tr('Biografie & Istoric Carieră', 'Biography & Career History', 'Биография и история')}
+                    </h2>
+                  </div>
+                  {encyclopedia.artistBio.length > 360 && (
+                    <button
+                      type="button"
+                      onClick={() => setBioExpanded((v) => !v)}
+                      className="h-8 px-3 rounded-full text-xs font-semibold text-[#60a5fa] hover:bg-white/[0.06] transition-colors cursor-pointer"
                     >
-                      <Award className="w-3 h-3" />
-                      <span>{st}</span>
-                    </span>
+                      {bioExpanded
+                        ? tr('Restrânge', 'Show less', 'Свернуть')
+                        : tr('Citește toată biografia', 'Read full biography', 'Читать полностью')}
+                    </button>
+                  )}
+                </div>
+
+                {(encyclopedia.artistOrigin ||
+                  encyclopedia.artistActiveYears ||
+                  encyclopedia.artistTypeLabel ||
+                  encyclopedia.artistStyles.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      {encyclopedia.artistOrigin && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                          <Globe className="w-3.5 h-3.5 text-[#60a5fa]" />
+                          <span>{encyclopedia.artistOrigin}</span>
+                        </span>
+                      )}
+                      {encyclopedia.artistActiveYears && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                          <Calendar className="w-3.5 h-3.5 text-[#60a5fa]" />
+                          <span>{encyclopedia.artistActiveYears}</span>
+                        </span>
+                      )}
+                      {encyclopedia.artistTypeLabel && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                          <Users className="w-3.5 h-3.5 text-[#60a5fa]" />
+                          <span>{encyclopedia.artistTypeLabel}</span>
+                        </span>
+                      )}
+                      {encyclopedia.artistStyles.slice(0, 3).map((st) => (
+                        <span
+                          key={st}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
+                        >
+                          <Award className="w-3 h-3" />
+                          <span>{st}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                <p
+                  className={`whitespace-pre-line text-xs sm:text-sm text-slate-300 leading-relaxed ${bioExpanded ? '' : 'line-clamp-5'
+                    }`}
+                >
+                  {encyclopedia.artistBio}
+                </p>
+              </div>
+            )}
+
+            {/* Related Artists */}
+            {relatedArtists.length > 0 && (
+              <div className="space-y-3">
+                <h2 className={MUSIC_TYPOGRAPHY.h2}>
+                  {tr('Fanii mai ascultă și', 'Fans also like', 'Похожие артисты')}
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
+                  {relatedArtists.slice(0, 6).map((rel) => (
+                    <button
+                      key={rel.id}
+                      type="button"
+                      onClick={() => onOpenArtist(rel.name, rel.id)}
+                      className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-center group cursor-pointer flex flex-col items-center"
+                    >
+                      <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden mb-2.5 shadow-xl bg-[#111726] ring-1 ring-white/10">
+                        <img
+                          src={proxyMusicCover(rel.avatar)}
+                          alt={rel.name}
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = FALLBACK_MUSIC_COVER;
+                          }}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
+                        {rel.name}
+                      </div>
+                      <div className="text-xs font-medium text-[#94a3b8] mt-0.5">
+                        {tr('Artist', 'Artist', 'Исполнитель')}
+                      </div>
+                    </button>
                   ))}
                 </div>
-              )}
-
-              <p
-                className={`whitespace-pre-line text-xs sm:text-sm text-slate-300 leading-relaxed ${
-                  bioExpanded ? '' : 'line-clamp-5'
-                }`}
-              >
-                {encyclopedia.artistBio}
-              </p>
-            </div>
-          )}
-
-          {/* Related Artists */}
-          {relatedArtists.length > 0 && (
-            <div className="space-y-3">
-              <h2 className={MUSIC_TYPOGRAPHY.h2}>
-                {tr('Fanii mai ascultă și', 'Fans also like', 'Похожие артисты')}
-              </h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
-                {relatedArtists.slice(0, 6).map((rel) => (
-                  <button
-                    key={rel.id}
-                    type="button"
-                    onClick={() => onOpenArtist(rel.name, rel.id)}
-                    className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-center group cursor-pointer flex flex-col items-center"
-                  >
-                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden mb-2.5 shadow-xl bg-[#111726] ring-1 ring-white/10">
-                      <img
-                        src={proxyMusicCover(rel.avatar)}
-                        alt={rel.name}
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = FALLBACK_MUSIC_COVER;
-                        }}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
-                    </div>
-                    <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
-                      {rel.name}
-                    </div>
-                    <div className="text-xs font-medium text-[#94a3b8] mt-0.5">
-                      {tr('Artist', 'Artist', 'Исполнитель')}
-                    </div>
-                  </button>
-                ))}
               </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
 // ============================================================================
 // 2. ALBUM DETAIL VIEW
@@ -1410,252 +1424,250 @@ export const AlbumDetailView: React.FC<{
   onOpenSongStudio,
   onOpenTrackMenu,
 }) => {
-  const [encyclopedia, setEncyclopedia] = useState<MusicEncyclopediaData | null>(null);
-  const [storyExpanded, setStoryExpanded] = useState(false);
-  const uiLang = resolveUiLangFromTr(tr);
+    const [encyclopedia, setEncyclopedia] = useState<MusicEncyclopediaData | null>(null);
+    const [storyExpanded, setStoryExpanded] = useState(false);
+    const uiLang = resolveUiLangFromTr(tr);
 
-  useEffect(() => {
-    if (!album?.artistName || !album?.albumTitle) {
-      setEncyclopedia(null);
-      return;
-    }
-    let cancelled = false;
-    setStoryExpanded(false);
-    loadMusicEncyclopedia({
-      artist: album.artistName,
-      album: album.albumTitle,
-      genre: album.genre,
-      year: album.year,
-      lang: uiLang,
-    })
-      .then((res) => {
-        if (!cancelled) setEncyclopedia(res);
+    useEffect(() => {
+      if (!album?.artistName || !album?.albumTitle) {
+        setEncyclopedia(null);
+        return;
+      }
+      let cancelled = false;
+      setStoryExpanded(false);
+      loadMusicEncyclopedia({
+        artist: album.artistName,
+        album: album.albumTitle,
+        genre: album.genre,
+        year: album.year,
+        lang: uiLang,
       })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [album?.artistName, album?.albumTitle, album?.genre, album?.year, uiLang]);
+        .then((res) => {
+          if (!cancelled) setEncyclopedia(res);
+        })
+        .catch(() => { });
+      return () => {
+        cancelled = true;
+      };
+    }, [album?.artistName, album?.albumTitle, album?.genre, album?.year, uiLang]);
 
-  if (!album) return null;
+    if (!album) return null;
 
-  return (
-    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Compact Horizontal Album Hero Card */}
-      <div className="rounded-xl tahoe-glass p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div className="flex items-center gap-4 min-w-0">
-          <img
-            src={proxyMusicCover(album.coverUrl)}
-            alt={album.albumTitle}
-            onError={(e) => {
-              e.currentTarget.onerror = null;
-              e.currentTarget.src = FALLBACK_MUSIC_COVER;
-            }}
-            className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shadow-xl shrink-0 bg-[#111726]"
-          />
+    return (
+      <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
+        {/* Compact Horizontal Album Hero Card */}
+        <div className="rounded-xl tahoe-glass p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <img
+              src={proxyMusicCover(album.coverUrl)}
+              alt={album.albumTitle}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = FALLBACK_MUSIC_COVER;
+              }}
+              className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shadow-xl shrink-0 bg-[#111726]"
+            />
 
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-[#60a5fa]">
-                {album.recordType === 'single'
-                  ? 'Single'
-                  : album.recordType === 'ep'
-                  ? 'EP'
-                  : tr('Album', 'Album', 'Альбом')}
-              </span>
-              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#1e3a8a]/45 text-[#60a5fa]">
-                MAX • 24-bit FLAC
-              </span>
-            </div>
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-[#60a5fa]">
+                  {album.recordType === 'single'
+                    ? 'Single'
+                    : album.recordType === 'ep'
+                      ? 'EP'
+                      : tr('Album', 'Album', 'Альбом')}
+                </span>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-[#1e3a8a]/45 text-[#60a5fa]">
+                  MAX • 24-bit FLAC
+                </span>
+              </div>
 
-            <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>{album.albumTitle}</h1>
+              <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>{album.albumTitle}</h1>
 
-            <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 ${MUSIC_TYPOGRAPHY.meta}`}>
-              <button
-                type="button"
-                onClick={() => onOpenArtist(album.artistName, album.artistId)}
-                className="inline-flex items-center gap-1.5 font-semibold text-white hover:text-[#93c5fd] hover:underline cursor-pointer"
-              >
-                {album.artistAvatar && (
-                  <img
-                    src={proxyMusicCover(album.artistAvatar)}
-                    alt=""
-                    onError={(e) => {
-                      e.currentTarget.onerror = null;
-                      e.currentTarget.src = FALLBACK_MUSIC_COVER;
-                    }}
-                    className="w-4 h-4 rounded-full object-cover"
-                  />
-                )}
-                <span>{album.artistName}</span>
-              </button>
-              <span>•</span>
-              <span>{album.releaseDateText || album.year}</span>
-              <span>•</span>
-              <span>
-                {album.trackCount} {tr('melodii', 'songs', 'треков')},{' '}
-                {Math.max(1, Math.round(album.totalDurationSec / 60))} min
-              </span>
+              <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 ${MUSIC_TYPOGRAPHY.meta}`}>
+                <button
+                  type="button"
+                  onClick={() => onOpenArtist(album.artistName, album.artistId)}
+                  className="inline-flex items-center gap-1.5 font-semibold text-white hover:text-[#93c5fd] hover:underline cursor-pointer"
+                >
+                  {album.artistAvatar && (
+                    <img
+                      src={proxyMusicCover(album.artistAvatar)}
+                      alt=""
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = FALLBACK_MUSIC_COVER;
+                      }}
+                      className="w-4 h-4 rounded-full object-cover"
+                    />
+                  )}
+                  <span>{album.artistName}</span>
+                </button>
+                <span>•</span>
+                <span>{album.releaseDateText || album.year}</span>
+                <span>•</span>
+                <span>
+                  {album.trackCount} {tr('melodii', 'songs', 'треков')},{' '}
+                  {Math.max(1, Math.round(album.totalDurationSec / 60))} min
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={album.tracks.length === 0}
-            onClick={() => album.tracks[0] && onPlayTrack(album.tracks[0], album.tracks)}
-            style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
-            className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
-          >
-            <Play className="w-4 h-4 fill-current text-white" />
-            <span>{tr('Redă Albumul', 'Play Album', 'Слушать альбом')}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleShuffle}
-            className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${
-              isShuffle
-                ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
-                : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
-            }`}
-          >
-            <Shuffle className="w-4 h-4" />
-            <span>Shuffle</span>
-          </button>
-
-          {album.tracks[0] && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => onStartRadio(album.tracks[0])}
-              className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              disabled={album.tracks.length === 0}
+              onClick={() => album.tracks[0] && onPlayTrack(album.tracks[0], album.tracks)}
+              style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+              className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
             >
-              <Radio className="w-4 h-4" />
-              <span>{tr('Radio Album', 'Album Radio', 'Радио альбома')}</span>
+              <Play className="w-4 h-4 fill-current text-white" />
+              <span>{tr('Redă Albumul', 'Play Album', 'Слушать альбом')}</span>
             </button>
-          )}
 
-          <CollectionOfflineDownloadButton tr={tr} tracks={album.tracks} />
-        </div>
-      </div>
+            <button
+              type="button"
+              onClick={onToggleShuffle}
+              className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${isShuffle
+                ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
+                : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
+                }`}
+            >
+              <Shuffle className="w-4 h-4" />
+              <span>Shuffle</span>
+            </button>
 
-      {/* Album Tracklist */}
-      <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
-        {isLoading ? (
-          <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
-            <Loader2 className="w-4 h-4 animate-spin text-[#60a5fa]" />
-            <span>
-              {tr('Se încarcă melodiile albumului...', 'Loading album tracks...', 'Загрузка треков...')}
-            </span>
-          </div>
-        ) : (
-          <>
-            <TrackTableHeader tr={tr} showAlbum={false} />
-            <div className="p-1.5 space-y-0.5">
-              {album.tracks.map((track, idx) => (
-                <PremiumTrackRow
-                  key={`alb_tr_${track.id}_${idx}`}
-                  tr={tr}
-                  track={track}
-                  index={idx}
-                  isCurrent={currentTrack?.id === track.id}
-                  isPlaying={isPlaying}
-                  isLiked={likedTracks.some((t) => t.id === track.id)}
-                  showCover={false}
-                  showAlbum={false}
-                  onPlay={() => onPlayTrack(track, album.tracks)}
-                  onToggleLike={() => onToggleLikeTrack(track)}
-                  onOpenArtist={onOpenArtist}
-                  onOpenAlbum={onOpenAlbum}
-                  onStartRadio={onStartRadio}
-                  onOpenSongStudio={onOpenSongStudio}
-                  onOpenTrackMenu={onOpenTrackMenu}
-                />
-              ))}
-            </div>
-          </>
-        )}
-
-        {(album.label || album.copyright) && (
-          <div className="px-4 py-3 border-t border-white/[0.09] text-xs text-[#64748b] space-y-0.5">
-            {album.releaseDateText && <div>{album.releaseDateText}</div>}
-            <div>{album.label || album.copyright}</div>
-          </div>
-        )}
-      </div>
-
-      {/* Album History & Context */}
-      {encyclopedia?.albumStory && (
-        <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] p-4 sm:p-5 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-[#60a5fa] shrink-0" />
-              <h2 className={MUSIC_TYPOGRAPHY.h2}>
-                {tr('Istoricul & Povestea Albumului', 'Album History & Context', 'История альбома')}
-              </h2>
-            </div>
-            {encyclopedia.albumStory.length > 340 && (
+            {album.tracks[0] && (
               <button
                 type="button"
-                onClick={() => setStoryExpanded((v) => !v)}
-                className="h-8 px-3 rounded-full text-xs font-semibold text-[#60a5fa] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                onClick={() => onStartRadio(album.tracks[0])}
+                className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                {storyExpanded
-                  ? tr('Restrânge', 'Show less', 'Свернуть')
-                  : tr('Citește mai mult', 'Read more', 'Подробнее')}
+                <Radio className="w-4 h-4" />
+                <span>{tr('Radio Album', 'Album Radio', 'Радио альбома')}</span>
               </button>
             )}
-          </div>
-          <p
-            className={`whitespace-pre-line text-xs sm:text-sm text-slate-300 leading-relaxed ${
-              storyExpanded ? '' : 'line-clamp-5'
-            }`}
-          >
-            {encyclopedia.albumStory}
-          </p>
-        </div>
-      )}
 
-      {/* More Albums by Artist */}
-      {album.moreAlbums && album.moreAlbums.length > 0 && (
-        <div className="space-y-3">
-          <h2 className={MUSIC_TYPOGRAPHY.h2}>
-            {tr(`Mai multe de la ${album.artistName}`, `More by ${album.artistName}`, `Другие релизы ${album.artistName}`)}
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
-            {album.moreAlbums.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => onOpenAlbum(m.title, m.artist, m.id)}
-                className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-left group cursor-pointer flex flex-col"
-              >
-                <div className="relative aspect-square w-full rounded-lg overflow-hidden mb-2.5 bg-[#111726]">
-                  <img
-                    src={proxyMusicCover(m.cover)}
-                    alt={m.title}
-                    onError={(e) => {
-                      e.currentTarget.onerror = null;
-                      e.currentTarget.src = FALLBACK_MUSIC_COVER;
-                    }}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </div>
-                <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
-                  {m.title}
-                </div>
-                <div className="text-xs font-medium text-[#94a3b8] truncate mt-0.5 w-full">
-                  {m.year || ''}
-                </div>
-              </button>
-            ))}
+            <CollectionOfflineDownloadButton tr={tr} tracks={album.tracks} />
           </div>
         </div>
-      )}
-    </div>
-  );
-};
+
+        {/* Album Tracklist */}
+        <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
+          {isLoading ? (
+            <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
+              <Loader2 className="w-4 h-4 animate-spin text-[#60a5fa]" />
+              <span>
+                {tr('Se încarcă melodiile albumului...', 'Loading album tracks...', 'Загрузка треков...')}
+              </span>
+            </div>
+          ) : (
+            <>
+              <TrackTableHeader tr={tr} showAlbum={false} />
+              <div className="p-1.5 space-y-0.5">
+                {album.tracks.map((track, idx) => (
+                  <PremiumTrackRow
+                    key={`alb_tr_${track.id}_${idx}`}
+                    tr={tr}
+                    track={track}
+                    index={idx}
+                    isCurrent={currentTrack?.id === track.id}
+                    isPlaying={isPlaying}
+                    isLiked={likedTracks.some((t) => t.id === track.id)}
+                    showCover={false}
+                    showAlbum={false}
+                    onPlay={() => onPlayTrack(track, album.tracks)}
+                    onToggleLike={() => onToggleLikeTrack(track)}
+                    onOpenArtist={onOpenArtist}
+                    onOpenAlbum={onOpenAlbum}
+                    onStartRadio={onStartRadio}
+                    onOpenSongStudio={onOpenSongStudio}
+                    onOpenTrackMenu={onOpenTrackMenu}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {(album.label || album.copyright) && (
+            <div className="px-4 py-3 border-t border-white/[0.09] text-xs text-[#64748b] space-y-0.5">
+              {album.releaseDateText && <div>{album.releaseDateText}</div>}
+              <div>{album.label || album.copyright}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Album History & Context */}
+        {encyclopedia?.albumStory && (
+          <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] p-4 sm:p-5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-[#60a5fa] shrink-0" />
+                <h2 className={MUSIC_TYPOGRAPHY.h2}>
+                  {tr('Istoricul & Povestea Albumului', 'Album History & Context', 'История альбома')}
+                </h2>
+              </div>
+              {encyclopedia.albumStory.length > 340 && (
+                <button
+                  type="button"
+                  onClick={() => setStoryExpanded((v) => !v)}
+                  className="h-8 px-3 rounded-full text-xs font-semibold text-[#60a5fa] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                >
+                  {storyExpanded
+                    ? tr('Restrânge', 'Show less', 'Свернуть')
+                    : tr('Citește mai mult', 'Read more', 'Подробнее')}
+                </button>
+              )}
+            </div>
+            <p
+              className={`whitespace-pre-line text-xs sm:text-sm text-slate-300 leading-relaxed ${storyExpanded ? '' : 'line-clamp-5'
+                }`}
+            >
+              {encyclopedia.albumStory}
+            </p>
+          </div>
+        )}
+
+        {/* More Albums by Artist */}
+        {album.moreAlbums && album.moreAlbums.length > 0 && (
+          <div className="space-y-3">
+            <h2 className={MUSIC_TYPOGRAPHY.h2}>
+              {tr(`Mai multe de la ${album.artistName}`, `More by ${album.artistName}`, `Другие релизы ${album.artistName}`)}
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
+              {album.moreAlbums.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onOpenAlbum(m.title, m.artist, m.id)}
+                  className="p-3 rounded-xl bg-[#0e121b]/95 hover:bg-[#161f30] border border-white/[0.09] focus:outline-none transition-colors text-left group cursor-pointer flex flex-col"
+                >
+                  <div className="relative aspect-square w-full rounded-lg overflow-hidden mb-2.5 bg-[#111726]">
+                    <img
+                      src={proxyMusicCover(m.cover)}
+                      alt={m.title}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = FALLBACK_MUSIC_COVER;
+                      }}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  </div>
+                  <div className="text-[13px] sm:text-sm font-semibold text-white truncate w-full">
+                    {m.title}
+                  </div>
+                  <div className="text-xs font-medium text-[#94a3b8] truncate mt-0.5 w-full">
+                    {m.year || ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
 // ============================================================================
 // 3. SONG RADIO MIX GENERATOR VIEW
@@ -1698,136 +1710,135 @@ export const SongRadioView: React.FC<{
   onOpenSongStudio,
   onOpenTrackMenu,
 }) => {
-  if (!radioData && !isLoading) return null;
+    if (!radioData && !isLoading) return null;
 
-  const tracks = radioData?.tracks || [];
-  const isPlayingFromThisRadio =
-    Boolean(currentTrack) && tracks.some((t) => t.id === currentTrack?.id);
+    const tracks = radioData?.tracks || [];
+    const isPlayingFromThisRadio =
+      Boolean(currentTrack) && tracks.some((t) => t.id === currentTrack?.id);
 
-  return (
-    <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Compact Horizontal Radio Hero Card */}
-      <div className="rounded-xl bg-gradient-to-br from-[#1e3a8a]/45 via-[#111827] to-[#0c101b] border border-[#3b82f6]/25 p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div className="flex items-center gap-4 min-w-0">
-          <img
-            src={proxyMusicCover(radioData?.seedCover)}
-            alt={radioData?.seedTrack.title || 'Radio'}
-            onError={(e) => {
-              e.currentTarget.onerror = null;
-              e.currentTarget.src = FALLBACK_MUSIC_COVER;
-            }}
-            className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shadow-xl shrink-0 bg-[#111726]"
-          />
+    return (
+      <div className="space-y-6 pb-8 w-full max-w-full min-w-0 overflow-x-hidden">
+        {/* Compact Horizontal Radio Hero Card */}
+        <div className="rounded-xl bg-gradient-to-br from-[#1e3a8a]/45 via-[#111827] to-[#0c101b] border border-[#3b82f6]/25 p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <img
+              src={proxyMusicCover(radioData?.seedCover)}
+              alt={radioData?.seedTrack.title || 'Radio'}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = FALLBACK_MUSIC_COVER;
+              }}
+              className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shadow-xl shrink-0 bg-[#111726]"
+            />
 
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#60a5fa]">
-              <Radio className="w-3.5 h-3.5 shrink-0" />
-              <span>{tr('Playlist Radio Instant', 'Instant Radio Mix', 'Радио-Микс')}</span>
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#60a5fa]">
+                <Radio className="w-3.5 h-3.5 shrink-0" />
+                <span>{tr('Playlist Radio Instant', 'Instant Radio Mix', 'Радио-Микс')}</span>
+              </div>
+
+              <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>
+                {radioData?.title || tr('Se generează Radio...', 'Generating Radio...', 'Создание радио...')}
+              </h1>
+
+              <p className={`${MUSIC_TYPOGRAPHY.meta} truncate`}>
+                {radioData?.subtitle || ''}
+                {tracks.length > 0
+                  ? ` • ${tracks.length} ${tr('melodii similare', 'similar songs', 'похожих треков')}`
+                  : ''}
+              </p>
             </div>
-
-            <h1 className={`${MUSIC_TYPOGRAPHY.h1} truncate`}>
-              {radioData?.title || tr('Se generează Radio...', 'Generating Radio...', 'Создание радио...')}
-            </h1>
-
-            <p className={`${MUSIC_TYPOGRAPHY.meta} truncate`}>
-              {radioData?.subtitle || ''}
-              {tracks.length > 0
-                ? ` • ${tracks.length} ${tr('melodii similare', 'similar songs', 'похожих треков')}`
-                : ''}
-            </p>
           </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={tracks.length === 0}
-            onClick={() => {
-              if (isPlayingFromThisRadio) {
-                onTogglePlayPause();
-              } else if (tracks[0]) {
-                onPlayTrack(tracks[0], tracks);
-              }
-            }}
-            style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
-            className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
-          >
-            {isPlayingFromThisRadio && isPlaying ? (
-              <>
-                <Pause className="w-4 h-4 fill-current text-white" />
-                <span>{tr('Pauză Mix', 'Pause Mix', 'Пауза')}</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4 fill-current text-white" />
-                <span>{tr('Redă Mixul', 'Play Radio', 'Слушать микс')}</span>
-              </>
-            )}
-          </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={tracks.length === 0}
+              onClick={() => {
+                if (isPlayingFromThisRadio) {
+                  onTogglePlayPause();
+                } else if (tracks[0]) {
+                  onPlayTrack(tracks[0], tracks);
+                }
+              }}
+              style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+              className="h-10 px-5 rounded-full bg-[#2563eb] hover:scale-[1.03] disabled:opacity-50 text-white text-[13px] font-bold inline-flex items-center gap-2 shadow-lg transition-transform cursor-pointer"
+            >
+              {isPlayingFromThisRadio && isPlaying ? (
+                <>
+                  <Pause className="w-4 h-4 fill-current text-white" />
+                  <span>{tr('Pauză Mix', 'Pause Mix', 'Пауза')}</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-current text-white" />
+                  <span>{tr('Redă Mixul', 'Play Radio', 'Слушать микс')}</span>
+                </>
+              )}
+            </button>
 
-          <button
-            type="button"
-            onClick={onToggleShuffle}
-            className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${
-              isShuffle
+            <button
+              type="button"
+              onClick={onToggleShuffle}
+              className={`h-10 px-4 rounded-full text-[13px] font-semibold inline-flex items-center gap-1.5 border transition-colors cursor-pointer ${isShuffle
                 ? 'bg-[#1e3a8a]/45 border-[#60a5fa]/50 text-[#60a5fa]'
                 : 'bg-white/[0.08] border-white/10 text-white hover:bg-white/[0.15]'
-            }`}
-          >
-            <Shuffle className="w-4 h-4" />
-            <span>Shuffle</span>
-          </button>
+                }`}
+            >
+              <Shuffle className="w-4 h-4" />
+              <span>Shuffle</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={onRegenerateRadio}
-            className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>{tr('Regenerează', 'Refresh Mix', 'Обновить')}</span>
-          </button>
+            <button
+              type="button"
+              onClick={onRegenerateRadio}
+              className="h-10 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] border border-white/10 text-white text-[13px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>{tr('Regenerează', 'Refresh Mix', 'Обновить')}</span>
+            </button>
 
-          <CollectionOfflineDownloadButton tr={tr} tracks={tracks} />
-        </div>
-      </div>
-
-      {isLoading && tracks.length === 0 ? (
-        <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
-          <Loader2 className="w-5 h-5 animate-spin text-[#60a5fa]" />
-          <span>
-            {tr('Construim playlistul tău radio personalizat...', 'Building your personalized song radio...', 'Собираем ваш радио-плейлист...')}
-          </span>
-        </div>
-      ) : (
-        <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
-          <TrackTableHeader tr={tr} showAlbum />
-          <div className="p-1.5 space-y-0.5">
-            {tracks.map((track, idx) => (
-              <PremiumTrackRow
-                key={`rad_tr_${track.id}_${idx}`}
-                tr={tr}
-                track={track}
-                index={idx}
-                isCurrent={currentTrack?.id === track.id}
-                isPlaying={isPlaying}
-                isLiked={likedTracks.some((t) => t.id === track.id)}
-                showCover
-                showAlbum
-                onPlay={() => onPlayTrack(track, tracks)}
-                onToggleLike={() => onToggleLikeTrack(track)}
-                onOpenArtist={onOpenArtist}
-                onOpenAlbum={onOpenAlbum}
-                onStartRadio={onStartRadio}
-                onOpenSongStudio={onOpenSongStudio}
-                onOpenTrackMenu={onOpenTrackMenu}
-              />
-            ))}
+            <CollectionOfflineDownloadButton tr={tr} tracks={tracks} />
           </div>
         </div>
-      )}
-    </div>
-  );
-};
+
+        {isLoading && tracks.length === 0 ? (
+          <div className="py-10 flex items-center justify-center gap-2 text-xs sm:text-sm text-[#94a3b8]">
+            <Loader2 className="w-5 h-5 animate-spin text-[#60a5fa]" />
+            <span>
+              {tr('Construim playlistul tău radio personalizat...', 'Building your personalized song radio...', 'Собираем ваш радио-плейлист...')}
+            </span>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-[#0e121b]/95 border border-white/[0.09] overflow-hidden">
+            <TrackTableHeader tr={tr} showAlbum />
+            <div className="p-1.5 space-y-0.5">
+              {tracks.map((track, idx) => (
+                <PremiumTrackRow
+                  key={`rad_tr_${track.id}_${idx}`}
+                  tr={tr}
+                  track={track}
+                  index={idx}
+                  isCurrent={currentTrack?.id === track.id}
+                  isPlaying={isPlaying}
+                  isLiked={likedTracks.some((t) => t.id === track.id)}
+                  showCover
+                  showAlbum
+                  onPlay={() => onPlayTrack(track, tracks)}
+                  onToggleLike={() => onToggleLikeTrack(track)}
+                  onOpenArtist={onOpenArtist}
+                  onOpenAlbum={onOpenAlbum}
+                  onStartRadio={onStartRadio}
+                  onOpenSongStudio={onOpenSongStudio}
+                  onOpenTrackMenu={onOpenTrackMenu}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
 // ============================================================================
 // 4. SHARED STUDIO TABS (Studio / Synced Lyrics / Queue) — INLINE & FULLSCREEN
@@ -2045,31 +2056,30 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
       <button
         type="button"
         onClick={onToggleShuffle}
-        className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-white/[0.08] ${
-          isShuffle ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
-        }`}
+        className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-white/[0.08] ${isShuffle ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
+          }`}
         title={tr('Amestecare', 'Shuffle', 'Перемешать')}
       >
         <Shuffle className="w-4 h-4" />
       </button>
 
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-4 sm:gap-5">
         <button
           type="button"
           onClick={() => onSeek(Math.max(0, elapsedSec - 10))}
-          className="hidden sm:inline-flex w-9 h-9 rounded-full items-center justify-center text-white/65 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
+          className="hidden sm:inline-flex w-10 h-10 rounded-full items-center justify-center text-white/75 hover:text-white bg-white/[0.05] hover:bg-white/[0.12] active:scale-95 transition-all cursor-pointer touch-manipulation"
           title="-10s"
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className="w-[18px] h-[18px]" />
         </button>
 
         <button
           type="button"
           onClick={onPrevTrack}
-          className="w-9 h-9 rounded-full inline-flex items-center justify-center text-white hover:bg-white/[0.08] active:scale-95 transition-all cursor-pointer"
+          className="w-12 h-12 rounded-full bg-white/[0.07] hover:bg-white/[0.15] inline-flex items-center justify-center text-white active:scale-95 transition-all cursor-pointer touch-manipulation"
           title={tr('Piesa anterioară', 'Previous', 'Предыдущий трек')}
         >
-          <SkipBack className="w-5 h-5 fill-current" />
+          <SkipBack className="w-6 h-6 fill-current" />
         </button>
 
         <button
@@ -2082,41 +2092,40 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
             }
           }}
           style={{ backgroundColor: '#ffffff', color: '#000000' }}
-          className="w-12 h-12 rounded-full bg-white text-black inline-flex items-center justify-center shadow-xl active:scale-95 hover:scale-105 transition-all cursor-pointer shrink-0"
+          className="w-14 h-14 rounded-full bg-white text-black inline-flex items-center justify-center shadow-xl active:scale-95 hover:scale-105 transition-all cursor-pointer shrink-0 touch-manipulation"
           title={isActivelyPlayingThis ? 'Pause' : 'Play'}
         >
           {isActivelyPlayingThis ? (
-            <Pause className="w-5 h-5 fill-current text-black" />
+            <Pause className="w-6 h-6 fill-current text-black" />
           ) : (
-            <Play className="w-5 h-5 fill-current text-black ml-0.5" />
+            <Play className="w-6 h-6 fill-current text-black ml-0.5" />
           )}
         </button>
 
         <button
           type="button"
           onClick={onNextTrack}
-          className="w-9 h-9 rounded-full inline-flex items-center justify-center text-white hover:bg-white/[0.08] active:scale-95 transition-all cursor-pointer"
+          className="w-12 h-12 rounded-full bg-white/[0.07] hover:bg-white/[0.15] inline-flex items-center justify-center text-white active:scale-95 transition-all cursor-pointer touch-manipulation"
           title={tr('Piesa următoare', 'Next', 'Следующий трек')}
         >
-          <SkipForward className="w-5 h-5 fill-current" />
+          <SkipForward className="w-6 h-6 fill-current" />
         </button>
 
         <button
           type="button"
           onClick={() => onSeek(Math.min(effectiveDuration, elapsedSec + 10))}
-          className="hidden sm:inline-flex w-9 h-9 rounded-full items-center justify-center text-white/65 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
+          className="hidden sm:inline-flex w-10 h-10 rounded-full items-center justify-center text-white/75 hover:text-white bg-white/[0.05] hover:bg-white/[0.12] active:scale-95 transition-all cursor-pointer touch-manipulation"
           title="+10s"
         >
-          <RotateCw className="w-4 h-4" />
+          <RotateCw className="w-[18px] h-[18px]" />
         </button>
       </div>
 
       <button
         type="button"
         onClick={onToggleRepeat}
-        className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-white/[0.08] ${
-          isRepeat ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
-        }`}
+        className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-white/[0.08] ${isRepeat ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
+          }`}
         title={tr('Repetare', 'Repeat', 'Повтор')}
       >
         <Repeat className="w-4 h-4" />
@@ -2126,9 +2135,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
 
   return (
     <div
-      className={`flex flex-col w-full max-w-full min-w-0 overflow-x-hidden min-h-0 gap-3.5 ${
-        compact ? (activeTab === 'studio' ? 'my-auto' : 'flex-1 h-full') : ''
-      }`}
+      className={`flex flex-col w-full max-w-full min-w-0 overflow-x-hidden min-h-0 gap-3.5 ${compact ? (activeTab === 'studio' ? 'my-auto' : 'flex-1 h-full') : ''
+        }`}
     >
       {/* Studio Tabs Switcher */}
       <div
@@ -2152,11 +2160,10 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
               role="tab"
               aria-selected={selected}
               onClick={() => setActiveTab(id)}
-              className={`h-8 px-2 sm:px-3.5 rounded-full text-[11px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap flex-1 sm:flex-initial min-w-0 shrink-0 transition-all cursor-pointer focus:outline-none ${
-                selected
-                  ? 'bg-white text-black shadow'
-                  : 'text-white/80 hover:text-white'
-              }`}
+              className={`h-8 px-2 sm:px-3.5 rounded-full text-[11px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap flex-1 sm:flex-initial min-w-0 shrink-0 transition-all cursor-pointer focus:outline-none ${selected
+                ? 'bg-white text-black shadow'
+                : 'text-white/80 hover:text-white'
+                }`}
             >
               <Icon className="hidden min-[390px]:block w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
               <span>{label}</span>
@@ -2176,13 +2183,11 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
             <div className="relative">
               {isVinylMode ? (
                 <div
-                  className={`relative ${
-                    compact
-                      ? 'w-[min(70vw,34vh)] h-[min(70vw,34vh)] sm:w-[min(300px,36vh)] sm:h-[min(300px,36vh)]'
-                      : 'w-60 h-60 sm:w-72 sm:h-72'
-                  } rounded-full bg-gradient-to-br from-[#161f30] via-[#0b0f19] to-[#0e121b] p-3 shadow-[0_24px_60px_rgba(0,0,0,0.85)] border border-white/15 flex items-center justify-center ${
-                    isActivelyPlayingThis ? 'animate-[spin_10s_linear_infinite]' : ''
-                  }`}
+                  className={`relative ${compact
+                    ? 'w-[min(70vw,34vh)] h-[min(70vw,34vh)] sm:w-[min(300px,36vh)] sm:h-[min(300px,36vh)]'
+                    : 'w-60 h-60 sm:w-72 sm:h-72'
+                    } rounded-full bg-gradient-to-br from-[#161f30] via-[#0b0f19] to-[#0e121b] p-3 shadow-[0_24px_60px_rgba(0,0,0,0.85)] border border-white/15 flex items-center justify-center ${isActivelyPlayingThis ? 'animate-[spin_10s_linear_infinite]' : ''
+                    }`}
                 >
                   <div className="absolute inset-4 rounded-full border border-white/10 pointer-events-none" />
                   <div className="absolute inset-8 rounded-full border border-white/5 pointer-events-none" />
@@ -2199,11 +2204,10 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                 </div>
               ) : (
                 <div
-                  className={`relative ${
-                    compact
-                      ? 'w-[min(70vw,34vh)] h-[min(70vw,34vh)] sm:w-[min(300px,36vh)] sm:h-[min(300px,36vh)]'
-                      : 'w-60 h-60 sm:w-72 sm:h-72'
-                  } rounded-xl overflow-hidden shadow-[0_24px_60px_rgba(0,0,0,0.85)] border border-white/10 bg-[#111726]`}
+                  className={`relative ${compact
+                    ? 'w-[min(70vw,34vh)] h-[min(70vw,34vh)] sm:w-[min(300px,36vh)] sm:h-[min(300px,36vh)]'
+                    : 'w-60 h-60 sm:w-72 sm:h-72'
+                    } rounded-xl overflow-hidden shadow-[0_24px_60px_rgba(0,0,0,0.85)] border border-white/10 bg-[#111726]`}
                 >
                   <img
                     src={proxyMusicCover(track.cover || track.coverSmall)}
@@ -2277,9 +2281,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                 <button
                   type="button"
                   onClick={() => onToggleLikeTrack(track)}
-                  className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer hover:bg-white/[0.08] transition-all active:scale-90 shrink-0 ${
-                    isLiked ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
-                  }`}
+                  className={`w-9 h-9 rounded-full inline-flex items-center justify-center cursor-pointer hover:bg-white/[0.08] transition-all active:scale-90 shrink-0 ${isLiked ? 'text-[#60a5fa]' : 'text-white/65 hover:text-white'
+                    }`}
                   aria-label="Like Track"
                 >
                   <Heart className={`w-5 h-5 ${isLiked ? 'fill-current' : ''}`} />
@@ -2325,11 +2328,10 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                 <button
                   type="button"
                   onClick={onToggleVideoClip}
-                  className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
-                    isVideoClipMode
-                      ? 'bg-[#2563eb] text-white'
-                      : 'bg-white/[0.08] hover:bg-white/[0.15] text-white'
-                  }`}
+                  className={`h-8 px-3 rounded-full text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer ${isVideoClipMode
+                    ? 'bg-[#2563eb] text-white'
+                    : 'bg-white/[0.08] hover:bg-white/[0.15] text-white'
+                    }`}
                 >
                   <Tv className="w-3.5 h-3.5" />
                   <span>{isVideoClipMode ? tr('Clip Activ', 'Clip On', 'Клип') : 'Video HD'}</span>
@@ -2371,9 +2373,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
 
           <div
             ref={lyricsContainerRef}
-            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-gradient-to-b from-[#0f1d3a]/65 via-[#111622] to-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-3 ${
-              compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
-            }`}
+            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-gradient-to-b from-[#0f1d3a]/65 via-[#111622] to-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-3 ${compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
+              }`}
           >
             {lyricsLoading ? (
               <div className="h-full min-h-[220px] flex flex-col items-center justify-center gap-3 text-xs text-[#94a3b8]">
@@ -2395,13 +2396,12 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                       }
                       onSeek(line.timeSec);
                     }}
-                    className={`block w-full text-left font-bold transition-all duration-300 cursor-pointer rounded-lg px-2.5 py-1.5 focus:outline-none ${
-                      isActive
-                        ? 'text-lg sm:text-xl text-white bg-white/[0.08]'
-                        : isPast
+                    className={`block w-full text-left font-bold transition-all duration-300 cursor-pointer rounded-lg px-2.5 py-1.5 focus:outline-none ${isActive
+                      ? 'text-lg sm:text-xl text-white bg-white/[0.08]'
+                      : isPast
                         ? 'text-sm sm:text-base text-white/45 hover:text-white/80'
                         : 'text-sm sm:text-base text-white/75 hover:text-white'
-                    }`}
+                      }`}
                   >
                     {line.text}
                   </button>
@@ -2443,9 +2443,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
           className="flex-1 flex flex-col min-h-0 space-y-3"
         >
           <div
-            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-4 sm:p-5 space-y-4 ${
-              compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
-            }`}
+            className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-4 sm:p-5 space-y-4 ${compact ? 'min-h-[160px] max-h-[55dvh]' : 'min-h-[340px] max-h-[480px]'
+              }`}
           >
             {bioTabLoading && !encyclopedia ? (
               <div className="h-full min-h-[200px] flex flex-col items-center justify-center gap-2.5 text-xs text-[#94a3b8]">
@@ -2479,30 +2478,30 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                     encyclopedia?.artistActiveYears ||
                     encyclopedia?.artistTypeLabel ||
                     (encyclopedia?.artistStyles?.length || 0) > 0) && (
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      {encyclopedia?.artistOrigin && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                          <Globe className="w-3 h-3 text-[#60a5fa]" />
-                          <span>{encyclopedia.artistOrigin}</span>
-                        </span>
-                      )}
-                      {encyclopedia?.artistActiveYears && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                          <Calendar className="w-3 h-3 text-[#60a5fa]" />
-                          <span>{encyclopedia.artistActiveYears}</span>
-                        </span>
-                      )}
-                      {encyclopedia?.artistStyles?.slice(0, 3).map((st) => (
-                        <span
-                          key={st}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
-                        >
-                          <Award className="w-3 h-3" />
-                          <span>{st}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        {encyclopedia?.artistOrigin && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                            <Globe className="w-3 h-3 text-[#60a5fa]" />
+                            <span>{encyclopedia.artistOrigin}</span>
+                          </span>
+                        )}
+                        {encyclopedia?.artistActiveYears && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                            <Calendar className="w-3 h-3 text-[#60a5fa]" />
+                            <span>{encyclopedia.artistActiveYears}</span>
+                          </span>
+                        )}
+                        {encyclopedia?.artistStyles?.slice(0, 3).map((st) => (
+                          <span
+                            key={st}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
+                          >
+                            <Award className="w-3 h-3" />
+                            <span>{st}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   <p className="whitespace-pre-line text-xs sm:text-[13px] text-slate-300 leading-relaxed">
                     {encyclopedia?.artistBio ||
                       `${track.artist} • ${track.genre || 'Music'} (${track.year || 2025})`}
@@ -2554,9 +2553,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
           </div>
 
           <div
-            className={`flex-1 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-2 space-y-1 ${
-              compact ? 'min-h-[280px] max-h-[55vh]' : 'min-h-[340px] max-h-[480px]'
-            }`}
+            className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden rounded-xl bg-[#0e121b]/95 border border-white/10 p-2 space-y-1 ${compact ? 'min-h-[160px] max-h-[55dvh]' : 'min-h-[340px] max-h-[480px]'
+              }`}
           >
             {queue.length === 0 ? (
               <div className="py-12 text-center text-xs text-[#94a3b8]">
@@ -2568,9 +2566,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                 return (
                   <div
                     key={`q_${qTrack.id}_${idx}`}
-                    className={`px-2.5 py-2 rounded-lg flex items-center justify-between gap-2.5 transition-colors ${
-                      isCur ? 'bg-white/[0.12]' : 'hover:bg-white/[0.06]'
-                    }`}
+                    className={`px-2.5 py-2 rounded-lg flex items-center justify-between gap-2.5 transition-colors ${isCur ? 'bg-white/[0.12]' : 'hover:bg-white/[0.06]'
+                      }`}
                   >
                     <button
                       type="button"
@@ -2591,9 +2588,8 @@ export const SongStudioCore: React.FC<StudioTabsProps> = ({
                       />
                       <div className="min-w-0 flex-1">
                         <div
-                          className={`text-[13px] sm:text-sm font-semibold truncate ${
-                            isCur ? 'text-[#60a5fa]' : 'text-white'
-                          }`}
+                          className={`text-[13px] sm:text-sm font-semibold truncate ${isCur ? 'text-[#60a5fa]' : 'text-white'
+                            }`}
                         >
                           {qTrack.title}
                         </div>
@@ -2745,36 +2741,36 @@ export const SongStudioDetailView: React.FC<
               encyclopedia?.artistActiveYears ||
               encyclopedia?.artistTypeLabel ||
               (encyclopedia?.artistStyles?.length || 0) > 0) && (
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                {encyclopedia?.artistOrigin && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                    <Globe className="w-3 h-3 text-[#60a5fa]" />
-                    <span>{encyclopedia.artistOrigin}</span>
-                  </span>
-                )}
-                {encyclopedia?.artistActiveYears && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                    <Calendar className="w-3 h-3 text-[#60a5fa]" />
-                    <span>{encyclopedia.artistActiveYears}</span>
-                  </span>
-                )}
-                {encyclopedia?.artistTypeLabel && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
-                    <Users className="w-3 h-3 text-[#60a5fa]" />
-                    <span>{encyclopedia.artistTypeLabel}</span>
-                  </span>
-                )}
-                {encyclopedia?.artistStyles?.slice(0, 3).map((st) => (
-                  <span
-                    key={st}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
-                  >
-                    <Award className="w-3 h-3" />
-                    <span>{st}</span>
-                  </span>
-                ))}
-              </div>
-            )}
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  {encyclopedia?.artistOrigin && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                      <Globe className="w-3 h-3 text-[#60a5fa]" />
+                      <span>{encyclopedia.artistOrigin}</span>
+                    </span>
+                  )}
+                  {encyclopedia?.artistActiveYears && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                      <Calendar className="w-3 h-3 text-[#60a5fa]" />
+                      <span>{encyclopedia.artistActiveYears}</span>
+                    </span>
+                  )}
+                  {encyclopedia?.artistTypeLabel && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-slate-200">
+                      <Users className="w-3 h-3 text-[#60a5fa]" />
+                      <span>{encyclopedia.artistTypeLabel}</span>
+                    </span>
+                  )}
+                  {encyclopedia?.artistStyles?.slice(0, 3).map((st) => (
+                    <span
+                      key={st}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1e3a8a]/35 border border-[#3b82f6]/35 text-[#60a5fa] capitalize"
+                    >
+                      <Award className="w-3 h-3" />
+                      <span>{st}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
 
             {/* Artist Biography */}
             <div className="space-y-1.5 pt-1 border-t border-white/[0.09]">
@@ -2788,9 +2784,8 @@ export const SongStudioDetailView: React.FC<
               ) : (
                 <>
                   <p
-                    className={`whitespace-pre-line text-xs sm:text-[13px] text-slate-300 leading-relaxed ${
-                      bioExpanded ? '' : 'line-clamp-5'
-                    }`}
+                    className={`whitespace-pre-line text-xs sm:text-[13px] text-slate-300 leading-relaxed ${bioExpanded ? '' : 'line-clamp-5'
+                      }`}
                   >
                     {encyclopedia?.artistBio}
                   </p>
@@ -2912,9 +2907,8 @@ export const SongStudioDetailView: React.FC<
               {activeStoryText ? (
                 <>
                   <p
-                    className={`whitespace-pre-line text-xs sm:text-[13px] text-slate-300 leading-relaxed ${
-                      storyExpanded ? '' : 'line-clamp-5'
-                    }`}
+                    className={`whitespace-pre-line text-xs sm:text-[13px] text-slate-300 leading-relaxed ${storyExpanded ? '' : 'line-clamp-5'
+                      }`}
                   >
                     {activeStoryText}
                   </p>
@@ -2982,17 +2976,17 @@ export const PremiumFullscreenPlayerModal: React.FC<
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [onClose]);
 
-  return (
+  const fullscreenOverlay = (
     <div
-      data-music-root="true"
+      data-music-fullscreen-modal="true"
       role="dialog"
       aria-modal="true"
       aria-label="Spotify Now Playing Studio Fullscreen"
-      className="fixed inset-0 z-50 w-full max-w-[100vw] bg-[#080b12] flex flex-col justify-start overflow-y-auto overflow-x-hidden overscroll-x-none touch-pan-y animate-in fade-in slide-in-from-bottom duration-300 select-none"
+      className="fixed inset-0 z-[230] w-full max-w-[100vw] bg-[#080b12] flex flex-col justify-start overflow-y-auto overflow-x-hidden overscroll-x-none touch-pan-y animate-in fade-in slide-in-from-bottom duration-300 select-none"
       style={{
-        height: 'var(--ios-pwa-app-height, 100%)',
-        paddingTop: 'max(14px, var(--safe-top, env(safe-area-inset-top, 14px)))',
-        paddingBottom: 'var(--ios-pwa-nav-pb, max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.3)))',
+        height: 'var(--ios-pwa-app-height, 100dvh)',
+        paddingTop: 'max(10px, var(--safe-top, env(safe-area-inset-top, 10px)))',
+        paddingBottom: 'var(--ios-pwa-nav-pb, max(8px, env(safe-area-inset-bottom, 0px)))',
         paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
         paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
       }}
@@ -3036,7 +3030,25 @@ export const PremiumFullscreenPlayerModal: React.FC<
           </button>
         </div>
 
-        <div className="min-w-[2.5rem] shrink-0 flex items-center justify-end">
+        <div className="min-w-[2.5rem] shrink-0 flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              window.setTimeout(() => {
+                void toggleMusicPip();
+              }, 60);
+            }}
+            title={tr(
+              'MiniPlayer Picture-in-Picture (fereastră flotantă în afara paginii)',
+              'Picture-in-Picture MiniPlayer (floating window outside page)',
+              'Мини-плеер Картинка-в-картинке'
+            )}
+            aria-label={tr('MiniPlayer Picture-in-Picture', 'Picture-in-Picture MiniPlayer', 'Мини-плеер Картинка-в-картинке')}
+            className="hidden sm:inline-flex w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white/85 hover:text-white items-center justify-center transition-colors cursor-pointer shrink-0"
+          >
+            <PictureInPicture2 className="w-4 h-4" />
+          </button>
           {track.qualityTier && (
             <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-white/15 text-[#60a5fa]">
               {track.qualityTier}
@@ -3070,6 +3082,10 @@ export const PremiumFullscreenPlayerModal: React.FC<
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined'
+    ? createPortal(fullscreenOverlay, document.body)
+    : fullscreenOverlay;
 };
 
 // ============================================================================
@@ -3100,202 +3116,201 @@ export const TrackQuickActionsDialog: React.FC<{
   onOpenAlbum,
   onToggleLike,
 }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
+    const dialogRef = useRef<HTMLDialogElement | null>(null);
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
+    useEffect(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
 
-    if (track) {
-      if (!dialog.open) {
-        try {
-          dialog.showModal();
-        } catch {
-          // ignore if already open
+      if (track) {
+        if (!dialog.open) {
+          try {
+            dialog.showModal();
+          } catch {
+            // ignore if already open
+          }
         }
-      }
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [track]);
-
-  // Mandatory Safari light-dismiss fallback for browsers lacking <dialog closedby="any">
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog || 'closedBy' in HTMLDialogElement.prototype) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (event.target !== dialog) return;
-      const rect = dialog.getBoundingClientRect();
-      const isDialogContent =
-        rect.top <= event.clientY &&
-        event.clientY <= rect.top + rect.height &&
-        rect.left <= event.clientX &&
-        event.clientX <= rect.left + rect.width;
-      if (!isDialogContent) {
+      } else if (dialog.open) {
         dialog.close();
       }
-    };
+    }, [track]);
 
-    dialog.addEventListener('click', handleClickOutside);
-    return () => dialog.removeEventListener('click', handleClickOutside);
-  }, []);
+    // Mandatory Safari light-dismiss fallback for browsers lacking <dialog closedby="any">
+    useEffect(() => {
+      const dialog = dialogRef.current;
+      if (!dialog || 'closedBy' in HTMLDialogElement.prototype) return;
 
-  const offline = useOfflineMusicState();
-  const isOffline = track ? offline.isOffline(track) : false;
-  const isDownloading = track ? offline.getProgress(track) !== null : false;
+      const handleClickOutside = (event: MouseEvent) => {
+        if (event.target !== dialog) return;
+        const rect = dialog.getBoundingClientRect();
+        const isDialogContent =
+          rect.top <= event.clientY &&
+          event.clientY <= rect.top + rect.height &&
+          rect.left <= event.clientX &&
+          event.clientX <= rect.left + rect.width;
+        if (!isDialogContent) {
+          dialog.close();
+        }
+      };
 
-  if (!track) {
+      dialog.addEventListener('click', handleClickOutside);
+      return () => dialog.removeEventListener('click', handleClickOutside);
+    }, []);
+
+    const offline = useOfflineMusicState();
+    const isOffline = track ? offline.isOffline(track) : false;
+    const isDownloading = track ? offline.getProgress(track) !== null : false;
+
+    if (!track) {
+      return (
+        <dialog
+          ref={dialogRef}
+          {...({ closedby: 'any' } as Record<string, string>)}
+          aria-labelledby="track-actions-dialog-title"
+          className="hidden"
+        />
+      );
+    }
+
+    const actions: Array<{
+      label: string;
+      icon: React.FC<{ className?: string }>;
+      accent?: boolean;
+      onClick: () => void;
+    }> = [
+        {
+          label: tr('Redă acum', 'Play now', 'Слушать сейчас'),
+          icon: Play,
+          accent: true,
+          onClick: () => {
+            onPlayNow(track);
+            onClose();
+          },
+        },
+        {
+          label: tr('Redă următoarea în coadă', 'Play next in queue', 'Следующим в очередь'),
+          icon: Plus,
+          onClick: () => {
+            onPlayNext(track);
+            onClose();
+          },
+        },
+        {
+          label: isOffline
+            ? tr('Elimină din descărcări offline', 'Remove offline download', 'Удалить из загрузок')
+            : isDownloading
+              ? tr('Anulează descărcarea', 'Cancel download', 'Отменить загрузку')
+              : tr('Descarcă piesa offline', 'Download track offline', 'Скачать трек офлайн'),
+          icon: isOffline ? Trash2 : ArrowDownToLine,
+          accent: !isOffline,
+          onClick: () => {
+            void toggleTrackOffline(track);
+            onClose();
+          },
+        },
+        {
+          label: tr('Pornește Radio pentru piesă', 'Go to Song Radio', 'Радио по треку'),
+          icon: Radio,
+          accent: true,
+          onClick: () => {
+            onStartRadio(track);
+            onClose();
+          },
+        },
+        {
+          label: tr('Vezi Piesa & Versuri Live', 'Song Studio & Live Lyrics', 'Текст и Студия'),
+          icon: Mic2,
+          onClick: () => {
+            onOpenSongStudio(track);
+            onClose();
+          },
+        },
+        {
+          label: tr(`Mergi la Artist: ${track.artist}`, `Go to Artist: ${track.artist}`, `К артисту: ${track.artist}`),
+          icon: User,
+          onClick: () => {
+            onOpenArtist(track.artist, track.artistId);
+            onClose();
+          },
+        },
+        {
+          label: tr(`Mergi la Album: ${track.album || track.title}`, `Go to Album: ${track.album || track.title}`, `К альбому`),
+          icon: Disc,
+          onClick: () => {
+            onOpenAlbum(track.album || track.title, track.artist, track.albumId, track);
+            onClose();
+          },
+        },
+        {
+          label: isLiked
+            ? tr('Elimină din Melodii îndrăgite', 'Remove from Liked Songs', 'Удалить из Любимых')
+            : tr('Adaugă la Melodii îndrăgite', 'Save to Liked Songs', 'Добавить в Любимые'),
+          icon: Heart,
+          onClick: () => {
+            onToggleLike(track);
+            onClose();
+          },
+        },
+      ];
+
     return (
       <dialog
         ref={dialogRef}
         {...({ closedby: 'any' } as Record<string, string>)}
         aria-labelledby="track-actions-dialog-title"
-        className="hidden"
-      />
-    );
-  }
-
-  const actions: Array<{
-    label: string;
-    icon: React.FC<{ className?: string }>;
-    accent?: boolean;
-    onClick: () => void;
-  }> = [
-    {
-      label: tr('Redă acum', 'Play now', 'Слушать сейчас'),
-      icon: Play,
-      accent: true,
-      onClick: () => {
-        onPlayNow(track);
-        onClose();
-      },
-    },
-    {
-      label: tr('Redă următoarea în coadă', 'Play next in queue', 'Следующим в очередь'),
-      icon: Plus,
-      onClick: () => {
-        onPlayNext(track);
-        onClose();
-      },
-    },
-    {
-      label: isOffline
-        ? tr('Elimină din descărcări offline', 'Remove offline download', 'Удалить из загрузок')
-        : isDownloading
-        ? tr('Anulează descărcarea', 'Cancel download', 'Отменить загрузку')
-        : tr('Descarcă piesa offline', 'Download track offline', 'Скачать трек офлайн'),
-      icon: isOffline ? Trash2 : ArrowDownToLine,
-      accent: !isOffline,
-      onClick: () => {
-        void toggleTrackOffline(track);
-        onClose();
-      },
-    },
-    {
-      label: tr('Pornește Radio pentru piesă', 'Go to Song Radio', 'Радио по треку'),
-      icon: Radio,
-      accent: true,
-      onClick: () => {
-        onStartRadio(track);
-        onClose();
-      },
-    },
-    {
-      label: tr('Vezi Piesa & Versuri Live', 'Song Studio & Live Lyrics', 'Текст и Студия'),
-      icon: Mic2,
-      onClick: () => {
-        onOpenSongStudio(track);
-        onClose();
-      },
-    },
-    {
-      label: tr(`Mergi la Artist: ${track.artist}`, `Go to Artist: ${track.artist}`, `К артисту: ${track.artist}`),
-      icon: User,
-      onClick: () => {
-        onOpenArtist(track.artist, track.artistId);
-        onClose();
-      },
-    },
-    {
-      label: tr(`Mergi la Album: ${track.album || track.title}`, `Go to Album: ${track.album || track.title}`, `К альбому`),
-      icon: Disc,
-      onClick: () => {
-        onOpenAlbum(track.album || track.title, track.artist, track.albumId, track);
-        onClose();
-      },
-    },
-    {
-      label: isLiked
-        ? tr('Elimină din Melodii îndrăgite', 'Remove from Liked Songs', 'Удалить из Любимых')
-        : tr('Adaugă la Melodii îndrăgite', 'Save to Liked Songs', 'Добавить в Любимые'),
-      icon: Heart,
-      onClick: () => {
-        onToggleLike(track);
-        onClose();
-      },
-    },
-  ];
-
-  return (
-    <dialog
-      ref={dialogRef}
-      {...({ closedby: 'any' } as Record<string, string>)}
-      aria-labelledby="track-actions-dialog-title"
-      onClose={onClose}
-      onCancel={(e) => {
-        e.stopPropagation();
-      }}
-      className="m-auto w-[92vw] max-w-md rounded-2xl bg-[#0e1320] text-white border border-white/15 p-0 shadow-[0_24px_64px_rgba(0,0,0,0.9)] backdrop:bg-black/75 backdrop:backdrop-blur-sm overflow-hidden"
-    >
-      <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.03]">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <img
-            src={proxyMusicCover(track.coverSmall || track.cover)}
-            alt={track.title}
-            onError={(e) => {
-              e.currentTarget.onerror = null;
-              e.currentTarget.src = FALLBACK_MUSIC_COVER;
-            }}
-            className="w-12 h-12 rounded-lg object-cover shrink-0 shadow"
-          />
-          <div className="min-w-0">
-            <h3 id="track-actions-dialog-title" className="text-sm font-black text-white truncate">
-              {track.title}
-            </h3>
-            <p className="text-xs text-[#cbd5e1] truncate">{track.artist}</p>
+        onClose={onClose}
+        onCancel={(e) => {
+          e.stopPropagation();
+        }}
+        className="m-auto w-[92vw] max-w-md rounded-2xl bg-[#0e1320] text-white border border-white/15 p-0 shadow-[0_24px_64px_rgba(0,0,0,0.9)] backdrop:bg-black/75 backdrop:backdrop-blur-sm overflow-hidden"
+      >
+        <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.03]">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <img
+              src={proxyMusicCover(track.coverSmall || track.cover)}
+              alt={track.title}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = FALLBACK_MUSIC_COVER;
+              }}
+              className="w-12 h-12 rounded-lg object-cover shrink-0 shadow"
+            />
+            <div className="min-w-0">
+              <h3 id="track-actions-dialog-title" className="text-sm font-black text-white truncate">
+                {track.title}
+              </h3>
+              <p className="text-xs text-[#cbd5e1] truncate">{track.artist}</p>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer shrink-0"
+            aria-label={tr('Închide', 'Close', 'Закрыть')}
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer shrink-0"
-          aria-label={tr('Închide', 'Close', 'Закрыть')}
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
 
-      <div className="p-2 divide-y divide-white/[0.04]">
-        {actions.map((act) => {
-          const Icon = act.icon;
-          return (
-            <button
-              key={act.label}
-              type="button"
-              onClick={act.onClick}
-              className="w-full px-3.5 py-3 rounded-xl flex items-center gap-3 text-left text-xs sm:text-sm font-semibold hover:bg-white/[0.08] focus:outline-none transition-colors cursor-pointer"
-            >
-              <Icon
-                className={`w-4 h-4 shrink-0 ${
-                  act.accent ? 'text-[#60a5fa]' : 'text-[#cbd5e1]'
-                }`}
-              />
-              <span className="truncate">{act.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </dialog>
-  );
-};
+        <div className="p-2 divide-y divide-white/[0.04]">
+          {actions.map((act) => {
+            const Icon = act.icon;
+            return (
+              <button
+                key={act.label}
+                type="button"
+                onClick={act.onClick}
+                className="w-full px-3.5 py-3 rounded-xl flex items-center gap-3 text-left text-xs sm:text-sm font-semibold hover:bg-white/[0.08] focus:outline-none transition-colors cursor-pointer"
+              >
+                <Icon
+                  className={`w-4 h-4 shrink-0 ${act.accent ? 'text-[#60a5fa]' : 'text-[#cbd5e1]'
+                    }`}
+                />
+                <span className="truncate">{act.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </dialog>
+    );
+  };

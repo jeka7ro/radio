@@ -55,6 +55,7 @@ import {
   getActiveProfileMediaPrefs,
   saveActiveProfileMediaPrefs,
   hasLocalLoopbackBridge,
+  isDirectLocalHost,
   isLocalHomeServer,
 } from '../../services/deviceContinuityService';
 import { buildFileListApiUrl } from '../../views/smartTvLampaHelpers';
@@ -373,12 +374,7 @@ function buildProxyStreamUrl(
   if (referrer) params.set('ref', referrer);
   if (userAgent) params.set('ua', userAgent);
   const rel = `/api/tv-proxy?${params.toString()}`;
-  const onLocalOrigin =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname.startsWith('192.168.') ||
-      window.location.hostname.startsWith('10.'));
+  const onLocalOrigin = isDirectLocalHost();
   if (!forceRelativeCloud && !onLocalOrigin && hasLocalLoopbackBridge()) {
     return buildFileListApiUrl(rel);
   }
@@ -428,8 +424,8 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   );
   const [isSplitFullscreen, setIsSplitFullscreen] = useState(false);
   const effectiveTvFullMode =
-    !isMobilePhone &&
-    (isFullModeExpanded || (inlineEmbeddedMode ? false : isSmartTvFullMode));
+    isFullModeExpanded ||
+    (!isMobilePhone && (inlineEmbeddedMode ? false : isSmartTvFullMode));
 
   const storeTvChannel = useRadioStore((state) => state.currentTvChannel);
   const tvQueue = useRadioStore((state) => state.tvQueue);
@@ -649,9 +645,6 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
   };
 
   const enterTvFullMode = () => {
-    if (typeof window !== 'undefined' && window.innerWidth < 640) {
-      return;
-    }
     setIsFullModeExpanded(true);
     setIsSidePanelOpen(false);
     setIsInfoPanelOpen(false);
@@ -666,9 +659,22 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
     const now = Date.now();
     if (now - tvFullBackBtnAtRef.current < 380) return;
     tvFullBackBtnAtRef.current = now;
+    if (typeof document !== 'undefined') {
+      const doc = document as Document & {
+        webkitFullscreenElement?: Element | null;
+        webkitExitFullscreen?: () => Promise<void> | void;
+      };
+      if (doc.fullscreenElement && doc.exitFullscreen) {
+        void doc.exitFullscreen().catch(() => {});
+      } else if (doc.webkitFullscreenElement && doc.webkitExitFullscreen) {
+        void doc.webkitExitFullscreen();
+      }
+    }
     setIsFullModeExpanded(false);
     setIsSplitFullscreen(false);
-    setIsSidePanelOpen(true);
+    setIsSidePanelOpen(
+      isMobilePhone || (typeof window !== 'undefined' ? window.innerWidth >= 1024 : true)
+    );
     setIsInfoPanelOpen(true);
     setIsOsdOverlayOpen(false);
     window.setTimeout(() => {
@@ -1997,16 +2003,18 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       style={
         effectiveTvFullMode
           ? {
-            height: '100dvh',
-            maxHeight: '100dvh',
+            height: 'var(--ios-pwa-app-height, 100dvh)',
+            minHeight: 'var(--ios-pwa-app-height, 100dvh)',
+            maxHeight: 'var(--ios-pwa-app-height, 100dvh)',
           }
           : undefined
       }
+      data-tv-inline-shell={inlineEmbeddedMode && !effectiveTvFullMode && !isSplitFullscreen ? 'true' : undefined}
       className={
         effectiveTvFullMode
-          ? 'fixed inset-0 z-[190] m-0 w-full h-full max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+          ? 'fixed inset-0 z-[190] m-0 w-full h-full max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden flex flex-col'
           : inlineEmbeddedMode && isSplitFullscreen
-            ? 'fixed inset-0 z-[190] m-0 w-screen h-screen max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+            ? 'fixed inset-0 z-[190] m-0 w-full h-[100dvh] max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
             : inlineEmbeddedMode
               ? 'relative w-full h-[calc(100dvh-7.75rem)] md:h-[calc(100dvh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
               : 'fixed inset-0 z-[190] w-full max-w-[100vw] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-0 sm:p-3 overflow-y-auto overflow-x-hidden overscroll-x-none no-scrollbar'
@@ -2015,12 +2023,12 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
       <div
         className={
           effectiveTvFullMode
-            ? 'relative flex flex-col w-full h-full overflow-hidden bg-black'
+            ? 'relative flex flex-col flex-1 min-h-0 w-full h-full overflow-hidden bg-black'
             : inlineEmbeddedMode && isSplitFullscreen
               ? 'relative flex flex-col w-full h-full overflow-hidden bg-[#090d16]'
               : inlineEmbeddedMode
                 ? 'relative flex flex-col w-full h-full flex-1 min-h-0 overflow-hidden bg-[#090d16]'
-                : 'mx-auto m-0 sm:my-auto w-screen h-[100dvh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94vh] overflow-hidden'
+                : 'mx-auto m-0 sm:my-auto w-screen h-[100dvh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94dvh] overflow-hidden'
         }
       >
         {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}
@@ -2153,17 +2161,13 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 onClick={() => {
                   if (
                     typeof window !== 'undefined' &&
-                    (isMobilePhone ||
-                      window.innerWidth < 640 ||
-                      /iPhone|iPad|iPod/i.test(navigator.userAgent))
+                    isMobilePhone &&
+                    !/iPhone|iPad|iPod/i.test(navigator.userAgent)
                   ) {
                     handleFullscreen();
                     return;
                   }
-                  setIsFullModeExpanded(true);
-                  setIsSidePanelOpen(false);
-                  setIsInfoPanelOpen(false);
-                  wakeTvOsd();
+                  enterTvFullMode();
                 }}
                 aria-label="Full Mode TV"
                 title="Ecran Complet (Player Nativ pe Mobil / Full Mode pe TV)"
@@ -2217,19 +2221,19 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         )}
 
         {/* SMART BODY: Sticky Video + Compact EPG on Top + Full-Height Scrollable Channel List on Mobile (<1024px) | Strict 2/3 Left + 1/3 Right Flex-Row on Desktop/TV */}
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row h-full">
-          {/* LEFT COLUMN (2/3 of screen on Desktop/TV; compact shrink-0 video + EPG header on Mobile): 16:9 Video Player + Controls + EPG Now/Next */}
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row w-full h-full">
+          {/* LEFT COLUMN (2/3 of screen on Desktop/TV; full height in Full Mode across all viewports) */}
           <div
             className={`${showSideColumn
-              ? 'lg:w-2/3 xl:w-2/3 lg:h-full'
-              : 'lg:w-full lg:h-full'
-              } flex flex-col shrink-0 lg:flex-1 lg:shrink lg:min-h-0 lg:overflow-hidden no-scrollbar bg-[#090d16]`}
+              ? 'shrink-0 lg:w-2/3 xl:w-2/3 lg:h-full lg:flex-1 lg:shrink lg:min-h-0 lg:overflow-hidden bg-[#090d16]'
+              : 'w-full h-full flex-1 min-h-0 overflow-hidden bg-black'
+              } flex flex-col no-scrollbar`}
           >
             {/* Video Area (Full height in TV Full Mode, or flex-1 above compact EPG in Split-View so EPG + Upcoming Shows are never pushed off screen) */}
             <div
               ref={videoContainerRef}
               className={`group/video relative w-full bg-black flex items-center justify-center overflow-hidden ${effectiveTvFullMode && !showSideColumn && !isInfoPanelOpen
-                ? 'flex-1 min-h-0'
+                ? 'h-full flex-1 min-h-0'
                 : 'aspect-video shrink-0 lg:aspect-auto lg:flex-1 lg:min-h-0'
                 }`}
             >
@@ -2381,6 +2385,10 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                       videoRef.current.muted = false;
                       setIsAutoMuted(false);
                     }
+                    if (isMobilePhone && !isTvOsdVisible) {
+                      wakeTvOsd();
+                      return;
+                    }
                     setOsdViewMode('channels');
                     setIsOsdOverlayOpen(true);
                   }}
@@ -2406,10 +2414,17 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 !isOsdOverlayOpen && (
                   <div
                     style={{
-                      top: 'max(1.25rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
-                      right: 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
+                      top: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.35rem))'
+                        : 'max(1.25rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
+                      right: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.35rem))'
+                        : 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
+                      left: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.35rem))'
+                        : 'auto',
                     }}
-                    className="absolute top-5 right-6 z-30 flex items-center gap-2"
+                    className="absolute top-3 sm:top-5 right-3 sm:right-6 z-30 flex items-center justify-end gap-1.5 sm:gap-2"
                   >
                     <button
                       type="button"
@@ -2492,21 +2507,29 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 videoStatus !== 'loading' &&
                 !isOsdOverlayOpen && (
                   <div
+                    data-tv-fullscreen-osd-bar="true"
                     onClick={() => {
                       if (Date.now() - osdClosedAtRef.current < 320) return;
                       setOsdViewMode('channels');
                       setIsOsdOverlayOpen(true);
                     }}
                     style={{
-                      bottom: 'max(1.25rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.25rem))',
-                      left: 'max(1.5rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
-                      right: 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
+                      top: 'auto',
+                      bottom: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.25rem))'
+                        : 'max(1.25rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.25rem))',
+                      left: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.25rem))'
+                        : 'max(1.5rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
+                      right: isMobilePhone
+                        ? 'max(0.75rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.25rem))'
+                        : 'max(1.5rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
                       backgroundColor: 'rgba(10, 15, 28, 0.92)',
                       border: '1px solid rgba(148, 163, 184, 0.22)',
                       borderRadius: '24px',
                       boxShadow: '0 24px 64px rgba(0, 0, 0, 0.8)',
                     }}
-                    className="absolute bottom-5 inset-x-6 z-30 rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden cursor-pointer select-none"
+                    className="absolute bottom-3 sm:bottom-5 inset-x-3 sm:inset-x-6 z-30 rounded-2xl sm:rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden cursor-pointer select-none"
                   >
                     {/* Top Edge Full-Width EPG / Archive Progress Line (clickable to seek when playing from Archive) */}
                     <div
@@ -2535,251 +2558,326 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                       />
                     </div>
 
-                    <div
-                      style={{
-                        display: 'table',
-                        tableLayout: 'fixed',
-                        width: '100%',
-                        padding: '12px 22px',
-                      }}
-                    >
-                      {/* Left (26%): Channel Number + Favorite Star + Channel Name */}
-                      <div
-                        style={{
-                          display: 'table-cell',
-                          width: '26%',
-                          verticalAlign: 'middle',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          paddingRight: '16px',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: '22px',
-                            fontWeight: 800,
-                            color: '#ffffff',
-                            marginRight: '10px',
-                            verticalAlign: 'middle',
-                          }}
-                        >
-                          {Math.max(
-                            1,
-                            tvQueue.findIndex(
-                              (c) => c.id === currentTvChannel.id
-                            ) + 1
-                          )}
-                        </span>
-                        {isFavorite && (
-                          <span
-                            style={{
-                              color: '#fbbf24',
-                              fontSize: '18px',
-                              marginRight: '8px',
-                              verticalAlign: 'middle',
-                            }}
-                          >
-                          </span>
-                        )}
-                        <span
-                          style={{
-                            fontSize: '20px',
-                            fontWeight: 700,
-                            color: '#ffffff',
-                            verticalAlign: 'middle',
-                          }}
-                        >
-                          {currentTvChannel.name}
-                        </span>
-                      </div>
+                    {isMobilePhone ? (
+                      <div className="px-3.5 py-2.5 space-y-1">
+                        {/* Mobile Row 1: # + Fav + Channel Name | Resolution + Clock */}
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center min-w-0">
+                            <span className="text-xs font-extrabold text-zinc-400 mr-1.5 shrink-0 tabular-nums">
+                              {Math.max(
+                                1,
+                                tvQueue.findIndex(
+                                  (c) => c.id === currentTvChannel.id
+                                ) + 1
+                              )}
+                            </span>
+                            {isFavorite && (
+                              <span
+                                className="text-amber-400 text-xs mr-1 shrink-0"
+                                aria-hidden="true"
+                              >
+                                ★
+                              </span>
+                            )}
+                            <span className="text-sm font-extrabold text-white truncate">
+                              {currentTvChannel.name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[11px] font-bold text-sky-400 shrink-0 tabular-nums">
+                              {videoResolution ||
+                                currentTvChannel.resolution ||
+                                '1920x1080'}
+                            </span>
+                            <span className="text-xs font-bold text-zinc-200 tabular-nums shrink-0">
+                              {new Date().toLocaleTimeString('ro-RO', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                        </div>
 
-                      {/* Center (60%): Now Playing & Next EPG Programmes */}
+                        {/* Mobile Row 2: Current EPG/Archive Time & Title | Remaining Time */}
+                        {(activeArchiveProg || epg?.now) && (
+                          <div className="flex items-center justify-between gap-2 text-xs text-zinc-300 min-w-0">
+                            <span className="truncate">
+                              <span className="tabular-nums text-zinc-400 mr-1.5">
+                                {activeArchiveProg
+                                  ? `${formatEpgTime(activeArchiveProg.start)}–${formatEpgTime(activeArchiveProg.stop)}`
+                                  : epg?.now
+                                    ? `${formatEpgTime(epg.now.start)}–${formatEpgTime(epg.now.stop)}`
+                                    : ''}
+                              </span>
+                              <span className="font-semibold text-zinc-100">
+                                {activeArchiveProg
+                                  ? `[ARHIVĂ] ${activeArchiveProg.title}`
+                                  : epg?.now?.title || ''}
+                              </span>
+                            </span>
+                            <span
+                              className={`shrink-0 font-semibold tabular-nums ${
+                                activeArchiveProg
+                                  ? 'text-amber-300'
+                                  : 'text-zinc-300'
+                              }`}
+                            >
+                              {activeArchiveProg
+                                ? `${formatArchiveClock(archiveElapsedSec)} / ${formatArchiveClock(archiveTotalSec)}`
+                                : epg?.now
+                                  ? `+${epgStats.remainingMin}m`
+                                  : ''}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
                       <div
                         style={{
-                          display: 'table-cell',
-                          width: '60%',
-                          verticalAlign: 'middle',
-                          paddingRight: '16px',
+                          display: 'table',
+                          tableLayout: 'fixed',
+                          width: '100%',
+                          padding: '12px 22px',
                         }}
                       >
-                        {/* Row 1: Current Programme */}
+                        {/* Left (26%): Channel Number + Favorite Star + Channel Name */}
                         <div
                           style={{
-                            display: 'table',
-                            tableLayout: 'fixed',
-                            width: '100%',
-                            marginBottom: '4px',
+                            display: 'table-cell',
+                            width: '26%',
+                            verticalAlign: 'middle',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            paddingRight: '16px',
                           }}
                         >
                           <span
                             style={{
-                              display: 'table-cell',
-                              width: '135px',
-                              fontSize: '16px',
-                              color: '#e4e4e7',
-                              whiteSpace: 'nowrap',
+                              fontSize: '22px',
+                              fontWeight: 800,
+                              color: '#ffffff',
+                              marginRight: '10px',
                               verticalAlign: 'middle',
                             }}
                           >
-                            {activeArchiveProg
-                              ? `${formatEpgTime(activeArchiveProg.start)} - ${formatEpgTime(activeArchiveProg.stop)}`
-                              : epg?.now
-                                ? `${formatEpgTime(epg.now.start)} - ${formatEpgTime(epg.now.stop)}`
-                                : ''}
+                            {Math.max(
+                              1,
+                              tvQueue.findIndex(
+                                (c) => c.id === currentTvChannel.id
+                              ) + 1
+                            )}
                           </span>
+                          {isFavorite && (
+                            <span
+                              style={{
+                                color: '#fbbf24',
+                                fontSize: '18px',
+                                marginRight: '8px',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                            </span>
+                          )}
                           <span
                             style={{
-                              display: 'table-cell',
+                              fontSize: '20px',
+                              fontWeight: 700,
+                              color: '#ffffff',
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            {currentTvChannel.name}
+                          </span>
+                        </div>
+
+                        {/* Center (60%): Now Playing & Next EPG Programmes */}
+                        <div
+                          style={{
+                            display: 'table-cell',
+                            width: '60%',
+                            verticalAlign: 'middle',
+                            paddingRight: '16px',
+                          }}
+                        >
+                          {/* Row 1: Current Programme */}
+                          <div
+                            style={{
+                              display: 'table',
+                              tableLayout: 'fixed',
+                              width: '100%',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                width: '135px',
+                                fontSize: '16px',
+                                color: '#e4e4e7',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              {activeArchiveProg
+                                ? `${formatEpgTime(activeArchiveProg.start)} - ${formatEpgTime(activeArchiveProg.stop)}`
+                                : epg?.now
+                                  ? `${formatEpgTime(epg.now.start)} - ${formatEpgTime(epg.now.stop)}`
+                                  : ''}
+                            </span>
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                fontSize: '17px',
+                                fontWeight: 700,
+                                color: '#ffffff',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                verticalAlign: 'middle',
+                                paddingRight: '10px',
+                              }}
+                            >
+                              {activeArchiveProg
+                                ? `[ARHIVĂ] ${activeArchiveProg.title}`
+                                : epg?.now?.title || ''}
+                            </span>
+                            <span
+                              style={{
+                                display: 'table-cell',
+                                width: '115px',
+                                textAlign: 'right',
+                                fontSize: '15px',
+                                color: activeArchiveProg ? '#fbbf24' : '#e4e4e7',
+                                fontWeight: activeArchiveProg ? 700 : 400,
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle',
+                              }}
+                            >
+                              {activeArchiveProg
+                                ? `${formatArchiveClock(archiveElapsedSec)} / ${formatArchiveClock(archiveTotalSec)}`
+                                : epg?.now
+                                  ? `+${epgStats.remainingMin}`
+                                  : ''}
+                            </span>
+                          </div>
+
+                          {/* Row 2: Next Programme (from Archive when playing Catchup, or Live Upcoming) */}
+                          {(() => {
+                            const nextProg = activeArchiveProg
+                              ? archiveNextProgrammes[0]
+                              : epg?.upcoming?.[0];
+                            return (
+                              <div
+                                style={{
+                                  display: 'table',
+                                  tableLayout: 'fixed',
+                                  width: '100%',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: 'table-cell',
+                                    width: '135px',
+                                    fontSize: '15px',
+                                    color: '#a1a1aa',
+                                    whiteSpace: 'nowrap',
+                                    verticalAlign: 'middle',
+                                  }}
+                                >
+                                  {nextProg
+                                    ? `${formatEpgTime(nextProg.start)} - ${formatEpgTime(nextProg.stop)}`
+                                    : ''}
+                                </span>
+                                <span
+                                  style={{
+                                    display: 'table-cell',
+                                    fontSize: '15px',
+                                    fontWeight: 400,
+                                    color: '#d4d4d8',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    verticalAlign: 'middle',
+                                    paddingRight: '10px',
+                                  }}
+                                >
+                                  {nextProg?.title || ''}
+                                </span>
+                                <span
+                                  style={{
+                                    display: 'table-cell',
+                                    width: '115px',
+                                    textAlign: 'right',
+                                    fontSize: '15px',
+                                    color: '#a1a1aa',
+                                    whiteSpace: 'nowrap',
+                                    verticalAlign: 'middle',
+                                  }}
+                                >
+                                  {activeArchiveProg
+                                    ? `-${archiveRemainingMin}m (${archiveProgressPct}%)`
+                                    : nextProg
+                                      ? `+${Math.max(1, Math.round((nextProg.stop - nextProg.start) / 60000))}`
+                                      : ''}
+                                </span>
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Right (14%): Wall Clock + Channel Logo + Video Resolution */}
+                        <div
+                          style={{
+                            display: 'table-cell',
+                            width: '14%',
+                            verticalAlign: 'middle',
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <div
+                            style={{
                               fontSize: '17px',
                               fontWeight: 700,
                               color: '#ffffff',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              verticalAlign: 'middle',
-                              paddingRight: '10px',
+                              lineHeight: 1.2,
                             }}
                           >
-                            {activeArchiveProg
-                              ? `[ARHIVĂ] ${activeArchiveProg.title}`
-                              : epg?.now?.title || ''}
-                          </span>
-                          <span
-                            style={{
-                              display: 'table-cell',
-                              width: '115px',
-                              textAlign: 'right',
-                              fontSize: '15px',
-                              color: activeArchiveProg ? '#fbbf24' : '#e4e4e7',
-                              fontWeight: activeArchiveProg ? 700 : 400,
-                              whiteSpace: 'nowrap',
-                              verticalAlign: 'middle',
-                            }}
-                          >
-                            {activeArchiveProg
-                              ? `${formatArchiveClock(archiveElapsedSec)} / ${formatArchiveClock(archiveTotalSec)}`
-                              : epg?.now
-                                ? `+${epgStats.remainingMin}`
-                                : ''}
-                          </span>
-                        </div>
-
-                        {/* Row 2: Next Programme (from Archive when playing Catchup, or Live Upcoming) */}
-                        {(() => {
-                          const nextProg = activeArchiveProg
-                            ? archiveNextProgrammes[0]
-                            : epg?.upcoming?.[0];
-                          return (
-                            <div
-                              style={{
-                                display: 'table',
-                                tableLayout: 'fixed',
-                                width: '100%',
-                              }}
-                            >
-                              <span
-                                style={{
-                                  display: 'table-cell',
-                                  width: '135px',
-                                  fontSize: '15px',
-                                  color: '#a1a1aa',
-                                  whiteSpace: 'nowrap',
-                                  verticalAlign: 'middle',
-                                }}
-                              >
-                                {nextProg
-                                  ? `${formatEpgTime(nextProg.start)} - ${formatEpgTime(nextProg.stop)}`
-                                  : ''}
-                              </span>
-                              <span
-                                style={{
-                                  display: 'table-cell',
-                                  fontSize: '15px',
-                                  fontWeight: 400,
-                                  color: '#d4d4d8',
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  verticalAlign: 'middle',
-                                  paddingRight: '10px',
-                                }}
-                              >
-                                {nextProg?.title || ''}
-                              </span>
-                              <span
-                                style={{
-                                  display: 'table-cell',
-                                  width: '115px',
-                                  textAlign: 'right',
-                                  fontSize: '15px',
-                                  color: '#a1a1aa',
-                                  whiteSpace: 'nowrap',
-                                  verticalAlign: 'middle',
-                                }}
-                              >
-                                {activeArchiveProg
-                                  ? `-${archiveRemainingMin}m (${archiveProgressPct}%)`
-                                  : nextProg
-                                    ? `+${Math.max(1, Math.round((nextProg.stop - nextProg.start) / 60000))}`
-                                    : ''}
-                              </span>
-                            </div>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Right (14%): Wall Clock + Channel Logo + Video Resolution */}
-                      <div
-                        style={{
-                          display: 'table-cell',
-                          width: '14%',
-                          verticalAlign: 'middle',
-                          textAlign: 'right',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: '17px',
-                            fontWeight: 700,
-                            color: '#ffffff',
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {new Date().toLocaleTimeString('ro-RO', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </div>
-                        {effectiveLogo && (
-                          <div style={{ margin: '3px 0' }}>
-                            <img
-                              src={effectiveLogo}
-                              alt=""
-                              style={{
-                                height: '22px',
-                                maxWidth: '80px',
-                                objectFit: 'contain',
-                                display: 'inline-block',
-                              }}
-                            />
+                            {new Date().toLocaleTimeString('ro-RO', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
                           </div>
-                        )}
-                        <div
-                          style={{
-                            fontSize: '13px',
-                            fontWeight: 700,
-                            color: '#38bdf8',
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {videoResolution ||
-                            currentTvChannel.resolution ||
-                            '1920x1080'}
+                          {effectiveLogo && (
+                            <div style={{ margin: '3px 0' }}>
+                              <img
+                                src={effectiveLogo}
+                                alt=""
+                                style={{
+                                  height: '22px',
+                                  maxWidth: '80px',
+                                  objectFit: 'contain',
+                                  display: 'inline-block',
+                                }}
+                              />
+                            </div>
+                          )}
+                          <div
+                            style={{
+                              fontSize: '13px',
+                              fontWeight: 700,
+                              color: '#38bdf8',
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {videoResolution ||
+                              currentTvChannel.resolution ||
+                              '1920x1080'}
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
@@ -2809,9 +2907,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                 >
                   <div
                     style={{
-                      width: '86vw',
+                      width: isMobilePhone ? '94vw' : '86vw',
                       maxWidth: '880px',
-                      height: '78vh',
+                      height: isMobilePhone ? '82%' : '78vh',
                       maxHeight: '600px',
                       display: 'flex',
                       flexDirection: 'column',
@@ -3093,7 +3191,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
                         window.innerWidth < 640
                       ) {
                         if (selectedCh.id === currentTvChannel.id) {
-                          handleFullscreen();
+                          enterTvFullMode();
                         }
                         return;
                       }

@@ -1374,21 +1374,36 @@ function tvStreamProxyPlugin(): Plugin {
           hostHeader.startsWith('100.') ||
           hostHeader.includes('.local') ||
           hostHeader.includes('.lhr.life') ||
+          hostHeader.includes('.trycloudflare.com') ||
           /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
             req.headers['user-agent'] || ''
           );
 
         if (isLanTvClient && !rawUrl.startsWith('/api/') && !rawUrl.startsWith('/msx/')) {
           const distDir = path.resolve(process.cwd(), 'dist');
+          const acceptsGzip = /\bgzip\b/i.test(
+            String(req.headers['accept-encoding'] || '')
+          );
           if (rawUrl === '/sw.js') {
+            const isSmartTvUa = /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX/i.test(
+              req.headers['user-agent'] || ''
+            );
+            const isHttpsTunnel = hostHeader.includes('.trycloudflare.com');
+            const swDiskPath = fs.existsSync(path.join(distDir, 'sw.js'))
+              ? path.join(distDir, 'sw.js')
+              : path.resolve(process.cwd(), 'public', 'sw.js');
             res.writeHead(200, {
               'Access-Control-Allow-Origin': '*',
               'Content-Type': 'application/javascript; charset=utf-8',
               'Cache-Control': 'no-store, no-cache, must-revalidate',
             });
-            res.end(
-              "self.addEventListener('install',function(){self.skipWaiting()});self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(k){return Promise.all(k.map(function(n){return caches.delete(n)}))}).then(function(){return self.registration.unregister()}))});"
-            );
+            if (isHttpsTunnel && !isSmartTvUa && fs.existsSync(swDiskPath)) {
+              res.end(fs.readFileSync(swDiskPath));
+            } else {
+              res.end(
+                "self.addEventListener('install',function(){self.skipWaiting()});self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(k){return Promise.all(k.map(function(n){return caches.delete(n)}))}).then(function(){return self.registration.unregister()}))});"
+              );
+            }
             return;
           }
           if (rawUrl.startsWith('/assets/') || rawUrl.startsWith('/icons/') || rawUrl === '/manifest.webmanifest') {
@@ -1422,14 +1437,25 @@ function tvStreamProxyPlugin(): Plugin {
                           : ext === '.json' || ext === '.webmanifest'
                             ? 'application/json; charset=utf-8'
                             : 'application/octet-stream';
+              const isCompressible =
+                ext === '.js' ||
+                ext === '.css' ||
+                ext === '.svg' ||
+                ext === '.json' ||
+                ext === '.webmanifest';
+              const rawBuf = fs.readFileSync(assetFile);
+              const sendGzip = acceptsGzip && isCompressible;
+              const payload = sendGzip ? zlib.gzipSync(rawBuf, { level: 6 }) : rawBuf;
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Private-Network': 'true',
                 'Cross-Origin-Resource-Policy': 'cross-origin',
                 'Content-Type': mime,
                 'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Vary': 'Accept-Encoding',
+                ...(sendGzip ? { 'Content-Encoding': 'gzip' } : {}),
               });
-              res.end(fs.readFileSync(assetFile));
+              res.end(payload);
               return;
             }
           } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/car' || rawUrl.startsWith('/car/') || rawUrl === '/index.html') {
@@ -1441,6 +1467,9 @@ function tvStreamProxyPlugin(): Plugin {
                 /(\/assets\/[^"'\s>]+\.(?:js|css))/g,
                 `$1?v=${ver}`
               );
+              const htmlPayload = acceptsGzip
+                ? zlib.gzipSync(Buffer.from(freshHtml, 'utf-8'), { level: 6 })
+                : freshHtml;
               console.log(`[LAN-TV] Serving compiled ES2015 bundle (v=${ver}) to ${hostHeader}${req.url} (${req.headers['user-agent'] || ''})`);
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
@@ -1449,8 +1478,10 @@ function tvStreamProxyPlugin(): Plugin {
                 'Pragma': 'no-cache',
                 'Expires': '0',
                 'Referrer-Policy': 'no-referrer',
+                'Vary': 'Accept-Encoding',
+                ...(acceptsGzip ? { 'Content-Encoding': 'gzip' } : {}),
               });
-              res.end(freshHtml);
+              res.end(htmlPayload);
               return;
             }
           }
@@ -2739,93 +2770,112 @@ function tvStreamProxyPlugin(): Plugin {
           return;
         }
         const diskProfiles = readProfiles() || [];
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 3000);
-        fetch('https://filmio.my/api/tv-profiles', {
-          cache: 'no-store',
-          signal: ctrl.signal,
-        })
-          .then(async (r) => {
-            const rawDel = r.headers.get('x-server-deleted-ids');
-            if (rawDel) {
-              try {
-                const parsedDel = JSON.parse(rawDel);
-                if (Array.isArray(parsedDel)) {
-                  const now = Date.now();
-                  for (const id of parsedDel) {
-                    if (typeof id === 'string' && id && id !== 'p1') {
-                      inMemoryDeletedMap[id] = Math.max(
-                        Number(inMemoryDeletedMap[id]) || 0,
-                        now
-                      );
-                      inMemoryExtraProfiles.delete(id);
+        const immediateMerged = mergeLanAndCloudProfiles([
+          diskProfiles,
+          Array.from(inMemoryExtraProfiles.values()),
+        ]);
+
+        const syncProfilesWithCloudBg = () => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 3000);
+          return fetch('https://filmio.my/api/tv-profiles', {
+            cache: 'no-store',
+            signal: ctrl.signal,
+          })
+            .then(async (r) => {
+              const rawDel = r.headers.get('x-server-deleted-ids');
+              if (rawDel) {
+                try {
+                  const parsedDel = JSON.parse(rawDel);
+                  if (Array.isArray(parsedDel)) {
+                    const now = Date.now();
+                    for (const id of parsedDel) {
+                      if (typeof id === 'string' && id && id !== 'p1') {
+                        inMemoryDeletedMap[id] = Math.max(
+                          Number(inMemoryDeletedMap[id]) || 0,
+                          now
+                        );
+                        inMemoryExtraProfiles.delete(id);
+                      }
                     }
                   }
+                } catch {
+                  // ignore
                 }
-              } catch {
-                // ignore
               }
-            }
-            return r.ok ? r.json() : null;
-          })
-          .then((cloudProfiles) => {
-            clearTimeout(timer);
-            const cloudArr = Array.isArray(cloudProfiles) ? cloudProfiles : [];
-            const merged = mergeLanAndCloudProfiles([
-              diskProfiles,
-              Array.from(inMemoryExtraProfiles.values()),
-              cloudArr,
-            ]);
-            for (const p of merged) {
-              if (typeof p?.id === 'string') {
-                inMemoryExtraProfiles.set(p.id, p);
+              return r.ok ? r.json() : null;
+            })
+            .then((cloudProfiles) => {
+              clearTimeout(timer);
+              const cloudArr = Array.isArray(cloudProfiles) ? cloudProfiles : [];
+              const merged = mergeLanAndCloudProfiles([
+                diskProfiles,
+                Array.from(inMemoryExtraProfiles.values()),
+                cloudArr,
+              ]);
+              for (const p of merged) {
+                if (typeof p?.id === 'string') {
+                  inMemoryExtraProfiles.set(p.id, p);
+                }
               }
-            }
-            const cloudIds = new Set(
-              cloudArr.map((p: Record<string, unknown>) => p?.id).filter(Boolean)
-            );
-            if (
-              merged.some(
-                (p) => typeof p?.id === 'string' && !cloudIds.has(p.id)
-              )
-            ) {
-              fetch('https://filmio.my/api/tv-profiles', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Deleted-Profile-Ids': JSON.stringify(Object.keys(inMemoryDeletedMap)),
-                },
-                body: JSON.stringify(merged),
-              }).catch(() => { });
-            }
-            const deletedList = Object.keys(inMemoryDeletedMap).filter(
-              (id) => id !== 'p1' && !merged.some((p) => p?.id === id)
-            );
-            res.writeHead(200, {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': 'no-cache, no-store',
-              'X-Server-Deleted-Ids': JSON.stringify(deletedList),
-              'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
+              const cloudIds = new Set(
+                cloudArr.map((p: Record<string, unknown>) => p?.id).filter(Boolean)
+              );
+              if (
+                merged.some(
+                  (p) => typeof p?.id === 'string' && !cloudIds.has(p.id)
+                )
+              ) {
+                fetch('https://filmio.my/api/tv-profiles', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Deleted-Profile-Ids': JSON.stringify(Object.keys(inMemoryDeletedMap)),
+                  },
+                  body: JSON.stringify(merged),
+                }).catch(() => { });
+              }
+              return merged;
+            })
+            .catch(() => {
+              clearTimeout(timer);
+              return immediateMerged;
             });
-            res.end(JSON.stringify(merged));
-          })
-          .catch(() => {
-            clearTimeout(timer);
-            const fallback = mergeLanAndCloudProfiles([
-              diskProfiles,
-              Array.from(inMemoryExtraProfiles.values()),
-            ]);
-            const deletedList = Object.keys(inMemoryDeletedMap).filter(
-              (id) => id !== 'p1' && !fallback.some((p) => p?.id === id)
-            );
-            res.writeHead(200, {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': 'no-cache, no-store',
-              'X-Server-Deleted-Ids': JSON.stringify(deletedList),
-              'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
-            });
-            res.end(JSON.stringify(fallback));
+        };
+
+        // Fast non-blocking path: return local profiles in <1ms and sync cloud quietly in background (throttled >= 60s)
+        if (immediateMerged.length > 0) {
+          const nowSync = Date.now();
+          const lastProfSync = (lanCloudGetCache.get('profiles_bg_sync')?.ts) || 0;
+          if (nowSync - lastProfSync >= 60_000) {
+            lanCloudGetCache.set('profiles_bg_sync', { ts: nowSync, data: true });
+            void syncProfilesWithCloudBg();
+          }
+          const deletedList = Object.keys(inMemoryDeletedMap).filter(
+            (id) => id !== 'p1' && !immediateMerged.some((p) => p?.id === id)
+          );
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store',
+            'X-Server-Deleted-Ids': JSON.stringify(deletedList),
+            'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
           });
+          res.end(JSON.stringify(immediateMerged));
+          return;
+        }
+
+        void syncProfilesWithCloudBg().then((merged) => {
+          const deletedList = Object.keys(inMemoryDeletedMap).filter(
+            (id) => id !== 'p1' && !merged.some((p) => p?.id === id)
+          );
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store',
+            'X-Server-Deleted-Ids': JSON.stringify(deletedList),
+            'Access-Control-Expose-Headers': 'X-Server-Deleted-Ids, X-Persistent-Store',
+          });
+          res.end(JSON.stringify(merged));
+        });
       });
 
       // FileList.io Live Torrent Catalog, Resolver & Remux Streaming Engine
@@ -3600,6 +3650,7 @@ function tvStreamProxyPlugin(): Plugin {
           const rawMode = reqUrl.searchParams.get('raw') === '1';
           const skipAd = reqUrl.searchParams.get('skipAd') === '1';
           const wantOrigAudio = reqUrl.searchParams.get('orig') === '1';
+          const keepAllQualities = reqUrl.searchParams.get('allQualities') === '1';
           const audioIdxParam = reqUrl.searchParams.get('audioIdx');
           const requestedAudioIdx =
             audioIdxParam !== null && /^\d+$/.test(audioIdxParam)
@@ -3613,6 +3664,26 @@ function tvStreamProxyPlugin(): Plugin {
           }
 
           const parsedTarget = new URL(targetUrl);
+          const targetHost = parsedTarget.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+          const isBlockedPrivateHost =
+            targetHost === 'localhost' ||
+            targetHost === '0.0.0.0' ||
+            targetHost === '::1' ||
+            targetHost === 'metadata.google.internal' ||
+            targetHost.endsWith('.local') ||
+            targetHost.endsWith('.internal') ||
+            targetHost.endsWith('.localhost') ||
+            /^127\./.test(targetHost) ||
+            /^10\./.test(targetHost) ||
+            /^192\.168\./.test(targetHost) ||
+            /^169\.254\./.test(targetHost) ||
+            /^172\.(1[6-9]|2\d|3[0-1])\./.test(targetHost) ||
+            /^(fc|fd|fe80)/i.test(targetHost);
+          if (isBlockedPrivateHost) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden target host');
+            return;
+          }
           const refererHeader = customRef || `${parsedTarget.origin}/`;
           let originHeader = parsedTarget.origin;
           if (customRef) {
@@ -4630,8 +4701,11 @@ function tvStreamProxyPlugin(): Plugin {
                 const hdVariants = variantPairs.filter(
                   (p) => p.height >= 720 || p.width >= 1200
                 );
-                const selectedVariants =
-                  hdVariants.length > 0 ? hdVariants : [variantPairs[0]];
+                const selectedVariants = keepAllQualities
+                  ? variantPairs
+                  : hdVariants.length > 0
+                    ? hdVariants
+                    : [variantPairs[0]];
                 rewritten = [
                   ...headerLines,
                   ...selectedVariants.flatMap((p) => [p.infLine, p.uriLine]),
@@ -4735,7 +4809,22 @@ function tvStreamProxyPlugin(): Plugin {
           res.on('close', onClientAbort);
           try {
             while (true) {
-              const { done, value } = await reader.read();
+              let chunkTimer: ReturnType<typeof setTimeout> | null = null;
+              const readPromise = reader.read();
+              const result = isLiveAudioStream
+                ? await readPromise
+                : await Promise.race([
+                    readPromise,
+                    new Promise<{ done: true; value: undefined }>((_, reject) => {
+                      chunkTimer = setTimeout(() => {
+                        reader.cancel().catch(() => { });
+                        controller.abort();
+                        reject(new Error('Upstream chunk read idle timeout'));
+                      }, 15_000);
+                    }),
+                  ]);
+              if (chunkTimer) clearTimeout(chunkTimer);
+              const { done, value } = result;
               if (done || res.writableEnded || res.destroyed) {
                 streamCompleted = true;
                 break;

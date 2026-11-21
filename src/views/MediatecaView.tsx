@@ -42,13 +42,16 @@ import { TvChannel } from '../types/radio';
 import { parseM3uPlaylist } from '../services/tvApi';
 import {
   OfflineMediaItem,
-  OfflineDownloadProgress,
   listOfflineItems,
   deleteOfflineItem,
   downloadHlsToOfflineDb,
   saveLocalFileToOfflineDb,
   exportOfflineItemToDeviceFile,
   formatBytes,
+  useOfflineVideoDownloadState,
+  enqueueOfflineVideoDownloadJob,
+  cancelActiveOfflineVideoDownload,
+  clearOfflineVideoDownloadError,
 } from '../services/offlineMediaService';
 import {
   SubtitleCue,
@@ -235,38 +238,8 @@ const SUBTITLE_LANGUAGES: Array<{
 const VOD_SERVERS: Array<{ id: VodServerId; label: string; badge: string }> = [
   {
     id: 'kinogram_hls',
-    label: 'S1: Nativ 1080p Full HD (Original + Offline)',
-    badge: 'Fără Reclame • 1080p Full HD • Audio Original / RU + Descărcare Offline',
-  },
-  {
-    id: 'vidspark',
-    label: 'S2: VidSpark 1080p/4K',
-    badge: 'Fără Reclame • Reluare Automată + Subtitrări RO/RU/EN',
-  },
-  {
-    id: 'kinogram_embed',
-    label: 'S3: Kinogram 1080p Multi-Audio',
-    badge: 'Fără Pop-up • Filme & Seriale + Dublaj Multi-Audio',
-  },
-  {
-    id: 'vidzee',
-    label: 'S4: VidZee 1080p',
-    badge: 'Fără Pop-up • Reluare Automată + Multi-Sub',
-  },
-  {
-    id: 'vidsrc_pm',
-    label: 'S5: VidSrc 1080p',
-    badge: 'Fără Pop-up • Reluare Automată + OpenSubtitles',
-  },
-  {
-    id: 'nontongo',
-    label: 'S6: MultiEmbed 4K / 1080p VIP',
-    badge: 'Fără Pop-up • Surse Multiple 4K/1080p + Subtitrări',
-  },
-  {
-    id: 'frembed',
-    label: 'S7: Backup',
-    badge: 'Fără Pop-up • Backup Global',
+    label: 'S1: Player Nativ Filmio (Direct HLS • Fără Reclame)',
+    badge: 'Exclusiv Player Nativ Filmio • Fără Site-uri Externe',
   },
 ];
 
@@ -636,75 +609,14 @@ function formatWatchSeconds(totalSeconds: number): string {
 }
 
 function buildVodEmbedUrl(
-  server: VodServerId,
-  item: CinemetaItem,
-  season: number,
-  episode: number,
-  subLang: SubtitleLangId,
-  startSeconds: number
+  _server: VodServerId,
+  _item: CinemetaItem,
+  _season: number,
+  _episode: number,
+  _subLang: SubtitleLangId,
+  _startSeconds: number
 ): string {
-  const imdbId = item.id.startsWith('tt') ? item.id : '';
-  const kpId =
-    item.kpId ||
-    (item.id.startsWith('kp_') ? item.id.replace(/^kp_/, '') : '');
-  const tmdbOrImdbId = item.moviedb_id
-    ? String(item.moviedb_id)
-    : imdbId || kpId;
-  const isSeries = item.type === 'series';
-  const start = Math.max(0, Math.floor(startSeconds || 0));
-
-  switch (server) {
-    case 'kinogram_hls':
-    case 'kinogram_embed': {
-      const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;
-      const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-      return `https://api.namy.ws/embed/${path}${qs}`;
-    }
-    case 'vidspark': {
-      const params = new URLSearchParams();
-      params.set('autoplay', 'true');
-      params.set('lang', subLang);
-      if (start > 5) {
-        params.set('startAt', String(start));
-        params.set('t', String(start));
-      }
-      return isSeries
-        ? `https://vidspark.to/tv/${imdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidspark.to/movie/${imdbId}?${params.toString()}`;
-    }
-    case 'vidzee': {
-      const params = new URLSearchParams();
-      if (start > 5) {
-        params.set('startAt', String(start));
-      }
-      const qs = params.toString();
-      const suffix = qs ? `?${qs}` : '';
-      return isSeries
-        ? `https://player.vidzee.wtf/embed/tv/${tmdbOrImdbId}/${season}/${episode}${suffix}`
-        : `https://player.vidzee.wtf/embed/movie/${tmdbOrImdbId}${suffix}`;
-    }
-    case 'nontongo': {
-      return isSeries
-        ? `https://multiembed.mov/?video_id=${imdbId}&s=${season}&e=${episode}`
-        : `https://multiembed.mov/?video_id=${imdbId}`;
-    }
-    case 'vidsrc_pm': {
-      const params = new URLSearchParams();
-      params.set('autoplay', 'true');
-      params.set('ds_lang', subLang);
-      if (start > 5) {
-        params.set('startAt', String(start));
-        params.set('t', String(start));
-      }
-      return isSeries
-        ? `https://vidsrc.pm/embed/tv/${imdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidsrc.pm/embed/movie/${imdbId}?${params.toString()}`;
-    }
-    case 'frembed':
-      return isSeries
-        ? `https://frembed.live/api/serie.php?id=${imdbId}&sa=${season}&epi=${episode}`
-        : `https://frembed.live/api/film.php?id=${imdbId}`;
-  }
+  return '';
 }
 
 async function searchKinopoiskByKeyword(
@@ -844,10 +756,14 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
   const [activeOfflineItem, setActiveOfflineItem] =
     useState<OfflineMediaItem | null>(null);
   const [downloadQuality, setDownloadQuality] = useState<360 | 720>(360);
-  const [activeDownloadProgress, setActiveDownloadProgress] =
-    useState<OfflineDownloadProgress | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const downloadAbortRef = useRef<AbortController | null>(null);
+  const offlineVideoDl = useOfflineVideoDownloadState();
+  const activeDownloadProgress = offlineVideoDl.activeProgress;
+  const [localDownloadError, setLocalDownloadError] = useState<string | null>(null);
+  const downloadError = localDownloadError || offlineVideoDl.lastError;
+  const setDownloadError = (val: string | null) => {
+    setLocalDownloadError(val);
+    if (val === null) clearOfflineVideoDownloadError();
+  };
   const localVideoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Watch progress state ("Continuă vizionarea — De unde ai rămas")
@@ -1683,73 +1599,68 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     updateWatchProgress,
   ]);
 
-  // Start Offline Download of the currently open Movie / Episode into IndexedDB
+  // Start Offline Download of the currently open Movie / Episode into IndexedDB (persists across page switches!)
   const handleDownloadCurrentVodOffline = async () => {
-    if (!activeVodItem || !resolvedDirectStream?.hlsUrl) return;
-    if (activeDownloadProgress) return;
+    if (!activeVodItem) return;
+    const downloadUrl =
+      resolvedDirectStream?.hlsUrl ||
+      (resolvedDirectStream as { proxyHlsUrl?: string } | null)?.proxyHlsUrl ||
+      '';
+    if (!downloadUrl) {
+      setDownloadError(
+        'Streamul video nu este disponibil încă pentru descărcare locală la acest titlu.'
+      );
+      return;
+    }
 
     setDownloadError(null);
-    const controller = new AbortController();
-    downloadAbortRef.current = controller;
+    const snapVod = activeVodItem;
+    const snapDirect = resolvedDirectStream;
+    const snapQuality = downloadQuality;
+    const snapSeason = selectedSeason;
+    const snapEpisode = selectedEpisode;
 
     const offlineId =
-      activeVodItem.type === 'series'
-        ? `vod_${activeVodItem.id}_S${selectedSeason}E${selectedEpisode}`
-        : `vod_${activeVodItem.id}`;
+      snapVod.type === 'series'
+        ? `vod_${snapVod.id}_S${snapSeason}E${snapEpisode}`
+        : `vod_${snapVod.id}`;
 
     const subtitleLabel =
-      activeVodItem.type === 'series'
-        ? `Sezonul ${selectedSeason} • Episodul ${selectedEpisode}`
-        : activeVodItem.releaseInfo || 'Film Complet';
+      snapVod.type === 'series'
+        ? `Sezonul ${snapSeason} • Episodul ${snapEpisode}`
+        : snapVod.releaseInfo || 'Film Complet';
 
-    try {
-      setActiveDownloadProgress({
-        percent: 1,
-        downloadedBytes: 0,
-        totalSegments: 0,
-        completedSegments: 0,
-        stage: 'Se pregătește descărcarea Offline...',
-      });
-
-      await downloadHlsToOfflineDb({
-        id: offlineId,
-        title: activeVodItem.name,
-        subtitleLabel,
-        poster:
-          activeVodItem.poster ||
-          `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`,
-        masterM3u8Url: resolvedDirectStream.hlsUrl,
-        preferredHeight: downloadQuality,
-        audioLabel:
-          resolvedDirectStream.audioNames?.[0] || 'Русский / Original',
-        signal: controller.signal,
-        onProgress: (prog) => setActiveDownloadProgress(prog),
-      });
-
-      await refreshOfflineLibrary();
-      window.setTimeout(() => {
-        setActiveDownloadProgress(null);
-      }, 2500);
-    } catch (err) {
-      setActiveDownloadProgress(null);
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        setDownloadError('Descărcarea a fost oprită.');
-      } else {
-        setDownloadError(
-          err instanceof Error
-            ? err.message
-            : 'Eroare la descărcarea filmului offline.'
-        );
-      }
-    } finally {
-      downloadAbortRef.current = null;
-    }
+    enqueueOfflineVideoDownloadJob({
+      vodId: snapVod.id,
+      title: snapVod.name,
+      run: async ({ signal, setTargetId, setProgress, notifyItemSaved }) => {
+        setTargetId(offlineId);
+        await downloadHlsToOfflineDb({
+          id: offlineId,
+          title: snapVod.name,
+          subtitleLabel,
+          poster:
+            snapVod.poster ||
+            `https://images.metahub.space/poster/medium/${snapVod.id}/img`,
+          masterM3u8Url: downloadUrl,
+          preferredHeight: snapQuality,
+          audioLabel: snapDirect?.audioNames?.[0] || 'Русский / Original',
+          sourceLabel: snapDirect?.sourcePath,
+          vodId: snapVod.id,
+          mediaKind: snapVod.type,
+          season: snapVod.type === 'series' ? snapSeason : undefined,
+          episode: snapVod.type === 'series' ? snapEpisode : undefined,
+          signal,
+          onProgress: (prog) => setProgress(prog),
+        });
+        notifyItemSaved();
+        void refreshOfflineLibrary();
+      },
+    });
   };
 
   const handleCancelDownload = () => {
-    downloadAbortRef.current?.abort();
-    downloadAbortRef.current = null;
-    setActiveDownloadProgress(null);
+    cancelActiveOfflineVideoDownload();
   };
 
   const handleImportLocalVideoToOfflineDb = async (
@@ -2961,7 +2872,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       );
                     }}
                   />
-                  ) : isFileListExclusiveRomanianTitle(activeVodItem) ? (
+                  ) : (
                   <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
                     <div className="text-base font-extrabold text-white">
                       {activeVodItem.name}
@@ -2970,7 +2881,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                         : ''}
                     </div>
                     <p className="text-xs text-zinc-400 max-w-md">
-                      Streamul Cloud HD pentru acest episod este temporar ocupat. Reîncearcă încărcarea redării directe.
+                      Redarea folosește exclusiv Playerul Nativ Filmio (fără playere externe de pe site-uri). Streamul direct nu este disponibil momentan — reîncearcă sau deschide din modul Smart TV / FileList Local.
                     </p>
                     <button
                       type="button"
@@ -2996,173 +2907,25 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                       }}
                       className="h-10 px-4 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-extrabold text-xs cursor-pointer"
                     >
-                      Reîncearcă Cloud HD
+                      Reîncearcă Player Nativ
                     </button>
                   </div>
-                  ) : (
-                  <div className="relative w-full h-full">
-                    <iframe
-                      ref={vodIframeRef}
-                      key={`fallback_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
-                      src={buildVodEmbedUrl(
-                        activeVodItem.id.startsWith('kp_')
-                          ? 'kinogram_embed'
-                          : 'vidspark',
-                        activeItemForEmbed,
-                        selectedSeason,
-                        selectedEpisode,
-                        preferredSubLang,
-                        resumeStartSeconds
-                      )}
-                      title={activeVodItem.name}
-                      className="w-full h-full border-0 bg-black"
-                      style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
-                      referrerPolicy="origin"
-                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                      allowFullScreen
-                    />
-                    {activeSubCues.length > 0 && (
-                      <>
-                        <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
-                          <span className="max-w-[110px] truncate font-bold">
-                            CC: {activeSubLabel || 'Activă'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                          >
-                            -1s
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                          >
-                            +1s
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveSubVttUrl(null);
-                              setActiveSubLabel('');
-                              setActiveSubCues([]);
-                            }}
-                            className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
-                          >
-                          </button>
-                        </div>
-                        {(() => {
-                          const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
-                          const cue = activeSubCues.find(
-                            (c) => effectiveSec >= c.start && effectiveSec <= c.end
-                          );
-                          if (!cue) return null;
-                          return (
-                            <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
-                              <div
-                                className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
-                                style={{
-                                  textShadow:
-                                    '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
-                                }}
-                              >
-                                {cue.text}
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </>
-                    )}
-                  </div>
                   )
-                  ) : (
-                  <div className="relative w-full h-full">
-                    <iframe
-                      ref={vodIframeRef}
-                      key={`${activeServer}_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}_${preferredSubLang}_${resumeStartSeconds}`}
-                      src={buildVodEmbedUrl(
-                        activeServer,
-                        activeItemForEmbed,
-                        selectedSeason,
-                        selectedEpisode,
-                        preferredSubLang,
-                        resumeStartSeconds
-                      )}
-                      title={activeVodItem.name}
-                      className="w-full h-full border-0 bg-black"
-                      style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
-                      referrerPolicy="origin"
-                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                      allowFullScreen
-                      onLoad={() => {
-                        if (resumeStartSeconds > 5) {
-                          window.setTimeout(() => {
-                            try {
-                              vodIframeRef.current?.contentWindow?.postMessage(
-                                { action: 'seek', time: resumeStartSeconds },
-                                '*'
-                              );
-                            } catch {
-                              // ignore
-                            }
-                          }, 1200);
-                        }
-                      }}
-                    />
-                    {activeSubCues.length > 0 && (
-                      <>
-                        <div className="absolute top-2.5 right-2.5 z-20 inline-flex items-center gap-1 bg-zinc-900/90 border border-emerald-500/40 rounded-full px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xs">
-                          <span className="max-w-[110px] truncate font-bold">
-                            CC: {activeSubLabel || 'Activă'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setIframeSubOffsetSec((s) => s - 1)}
-                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                          >
-                            -1s
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIframeSubOffsetSec((s) => s + 1)}
-                            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 tabular-nums text-[10px]"
-                          >
-                            +1s
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveSubVttUrl(null);
-                              setActiveSubLabel('');
-                              setActiveSubCues([]);
-                            }}
-                            className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white font-bold text-[10px]"
-                          >
-                          </button>
-                        </div>
-                        {(() => {
-                          const effectiveSec = liveCurrentTime - iframeSubOffsetSec;
-                          const cue = activeSubCues.find(
-                            (c) => effectiveSec >= c.start && effectiveSec <= c.end
-                          );
-                          if (!cue) return null;
-                          return (
-                            <div className="pointer-events-none absolute bottom-12 sm:bottom-14 inset-x-4 z-20 flex justify-center">
-                              <div
-                                className="max-w-3xl px-4 py-1.5 rounded-xl bg-black/80 text-white text-center font-bold text-sm sm:text-base md:text-lg leading-snug whitespace-pre-line shadow-2xl border border-white/10"
-                                style={{
-                                  textShadow:
-                                    '0 2px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
-                                }}
-                              >
-                                {cue.text}
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </>
-                    )}
+                ) : (
+                  <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center bg-zinc-950 text-zinc-200 gap-3">
+                    <div className="text-base font-extrabold text-white">
+                      {activeVodItem.name}
+                    </div>
+                    <p className="text-xs text-zinc-400 max-w-md">
+                      Playerele externe sunt dezactivate. Folosește doar Playerul Nativ Filmio.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveServer('kinogram_hls')}
+                      className="h-10 px-4 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-extrabold text-xs cursor-pointer"
+                    >
+                      Înapoi la Player Nativ
+                    </button>
                   </div>
             )}
                 </div>

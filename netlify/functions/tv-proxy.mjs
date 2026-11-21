@@ -513,6 +513,7 @@ export default async (req) => {
     const vkQualityParam = Number(reqUrl.searchParams.get('vkq') || 0);
     const rawMode = reqUrl.searchParams.get('raw') === '1';
     const wantOrigAudio = reqUrl.searchParams.get('orig') === '1';
+    const keepAllQualities = reqUrl.searchParams.get('allQualities') === '1';
     const audioIdxParam = reqUrl.searchParams.get('audioIdx');
     const requestedAudioIdx =
       audioIdxParam !== null && /^\d+$/.test(audioIdxParam)
@@ -1332,8 +1333,11 @@ export default async (req) => {
           const hdVariants = variantPairs.filter(
             (p) => p.height >= 720 || p.width >= 1200
           );
-          const selectedVariants =
-            hdVariants.length > 0 ? hdVariants : [variantPairs[0]];
+          const selectedVariants = keepAllQualities
+            ? variantPairs
+            : hdVariants.length > 0
+              ? hdVariants
+              : [variantPairs[0]];
           rewritten = [
             ...headerLines,
             ...selectedVariants.flatMap((p) => [p.infLine, p.uriLine]),
@@ -1372,15 +1376,26 @@ export default async (req) => {
       /(okcdn\.ru|vkuser\.net|vkuservideo\.net|mycdn\.me|vmget\.online|vmpx\.online|vmnow\.online|vmeas\.cloud|vidmoly|srcAg=|srcIp=|asn=)/i.test(
         finalUrl
       );
+    const upLen = upstreamRes.headers.get('content-length');
+    const isLiveAudioStream =
+      contentType.startsWith('audio/') ||
+      contentType.includes('ogg') ||
+      contentType.includes('aac') ||
+      (!upLen && /\.(?:mp3|aac|aacp|ogg|opus)(\?|$)/i.test(finalUrl));
     if (finalUrl.startsWith('http://') || mustPipeSignedHttps) {
       const pipeHeaders = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Expose-Headers':
           'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-        'Content-Type': contentType || 'video/mp2t',
-        'Cache-Control': 'public, max-age=15',
+        'Content-Type':
+          contentType || (isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'),
+        'Cache-Control': isLiveAudioStream
+          ? 'no-cache, no-store, must-revalidate'
+          : 'public, max-age=15',
       };
-      const upLen = upstreamRes.headers.get('content-length');
+      if (isLiveAudioStream) {
+        pipeHeaders['CDN-Cache-Control'] = 'no-store';
+      }
       const upRange = upstreamRes.headers.get('content-range');
       const upAccept = upstreamRes.headers.get('accept-ranges');
       if (upLen) pipeHeaders['Content-Length'] = upLen;
@@ -1392,12 +1407,21 @@ export default async (req) => {
       });
     }
 
+    try {
+      upstreamRes.body?.cancel();
+    } catch {
+      // ignore body cancel errors before redirect
+    }
+
     return new Response(null, {
       status: 302,
       headers: {
         'Access-Control-Allow-Origin': '*',
         Location: finalUrl,
-        'Cache-Control': 'public, max-age=30',
+        'Cache-Control': isLiveAudioStream
+          ? 'no-cache, no-store, must-revalidate'
+          : 'public, max-age=30',
+        ...(isLiveAudioStream ? { 'CDN-Cache-Control': 'no-store' } : {}),
       },
     });
   } catch (err) {

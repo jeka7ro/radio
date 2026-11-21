@@ -244,6 +244,20 @@ function httpsFallbackFetch(
   redirectsLeft = 3
 ): Promise<SimpleFetchResponse> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finishResolve = (val: SimpleFetchResponse) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      resolve(val);
+    };
+    const finishReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      reject(err instanceof Error ? err : new Error(String(err || 'Request failed')));
+    };
+
     const u = new URL(urlStr);
     const isHttps = u.protocol === 'https:';
     const mod = isHttps ? https : http;
@@ -291,12 +305,19 @@ function httpsFallbackFetch(
             timeoutMs,
             redirectsLeft - 1
           )
-            .then(resolve)
-            .catch(reject);
+            .then(finishResolve)
+            .catch(finishReject);
           return;
         }
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(Buffer.from(c)));
+        res.on('error', finishReject);
+        res.on('aborted', () => finishReject(new Error('Response aborted')));
+        res.on('close', () => {
+          if (!settled) {
+            finishReject(new Error('Response closed prematurely'));
+          }
+        });
         res.on('end', () => {
           const fullBuf = Buffer.concat(chunks);
           const rawSetCookie = res.headers['set-cookie'];
@@ -305,7 +326,7 @@ function httpsFallbackFetch(
             : rawSetCookie
               ? [rawSetCookie]
               : [];
-          resolve({
+          finishResolve({
             ok: status >= 200 && status < 300,
             status,
             headers: {
@@ -319,10 +340,18 @@ function httpsFallbackFetch(
         });
       }
     );
+    const hardTimer = setTimeout(() => {
+      try {
+        req.destroy(new Error('Hard request timeout'));
+      } catch {
+        // ignore
+      }
+      finishReject(new Error('Hard request timeout'));
+    }, timeoutMs + 1000);
     req.on('timeout', () => {
       req.destroy(new Error('Request timeout'));
     });
-    req.on('error', reject);
+    req.on('error', finishReject);
     if (bodyBuf) req.write(bodyBuf);
     req.end();
   });
@@ -344,19 +373,22 @@ async function safeFetch(
           ...init,
           signal: controller.signal,
         });
+        const rawBuf = Buffer.from(await res.arrayBuffer());
+        const cookieArr =
+          typeof res.headers.getSetCookie === 'function'
+            ? res.headers.getSetCookie()
+            : [];
         clearTimeout(timer);
         return {
           ok: res.ok,
           status: res.status,
           headers: {
-            getSetCookie: () =>
-              typeof res.headers.getSetCookie === 'function'
-                ? res.headers.getSetCookie()
-                : [],
+            getSetCookie: () => cookieArr,
           },
-          text: () => res.text(),
-          json: () => res.json(),
-          arrayBuffer: () => res.arrayBuffer(),
+          text: async () => rawBuf.toString('utf8'),
+          json: async () => JSON.parse(rawBuf.toString('utf8')),
+          arrayBuffer: async () =>
+            rawBuf.buffer.slice(rawBuf.byteOffset, rawBuf.byteOffset + rawBuf.byteLength),
         };
       } catch (err) {
         clearTimeout(timer);
@@ -845,7 +877,10 @@ async function fetchFileListApi(
 }
 
 const catalogCache = new Map<string, { ts: number; items: FileListTorrentCard[] }>();
-const inFlightCatalog = new Map<string, Promise<FileListTorrentCard[]>>();
+const inFlightCatalog = new Map<
+  string,
+  { promise: Promise<FileListTorrentCard[]>; startedAt: number }
+>();
 
 export async function getFileListCatalog(options: {
   section?: string;
@@ -868,11 +903,12 @@ export async function getFileListCatalog(options: {
     if (cached && Date.now() - cached.ts < ttlMs) {
       return cached.items;
     }
+    const existingFlight = inFlightCatalog.get(cacheKey);
+    if (existingFlight && Date.now() - existingFlight.startedAt < 12_000) {
+      return existingFlight.promise;
+    }
   }
-  const existingFlight = inFlightCatalog.get(cacheKey);
-  if (existingFlight) {
-    return existingFlight;
-  }
+  inFlightCatalog.delete(cacheKey);
 
   const work = (async (): Promise<FileListTorrentCard[]> => {
     // Map section to FileList category IDs:
@@ -985,15 +1021,26 @@ export async function getFileListCatalog(options: {
     return finalItems;
   })();
 
-  inFlightCatalog.set(cacheKey, work);
+  let flightTimer: ReturnType<typeof setTimeout> | null = null;
+  const guardedWork = Promise.race<FileListTorrentCard[]>([
+    work,
+    new Promise<FileListTorrentCard[]>((resolve) => {
+      flightTimer = setTimeout(() => resolve([]), 12_000);
+    }),
+  ]);
+  const flightEntry = { promise: guardedWork, startedAt: Date.now() };
+  inFlightCatalog.set(cacheKey, flightEntry);
   try {
-    const res = await work;
+    const res = await guardedWork;
     if (res.length > 0) {
       catalogCache.set(cacheKey, { ts: Date.now(), items: res });
     }
     return res;
   } finally {
-    inFlightCatalog.delete(cacheKey);
+    if (flightTimer) clearTimeout(flightTimer);
+    if (inFlightCatalog.get(cacheKey) === flightEntry) {
+      inFlightCatalog.delete(cacheKey);
+    }
   }
 }
 
@@ -1033,13 +1080,7 @@ async function fetchTorrentioStreams(
   try {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 5500);
-    const res = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: controller.signal,
-    });
-    clearTimeout(t);
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
+    let data: {
       streams?: Array<{
         name?: string;
         title?: string;
@@ -1049,6 +1090,16 @@ async function fetchTorrentioStreams(
         behaviorHints?: { filename?: string };
       }>;
     };
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: controller.signal,
+      });
+      if (!res.ok) return [];
+      data = (await res.json()) as typeof data;
+    } finally {
+      clearTimeout(t);
+    }
     const rawStreams = Array.isArray(data?.streams) ? data.streams : [];
     const results: FileListTorrentCard[] = [];
 
@@ -3110,7 +3161,7 @@ export async function handleFileListRequest(
         !isRussianParam && imdbParam && imdbParam.startsWith('tt')
           ? getFileListCatalog({ imdb: imdbParam }).catch(() => [])
           : Promise.resolve([]),
-        !isRussianParam && imdbParam && imdbParam.startsWith('tt')
+        !isRussianParam && !isRomanianQuery && imdbParam && imdbParam.startsWith('tt')
           ? fetchTorrentioStreams(
               imdbParam,
               typeParam === 'series' ? 'series' : 'movie',
@@ -3649,6 +3700,8 @@ export async function handleFileListRequest(
         parseInt(parsedUrl.searchParams.get('maxw') || '0', 10) || 0;
       const forceVideoTranscode =
         parsedUrl.searchParams.get('vtranscode') === '1';
+      const isOfflineDownload =
+        parsedUrl.searchParams.get('download') === '1';
       const clientUa = String(req.headers['user-agent'] || '');
       const isSmartTvClientUa =
         /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
@@ -3671,18 +3724,21 @@ export async function handleFileListRequest(
           ? 'localhost'
           : rawIp;
 
-      // Kill any previous stream from THIS SAME client immediately so seeking never leaves a zombie ffmpeg competing for peer bandwidth!
+      // Kill any previous PLAYBACK stream from THIS SAME client immediately so seeking never leaves a zombie ffmpeg competing for peer bandwidth.
+      // Offline background downloads (`?download=1`) run independently so navigating/watching another title NEVER aborts an active download!
       if (!(gState as any).activeStreamCleanupByClient) {
         (gState as any).activeStreamCleanupByClient = new Map<string, () => void>();
       }
-      const prevClientCleanup = (
-        gState as any
-      ).activeStreamCleanupByClient.get(clientKey);
-      if (typeof prevClientCleanup === 'function') {
-        try {
-          prevClientCleanup();
-        } catch {
-          // ignore
+      if (!isOfflineDownload) {
+        const prevClientCleanup = (
+          gState as any
+        ).activeStreamCleanupByClient.get(clientKey);
+        if (typeof prevClientCleanup === 'function') {
+          try {
+            prevClientCleanup();
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -4035,7 +4091,9 @@ export async function handleFileListRequest(
       );
 
       const ff = spawn(ffmpegPath as string, ffArgs);
-      gState.activeStreamProcess = ff;
+      if (!isOfflineDownload) {
+        gState.activeStreamProcess = ff;
+      }
 
       let directReadStream: any = null;
       if (useDirectPipe) {
@@ -4054,7 +4112,9 @@ export async function handleFileListRequest(
             // ignore
           }
         };
-        entry.activeStreams.add(closeDirect);
+        if (!isOfflineDownload) {
+          entry.activeStreams.add(closeDirect);
+        }
         directReadStream.on('error', () => {});
         ff.stdin.on('error', () => {});
         directReadStream.pipe(ff.stdin);
@@ -4062,6 +4122,7 @@ export async function handleFileListRequest(
 
       let patchedFtyp = false;
       let bytesEmitted = 0;
+      let lastTouchMs = Date.now();
       let ffStderrTail = '';
       ff.stderr?.on('data', (d: Buffer) => {
         if (ffStderrTail.length < 800) {
@@ -4070,6 +4131,11 @@ export async function handleFileListRequest(
       });
       ff.stdout.on('data', (chunk: Buffer) => {
         bytesEmitted += chunk.length;
+        const nowTouch = Date.now();
+        if (nowTouch - lastTouchMs > 2000) {
+          lastTouchMs = nowTouch;
+          entry.lastAccessed = nowTouch;
+        }
         let outChunk = chunk;
         if (!patchedFtyp && chunk.length >= 32) {
           patchedFtyp = true;
@@ -4137,7 +4203,9 @@ export async function handleFileListRequest(
         }
       };
 
-      (gState as any).activeStreamCleanupByClient.set(clientKey, cleanup);
+      if (!isOfflineDownload) {
+        (gState as any).activeStreamCleanupByClient.set(clientKey, cleanup);
+      }
       if (
         clientDisconnectedEarly ||
         res.destroyed ||

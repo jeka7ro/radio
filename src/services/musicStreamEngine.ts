@@ -54,15 +54,31 @@ type YtWindow = Window & {
   onYouTubeIframeAPIReady?: () => void;
 };
 
-const YT_CANDIDATES_STORAGE_KEY = 'aether_yt_music_candidates_v1';
-const YT_CANDIDATES_TTL_MS = 24 * 60 * 60 * 1000;
+const YT_CANDIDATES_STORAGE_KEY = 'aether_yt_music_candidates_v2';
+const YT_CANDIDATES_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SHORT_SNIPPET_RE = /\b(shorts?|teaser|preview|snippet|ringtone|15\s*sec|30\s*sec)\b/i;
-const PENALTY_VERSION_RE = /\b(karaoke|8d|nightcore|slowed|reverb\s*only)\b/i;
+const PENALTY_VERSION_RE = /\b(karaoke|8d|nightcore|slowed|reverb\s*only|sped\s*up|reaction|interview|full\s*album|megamix)\b/i;
+const LIVE_OR_MIX_RE = /\b(live|concert|rilive|radio\s+italia|remix|mashup|mix\s+\d+)\b/i;
 const BONUS_OFFICIAL_RE = /\b(official\s*audio|topic|lyrics?|audio)\b/i;
+const prefetchedDirectTrackKeys = new Map<string, number>();
 
 const memCandidateCache = new Map<string, { ids: string[]; ts: number }>();
 const inFlightCandidateResolves = new Map<string, Promise<string[]>>();
 let candidatesHydrated = false;
+
+function getCandidateStorage(): Storage | null {
+  try {
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch {
+    // ignore
+  }
+  try {
+    if (typeof sessionStorage !== 'undefined') return sessionStorage;
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 function normalizeCandidateCacheKey(track: Pick<SpotifyTrackItem, 'id' | 'artist' | 'title'>): string {
   const norm = (s: string) =>
@@ -85,9 +101,10 @@ function extractVideoIdFromAudioUrl(rawUrl?: string): string {
 function hydrateCandidateCache(): void {
   if (candidatesHydrated) return;
   candidatesHydrated = true;
-  if (typeof sessionStorage === 'undefined') return;
+  const store = getCandidateStorage();
+  if (!store) return;
   try {
-    const raw = sessionStorage.getItem(YT_CANDIDATES_STORAGE_KEY);
+    const raw = store.getItem(YT_CANDIDATES_STORAGE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw) as Record<string, { ids?: string[]; ts?: number }>;
     if (!parsed || typeof parsed !== 'object') return;
@@ -111,26 +128,48 @@ function saveCandidatesToStorage(key: string, ids: string[]): void {
   hydrateCandidateCache();
   const entry = { ids, ts: Date.now() };
   memCandidateCache.set(key, entry);
-  if (typeof sessionStorage === 'undefined') return;
+  const store = getCandidateStorage();
+  if (!store) return;
   try {
-    const raw = sessionStorage.getItem(YT_CANDIDATES_STORAGE_KEY);
+    const raw = store.getItem(YT_CANDIDATES_STORAGE_KEY);
     const parsed = raw
       ? (JSON.parse(raw) as Record<string, { ids: string[]; ts: number }>)
       : {};
     parsed[key] = entry;
     const entries = Object.entries(parsed);
-    if (entries.length > 220) {
+    if (entries.length > 350) {
       entries.sort((a, b) => (b[1]?.ts || 0) - (a[1]?.ts || 0));
-      sessionStorage.setItem(
+      store.setItem(
         YT_CANDIDATES_STORAGE_KEY,
-        JSON.stringify(Object.fromEntries(entries.slice(0, 180)))
+        JSON.stringify(Object.fromEntries(entries.slice(0, 300)))
       );
     } else {
-      sessionStorage.setItem(YT_CANDIDATES_STORAGE_KEY, JSON.stringify(parsed));
+      store.setItem(YT_CANDIDATES_STORAGE_KEY, JSON.stringify(parsed));
     }
   } catch {
     // ignore quota errors
   }
+}
+
+function getCachedYoutubeCandidatesSync(track: SpotifyTrackItem): string[] {
+  hydrateCandidateCache();
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (vid?: string) => {
+    const clean = String(vid || '').trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(clean) && !seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+    }
+  };
+  const key = normalizeCandidateCacheKey(track);
+  const cached = key ? memCandidateCache.get(key) : undefined;
+  if (cached && Date.now() - cached.ts < YT_CANDIDATES_TTL_MS && cached.ids.length > 0) {
+    for (const id of cached.ids) push(id);
+  }
+  push(track.videoId);
+  push(extractVideoIdFromAudioUrl(track.fullAudioUrl));
+  return out;
 }
 
 export function canUseResidentialDirectAudio(): boolean {
@@ -156,7 +195,21 @@ export function canUseResidentialDirectAudio(): boolean {
   );
 }
 
-export function buildResidentialFullAudioUrl(track: SpotifyTrackItem): string {
+export function isMobileLockScreenDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return (
+    /iPhone|iPad|iPod|Android|Mobile/i.test(ua) ||
+    (navigator.maxTouchPoints > 1 &&
+      typeof window !== 'undefined' &&
+      Boolean(window.matchMedia?.('(pointer: coarse)')?.matches))
+  );
+}
+
+export function buildDirectFullAudioUrl(
+  track: SpotifyTrackItem,
+  retryIdx = 0
+): string {
   const qs = new URLSearchParams();
   const seedId =
     track.videoId && /^[a-zA-Z0-9_-]{11}$/.test(track.videoId)
@@ -172,7 +225,16 @@ export function buildResidentialFullAudioUrl(track: SpotifyTrackItem): string {
   if (track.durationSec > 0) {
     qs.set('dur', String(Math.round(track.durationSec)));
   }
-  return buildFileListApiUrl(`/api/youtube/audio?${qs.toString()}`);
+  if (retryIdx > 0) {
+    qs.set('retry', String(retryIdx));
+  }
+  qs.set('fmt', 'm4a2');
+  const relPath = `/api/youtube/audio?${qs.toString()}`;
+  return canUseResidentialDirectAudio() ? buildFileListApiUrl(relPath) : relPath;
+}
+
+export function buildResidentialFullAudioUrl(track: SpotifyTrackItem): string {
+  return buildDirectFullAudioUrl(track, 0);
 }
 
 export function promoteWorkingCandidate(
@@ -222,7 +284,13 @@ export async function resolveTrackYoutubeCandidates(
     const expectedDur = Math.max(0, Math.round(track.durationSec || 0));
     const minAcceptableDur =
       expectedDur >= 75 ? Math.max(48, Math.floor(expectedDur * 0.45)) : 45;
-    const maxAcceptableDur = Math.max(expectedDur * 2.8, 960);
+    const maxAcceptableDur =
+      expectedDur >= 60
+        ? Math.max(Math.round(expectedDur * 1.75), expectedDur + 95)
+        : 720;
+    const trackWantsLiveOrMix = LIVE_OR_MIX_RE.test(
+      `${track.artist || ''} ${track.title || ''}`
+    );
 
     type ScoredCandidate = { id: string; score: number; restrictedLikely: boolean };
 
@@ -250,16 +318,19 @@ export async function resolveTrackYoutubeCandidates(
           let score = 0;
           if (expectedDur > 0) {
             const diff = Math.abs(dur - expectedDur);
-            if (diff <= 5) score += 60;
-            else if (diff <= 15) score += 40;
+            if (diff <= 5) score += 65;
+            else if (diff <= 15) score += 45;
             else if (diff <= 35) score += 20;
-            else if (diff > 120) score -= 20;
+            else if (diff > 90) score -= 35;
           }
           if (BONUS_OFFICIAL_RE.test(title) || /\bTopic\b/i.test(ch)) {
             score += 25;
           }
           if (PENALTY_VERSION_RE.test(title)) {
-            score -= 35;
+            score -= 45;
+          }
+          if (!trackWantsLiveOrMix && LIVE_OR_MIX_RE.test(`${title} ${ch}`)) {
+            score -= 25;
           }
           scored.push({ id: vid, score, restrictedLikely: isTopicOrVevo });
         }
@@ -276,36 +347,39 @@ export async function resolveTrackYoutubeCandidates(
         ? track.videoQuery.trim()
         : `${track.artist || ''} - ${track.title || ''}`.trim();
     const primaryQuery = `${baseTrackName} Official Audio`.trim();
-    const primaryRanked = await fetchAndScore(primaryQuery);
+    const lyricsQuery = `${baseTrackName} lyrics`.trim();
+    const plainQuery = `${track.artist || ''} - ${track.title || ''}`.trim();
+    const secondaryQuery =
+      lyricsQuery && lyricsQuery !== primaryQuery ? lyricsQuery : plainQuery;
+
+    // Fetch Official Audio and Lyrics queries IN PARALLEL to cut cold lookup latency in half!
+    const [primaryRanked, secondaryRanked] = await Promise.all([
+      fetchAndScore(primaryQuery),
+      secondaryQuery && secondaryQuery !== primaryQuery
+        ? fetchAndScore(secondaryQuery)
+        : Promise.resolve([] as ScoredCandidate[]),
+    ]);
+
     const mergedRanked: ScoredCandidate[] = [...primaryRanked];
-
-    const allTopRestrictedLikely =
-      primaryRanked.length > 0 &&
-      primaryRanked.every((item) => item.restrictedLikely);
-
-    if (primaryRanked.length < 6 || allTopRestrictedLikely) {
-      const lyricsQuery = `${baseTrackName} lyrics`.trim();
-      const plainQuery = `${track.artist || ''} - ${track.title || ''}`.trim();
-      const secondaryQuery =
-        lyricsQuery && lyricsQuery !== primaryQuery ? lyricsQuery : plainQuery;
-      if (secondaryQuery && secondaryQuery !== primaryQuery) {
-        const secondaryRanked = await fetchAndScore(secondaryQuery);
-        const existingSet = new Set(mergedRanked.map((c) => c.id));
-        for (const item of secondaryRanked) {
-          if (!existingSet.has(item.id)) {
-            existingSet.add(item.id);
-            mergedRanked.push(item);
-          }
-        }
+    const existingSet = new Set(mergedRanked.map((c) => c.id));
+    for (const item of secondaryRanked) {
+      if (!existingSet.has(item.id)) {
+        existingSet.add(item.id);
+        mergedRanked.push(item);
       }
-      if (mergedRanked.length < 4 && plainQuery && plainQuery !== primaryQuery && plainQuery !== secondaryQuery) {
-        const plainRanked = await fetchAndScore(plainQuery);
-        const existingSet = new Set(mergedRanked.map((c) => c.id));
-        for (const item of plainRanked) {
-          if (!existingSet.has(item.id)) {
-            existingSet.add(item.id);
-            mergedRanked.push(item);
-          }
+    }
+
+    if (
+      mergedRanked.length < 4 &&
+      plainQuery &&
+      plainQuery !== primaryQuery &&
+      plainQuery !== secondaryQuery
+    ) {
+      const plainRanked = await fetchAndScore(plainQuery);
+      for (const item of plainRanked) {
+        if (!existingSet.has(item.id)) {
+          existingSet.add(item.id);
+          mergedRanked.push(item);
         }
       }
     }
@@ -429,7 +503,7 @@ function loadCandidateAtIndex(
         } catch {
           // ignore transient state read error
         }
-      }, 1300);
+      }, 900);
 
       candidateWatchdogTimer = window.setTimeout(() => {
         candidateWatchdogTimer = null;
@@ -437,7 +511,7 @@ function loadCandidateAtIndex(
           return;
         }
         loadCandidateAtIndex(player, idx + 1, safeStart, seq);
-      }, 5500);
+      }, 3200);
     }
   } catch {
     loadCandidateAtIndex(player, idx + 1, safeStart, seq);
@@ -517,6 +591,7 @@ function lockHostIframeFromFocus(): void {
   if (iframe) {
     iframe.tabIndex = -1;
     iframe.setAttribute('aria-hidden', 'true');
+    iframe.setAttribute('allow', 'autoplay; encrypted-media');
   }
 }
 
@@ -659,6 +734,39 @@ export function prewarmYoutubeMusicEngine(): void {
   void ensureYoutubePlayerReady();
 }
 
+/**
+ * Quietly pre-resolves the next track in the active queue so pressing Next (or auto-advancing)
+ * starts almost instantaneously (<0.2s):
+ * - On LAN / Cloudflare Tunnel / Bridge: triggers `?prefetch=1` so the local server downloads &
+ *   losslessly remuxes the clean faststart M4A into RAM ahead of time.
+ * - On Cloud (filmio.my): caches YouTube candidate videoIds in memory & localStorage so YT.Player
+ *   hits the 0ms synchronous fast-path inside the user's Next tap gesture.
+ */
+export function prewarmNextMusicTrack(track: SpotifyTrackItem | null | undefined): void {
+  if (typeof window === 'undefined' || !track) return;
+  const key = normalizeCandidateCacheKey(track);
+  if (!key) return;
+  const now = Date.now();
+  const prevTs = prefetchedDirectTrackKeys.get(key) || 0;
+  if (now - prevTs < 15 * 60 * 1000) return;
+  prefetchedDirectTrackKeys.set(key, now);
+  if (prefetchedDirectTrackKeys.size > 120) {
+    const oldest = prefetchedDirectTrackKeys.keys().next().value;
+    if (oldest) prefetchedDirectTrackKeys.delete(oldest);
+  }
+
+  if (canUseResidentialDirectAudio()) {
+    const prefetchUrl = `${buildDirectFullAudioUrl(track, 0)}&prefetch=1`;
+    void fetch(prefetchUrl, { cache: 'no-store' }).catch(() => {
+      prefetchedDirectTrackKeys.delete(key);
+    });
+  } else {
+    void resolveTrackYoutubeCandidates(track).catch(() => {
+      prefetchedDirectTrackKeys.delete(key);
+    });
+  }
+}
+
 export async function playYoutubeMusicTrack(
   track: SpotifyTrackItem,
   callbacks: YoutubeMusicCallbacks,
@@ -673,8 +781,40 @@ export async function playYoutubeMusicTrack(
   clearCandidateTimers();
   stopProgressTicker();
 
+  const startSec = opts?.startSec || 0;
+  const syncCandidates = getCachedYoutubeCandidatesSync(track);
+
+  // SYNCHRONOUS FAST-PATH: If YT.Player is prewarmed and we have cached/seed videoId(s),
+  // invoke loadVideoById + playVideo synchronously inside the user's tap gesture (100% iOS Safari autoplay-safe!)
+  if (ytPlayerInstance && ytPlayerReady && syncCandidates.length > 0) {
+    activeCandidates = syncCandidates;
+    loadCandidateAtIndex(ytPlayerInstance, 0, startSec, seq);
+    // Quietly enrich backup candidates in the background in case candidate #0 is embed-restricted
+    if (syncCandidates.length < 4) {
+      void resolveTrackYoutubeCandidates(track).then((more) => {
+        if (seq !== activeSeq) return;
+        const merged = [...activeCandidates];
+        const seen = new Set(merged);
+        for (const id of more) {
+          if (!seen.has(id)) {
+            seen.add(id);
+            merged.push(id);
+          }
+        }
+        activeCandidates = merged.slice(0, 10);
+      });
+    }
+    return;
+  }
+
   if (ytPlayerInstance && ytPlayerReady) {
     applyYtPlayerVolume(ytPlayerInstance);
+    // Synchronously unlock iOS/iPadOS Safari media gesture on the prewarmed YT iframe before async search
+    try {
+      ytPlayerInstance.playVideo();
+    } catch {
+      // ignore if no video cued yet
+    }
   }
 
   const [candidates, player] = await Promise.all([
@@ -695,7 +835,7 @@ export async function playYoutubeMusicTrack(
     return;
   }
 
-  loadCandidateAtIndex(player, 0, opts?.startSec || 0, seq);
+  loadCandidateAtIndex(player, 0, startSec, seq);
 }
 
 export function pauseYoutubeMusicTrack(): void {

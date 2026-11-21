@@ -1,5 +1,8 @@
 import { buildFileListApiUrl } from '../views/smartTvLampaHelpers';
-import { hasLocalLoopbackBridge } from './deviceContinuityService';
+import {
+  hasLocalLoopbackBridge,
+  isDirectLocalHost,
+} from './deviceContinuityService';
 
 export interface ResolvedDirectVodStream {
   ok: boolean;
@@ -63,12 +66,7 @@ export async function resolveDirectVodStreamClient(params: {
     ru = '',
   } = params;
 
-  const isLocalLan =
-    typeof window !== 'undefined' &&
-    (window.location.hostname.startsWith('192.168.') ||
-      window.location.hostname.startsWith('10.') ||
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1');
+  const isLocalLan = isDirectLocalHost();
 
   const qs = new URLSearchParams({
     kp,
@@ -152,11 +150,8 @@ export async function resolveDirectVodStreamClient(params: {
                 : undefined),
           };
         }
-        if (
-          data?.embedUrl ||
-          (Array.isArray(data?.seasons) && data.seasons.length > 0)
-        ) {
-          return data;
+        if (Array.isArray(data?.seasons) && data.seasons.length > 0) {
+          return { ...data, embedUrl: undefined };
         }
       }
     } catch {

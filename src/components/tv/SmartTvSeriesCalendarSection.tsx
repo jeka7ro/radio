@@ -874,7 +874,7 @@ export const SmartTvSeriesCalendarSection: React.FC<
       {/* TOP HEADER PANEL (Apple macOS Tahoe Liquid Glass) */}
       <div className="rounded-3xl tahoe-glass border border-white/10 p-4 sm:p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+          <div data-mobile-hide-banner="true" className="hidden md:flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center text-white shadow-inner shrink-0">
               <Calendar className="w-5 h-5 stroke-[2]" />
             </div>

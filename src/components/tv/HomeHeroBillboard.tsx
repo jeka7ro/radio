@@ -95,6 +95,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
       <div
         ref={containerRef}
         data-top-hero-card="true"
+        data-mobile-hide-banner="true"
         onMouseEnter={() => {
           isHoveredRef.current = true;
         }}
@@ -108,7 +109,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
           contain: 'layout paint',
           overflowAnchor: 'none',
         }}
-        className="relative w-full rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] select-none"
+        className="hidden md:block relative w-full rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] select-none"
       >
         {/* Render stacked slides with absolute crossfade (ZERO reload, ZERO black flash, ZERO layout shift) */}
         {heroBillboardItems.map((heroItem, idx) => {

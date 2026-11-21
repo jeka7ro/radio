@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search,
   Play,
@@ -514,9 +515,9 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
       {/* Header & Search */}
       <div
         data-top-hero-card="true"
-        className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-[#101829]/90 border border-[#2563eb]/35 rounded-2xl p-4 shadow-lg"
+        className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-0 bg-transparent border-0 shadow-none md:bg-[#101829]/90 md:border md:border-[#2563eb]/35 md:rounded-2xl md:p-4 md:shadow-lg"
       >
-        <div className="flex items-center gap-3">
+        <div data-mobile-hide-banner="true" className="hidden md:flex items-center gap-3">
           <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#1e3a8a] to-[#2563eb] border border-[#60a5fa]/40 flex items-center justify-center shadow-lg shadow-blue-900/40 shrink-0">
             {dedicatedShowsMode ? (
               <Flame className="w-6 h-6 text-white" />
@@ -587,8 +588,9 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           </div>
           <button
             type="button"
+            data-mobile-hide-banner="true"
             onClick={() => setIsKeyboardOpen((prev) => !prev)}
-            className={`h-10 px-4 rounded-xl text-xs font-extrabold inline-flex items-center gap-2 border transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${
+            className={`h-10 px-4 rounded-xl text-xs font-extrabold hidden md:inline-flex items-center gap-2 border transition-all focus:outline-none focus:ring-4 focus:ring-white focus:bg-white focus:text-[#141414] cursor-pointer ${
               isKeyboardOpen
                 ? 'bg-[#1e3a8a] text-white border-[#60a5fa]'
                 : 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-100 border-white/15'
@@ -712,7 +714,8 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
         return (
           <div
             data-top-hero-card="true"
-            className="relative w-full min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex flex-col justify-between p-3 sm:p-5 lg:p-8"
+            data-mobile-hide-banner="true"
+            className="hidden md:flex relative w-full min-h-[175px] sm:min-h-[210px] lg:min-h-[300px] max-h-[360px] rounded-2xl sm:rounded-[28px] overflow-hidden border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.85)] bg-[#111318] flex-col justify-between p-3 sm:p-5 lg:p-8"
           >
             {/* Full-Bleed Widescreen Backdrop */}
             {heroBackdrop && (
@@ -1192,13 +1195,22 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
       )}
 
       {/* Detail & Episode / Quality Picker Modal */}
-      {activeItem && (
+      {activeItem && (() => {
+        const detailModal = (
         <div
-          className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+            paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+            paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))',
+            paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+          }}
+          className="fixed inset-0 z-[240] bg-black/80 flex items-center justify-center p-2 sm:p-6"
           onClick={() => setActiveItem(null)}
         >
           <div
-            className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
+            className="relative w-full max-w-3xl max-h-[min(92dvh,820px)] overflow-y-auto overflow-x-hidden rounded-2xl sm:rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -1374,7 +1386,11 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
               )}
           </div>
         </div>
-      )}
+        );
+        return typeof document !== 'undefined'
+          ? createPortal(detailModal, document.body)
+          : detailModal;
+      })()}
     </div>
   );
 };

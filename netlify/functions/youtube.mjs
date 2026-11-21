@@ -11,6 +11,38 @@ const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const streamCache = new Map();
 const STREAM_CACHE_TTL_MS = 25 * 60 * 1000;
 
+let cachedVisitorData = '';
+let cachedVisitorTs = 0;
+const VISITOR_CACHE_TTL_MS = 25 * 60 * 1000;
+
+async function getYouTubeVisitorData(seedVideoId = 'fHI8X4OXluQ') {
+  if (cachedVisitorData && Date.now() - cachedVisitorTs < VISITOR_CACHE_TTL_MS) {
+    return cachedVisitorData;
+  }
+  const cleanSeed = /^[a-zA-Z0-9_-]{11}$/.test(seedVideoId) ? seedVideoId : 'fHI8X4OXluQ';
+  try {
+    const res = await fetch(`https://www.youtube.com/embed/${cleanSeed}`, {
+      headers: {
+        'User-Agent': DESKTOP_UA,
+        'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+      signal: AbortSignal.timeout(4500),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const m = html.match(/"VISITOR_DATA":"([^"]+)"/);
+      if (m?.[1]) {
+        cachedVisitorData = m[1];
+        cachedVisitorTs = Date.now();
+        return cachedVisitorData;
+      }
+    }
+  } catch {
+    // ignore transient embed fetch errors
+  }
+  return cachedVisitorData || '';
+}
+
 function parseDurationTextToSeconds(raw = '') {
   if (!raw) return 0;
   const parts = String(raw)
@@ -88,7 +120,7 @@ function extractYouTubeVideoItems(data) {
   return items;
 }
 
-function pickBestMusicVideoMatch(results, targetDurationSec = 0) {
+function rankMusicVideoMatches(results, targetDurationSec = 0) {
   const minDur =
     targetDurationSec >= 75
       ? Math.max(48, Math.floor(targetDurationSec * 0.45))
@@ -117,11 +149,16 @@ function pickBestMusicVideoMatch(results, targetDurationSec = 0) {
     scored.push({ item: r, score });
   }
   scored.sort((a, b) => b.score - a.score);
-  return (
-    scored[0]?.item ||
-    results.find((r) => !r.isLive && r.durationSec >= 48 && !SHORT_SNIPPET_RE.test(r.title || '')) ||
-    results[0]
+  const ranked = scored.map((s) => s.item);
+  if (ranked.length > 0) return ranked.slice(0, 6);
+  const fallback = (results || []).filter(
+    (r) => r?.videoId && !r.isLive && r.durationSec >= 48 && !SHORT_SNIPPET_RE.test(r.title || '')
   );
+  return fallback.length > 0 ? fallback.slice(0, 6) : (results || []).slice(0, 4);
+}
+
+function pickBestMusicVideoMatch(results, targetDurationSec = 0) {
+  return rankMusicVideoMatches(results, targetDurationSec)[0];
 }
 
 async function searchYouTubeVideos(cleanQuery = 'trending romania') {
@@ -222,16 +259,19 @@ async function resolveYouTubeAudioStream(videoId, forceRefresh = false) {
     return cached;
   }
 
+  const visitorData = await getYouTubeVisitorData(cleanId);
+
   const contexts = [
     {
-      ua: IOS_PRODUCER_UA,
+      ua: DESKTOP_UA,
       client: {
-        clientName: 'IOS_PRODUCER',
-        clientVersion: '0.145.1',
+        clientName: 'VISIONOS',
+        clientVersion: '0.1',
         deviceMake: 'Apple',
-        deviceModel: 'iPhone16,2',
-        osName: 'iPhone',
-        osVersion: '18.2.1.22C161',
+        deviceModel: 'RealityDevice14,1',
+        osName: 'visionOS',
+        osVersion: '1.3.21O771',
+        ...(visitorData ? { visitorData } : {}),
         hl: 'ro',
         gl: 'RO',
       },
@@ -245,6 +285,21 @@ async function resolveYouTubeAudioStream(videoId, forceRefresh = false) {
         deviceModel: 'iPhone16,2',
         osName: 'iPhone',
         osVersion: '18.3.2.22D82',
+        ...(visitorData ? { visitorData } : {}),
+        hl: 'ro',
+        gl: 'RO',
+      },
+    },
+    {
+      ua: IOS_PRODUCER_UA,
+      client: {
+        clientName: 'IOS_PRODUCER',
+        clientVersion: '0.145.1',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.2.1.22C161',
+        ...(visitorData ? { visitorData } : {}),
         hl: 'ro',
         gl: 'RO',
       },
@@ -1081,6 +1136,7 @@ export async function handler(event) {
 
   // 1. MUSIC CATALOG ROUTE
   if (path.includes('/music-catalog') || params.action === 'music-catalog') {
+    void getYouTubeVisitorData('dQw4w9WgXcQ').catch(() => {});
     const rawQuery = (params.q || params.term || '__GLOBAL_TOP_50__').trim();
     const country = (params.country || 'RO').trim().toUpperCase();
     const limit = Math.min(60, Math.max(5, parseInt(params.limit || '50', 10) || 50));
@@ -1196,128 +1252,171 @@ export async function handler(event) {
 
   // 2. AUDIO RESOLVER ROUTE
   if (path.includes('/audio') || params.action === 'audio') {
-    let id = (params.id || '').trim();
+    const initialId = (params.id || '').trim();
     const q = (params.q || '').trim();
     const targetDurationSec = Math.max(0, Number(params.dur || 0) || 0);
+    const retryIdx = Math.max(0, Math.min(4, parseInt(params.retry || '0', 10) || 0));
+    const audioErrHeaders = {
+      ...jsonHeaders,
+      'Cache-Control': 'no-store',
+    };
 
     try {
-      if (!id && q) {
+      const candidateIds = [];
+      const seenIds = new Set();
+      const pushCand = (vid) => {
+        const clean = String(vid || '').trim();
+        if (/^[a-zA-Z0-9_-]{11}$/.test(clean) && !seenIds.has(clean)) {
+          seenIds.add(clean);
+          candidateIds.push(clean);
+        }
+      };
+
+      pushCand(initialId);
+      if (q && (candidateIds.length === 0 || retryIdx > 0)) {
         const results = await searchYouTubeVideos(q);
-        const bestMatch = pickBestMusicVideoMatch(results, targetDurationSec);
-        if (bestMatch?.videoId) {
-          id = bestMatch.videoId;
+        for (const m of rankMusicVideoMatches(results, targetDurationSec)) {
+          pushCand(m?.videoId);
         }
       }
 
-      if (id) {
+      const orderedIds =
+        retryIdx > 0 && candidateIds.length > retryIdx
+          ? [...candidateIds.slice(retryIdx), ...candidateIds.slice(0, retryIdx)]
+          : candidateIds;
+
+      const stripRange = (raw) => {
+        try {
+          const u = new URL(raw);
+          u.searchParams.delete('range');
+          return u.toString();
+        } catch {
+          return String(raw).replace(/[?&]range=[^&]*/g, '');
+        }
+      };
+
+      for (const id of orderedIds.slice(0, 4)) {
         let streamInfo = await resolveYouTubeAudioStream(id);
-        if (streamInfo?.url && streamInfo.contentLength > 0) {
-          const reqHeaders = event.headers || {};
-          const rangeHeader = String(reqHeaders.range || reqHeaders.Range || '');
-          const totalSize = streamInfo.contentLength;
-          const rangeMatch = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
-          const reqStart = rangeMatch
-            ? Math.min(Math.max(0, Number(rangeMatch[1])), totalSize - 1)
-            : 0;
-          const requestedEnd =
-            rangeMatch && rangeMatch[2]
-              ? Math.min(Math.max(reqStart, Number(rangeMatch[2])), totalSize - 1)
-              : totalSize - 1;
-          const MAX_LAMBDA_WINDOW = 3 * 1048576;
-          const reqEnd = Math.min(requestedEnd, reqStart + MAX_LAMBDA_WINDOW - 1);
+        if (!streamInfo?.url) continue;
 
-          const stripRange = (raw) => {
-            try {
-              const u = new URL(raw);
-              u.searchParams.delete('range');
-              return u.toString();
-            } catch {
-              return String(raw).replace(/[?&]range=[^&]*/g, '');
-            }
-          };
-
-          let baseUrl = stripRange(streamInfo.url);
-          const CHUNK_SIZE = 1048576;
-          const chunks = [];
-          let pos = reqStart;
-          let refreshedOnce = false;
-
-          while (pos <= reqEnd) {
-            const chunkEnd = Math.min(reqEnd, pos + CHUNK_SIZE - 1);
+        let baseUrl = stripRange(streamInfo.url);
+        let totalSize = streamInfo.contentLength;
+        if (totalSize <= 0) {
+          try {
             const sep = baseUrl.includes('?') ? '&' : '?';
-            let chunkBuf = null;
-            for (let attempt = 0; attempt < 2; attempt++) {
-              try {
-                const cRes = await fetch(`${baseUrl}${sep}range=${pos}-${chunkEnd}`, {
-                  headers: { 'User-Agent': streamInfo.userAgent },
-                });
-                if (cRes.status === 403 && !refreshedOnce) {
-                  refreshedOnce = true;
-                  const refreshed = await resolveYouTubeAudioStream(id, true);
-                  if (refreshed?.url) {
-                    streamInfo = refreshed;
-                    baseUrl = stripRange(streamInfo.url);
-                  }
-                  continue;
-                }
-                if (cRes.ok || cRes.status === 206) {
-                  const ab = await cRes.arrayBuffer();
-                  if (ab.byteLength > 0) {
-                    chunkBuf = Buffer.from(ab);
-                    break;
-                  }
-                }
-              } catch {
-                // retry once
-              }
+            const probeRes = await fetch(`${baseUrl}${sep}range=0-65535`, {
+              headers: { 'User-Agent': streamInfo.userAgent },
+            });
+            const cr = probeRes.headers.get('content-range') || '';
+            const mTotal = /\/(\d+)$/.exec(cr);
+            if (mTotal?.[1]) {
+              totalSize = Number(mTotal[1]) || 0;
+              if (totalSize > 0) streamInfo.contentLength = totalSize;
             }
-            if (!chunkBuf) break;
-            chunks.push(chunkBuf);
-            pos += chunkBuf.byteLength;
+            await probeRes.body?.cancel().catch(() => {});
+          } catch {
+            // ignore probe error
           }
+        }
+        if (totalSize <= 0) continue;
 
-          if (chunks.length > 0) {
-            const outBuf = Buffer.concat(chunks);
-            const actualEnd = reqStart + outBuf.byteLength - 1;
-            const isPartial = Boolean(rangeMatch) || actualEnd < totalSize - 1;
-            return {
-              statusCode: isPartial ? 206 : 200,
-              isBase64Encoded: true,
-              headers: {
-                'Content-Type': streamInfo.mimeType || 'audio/mp4',
-                'Accept-Ranges': 'bytes',
-                'Content-Length': String(outBuf.byteLength),
-                ...(isPartial
-                  ? { 'Content-Range': `bytes ${reqStart}-${actualEnd}/${totalSize}` }
-                  : {}),
-                'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'private, no-store',
-                Vary: 'Range',
-                ...(streamInfo.durationSec > 0
-                  ? {
-                      'X-Content-Duration': String(streamInfo.durationSec),
-                      'Access-Control-Expose-Headers':
-                        'X-Content-Duration, Content-Range, Accept-Ranges',
-                    }
-                  : {
-                      'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges',
-                    }),
-              },
-              body: outBuf.toString('base64'),
-            };
+        const reqHeaders = event.headers || {};
+        const rangeHeader = String(reqHeaders.range || reqHeaders.Range || '');
+        const rangeMatch = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
+        const reqStart = rangeMatch
+          ? Math.min(Math.max(0, Number(rangeMatch[1])), totalSize - 1)
+          : 0;
+        const requestedEnd =
+          rangeMatch && rangeMatch[2]
+            ? Math.min(Math.max(reqStart, Number(rangeMatch[2])), totalSize - 1)
+            : totalSize - 1;
+        const MAX_LAMBDA_WINDOW = !rangeMatch
+          ? Math.floor(3.6 * 1048576)
+          : reqStart === 0
+            ? 262144
+            : Math.floor(2.5 * 1048576);
+        const reqEnd = Math.min(requestedEnd, reqStart + MAX_LAMBDA_WINDOW - 1);
+
+        const CHUNK_SIZE = 1048576;
+        const chunks = [];
+        let pos = reqStart;
+        let refreshedOnce = false;
+
+        while (pos <= reqEnd) {
+          const chunkEnd = Math.min(reqEnd, pos + CHUNK_SIZE - 1);
+          const sep = baseUrl.includes('?') ? '&' : '?';
+          let chunkBuf = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const cRes = await fetch(`${baseUrl}${sep}range=${pos}-${chunkEnd}`, {
+                headers: { 'User-Agent': streamInfo.userAgent },
+              });
+              if (cRes.status === 403 && !refreshedOnce) {
+                refreshedOnce = true;
+                const refreshed = await resolveYouTubeAudioStream(id, true);
+                if (refreshed?.url) {
+                  streamInfo = refreshed;
+                  baseUrl = stripRange(streamInfo.url);
+                }
+                continue;
+              }
+              if (cRes.ok || cRes.status === 206) {
+                const ab = await cRes.arrayBuffer();
+                if (ab.byteLength > 0) {
+                  chunkBuf = Buffer.from(ab);
+                  break;
+                }
+              }
+            } catch {
+              // retry once
+            }
           }
+          if (!chunkBuf) break;
+          chunks.push(chunkBuf);
+          pos += chunkBuf.byteLength;
+        }
+
+        if (chunks.length > 0) {
+          const outBuf = Buffer.concat(chunks);
+          const actualEnd = reqStart + outBuf.byteLength - 1;
+          const isPartial = Boolean(rangeMatch) || actualEnd < totalSize - 1;
+          return {
+            statusCode: isPartial ? 206 : 200,
+            isBase64Encoded: true,
+            headers: {
+              'Content-Type': streamInfo.mimeType || 'audio/mp4',
+              'Accept-Ranges': 'bytes',
+              'Content-Length': String(outBuf.byteLength),
+              ...(isPartial
+                ? { 'Content-Range': `bytes ${reqStart}-${actualEnd}/${totalSize}` }
+                : {}),
+              'Access-Control-Allow-Origin': '*',
+              'Cache-Control': 'private, no-store',
+              Vary: 'Range',
+              ...(streamInfo.durationSec > 0
+                ? {
+                    'X-Content-Duration': String(streamInfo.durationSec),
+                    'Access-Control-Expose-Headers':
+                      'X-Content-Duration, Content-Range, Accept-Ranges',
+                  }
+                : {
+                    'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges',
+                  }),
+            },
+            body: outBuf.toString('base64'),
+          };
         }
       }
 
       return {
         statusCode: 404,
-        headers: jsonHeaders,
+        headers: audioErrHeaders,
         body: JSON.stringify({ ok: false, error: 'Audio source not found' }),
       };
     } catch (err) {
       return {
         statusCode: 500,
-        headers: jsonHeaders,
+        headers: audioErrHeaders,
         body: JSON.stringify({ ok: false, error: String(err) }),
       };
     }

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Home,
@@ -56,6 +57,7 @@ import {
   HardDriveDownload,
   Airplay,
   Car,
+  PictureInPicture2,
 } from 'lucide-react';
 import {
   clearAllOfflineMusic,
@@ -65,10 +67,11 @@ import {
   useOfflineMusicState,
 } from '../services/offlineMusicService';
 import {
-  buildResidentialFullAudioUrl,
+  buildDirectFullAudioUrl,
   canUseResidentialDirectAudio,
   pauseYoutubeMusicTrack,
   playYoutubeMusicTrack,
+  prewarmNextMusicTrack,
   prewarmYoutubeMusicEngine,
   resumeYoutubeMusicTrack,
   seekYoutubeMusicTrack,
@@ -82,8 +85,11 @@ import {
   deleteOfflineItem,
   exportOfflineItemToDeviceFile,
   formatBytes,
+  useOfflineVideoDownloadState,
+  enqueueOfflineVideoDownloadJob,
+  cancelActiveOfflineVideoDownload,
+  clearOfflineVideoDownloadError,
   type OfflineMediaItem,
-  type OfflineDownloadProgress,
 } from '../services/offlineMediaService';
 import {
   resolveKlubnichkaDirectStream,
@@ -207,6 +213,7 @@ import { VodCardProducerBadge } from '../components/common/VodCardProducerBadge'
 import { VodPosterWatchedControl } from '../components/common/VodPosterWatchedControl';
 import { setActiveTvPlaylistContext } from '../components/tv/TvOsdChannelList';
 import { RadioPipPlayer } from '../components/player/RadioPipPlayer';
+import { MusicPipPlayer, toggleMusicPip } from '../components/player/MusicPipPlayer';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 
 interface SmartTvLampaViewProps {
@@ -291,7 +298,6 @@ import {
   isEpisodeProgressWatched,
   getSeriesWatchedEpisodesCount,
   isVodEntryWatched,
-  buildVodEmbedUrl,
   SMART_TV_SETTINGS_STORAGE_KEY,
   SmartTvSettings,
   DEFAULT_SMART_TV_SETTINGS,
@@ -493,9 +499,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const musicAudioRef = useRef<HTMLAudioElement | null>(null);
   const [currentMusicTrack, setCurrentMusicTrack] =
     useState<SpotifyTrackItem | null>(null);
-  const [musicQueue, setMusicQueue] = useState<SpotifyTrackItem[]>(
-    INITIAL_SPOTIFY_TRACKS
-  );
+  const [musicQueue, setMusicQueue] = useState<SpotifyTrackItem[]>(() => {
+    const pid = loadActiveProfileId();
+    try {
+      const raw = localStorage.getItem(`filmio_music_queue_${pid}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    const init = loadLocalProfileMusicState(pid);
+    if (init && init.likedTracks.length > 0) return init.likedTracks;
+    return INITIAL_SPOTIFY_TRACKS;
+  });
   const [isMusicPlaying, setIsMusicPlaying] = useState<boolean>(false);
   const [musicElapsedSec, setMusicElapsedSec] = useState<number>(0);
   const [musicDurationSec, setMusicDurationSec] = useState<number>(0);
@@ -595,7 +613,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const audioFallbackOnlyRef = useRef<boolean>(false);
   const isMusicRepeatRef = useRef<boolean>(isMusicRepeat);
   isMusicRepeatRef.current = isMusicRepeat;
+  const musicQueueRef = useRef<SpotifyTrackItem[]>(musicQueue);
+  musicQueueRef.current = musicQueue;
+  const handleUpdateMusicQueue = useCallback((nextQueue: SpotifyTrackItem[]) => {
+    if (!nextQueue || nextQueue.length === 0) return;
+    musicQueueRef.current = nextQueue;
+    setMusicQueue(nextQueue);
+    try {
+      const pid = activeProfileIdForMusicRef.current || 'p1';
+      localStorage.setItem(`filmio_music_queue_${pid}`, JSON.stringify(nextQueue.slice(0, 200)));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, []);
+  const isMusicShuffleRef = useRef<boolean>(isMusicShuffle);
+  isMusicShuffleRef.current = isMusicShuffle;
   const handleNextMusicTrackRef = useRef<() => void>(() => {});
+  const handlePrevMusicTrackRef = useRef<() => void>(() => {});
+  const handleSeekMusicRef = useRef<(sec: number) => void>(() => {});
+  const handleStopAndCloseMusicRef = useRef<() => void>(() => {});
   const lastMusicPosSyncMsRef = useRef<number>(0);
 
   // If Radio Live or Live TV starts playing, stop and close Spotify Music completely so only the current source is active
@@ -646,6 +682,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   ]);
 
   const musicPlaybackSeqRef = useRef<number>(0);
+  const musicAudioRetryRef = useRef<number>(0);
+  const lastMusicAudioProgressMsRef = useRef<number>(0);
+  const lastMusicAudioTimeSecRef = useRef<number>(-1);
+  const consecutiveMusicFailCountRef = useRef<number>(0);
+  const nextTrackPrefetchTimerRef = useRef<number | null>(null);
+  const musicStallTimeoutRef = useRef<number | null>(null);
+  const musicDoubleDurCapRef = useRef<number>(0);
 
   const startYtTrackPlayback = useCallback(
     (track: SpotifyTrackItem, startSec = 0) => {
@@ -660,6 +703,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         track,
         {
           onProgress: (ct, dur) => {
+            if (ct > 2) consecutiveMusicFailCountRef.current = 0;
+            lastMusicAudioProgressMsRef.current = Date.now();
             setMusicElapsedSec(ct);
             if (dur >= 45) {
               setMusicDurationSec(dur);
@@ -686,17 +731,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
           },
           onAllCandidatesFailed: () => {
-            const el = musicAudioRef.current;
-            if (el && track.previewUrl) {
-              activeMusicBackendRef.current = 'audio';
-              audioFallbackOnlyRef.current = true;
-              el.src = track.previewUrl;
-              el.volume = isMusicMuted ? 0 : musicVolume;
-              el.play().catch(() => {});
-            } else {
-              activeMusicBackendRef.current = 'none';
-              setIsMusicPlaying(false);
+            // STRICT POLICY: Never fall back to 30-second Deezer/iTunes previewUrl!
+            consecutiveMusicFailCountRef.current += 1;
+            if (
+              consecutiveMusicFailCountRef.current <= 3 &&
+              musicQueueRef.current.length > 1
+            ) {
+              handleNextMusicTrackRef.current();
+              return;
             }
+            activeMusicBackendRef.current = 'none';
+            setIsMusicPlaying(false);
           },
         },
         { startSec }
@@ -717,12 +762,59 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         closeTvPlayer();
       }
       if (queueList && queueList.length > 0) {
-        setMusicQueue(queueList);
+        handleUpdateMusicQueue(queueList);
       }
+      currentMusicTrackRef.current = track;
+      musicElapsedSecRef.current = 0;
+      musicDurationSecRef.current = track.durationSec || 200;
+      isMusicPlayingRef.current = true;
       setCurrentMusicTrack(track);
       setMusicElapsedSec(0);
       setMusicDurationSec(track.durationSec || 200);
       setIsMusicPlaying(true);
+
+      claimMediaSession(
+        "music",
+        {
+          title: track.title,
+          artist: track.artist || "Filmio Music",
+          album: track.album || "Filmio Music",
+          artworkUrl: track.cover || track.coverSmall || "/apple-touch-icon.png",
+        },
+        {
+          onPlay: () => {
+            stopRadio();
+            setIsTvRadioPlayerOpen(false);
+            if (currentTvChannel) closeTvPlayer();
+            if (activeMusicBackendRef.current === "yt") {
+              resumeYoutubeMusicTrack();
+              setIsMusicPlaying(true);
+              return;
+            }
+            const el = musicAudioRef.current;
+            if (el) {
+              el.play().catch(() => {});
+              setIsMusicPlaying(true);
+            }
+          },
+          onPause: () => {
+            if (activeMusicBackendRef.current === "yt") {
+              pauseYoutubeMusicTrack();
+            } else {
+              musicAudioRef.current?.pause();
+            }
+            setIsMusicPlaying(false);
+          },
+          onStop: () => handleStopAndCloseMusicRef.current(),
+          onPrev: () => handlePrevMusicTrackRef.current(),
+          onNext: () => handleNextMusicTrackRef.current(),
+          onSeekBackward: null,
+          onSeekForward: null,
+          onSeekTo: (sec) => handleSeekMusicRef.current(sec),
+        }
+      );
+      updateMediaSessionPlaybackState("music", "playing");
+      updateMediaSessionPosition("music", 0, track.durationSec || 200);
 
       const now = Date.now();
       const normTrackKey = `${String(track.artist || '').toLowerCase().trim()}::${String(track.title || '').toLowerCase().trim()}`;
@@ -746,14 +838,46 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         },
       });
 
+      musicAudioRetryRef.current = 0;
+      musicDoubleDurCapRef.current = 0;
+      lastMusicAudioProgressMsRef.current = Date.now();
+      lastMusicAudioTimeSecRef.current = -1;
       const playbackSeq = ++musicPlaybackSeqRef.current;
+      if (nextTrackPrefetchTimerRef.current !== null) {
+        window.clearTimeout(nextTrackPrefetchTimerRef.current);
+        nextTrackPrefetchTimerRef.current = null;
+      }
+      const effectiveQueueForPrefetch =
+        queueList && queueList.length > 0 ? queueList : musicQueueRef.current;
+      if (effectiveQueueForPrefetch.length > 1) {
+        const curQIdx = effectiveQueueForPrefetch.findIndex((t) => t.id === track.id);
+        const upcomingTrack =
+          curQIdx >= 0
+            ? effectiveQueueForPrefetch[(curQIdx + 1) % effectiveQueueForPrefetch.length]
+            : effectiveQueueForPrefetch[0];
+        if (upcomingTrack && upcomingTrack.id !== track.id) {
+          nextTrackPrefetchTimerRef.current = window.setTimeout(() => {
+            nextTrackPrefetchTimerRef.current = null;
+            if (musicPlaybackSeqRef.current === playbackSeq) {
+              prewarmNextMusicTrack(upcomingTrack);
+            }
+          }, 1100);
+        }
+      }
       const audioEl = musicAudioRef.current;
       const startOnlinePlayback = () => {
         if (musicPlaybackSeqRef.current !== playbackSeq) return;
-        if (canUseResidentialDirectAudio() && audioEl) {
+        // On Cloud (filmio.my without LAN Bridge), Netlify Lambda IPs are blocked by YouTube InnerTube (HTTP 404).
+        // Start full-track YT.Player IMMEDIATELY inside the user's tap gesture on ALL devices (iPhone/iPad/Android/PC/TV)!
+        if (!canUseResidentialDirectAudio()) {
+          startYtTrackPlayback(track, 0);
+          return;
+        }
+        if (audioEl) {
           activeMusicBackendRef.current = 'audio';
           audioFallbackOnlyRef.current = false;
-          audioEl.src = buildResidentialFullAudioUrl(track);
+          musicAudioRetryRef.current = 0;
+          audioEl.src = buildDirectFullAudioUrl(track, 0);
           audioEl.volume = isMusicMuted ? 0 : musicVolume;
           const playPromise = audioEl.play();
           if (playPromise !== undefined) {
@@ -802,13 +926,20 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       musicVolume,
       persistAndSyncMusicState,
       startYtTrackPlayback,
+      handleUpdateMusicQueue,
     ]
   );
 
   const handleToggleMusicPlayPause = useCallback(() => {
     const audioEl = musicAudioRef.current;
     if (!currentMusicTrack) {
-      handlePlayMusicTrack(INITIAL_SPOTIFY_TRACKS[0], INITIAL_SPOTIFY_TRACKS);
+      const initList =
+        musicQueueRef.current.length > 0
+          ? musicQueueRef.current
+          : likedMusicTracksRef.current.length > 0
+            ? likedMusicTracksRef.current
+            : INITIAL_SPOTIFY_TRACKS;
+      handlePlayMusicTrack(initList[0], initList);
       return;
     }
 
@@ -840,30 +971,32 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       if (!audioEl.getAttribute('src')) {
         const seq = ++musicPlaybackSeqRef.current;
         const resumeAt = Math.max(0, Math.floor(musicElapsedSecRef.current || 0));
+        musicAudioRetryRef.current = 0;
         const resumeOnline = () => {
           if (musicPlaybackSeqRef.current !== seq) return;
-          if (canUseResidentialDirectAudio()) {
-            activeMusicBackendRef.current = 'audio';
-            audioFallbackOnlyRef.current = false;
-            audioEl.src = buildResidentialFullAudioUrl(currentMusicTrack);
-            audioEl.volume = isMusicMuted ? 0 : musicVolume;
-            if (resumeAt > 2) {
-              const seekOnce = () => {
-                try {
-                  audioEl.currentTime = resumeAt;
-                } catch {
-                  // ignore seek before ready
-                }
-              };
-              audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
-            }
-            audioEl.play().catch(() => {
-              if (musicPlaybackSeqRef.current !== seq) return;
-              startYtTrackPlayback(currentMusicTrack, resumeAt);
-            });
+          if (!canUseResidentialDirectAudio()) {
+            startYtTrackPlayback(currentMusicTrack, resumeAt);
             return;
           }
-          startYtTrackPlayback(currentMusicTrack, resumeAt);
+          activeMusicBackendRef.current = 'audio';
+          audioFallbackOnlyRef.current = false;
+          musicAudioRetryRef.current = 0;
+          audioEl.src = buildDirectFullAudioUrl(currentMusicTrack, 0);
+          audioEl.volume = isMusicMuted ? 0 : musicVolume;
+          if (resumeAt > 2) {
+            const seekOnce = () => {
+              try {
+                audioEl.currentTime = resumeAt;
+              } catch {
+                // ignore seek before ready
+              }
+            };
+            audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
+          }
+          audioEl.play().catch(() => {
+            if (musicPlaybackSeqRef.current !== seq) return;
+            startYtTrackPlayback(currentMusicTrack, resumeAt);
+          });
         };
 
         if (!isTrackOfflineSync(currentMusicTrack)) {
@@ -926,40 +1059,128 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   ]);
 
   const handleNextMusicTrack = useCallback(() => {
-    const list = musicQueue.length > 0 ? musicQueue : INITIAL_SPOTIFY_TRACKS;
+    const likedFallback = likedMusicTracksRef.current;
+    const rawQ = musicQueueRef.current;
+    const cur = currentMusicTrackRef.current;
+    const qMatchesCur =
+      !cur || rawQ.length === 0 || rawQ.some((t) => t.id === cur.id);
+    const list =
+      !qMatchesCur && likedFallback.some((t) => t.id === cur?.id)
+        ? likedFallback
+        : rawQ.length > 0
+          ? rawQ
+          : likedFallback.length > 0
+            ? likedFallback
+            : INITIAL_SPOTIFY_TRACKS;
     if (list.length === 0) return;
-    if (isMusicShuffle && list.length > 1) {
-      const candidates = list.filter((t) => t.id !== currentMusicTrack?.id);
+    if (isMusicShuffleRef.current && list.length > 1) {
+      const candidates = list.filter((t) => t.id !== cur?.id);
       const pick =
         candidates[Math.floor(Math.random() * candidates.length)] || list[0];
       handlePlayMusicTrack(pick, list);
       return;
     }
-    const idx = list.findIndex((t) => t.id === currentMusicTrack?.id);
+    const idx = list.findIndex((t) => t.id === cur?.id);
     const nextTrack = list[(idx + 1) % list.length] || list[0];
     handlePlayMusicTrack(nextTrack, list);
-  }, [musicQueue, isMusicShuffle, currentMusicTrack, handlePlayMusicTrack]);
+  }, [handlePlayMusicTrack]);
   handleNextMusicTrackRef.current = handleNextMusicTrack;
 
+  const clearMusicStallTimer = useCallback(() => {
+    if (musicStallTimeoutRef.current !== null) {
+      window.clearTimeout(musicStallTimeoutRef.current);
+      musicStallTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleMusicStallRecovery = useCallback(() => {
+    if (activeMusicBackendRef.current !== 'audio') return;
+    if (musicStallTimeoutRef.current !== null) return;
+    const el = musicAudioRef.current;
+    const snapTime = Number(el?.currentTime || 0);
+    const snapSeq = musicPlaybackSeqRef.current;
+    musicStallTimeoutRef.current = window.setTimeout(() => {
+      musicStallTimeoutRef.current = null;
+      if (
+        musicPlaybackSeqRef.current !== snapSeq ||
+        activeMusicBackendRef.current !== 'audio'
+      ) {
+        return;
+      }
+      const curEl = musicAudioRef.current;
+      const curTrack = currentMusicTrackRef.current;
+      if (!curEl || !curTrack || curEl.paused) return;
+      const ct = Number(curEl.currentTime || 0);
+      if (Math.abs(ct - snapTime) >= 0.35) return;
+      const dur = Number(curEl.duration || 0);
+      if (dur > 30 && Number.isFinite(dur) && ct >= dur - 2.5) {
+        if (isMusicRepeatRef.current) {
+          curEl.currentTime = 0;
+          curEl.play().catch(() => {});
+        } else {
+          handleNextMusicTrackRef.current();
+        }
+        return;
+      }
+      const resumeAt = Math.max(0, Math.floor(ct));
+      if (musicAudioRetryRef.current < 2) {
+        musicAudioRetryRef.current += 1;
+        curEl.src = buildDirectFullAudioUrl(curTrack, musicAudioRetryRef.current);
+        if (resumeAt > 2) {
+          const seekOnReady = () => {
+            try {
+              curEl.currentTime = resumeAt;
+            } catch {
+              // ignore
+            }
+          };
+          curEl.addEventListener('loadedmetadata', seekOnReady, { once: true });
+        }
+        curEl.play().catch(() => {
+          startYtTrackPlayback(curTrack, resumeAt);
+        });
+      } else {
+        curEl.pause();
+        curEl.removeAttribute('src');
+        startYtTrackPlayback(curTrack, resumeAt);
+      }
+    }, 9000);
+  }, [startYtTrackPlayback]);
+
   const handlePrevMusicTrack = useCallback(() => {
-    const list = musicQueue.length > 0 ? musicQueue : INITIAL_SPOTIFY_TRACKS;
+    const likedFallback = likedMusicTracksRef.current;
+    const rawQ = musicQueueRef.current;
+    const cur = currentMusicTrackRef.current;
+    const qMatchesCur =
+      !cur || rawQ.length === 0 || rawQ.some((t) => t.id === cur.id);
+    const list =
+      !qMatchesCur && likedFallback.some((t) => t.id === cur?.id)
+        ? likedFallback
+        : rawQ.length > 0
+          ? rawQ
+          : likedFallback.length > 0
+            ? likedFallback
+            : INITIAL_SPOTIFY_TRACKS;
     if (list.length === 0) return;
-    if (musicElapsedSec > 5) {
+    if ((musicElapsedSecRef.current || 0) > 5) {
       if (activeMusicBackendRef.current === 'yt') {
         seekYoutubeMusicTrack(0);
+        musicElapsedSecRef.current = 0;
         setMusicElapsedSec(0);
         return;
       }
       if (musicAudioRef.current) {
         musicAudioRef.current.currentTime = 0;
+        musicElapsedSecRef.current = 0;
         setMusicElapsedSec(0);
         return;
       }
     }
-    const idx = list.findIndex((t) => t.id === currentMusicTrack?.id);
+    const idx = list.findIndex((t) => t.id === cur?.id);
     const prevIdx = idx <= 0 ? list.length - 1 : idx - 1;
     handlePlayMusicTrack(list[prevIdx] || list[0], list);
-  }, [musicQueue, musicElapsedSec, currentMusicTrack, handlePlayMusicTrack]);
+  }, [handlePlayMusicTrack]);
+  handlePrevMusicTrackRef.current = handlePrevMusicTrack;
 
   const handleSeekMusic = useCallback(
     (targetSec: number) => {
@@ -994,6 +1215,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     },
     [persistAndSyncMusicState]
   );
+  handleSeekMusicRef.current = handleSeekMusic;
 
   const handleToggleLikeMusicTrack = useCallback(
     (track: SpotifyTrackItem) => {
@@ -1069,11 +1291,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       { forceCloud: true }
     );
   }, [persistAndSyncMusicState]);
+  handleStopAndCloseMusicRef.current = handleStopAndCloseMusic;
 
   // Apple CarPlay Now Playing + Mercedes GLE Steering-Wheel & Cluster MediaSession for Music
   useEffect(() => {
     if (
       !currentMusicTrack ||
+      (!isMusicPlaying && activeMusicBackendRef.current === 'none') ||
       currentStation ||
       currentTvChannel ||
       isPlayingVodRef.current
@@ -1532,6 +1756,31 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
       } else if (pb?.track && isIdle) {
         const activeTrack = pb.track;
+        if (!musicQueueRef.current.some((t) => t.id === activeTrack.id)) {
+          let matchedQueue: SpotifyTrackItem[] | null = null;
+          try {
+            const rawQ = localStorage.getItem(`filmio_music_queue_${effectiveProfileId}`);
+            if (rawQ) {
+              const parsedQ = JSON.parse(rawQ);
+              if (
+                Array.isArray(parsedQ) &&
+                parsedQ.length > 0 &&
+                parsedQ.some((t: SpotifyTrackItem) => t?.id === activeTrack.id)
+              ) {
+                matchedQueue = parsedQ;
+              }
+            }
+          } catch {
+            // ignore
+          }
+          if (!matchedQueue && nextLiked.some((t) => t.id === activeTrack.id)) {
+            matchedQueue = nextLiked;
+          }
+          if (matchedQueue && matchedQueue.length > 0) {
+            musicQueueRef.current = matchedQueue;
+            setMusicQueue(matchedQueue);
+          }
+        }
         setCurrentMusicTrack((prev) => {
           if (
             prev &&
@@ -1966,8 +2215,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const handleFocusVodItemRef = useRef<(item: CinemetaItem, isHeroBannerPreload?: boolean) => void>(() => { });
   const lastFocusedVodItemRef = useRef<CinemetaItem | null>(null);
 
+  const isSelectingProfileRef = useRef<boolean>(false);
   const handleSelectProfile = useCallback(
     (profileId: string) => {
+      if (isSelectingProfileRef.current) return;
+      isSelectingProfileRef.current = true;
+      try {
       const cleanId = (profileId || 'p1').trim();
       const latestStored = loadTvProfiles();
       const targetProfile =
@@ -2026,6 +2279,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       setEditingProfileId(null);
       setIsProfilePickerOpen(false);
       setIsHandoffModalOpen(false);
+      } finally {
+        isSelectingProfileRef.current = false;
+      }
     },
     [tvProfiles, switchRadioFavoritesProfile, currentTvChannel]
   );
@@ -2266,8 +2522,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [activeYtDurationSec, setActiveYtDurationSec] = useState<number>(0);
   const [ytUseEmbedFallback, setYtUseEmbedFallback] = useState<boolean>(() => !isLocalHomeServer());
   const [activeServer, setActiveServer] = useState<VodServerId>(() => {
-    if (tvSettings.defaultVodServer === 'auto_best') return 'filelist_torrent';
-    return tvSettings.defaultVodServer;
+    if (tvSettings.defaultVodServer === 'kinogram_hls') return 'kinogram_hls';
+    return 'filelist_torrent';
   });
   const [preferredSubLang, setPreferredSubLang] = useState<SubtitleLangId>(() =>
     tvSettings.defaultSubLang === 'off' ? 'ro' : tvSettings.defaultSubLang
@@ -2692,8 +2948,28 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   // Offline / Local Device Downloads (IndexedDB + Device Export)
   const offlineMusicState = useOfflineMusicState();
   const [offlineItems, setOfflineItems] = useState<OfflineMediaItem[]>([]);
-  const [selectedOfflineSeriesId, setSelectedOfflineSeriesId] = useState<string | null>(null);
+  const [downloadsFilterTab, setDownloadsFilterTab] = useState<'all' | 'movies' | 'series' | 'music'>('all');
+  const [isDownloadsEditMode, setIsDownloadsEditMode] = useState<boolean>(false);
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    setIsDownloadModalOpen(false);
+    setIsInfoSheetOpen(false);
+    setIsEpisodesDrawerOpen(false);
+    setIsDownloadsEditMode(false);
+  }, [activeVodItem?.id, section]);
+
+  useEffect(() => {
+    if (!isDownloadModalOpen) return;
+    const onEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.stopPropagation();
+        setIsDownloadModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onEsc, true);
+    return () => window.removeEventListener('keydown', onEsc, true);
+  }, [isDownloadModalOpen]);
   const [downloadQualityHeight, setDownloadQualityHeight] = useState<
     360 | 480 | 720 | 1080
   >(480);
@@ -2701,13 +2977,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const [selectedDownloadEpisodes, setSelectedDownloadEpisodes] = useState<
     number[]
   >([1]);
-  const [activeDownloadProgress, setActiveDownloadProgress] =
-    useState<OfflineDownloadProgress | null>(null);
-  const [activeDownloadTargetId, setActiveDownloadTargetId] = useState<
-    string | null
-  >(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const downloadAbortRef = useRef<AbortController | null>(null);
+  const offlineVideoDl = useOfflineVideoDownloadState();
+  const activeDownloadProgress = offlineVideoDl.activeProgress;
+  const activeDownloadTargetId = offlineVideoDl.activeTargetId;
+  const downloadError = offlineVideoDl.lastError;
+  const setDownloadError = useCallback((val: string | null) => {
+    if (val === null) clearOfflineVideoDownloadError();
+  }, []);
 
   const refreshOfflineLibrary = useCallback(async () => {
     try {
@@ -2732,7 +3008,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
     window.addEventListener('offline', onOffline);
     return () => window.removeEventListener('offline', onOffline);
-  }, [refreshOfflineLibrary]);
+  }, [refreshOfflineLibrary, offlineVideoDl.libraryRevision]);
 
   const currentVodOfflineId = useMemo(() => {
     if (!activeVodItem) return '';
@@ -2756,10 +3032,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       episodesOverride?: number[]
     ) => {
       if (!activeVodItem) return;
-      if (activeDownloadProgress) return;
 
+      // All render-scope props/state (activeVodItem, detailedMeta, resolvedDirectStream, etc.)
+      // are immutable closure snapshots for this job, so switching pages or cards NEVER affects it!
+      const snapVod = activeVodItem;
       const targetHeight = preferredHeightOverride || downloadQualityHeight;
-      const isSeries = activeVodItem.type === 'series';
+      const isSeries = snapVod.type === 'series';
       const targetSeason = isSeries
         ? (seasonOverride ?? downloadModalSeason ?? selectedSeason)
         : 1;
@@ -2768,10 +3046,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ? [...episodesOverride].sort((a, b) => a - b)
           : [selectedEpisode]
         : [1];
+      const snapTitle = detailedMeta?.name || snapVod.name;
 
-      setDownloadError(null);
-      const controller = new AbortController();
-      downloadAbortRef.current = controller;
+      clearOfflineVideoDownloadError();
 
       const kpId =
         activeVodItem.kpId ||
@@ -2786,14 +3063,391 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         detailedMeta?.releaseInfo || activeVodItem.releaseInfo || ''
       ).slice(0, 4);
 
-      try {
+      const canUseLocalFl = isLocalHomeServer();
+      const preferFileList =
+        canUseLocalFl &&
+        (activeServer === 'filelist_torrent' || isCurrentVodForeign);
+      const iedemFid =
+        activeVodItem.iedemFid ||
+        (activeVodItem.id.startsWith('iedem_')
+          ? Number(activeVodItem.id.replace(/^iedem_/, ''))
+          : 0);
+      const iedemCardSeason = (() => {
+        const rawLabel = String(
+          activeVodItem.releaseTitle || activeVodItem.name || ''
+        );
+        const sm = rawLabel.match(/(?:Сезон|Season|\bS)0*(\d{1,2})\b/i);
+        return sm ? Number(sm[1]) || 1 : 1;
+      })();
+
+      type DownloadCandidate = {
+        url: string;
+        sourceLabel: string;
+        audioNames?: string[];
+        estimatedSizeBytes?: number;
+        estimatedDurationSec?: number;
+        forceDirectVideo?: boolean;
+      };
+
+      const pickBestVkUrl = (
+        vkQuals?: ResolvedDirectVodStream['vkQualities']
+      ): string | undefined => {
+        if (!vkQuals || vkQuals.length === 0) return undefined;
+        const withinCap = vkQuals.filter((q) => q.height <= targetHeight + 60);
+        const pool = withinCap.length > 0 ? withinCap : vkQuals;
+        const sorted = [...pool].sort(
+          (a, b) =>
+            Math.abs(a.height - targetHeight) - Math.abs(b.height - targetHeight)
+        );
+        return sorted[0]?.url;
+      };
+
+      const appendDirectCandidates = (
+        list: DownloadCandidate[],
+        streamObj: ResolvedDirectVodStream | null | undefined,
+        fallbackLabel: string
+      ) => {
+        if (!streamObj) return;
+        const srcLabel = streamObj.sourcePath || fallbackLabel;
+        const vkPicked = pickBestVkUrl(streamObj.vkQualities);
+        const rawUrls = [
+          vkPicked,
+          streamObj.hlsUrl,
+          streamObj.proxyHlsUrl,
+          streamObj.fallbackHlsUrl,
+          ...(streamObj.backupHlsUrls || []),
+        ].filter((u): u is string => Boolean(u && typeof u === 'string'));
+        for (const u of rawUrls) {
+          if (!list.some((x) => x.url === u)) {
+            list.push({
+              url: u,
+              sourceLabel: srcLabel,
+              audioNames: streamObj.audioNames,
+              estimatedDurationSec: streamObj.duration || 0,
+            });
+          }
+        }
+      };
+
+      enqueueOfflineVideoDownloadJob({
+        vodId: snapVod.id,
+        title: snapTitle,
+        run: async ({ signal, setTargetId, setProgress, notifyItemSaved }) => {
+        const controller = { signal };
+        // Cache iEdem VIP episode URL map once for the entire download batch (fixes all iEdem series like Вор в законе!)
+        let cachedIedemDetail: Awaited<
+          ReturnType<typeof fetchIedemItemDetail>
+        > | null = null;
+        if (iedemFid > 0 && !isCurrentVodForeign) {
+          try {
+            cachedIedemDetail = await fetchIedemItemDetail(iedemFid);
+          } catch {
+            cachedIedemDetail = null;
+          }
+        }
+
+        const resolveFileListCandidate = async (
+          epNum: number
+        ): Promise<DownloadCandidate | null> => {
+          if (!canUseLocalFl) return null;
+          const isSameSelectedEp =
+            !isSeries ||
+            (targetSeason === selectedSeason && epNum === selectedEpisode);
+
+          const buildFlStreamUrl = (
+            rawStreamUrl: string,
+            audioNames?: string[]
+          ): string => {
+            const absUrl = /^https?:\/\//i.test(rawStreamUrl)
+              ? rawStreamUrl
+              : buildFileListApiUrl(rawStreamUrl);
+            let out = absUrl;
+            if (!/[?&]orig=/.test(out)) {
+              out += `${out.includes('?') ? '&' : '?'}orig=${isCurrentVodForeign ? '1' : '0'}`;
+            }
+            const flAudioIdx =
+              selectedAudioTrackIdx >= 0 &&
+              audioNames &&
+              selectedAudioTrackIdx < audioNames.length
+                ? selectedAudioTrackIdx
+                : -1;
+            if (flAudioIdx >= 0 && !/[?&]audio=/.test(out)) {
+              out += `&audio=${flAudioIdx}`;
+            }
+            if (targetHeight <= 1080 && !/[?&]maxw=/.test(out)) {
+              const targetMaxW =
+                targetHeight <= 360
+                  ? 640
+                  : targetHeight <= 480
+                    ? 854
+                    : targetHeight <= 720
+                      ? 1280
+                      : 1920;
+              out += `&maxw=${targetMaxW}`;
+            }
+            if (!/[?&]download=1/.test(out)) {
+              out += '&download=1';
+            }
+            return out;
+          };
+
+          const pickCompactOfflineTorrent = (
+            torrents?: ResolvedFileListStream['torrents'],
+            currentTor?: ResolvedFileListStream['selectedTorrent']
+          ) => {
+            if (!torrents || torrents.length <= 1) return null;
+            const curBytes = currentTor?.sizeBytes || 0;
+            const curTitle = String(currentTor?.releaseTitle || '');
+            const curIsHugeOr4k =
+              curBytes > 6 * 1024 * 1024 * 1024 ||
+              /2160p|4k|uhd|remux/i.test(curTitle);
+            if (!curIsHugeOr4k && targetHeight >= 1080) return null;
+            const cleanPool = torrents.filter((t) => {
+              const rel = String(t.releaseTitle || t.name || '');
+              if (/(EXTRAS|BONUS|SAMPLE|TRAILER|FEATURETTES)/i.test(rel)) {
+                return false;
+              }
+              return (t.sizeBytes || 0) > 150 * 1024 * 1024 && (t.seeders || 0) >= 3;
+            });
+            if (cleanPool.length === 0) return null;
+            // Prefer non-4K compact x264/WEB-DL release matching requested targetHeight (avoids 80GB Remux OOM on iPad!)
+            const non4k = cleanPool.filter(
+              (t) => !/2160p|4k|uhd|remux/i.test(String(t.releaseTitle || ''))
+            );
+            const preferred =
+              targetHeight <= 720
+                ? non4k.filter((t) => /720p|480p|webrip|bdrip/i.test(String(t.releaseTitle || '')))
+                : non4k;
+            const candidatesPool =
+              preferred.length > 0
+                ? preferred
+                : non4k.length > 0
+                  ? non4k
+                  : cleanPool;
+            const best = [...candidatesPool].sort(
+              (a, b) => (a.sizeBytes || 0) - (b.sizeBytes || 0)
+            )[0];
+            if (
+              best &&
+              best.id &&
+              best.id !== currentTor?.id &&
+              (!curBytes || (best.sizeBytes || 0) < curBytes * 0.75)
+            ) {
+              return best;
+            }
+            return null;
+          };
+
+          const estimateFlOfflineBytes = (
+            tor?: ResolvedFileListStream['selectedTorrent'],
+            filesCount = 1,
+            durSec = 0
+          ): number => {
+            const rawBytes = tor?.sizeBytes || 0;
+            const perFile =
+              rawBytes > 0
+                ? isSeries && filesCount > 1
+                  ? Math.round(rawBytes / filesCount)
+                  : rawBytes
+                : 0;
+            const isTranscoded4k = /2160p|4k|uhd|hevc|x265|h\.?265/i.test(
+              String(tor?.releaseTitle || '')
+            );
+            if (isTranscoded4k && durSec > 60) {
+              // maxw=1920 Hardware VideoToolbox transcode targets ~8 Mbps (~1 MB/s)
+              return Math.min(perFile || Infinity, Math.round(durSec * 1_050_000));
+            }
+            return perFile;
+          };
+
+          const compactMovieTor = !isSeries
+            ? pickCompactOfflineTorrent(
+                resolvedFileListStream?.torrents,
+                resolvedFileListStream?.selectedTorrent
+              )
+            : null;
+
+          if (
+            isSameSelectedEp &&
+            !compactMovieTor &&
+            resolvedFileListStream?.ok &&
+            resolvedFileListStream.streamUrl
+          ) {
+            const filesCount = Math.max(
+              1,
+              resolvedFileListStream.files?.length || 1
+            );
+            return {
+              url: buildFlStreamUrl(
+                resolvedFileListStream.streamUrl,
+                resolvedFileListStream.audioNames
+              ),
+              sourceLabel: isCurrentVodForeign
+                ? 'FileList.io Local'
+                : 'Kinozal / FileList Local',
+              audioNames: resolvedFileListStream.audioNames,
+              estimatedSizeBytes: estimateFlOfflineBytes(
+                resolvedFileListStream.selectedTorrent,
+                filesCount,
+                resolvedFileListStream.durationSec || 0
+              ),
+              estimatedDurationSec: resolvedFileListStream.durationSec || 0,
+              forceDirectVideo: true,
+            };
+          }
+
+          const flQueryTitle = isCurrentVodForeign
+            ? detailedMeta?.nameOriginal ||
+              activeVodItem.nameOriginal ||
+              detailedMeta?.name ||
+              activeVodItem.name ||
+              ''
+            : activeVodItem.name ||
+              detailedMeta?.name ||
+              detailedMeta?.nameOriginal ||
+              '';
+          const flParams = new URLSearchParams({
+            q: flQueryTitle,
+            type: activeVodItem.type,
+            ru: isCurrentVodForeign ? '0' : '1',
+            ...(yearStr ? { year: yearStr } : {}),
+            ...(imdbId ? { imdb: imdbId } : {}),
+            ...(isSeries
+              ? { s: String(targetSeason), e: String(epNum) }
+              : {}),
+          });
+          if (compactMovieTor?.id) {
+            flParams.set('id', String(compactMovieTor.id));
+            flParams.set('strictId', '1');
+          } else if (resolvedFileListStream?.torrentId) {
+            flParams.set('id', String(resolvedFileListStream.torrentId));
+          }
+
+          try {
+            const r = await fetch(
+              buildFileListApiUrl(`/api/filelist/resolve?${flParams.toString()}`),
+              { signal: controller.signal }
+            );
+            if (!r.ok) return null;
+            const rawFl = (await r.json()) as ResolvedFileListStream;
+            const flData = normalizeFileListResolveData(rawFl);
+            if (flData?.ok && flData.streamUrl) {
+              const filesCount = Math.max(1, flData.files?.length || 1);
+              return {
+                url: buildFlStreamUrl(flData.streamUrl, flData.audioNames),
+                sourceLabel: isCurrentVodForeign
+                  ? 'FileList.io Local'
+                  : 'Kinozal / FileList Local',
+                audioNames: flData.audioNames,
+                estimatedSizeBytes: estimateFlOfflineBytes(
+                  flData.selectedTorrent,
+                  filesCount,
+                  flData.durationSec || 0
+                ),
+                estimatedDurationSec: flData.durationSec || 0,
+                forceDirectVideo: true,
+              };
+            }
+          } catch (err) {
+            if (controller.signal.aborted) throw err;
+          }
+          return null;
+        };
+
+        const resolveDirectCandidates = async (
+          epNum: number
+        ): Promise<DownloadCandidate[]> => {
+          const list: DownloadCandidate[] = [];
+          const isSameSelectedEp =
+            !isSeries ||
+            (targetSeason === selectedSeason && epNum === selectedEpisode);
+
+          // 1. iEdem VIP direct episode / movie map (instant, zero balancer failure!)
+          if (
+            !isCurrentVodForeign &&
+            (!isSeries || targetSeason === iedemCardSeason)
+          ) {
+            if (
+              cachedIedemDetail?.type === 'multistream' &&
+              Array.isArray(cachedIedemDetail.items) &&
+              cachedIedemDetail.items.length > 0
+            ) {
+              const matchedEp =
+                cachedIedemDetail.items[epNum - 1] ||
+                cachedIedemDetail.items.find((it) => {
+                  const m = String(it.title || '').match(/(?:Серия|Эпизод|Ep\.?|E)\s*0*(\d+)/i);
+                  return m ? Number(m[1]) === epNum : false;
+                });
+              if (matchedEp?.url) {
+                list.push({
+                  url: `/api/tv-proxy?url=${encodeURIComponent(matchedEp.url)}`,
+                  sourceLabel: 'iEdem VIP',
+                  audioNames: resolvedDirectStream?.audioNames?.length
+                    ? resolvedDirectStream.audioNames
+                    : ['Русский (iEdem VIP)'],
+                });
+              }
+            } else if (!isSeries) {
+              const directIedemTarget =
+                cachedIedemDetail?.variants?.['1080'] ||
+                cachedIedemDetail?.url ||
+                cachedIedemDetail?.variants?.['auto'] ||
+                activeVodItem.iedemStreamUrl ||
+                '';
+              if (directIedemTarget) {
+                list.push({
+                  url: `/api/tv-proxy?url=${encodeURIComponent(directIedemTarget)}`,
+                  sourceLabel: 'iEdem VIP',
+                  audioNames: resolvedDirectStream?.audioNames?.length
+                    ? resolvedDirectStream.audioNames
+                    : ['Русский (iEdem VIP)'],
+                });
+              }
+            }
+          }
+
+          // 2. Currently resolved direct stream (if same episode or movie)
+          if (isSameSelectedEp && resolvedDirectStream?.ok) {
+            appendDirectCandidates(list, resolvedDirectStream, 'Direct HLS');
+          }
+
+          // 3. Fresh resolveDirectVodStreamClient (with correct ru=0/1 & Russian vs Original title!)
+          if (list.length === 0) {
+            try {
+              const resolvedEp = await resolveDirectVodStreamClient({
+                kp: kpId,
+                imdb: imdbId,
+                title: isCurrentVodForeign
+                  ? detailedMeta?.nameOriginal ||
+                    activeVodItem.nameOriginal ||
+                    activeVodItem.name
+                  : activeVodItem.name ||
+                    detailedMeta?.name ||
+                    detailedMeta?.nameOriginal,
+                type: activeVodItem.type,
+                year: yearStr,
+                season: targetSeason,
+                episode: epNum,
+                ru: isCurrentVodForeign ? '0' : '1',
+              });
+              if (resolvedEp?.ok) {
+                appendDirectCandidates(list, resolvedEp, 'Direct HLS');
+              }
+            } catch (err) {
+              if (controller.signal.aborted) throw err;
+            }
+          }
+
+          return list;
+        };
+
         for (let idx = 0; idx < targetEpisodes.length; idx++) {
           if (controller.signal.aborted) break;
           const epNum = targetEpisodes[idx];
           const offlineId = isSeries
             ? `vod_${activeVodItem.id}_S${targetSeason}E${epNum}`
             : `vod_${activeVodItem.id}`;
-          setActiveDownloadTargetId(offlineId);
+          setTargetId(offlineId);
 
           const batchPrefix =
             isSeries && targetEpisodes.length > 1
@@ -2802,7 +3456,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 ? `[S${targetSeason}:E${epNum}] `
                 : '';
 
-          setActiveDownloadProgress({
+          setProgress({
+            title: snapTitle,
             percent: 1,
             downloadedBytes: 0,
             totalSegments: 0,
@@ -2814,41 +3469,48 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             )}`,
           });
 
-          let hlsTarget =
-            !isSeries ||
-              (targetSeason === selectedSeason && epNum === selectedEpisode)
-              ? resolvedDirectStream?.hlsUrl
-              : undefined;
-          let epAudioNames = resolvedDirectStream?.audioNames;
+          const candidates: DownloadCandidate[] = [];
+          const pushUnique = (c: DownloadCandidate | null) => {
+            if (c && c.url && !candidates.some((x) => x.url === c.url)) {
+              candidates.push(c);
+            }
+          };
 
-          if (!hlsTarget) {
-            const resolvedEp = await resolveDirectVodStreamClient({
-              kp: kpId,
-              imdb: imdbId,
-              title: detailedMeta?.nameOriginal || activeVodItem.name,
-              type: activeVodItem.type,
-              year: yearStr,
-              season: targetSeason,
-              episode: epNum,
-            });
-            hlsTarget = resolvedEp?.hlsUrl || resolvedEp?.proxyHlsUrl;
-            if (resolvedEp?.audioNames?.length) {
-              epAudioNames = resolvedEp.audioNames;
+          if (preferFileList) {
+            pushUnique(await resolveFileListCandidate(epNum));
+            if (candidates.length === 0) {
+              const directList = await resolveDirectCandidates(epNum);
+              for (const c of directList) pushUnique(c);
+            }
+          } else {
+            const directList = await resolveDirectCandidates(epNum);
+            for (const c of directList) pushUnique(c);
+            if (candidates.length === 0 && canUseLocalFl) {
+              pushUnique(await resolveFileListCandidate(epNum));
             }
           }
 
-          if (!hlsTarget) {
+          if (candidates.length === 0) {
+            if (!canUseLocalFl && isCurrentVodForeign) {
+              throw new Error(
+                tr(
+                  'Pentru descărcarea locală la acest titlu străin, conectează aplicația la serverul local FileList (LAN / Tunel).',
+                  'To download this foreign title locally, connect to your local FileList server (LAN / Tunnel).',
+                  'Для скачивания этого зарубежного тайтла подключитесь к локальному серверу FileList (LAN / Туннель).'
+                )
+              );
+            }
             throw new Error(
               isSeries
                 ? tr(
-                  `Streamul HLS nu este disponibil pentru S${targetSeason}:E${epNum}.`,
-                  `HLS stream unavailable for S${targetSeason}:E${epNum}.`,
-                  `Поток HLS недоступен для S${targetSeason}:E${epNum}.`
+                  `Nu s-a găsit un stream descărcabil pentru S${targetSeason}:E${epNum}.`,
+                  `No downloadable stream found for S${targetSeason}:E${epNum}.`,
+                  `Не найден доступный поток для скачивания S${targetSeason}:E${epNum}.`
                 )
                 : tr(
-                  'Streamul direct HLS nu este disponibil pentru descărcare locală la acest titlu.',
-                  'Direct HLS stream is unavailable for offline download on this title.',
-                  'Прямой поток HLS недоступен для скачивания.'
+                  'Nu s-a găsit un stream descărcabil pentru acest titlu.',
+                  'No downloadable video stream found for this title.',
+                  'Не найден доступный поток для скачивания.'
                 )
             );
           }
@@ -2897,81 +3559,117 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             ? `Sezonul ${targetSeason} • Episodul ${epNum}`
             : detailedMeta?.releaseInfo || activeVodItem.releaseInfo || 'Film';
 
-          const audioIdx =
-            selectedAudioTrackIdx >= 0
-              ? selectedAudioTrackIdx
-              : epAudioNames?.length
-                ? resolveAudioTrackIndexByPreference(
-                  epAudioNames,
-                  effectiveVodAudioPref
+          let downloadedThisEp = false;
+          let lastAttemptErr: unknown = null;
+
+          // If all initial direct candidates fail on a local home server, lazily append FileList fallback once
+          let appendedFlFallback = preferFileList;
+
+          for (let cIdx = 0; cIdx < candidates.length; cIdx++) {
+            const cand = candidates[cIdx];
+            if (controller.signal.aborted) {
+              throw new DOMException('Descărcare anulată', 'AbortError');
+            }
+            const epAudioNames =
+              cand.audioNames?.length
+                ? cand.audioNames
+                : resolvedDirectStream?.audioNames?.length
+                  ? resolvedDirectStream.audioNames
+                  : resolvedFileListStream?.audioNames;
+            const audioIdx =
+              selectedAudioTrackIdx >= 0
+                ? selectedAudioTrackIdx
+                : epAudioNames?.length
+                  ? resolveAudioTrackIndexByPreference(
+                    epAudioNames,
+                    effectiveVodAudioPref
+                  )
+                  : Math.max(0, effectiveAudioTrackIdx);
+            try {
+              await downloadHlsToOfflineDb({
+                id: offlineId,
+                title: detailedMeta?.name || activeVodItem.name,
+                subtitleLabel: subtitleText,
+                poster:
+                  detailedMeta?.poster ||
+                  activeVodItem.poster ||
+                  `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`,
+                masterM3u8Url: cand.url,
+                preferredHeight: targetHeight,
+                audioTrackIndex: audioIdx,
+                audioLabel:
+                  epAudioNames?.[audioIdx] ||
+                  epAudioNames?.[0] ||
+                  'Original / Audio 1',
+                sourceLabel: cand.sourceLabel,
+                estimatedSizeBytes: cand.estimatedSizeBytes,
+                estimatedDurationSec: cand.estimatedDurationSec,
+                forceDirectVideo: cand.forceDirectVideo,
+                savedSubCues: epSubCues.length > 0 ? epSubCues : undefined,
+                savedSubLabel: epSubLabel || undefined,
+                vodId: activeVodItem.id,
+                mediaKind: activeVodItem.type,
+                season: isSeries ? targetSeason : undefined,
+                episode: isSeries ? epNum : undefined,
+                overview: detailedMeta?.description || activeVodItem.description || undefined,
+                releaseYear: yearStr || undefined,
+                rating: detailedMeta?.imdbRating || activeVodItem.imdbRating || undefined,
+                backdrop: detailedMeta?.background || activeVodItem.background || undefined,
+                signal: controller.signal,
+                onProgress: (prog) =>
+                  setProgress({
+                    ...prog,
+                    title: prog.title || snapTitle,
+                    stage: `${batchPrefix}${prog.stage}`,
+                  }),
+              });
+              downloadedThisEp = true;
+              break;
+            } catch (attemptErr) {
+              if (
+                controller.signal.aborted ||
+                (attemptErr instanceof DOMException &&
+                  attemptErr.name === 'AbortError')
+              ) {
+                throw attemptErr;
+              }
+              lastAttemptErr = attemptErr;
+              if (
+                cIdx === candidates.length - 1 &&
+                !appendedFlFallback &&
+                canUseLocalFl
+              ) {
+                appendedFlFallback = true;
+                const flFallback = await resolveFileListCandidate(epNum);
+                pushUnique(flFallback);
+              }
+            }
+          }
+
+          if (!downloadedThisEp) {
+            throw (
+              lastAttemptErr ||
+              new Error(
+                tr(
+                  'Nu s-a putut descărca acest stream video.',
+                  'Could not download this video stream.',
+                  'Не удалось скачать видеопоток.'
                 )
-                : Math.max(0, effectiveAudioTrackIdx);
-          await downloadHlsToOfflineDb({
-            id: offlineId,
-            title: detailedMeta?.name || activeVodItem.name,
-            subtitleLabel: subtitleText,
-            poster:
-              detailedMeta?.poster ||
-              activeVodItem.poster ||
-              `https://images.metahub.space/poster/medium/${activeVodItem.id}/img`,
-            masterM3u8Url: hlsTarget,
-            preferredHeight: targetHeight,
-            audioTrackIndex: audioIdx,
-            audioLabel:
-              epAudioNames?.[audioIdx] ||
-              resolvedDirectStream?.audioNames?.[audioIdx] ||
-              'Original / Audio 1',
-            savedSubCues: epSubCues.length > 0 ? epSubCues : undefined,
-            savedSubLabel: epSubLabel || undefined,
-            vodId: activeVodItem.id,
-            mediaKind: activeVodItem.type,
-            season: isSeries ? targetSeason : undefined,
-            episode: isSeries ? epNum : undefined,
-            signal: controller.signal,
-            onProgress: (prog) =>
-              setActiveDownloadProgress({
-                ...prog,
-                stage: `${batchPrefix}${prog.stage}`,
-              }),
-          });
-
-          await refreshOfflineLibrary();
-        }
-
-        window.setTimeout(() => {
-          setActiveDownloadProgress(null);
-          setActiveDownloadTargetId(null);
-        }, 1600);
-      } catch (err) {
-        setActiveDownloadProgress(null);
-        setActiveDownloadTargetId(null);
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          setDownloadError(
-            tr(
-              'Descărcarea a fost oprită.',
-              'Download cancelled.',
-              'Загрузка отменена.'
-            )
-          );
-        } else {
-          setDownloadError(
-            err instanceof Error
-              ? err.message
-              : tr(
-                'Eroare la descărcarea locală.',
-                'Local download error.',
-                'Ошибка загрузки.'
               )
-          );
+            );
+          }
+
+          notifyItemSaved();
         }
-      } finally {
-        downloadAbortRef.current = null;
-      }
+        },
+      });
     },
     [
       activeVodItem,
-      activeDownloadProgress,
+      activeServer,
+      isCurrentVodForeign,
       resolvedDirectStream,
+      resolvedFileListStream,
       downloadQualityHeight,
       downloadModalSeason,
       selectedSeason,
@@ -2983,16 +3681,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       activeSubCues,
       activeSubLabel,
       tvSettings.defaultSubLang,
-      refreshOfflineLibrary,
       tr,
     ]
   );
 
   const handleCancelOfflineDownload = useCallback(() => {
-    downloadAbortRef.current?.abort();
-    downloadAbortRef.current = null;
-    setActiveDownloadProgress(null);
-    setActiveDownloadTargetId(null);
+    cancelActiveOfflineVideoDownload();
   }, []);
 
   const [isMobileCustomFullscreen, setIsMobileCustomFullscreen] = useState(false);
@@ -3493,6 +4187,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         setIsSubFinderOpen(false);
         return;
       }
+      if (
+        rootContainerRef.current?.querySelector(
+          '[data-imdb-dropdown-popover="true"]'
+        )
+      ) {
+        window.dispatchEvent(new CustomEvent('aether:imdb-close-dropdown'));
+        return;
+      }
       if (isPlayingVod) {
         const vodMenuEl = playerBoxRef.current?.querySelector(
           '[data-vod-open-menu]'
@@ -3692,6 +4394,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
         if (isSubFinderOpen) {
           setIsSubFinderOpen(false);
+          return;
+        }
+        if (
+          rootContainerRef.current?.querySelector(
+            '[data-imdb-dropdown-popover="true"]'
+          )
+        ) {
+          window.dispatchEvent(new CustomEvent('aether:imdb-close-dropdown'));
           return;
         }
         if (isPlayingVod) {
@@ -4718,6 +5428,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     ? rootContainerRef.current?.querySelector<HTMLElement>(
                       '[data-actor-profile-modal="true"]'
                     ) || rootContainerRef.current
+                    : rootContainerRef.current?.querySelector<HTMLElement>(
+                        '[data-imdb-dropdown-popover="true"]'
+                      )
+                      ? rootContainerRef.current.querySelector<HTMLElement>(
+                        '[data-imdb-dropdown-popover="true"]'
+                      )
 
                     : isPlayingVod && !isSettingsDrawerOpen
                       ? playerBoxRef.current?.querySelector<HTMLElement>(
@@ -8672,27 +9388,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
           setSelectedAudioTrackIdx(prefTrackIdx);
         }
-        setActiveServer(
-          isForeignVod &&
-            !activeVodItem.id.startsWith('kp_') &&
-            !isFileListExclusiveRomanianTitle(activeVodItem) &&
-            tvSettings.defaultVodServer !== 'auto_best' &&
-            tvSettings.defaultVodServer !== 'nontongo' &&
-            tvSettings.defaultVodServer !== 'filelist_torrent'
-            ? tvSettings.defaultVodServer
-            : 'kinogram_hls'
-        );
+        setActiveServer('kinogram_hls');
         return;
       }
-      setActiveServer(
-        isForeignVod &&
-          tvSettings.defaultVodServer !== 'auto_best' &&
-          tvSettings.defaultVodServer !== 'kinogram_hls' &&
-          tvSettings.defaultVodServer !== 'nontongo' &&
-          tvSettings.defaultVodServer !== 'filelist_torrent'
-          ? tvSettings.defaultVodServer
-          : 'kinogram_hls'
-      );
+      setActiveServer(canUseLocalTorrent ? 'filelist_torrent' : 'kinogram_hls');
     };
 
     if (kp && !(Number(kp) >= 9001000 && Number(kp) <= 9001999)) {
@@ -10322,6 +11021,31 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           map.set(sIdx, list);
         }
       }
+
+      // Ensure every offline-downloaded episode for this series is always present in seasonsMap (works 100% in Airplane Mode!)
+      const offlineForActive = offlineItems.filter(
+        (it) =>
+          it.vodId === activeVodItem.id ||
+          it.id.startsWith(`vod_${activeVodItem.id}_`)
+      );
+      for (const offIt of offlineForActive) {
+        const sNum = offIt.season || 1;
+        const epNum = offIt.episode || 1;
+        const existingList = map.get(sNum) || [];
+        if (!existingList.some((e) => e.episode === epNum)) {
+          const nextList = [
+            ...existingList,
+            {
+              id: `offline_${sNum}_${epNum}`,
+              name: offIt.subtitleLabel || `Episodul ${epNum}`,
+              thumbnail: offIt.backdrop || offIt.poster,
+              season: sNum,
+              episode: epNum,
+            },
+          ].sort((a, b) => a.episode - b.episode);
+          map.set(sNum, nextList);
+        }
+      }
     }
 
     return map;
@@ -10332,6 +11056,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     resolvedFileListStream,
     selectedSeason,
     selectedEpisode,
+    offlineItems,
   ]);
 
   const availableSeasons = useMemo(
@@ -10773,6 +11498,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     setIsMobileChromeHidden(false);
     setIsPlayingVod(false);
     setIsInfoSheetOpen(false);
+    setIsDownloadModalOpen(false);
     setActiveVodItem(null);
     if (
       !isCarMode &&
@@ -11399,10 +12125,16 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       }
     };
     window.addEventListener('aether:tv-home-play-request', onHomePlayRequest);
+    const isDedicatedSmartTv =
+      typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('smart-tv-mode');
+    let registeredTvHomePlay = false;
     if (
+      isDedicatedSmartTv &&
       typeof navigator !== 'undefined' &&
       'mediaSession' in navigator &&
       section === 'home' &&
+      !currentMusicTrack &&
       !isPlayingVod &&
       !activeVodItem &&
       !currentTvChannel &&
@@ -11414,6 +12146,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         navigator.mediaSession.setActionHandler('play', () => {
           triggerHomeQuickPlayRef.current();
         });
+        registeredTvHomePlay = true;
       } catch {
         // ignore unsupported MediaSession handlers
       }
@@ -11423,9 +12156,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         'aether:tv-home-play-request',
         onHomePlayRequest
       );
+      if (
+        registeredTvHomePlay &&
+        typeof navigator !== 'undefined' &&
+        'mediaSession' in navigator &&
+        !window.__aetherMediaSessionOwner
+      ) {
+        try {
+          navigator.mediaSession.setActionHandler('play', null);
+        } catch {
+          // ignore
+        }
+      }
     };
   }, [
     section,
+    currentMusicTrack,
     isPlayingVod,
     activeVodItem,
     currentTvChannel,
@@ -12499,8 +13245,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
   const renderRoCloudRetryCard = (resetServer = false) =>
     activeVodItem ? (
-      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-[#09090b]">
-        <div className="max-w-md rounded-3xl border border-white/15 bg-zinc-950/95 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
+      <div
+        data-native-stream-unavailable="true"
+        className="relative z-10 w-full h-full flex flex-col items-center justify-center px-6 text-center bg-[#09090b]"
+      >
+        <div className="max-w-lg rounded-3xl border border-white/15 bg-zinc-950/95 p-6 sm:p-8 shadow-2xl flex flex-col items-center gap-4">
           <div className="text-lg sm:text-xl font-extrabold text-white">
             {activeVodItem.name}
             {activeVodItem.type === 'series'
@@ -12508,13 +13257,42 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               : ''}
           </div>
           <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
-            {tr(
-              'Streamul Cloud HD pentru acest episod este temporar indisponibil sau încă se încarcă. Poți reîncerca acum sau alege alt episod.',
-              'Cloud HD stream for this episode is temporarily busy. Retry now or pick another episode.',
-              'Облачный поток HD временно недоступен. Попробуйте снова или выберите другую серию.'
-            )}
+            {isCurrentVodForeign && !isLocalHomeServer()
+              ? tr(
+                  'Redarea filmelor și serialelor străine folosește exclusiv Playerul Nativ Filmio (FileList.io / Cloud Direct HLS, fără playere externe). Conectează serverul local FileList (LAN Bridge) sau reîncearcă stream-ul direct.',
+                  'Foreign movies & series play exclusively in Filmio Native Player (FileList.io / Direct Cloud HLS, never third-party site players). Connect your local FileList server (LAN Bridge) or retry the direct stream.',
+                  'Фильмы и сериалы воспроизводятся только во встроенном плеере Filmio (FileList.io / Direct HLS, без сторонних плееров). Подключите локальный сервер FileList или повторите попытку.'
+                )
+              : tr(
+                  'Streamul nativ direct pentru acest titlu este temporar indisponibil sau încă se încarcă. Poți reîncerca acum sau alege altă sursă nativă.',
+                  'Direct native stream for this title is temporarily unavailable or loading. Retry now or pick another native source.',
+                  'Прямой поток временно недоступен. Попробуйте снова или выберите другую серию.'
+                )}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+            {isCurrentVodForeign && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFileListStreamLoading(true);
+                  setActiveServer('filelist_torrent');
+                  void retryProbeLocalBridge().then((ok) => {
+                    if (ok) {
+                      setLocalBridgeTick((t) => t + 1);
+                    } else {
+                      setIsFileListStreamLoading(false);
+                    }
+                  });
+                }}
+                className="h-10 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white border border-blue-400/50 font-extrabold text-xs cursor-pointer shadow-lg"
+              >
+                {tr(
+                  'Conectează FileList Local',
+                  'Connect Local FileList',
+                  'Подключить FileList'
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -12526,9 +13304,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               className="h-10 px-5 rounded-xl bg-white hover:bg-zinc-200 text-zinc-950 font-extrabold text-xs cursor-pointer"
             >
               {tr(
-                'Reîncearcă Redarea Cloud HD',
-                'Retry Cloud HD Playback',
-                'Повторить Cloud HD'
+                'Reîncearcă Redarea Nativă',
+                'Retry Native Playback',
+                'Повторить плеер'
               )}
             </button>
             {activeVodItem.type === 'series' && (
@@ -12549,11 +13327,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       </div>
     ) : null;
 
+  const showMobileSubHeaderRadio = Boolean(
+    currentStation && (section !== 'radio' || Boolean(activeVodItem))
+  );
+  const showMobileSubHeaderMusic = Boolean(
+    !currentStation &&
+      currentMusicTrack &&
+      (section !== 'music' || Boolean(activeVodItem))
+  );
+  const hasMobileSubHeaderPlayer =
+    !isAnyFullModePlayer &&
+    (showMobileSubHeaderRadio || showMobileSubHeaderMusic);
+
   return (
     <div
       ref={rootContainerRef}
       data-lampa-root="true"
+      data-mobile-phone={isMobilePhone ? 'true' : 'false'}
+      data-mobile-landscape={isMobilePhone && !isPortraitViewport ? 'true' : 'false'}
       data-mobile-chrome-hidden={isMobileChromeHidden ? 'true' : 'false'}
+      data-mobile-subheader-player={hasMobileSubHeaderPlayer ? 'true' : 'false'}
       data-tv-theme={tvSettings.tvTheme || 'dark'}
       onScroll={(e) => {
         if (e.currentTarget === e.target) {
@@ -12570,7 +13363,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         !isPlayingVod && (
           <div
             aria-hidden="true"
-            className="pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[#10141d] transition-opacity duration-500"
+            className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-[#10141d] transition-opacity duration-500"
           >
             <img
               src={
@@ -12595,32 +13388,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       {!isAnyFullModePlayer && (
         <header
           style={{
-            paddingTop: 'var(--safe-top, env(safe-area-inset-top, 0px))',
+            paddingTop:
+              'calc(var(--safe-top, env(safe-area-inset-top, 0px)) + var(--ios-portrait-header-pad, 0px))',
             paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
             paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
+            backdropFilter: 'none',
+            WebkitBackdropFilter: 'none',
           }}
-          className={`${
-            isMobilePhone
-              ? 'fixed top-0 inset-x-0 z-30'
-              : 'fixed top-0 inset-x-0 md:relative z-30 md:z-20'
-          } shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+          className={`relative z-30 md:z-20 w-full shrink-0 ${
             activeVodItem
               ? isMobilePhone
-                ? 'bg-[#080b12]/85'
-                : 'bg-[#080b12]/80 md:bg-transparent'
+                ? 'bg-[#080b12]'
+                : 'bg-[#080b12] md:bg-transparent'
               : isMobilePhone
-                ? 'bg-[#080b12]/95'
-                : 'bg-[#080b12]/95 md:bg-black'
-          } ${
-            isMobileChromeHidden &&
-            !isSidebarOpen &&
-            !isSettingsDrawerOpen &&
-            !isFilterDrawerOpen &&
-            !isCatalogDrawerOpen
-              ? isMobilePhone
-                ? '-translate-y-full pointer-events-none'
-                : '-translate-y-full pointer-events-none md:translate-y-0 md:pointer-events-auto'
-              : 'translate-y-0'
+                ? 'bg-[#080b12]'
+                : 'bg-[#080b12] md:bg-black'
           }`}
         >
           <div className={`${isMobilePhone && !isPortraitViewport ? 'h-11 px-3' : 'h-12 sm:h-16 px-3 sm:px-7'} w-full flex items-center justify-between gap-2 sm:gap-4`}>
@@ -12707,7 +13489,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 <Menu className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" aria-hidden="true" />
               </button>
 
-              <SmartCinemaLogo size="md" className="ml-0.5 sm:ml-1 shrink-0" />
+              <button
+                type="button"
+                data-header-logo-btn="true"
+                aria-label={tr('Acasă Filmio', 'Filmio Home', 'Главная Filmio')}
+                title={tr('Acasă Filmio', 'Filmio Home', 'На главную')}
+                onClick={() => {
+                  isMobileChromeHiddenRef.current = false;
+                  scrollDeltaAccumRef.current = 0;
+                  lastMainScrollTopRef.current = 0;
+                  setIsMobileChromeHidden(false);
+                  setActiveVodItem(null);
+                  if (
+                    isCarMode ||
+                    isMobilePhone ||
+                    (typeof window !== 'undefined' && window.innerWidth < 768)
+                  ) {
+                    setIsSidebarOpen(false);
+                  }
+                  setIsFilterDrawerOpen(false);
+                  setIsCatalogDrawerOpen(false);
+                  setSection('home');
+                  rootContainerRef.current
+                    ?.querySelector<HTMLElement>('main')
+                    ?.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="ml-0.5 sm:ml-1 shrink-0 inline-flex items-center rounded-xl px-1 py-0.5 hover:bg-white/10 active:scale-95 transition-all cursor-pointer touch-manipulation focus:outline-none focus:ring-2 focus:ring-white/40"
+              >
+                <SmartCinemaLogo size="md" />
+              </button>
               {isCarMode && (
                 <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/25 border border-blue-400/50 text-[10px] font-black tracking-wider uppercase text-blue-300 shrink-0">
                   <Car className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -12810,7 +13620,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             {/* Right: Lampa Utility Icons + Clock + 2-Line Date */}
             <div className="flex items-center gap-1.5 sm:gap-3.5 shrink-0">
               {currentStation && (
-                <div className="relative inline-flex items-center h-9 sm:h-[40px] pl-1.5 pr-1.5 rounded-full bg-[#0e121b]/90 hover:bg-[#141926]/95 backdrop-blur-2xl border border-white/[0.12] shadow-[0_6px_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors">
+                <div className={`relative ${isMobilePhone ? 'hidden' : 'hidden sm:inline-flex'} items-center h-9 sm:h-[40px] pl-1.5 pr-1.5 rounded-full bg-[#0e121b]/90 hover:bg-[#141926]/95 backdrop-blur-2xl border border-white/[0.12] shadow-[0_6px_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors`}>
                   <button
                     type="button"
                     onClick={() => {
@@ -12923,9 +13733,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   totalDur > 0 ? '-' + formatMiniTime(remainingSec) : '--:--';
                 return (
                   <div
-                    className={`relative ${section === 'music' && !activeVodItem
+                    className={`relative ${(section === 'music' && !activeVodItem) || isMobilePhone
                       ? 'hidden'
-                      : 'inline-flex'
+                      : 'hidden sm:inline-flex'
                       } items-center h-9 sm:h-[40px] pl-1.5 pr-1.5 rounded-full bg-[#0e121b]/90 hover:bg-[#141926]/95 backdrop-blur-2xl border border-white/[0.12] shadow-[0_6px_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.12)] transition-colors`}
                   >
                     <button
@@ -13044,6 +13854,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         className="hidden sm:inline-flex w-7 h-7 rounded-full text-slate-300 hover:text-white hover:bg-white/[0.12] focus:bg-white focus:text-zinc-950 focus:outline-none items-center justify-center transition-colors cursor-pointer"
                       >
                         <SkipForward className="w-3.5 h-3.5 fill-current" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void toggleMusicPip()}
+                        title={tr(
+                          'MiniPlayer Picture-in-Picture (fereastră flotantă în afara paginii)',
+                          'Picture-in-Picture MiniPlayer (floating window outside page)',
+                          'Мини-плеер Картинка-в-картинке'
+                        )}
+                        className="hidden md:inline-flex w-7 h-7 rounded-full text-slate-300 hover:text-white hover:bg-white/[0.12] focus:bg-white focus:text-zinc-950 focus:outline-none items-center justify-center transition-colors cursor-pointer"
+                      >
+                        <PictureInPicture2 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"
@@ -13253,7 +14075,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                   isAppFullscreen ? 'Exit Full Screen (Esc)' : '100% Full Screen',
                   isAppFullscreen ? 'Выйти из полного экрана' : 'Полный экран'
                 )}
-                className={`hidden sm:flex w-9 h-9 rounded-full border items-center justify-center transition-all focus:bg-white focus:text-zinc-950 focus:outline-none cursor-pointer shrink-0 ${isAppFullscreen
+                className={`${isMobilePhone ? 'hidden' : 'hidden sm:flex'} w-9 h-9 rounded-full border items-center justify-center transition-all focus:bg-white focus:text-zinc-950 focus:outline-none cursor-pointer shrink-0 ${isAppFullscreen
                   ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_16px_rgba(37,99,235,0.5)]'
                   : 'bg-white/10 border-white/15 text-zinc-200 hover:text-white hover:bg-blue-600 hover:border-blue-400'
                   }`}
@@ -13278,14 +14100,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               </button>
 
               {/* Lampa 3-Dot Status Indicator */}
-              <div className="hidden md:flex flex-col items-center gap-1 px-1">
+              <div className={`${isMobilePhone ? 'hidden' : 'hidden md:flex'} flex-col items-center gap-1 px-1`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
                 <span className="w-1 h-1 rounded-full bg-zinc-500" />
                 <span className="w-1 h-1 rounded-full bg-zinc-500" />
               </div>
 
               {/* Lampa Clock + 2-Line Date */}
-              <div className="hidden sm:flex items-center gap-2.5 pl-1">
+              <div className={`${isMobilePhone ? 'hidden lg:flex' : 'hidden sm:flex'} items-center gap-2.5 pl-1`}>
                 <div className="text-xl sm:text-[26px] font-bold tracking-tight text-white tabular-nums leading-none">
                   {clockText}
                 </div>
@@ -13296,6 +14118,180 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               </div>
             </div>
           </div>
+
+          {hasMobileSubHeaderPlayer && (
+            <div
+              data-mobile-subheader-player="true"
+              className={`${isMobilePhone ? 'flex' : 'flex sm:hidden'} relative w-full ${isMobilePhone && !isPortraitViewport ? 'h-10' : 'h-12'} px-3 bg-[#0b0f1a] border-t border-white/[0.12] items-center justify-between gap-2.5`}
+            >
+              {showMobileSubHeaderRadio && currentStation ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVodItem(null);
+                      setIsTvRadioPlayerOpen(false);
+                      setSection('radio');
+                      rootContainerRef.current
+                        ?.querySelector('main')
+                        ?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer focus:outline-none"
+                  >
+                    {activeRadioTrack?.coverUrl ? (
+                      <img
+                        src={activeRadioTrack.coverUrl}
+                        alt=""
+                        className="w-8 h-8 rounded-lg object-cover shrink-0 ring-1 ring-white/15 bg-[#111726]"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-lg bg-white/[0.08] ring-1 ring-white/15 flex items-center justify-center shrink-0">
+                        <Radio
+                          className={`w-4 h-4 text-[#60a5fa] ${playerStatus === 'playing' ? 'animate-pulse' : ''}`}
+                        />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1 leading-tight">
+                      <div className="text-[13px] font-semibold text-white truncate">
+                        {activeRadioTrack?.title || currentStation.name}
+                      </div>
+                      <div className="text-[11px] font-medium text-[#94a3b8] truncate">
+                        {activeRadioTrack?.artist
+                          ? `${activeRadioTrack.artist} · ${currentStation.name}`
+                          : playerStatus === 'playing'
+                            ? `Live Radio · ${currentStation.name}`
+                            : currentStation.name}
+                      </div>
+                    </div>
+                  </button>
+                  <div className="shrink-0 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => playStation(currentStation)}
+                      aria-label={
+                        playerStatus === 'playing' || playerStatus === 'loading'
+                          ? tr('Pauză Radio', 'Pause Radio', 'Пауза радио')
+                          : tr('Redă Radio', 'Play Radio', 'Включить радио')
+                      }
+                      style={{ backgroundColor: '#ffffff', color: '#000000' }}
+                      className="w-8 h-8 rounded-full bg-white text-black inline-flex items-center justify-center shadow cursor-pointer"
+                    >
+                      {playerStatus === 'loading' ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-black" />
+                      ) : playerStatus === 'playing' ? (
+                        <Pause className="w-4 h-4 fill-current text-black" />
+                      ) : (
+                        <Play className="w-4 h-4 fill-current text-black ml-0.5" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopRadio();
+                        setIsTvRadioPlayerOpen(false);
+                      }}
+                      aria-label={tr('Oprește Radio și închide', 'Stop Radio and close', 'Закрыть')}
+                      className="w-8 h-8 rounded-full text-[#94a3b8] hover:text-white inline-flex items-center justify-center cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </>
+              ) : showMobileSubHeaderMusic && currentMusicTrack ? (() => {
+                const totalDur = Math.max(0, musicDurationSec || currentMusicTrack.durationSec || 0);
+                const elapsedClamped =
+                  totalDur > 0 ? Math.min(totalDur, Math.max(0, musicElapsedSec || 0)) : Math.max(0, musicElapsedSec || 0);
+                const remainingSec = totalDur > 0 ? Math.max(0, totalDur - elapsedClamped) : 0;
+                const musicProgressPct = totalDur > 0 ? Math.min(100, Math.max(0, (elapsedClamped / totalDur) * 100)) : 0;
+                const fmtSub = (v: number) => {
+                  const s = Math.max(0, Math.floor(v || 0));
+                  const m = Math.floor(s / 60);
+                  const r = s % 60;
+                  return `${m}:${r < 10 ? '0' : ''}${r}`;
+                };
+                return (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveVodItem(null);
+                        setSection('music');
+                        window.dispatchEvent(new CustomEvent('filmio:open-music-song-view'));
+                        rootContainerRef.current?.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="flex-1 min-w-0 flex items-center gap-2.5 text-left cursor-pointer focus:outline-none"
+                    >
+                      {currentMusicTrack.coverSmall || currentMusicTrack.cover ? (
+                        <img
+                          src={currentMusicTrack.coverSmall || currentMusicTrack.cover}
+                          alt={currentMusicTrack.title}
+                          className="w-8 h-8 rounded-lg object-cover shrink-0 ring-1 ring-white/15 bg-[#111726]"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg bg-white/[0.08] ring-1 ring-white/15 flex items-center justify-center shrink-0">
+                          <Music className="w-4 h-4 text-[#60a5fa]" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <div className="text-[13px] font-semibold text-white truncate">
+                          {currentMusicTrack.title}
+                        </div>
+                        <div className="text-[11px] font-medium text-[#94a3b8] truncate tabular-nums">
+                          {currentMusicTrack.artist}
+                          {totalDur > 0 ? ` · ${fmtSub(elapsedClamped)} / -${fmtSub(remainingSec)}` : ''}
+                        </div>
+                      </div>
+                    </button>
+                    <div className="shrink-0 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePrevMusicTrack}
+                        aria-label={tr('Piesa anterioară', 'Previous track', 'Предыдущий трек')}
+                        className="w-9 h-9 rounded-full bg-white/[0.06] hover:bg-white/15 active:scale-95 text-white inline-flex items-center justify-center cursor-pointer touch-manipulation"
+                      >
+                        <SkipBack className="w-[18px] h-[18px] fill-current" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleToggleMusicPlayPause}
+                        aria-label={isMusicPlaying ? tr('Pauză', 'Pause', 'Пауза') : tr('Redă', 'Play', 'Играть')}
+                        style={{ backgroundColor: '#ffffff', color: '#000000' }}
+                        className="w-9 h-9 mx-0.5 rounded-full bg-white text-black active:scale-95 inline-flex items-center justify-center shadow cursor-pointer touch-manipulation"
+                      >
+                        {isMusicPlaying ? (
+                          <Pause className="w-[18px] h-[18px] fill-current text-black" />
+                        ) : (
+                          <Play className="w-[18px] h-[18px] fill-current text-black ml-0.5" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleNextMusicTrack}
+                        aria-label={tr('Următoarea piesă', 'Next track', 'Следующий трек')}
+                        className="w-9 h-9 rounded-full bg-white/[0.06] hover:bg-white/15 active:scale-95 text-white inline-flex items-center justify-center cursor-pointer touch-manipulation"
+                      >
+                        <SkipForward className="w-[18px] h-[18px] fill-current" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleStopAndCloseMusic}
+                        aria-label={tr('Închide playerul', 'Close player', 'Закрыть')}
+                        className="w-8 h-8 rounded-full text-[#94a3b8] hover:text-white inline-flex items-center justify-center cursor-pointer touch-manipulation"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-[#60a5fa] transition-[width] duration-300 ease-linear"
+                        style={{ width: `${musicProgressPct}%` }}
+                      />
+                    </div>
+                  </>
+                );
+              })() : null}
+            </div>
+          )}
         </header>
       )}
 
@@ -13314,7 +14310,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           <div
             onClick={() => setIsSidebarOpen(false)}
             className={`${isCarMode || isMobilePhone ? 'block' : 'md:hidden'
-              } absolute inset-0 z-30 bg-black/70 backdrop-blur-xs`}
+              } absolute inset-0 z-[46] bg-black/70`}
           />
         )}
 
@@ -13324,13 +14320,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             aria-label="Meniu Principal Smart TV Lampa"
             className={`absolute ${isCarMode || isMobilePhone
               ? isMobilePhone && !isPortraitViewport
-                ? 'top-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-2'
-                : 'top-[calc(3.25rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-[4.75rem]'
-              : 'md:static md:my-2 md:ml-3 md:shadow-none top-[calc(3.25rem+var(--safe-top,env(safe-area-inset-top,0px)))] bottom-[4.75rem] md:top-2 md:bottom-2'
-              } left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] z-40 w-64 ${isMobilePhone ? '' : 'md:w-56'} py-2.5 px-3 rounded-[28px] overflow-y-auto overflow-x-hidden shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl ${activeVodItem
-                ? 'z-40'
-                : ''
-              }`}
+                ? 'top-2 bottom-[calc(4.1rem+var(--safe-bottom,env(safe-area-inset-bottom,0px))*0.65)] z-[48]'
+                : 'top-2 bottom-[calc(4.9rem+var(--safe-bottom,env(safe-area-inset-bottom,0px))*0.65)] z-[48]'
+              : 'md:static md:my-2 md:ml-3 md:shadow-none top-2 bottom-[4.75rem] md:top-2 md:bottom-2 z-[48] md:z-40'
+              } left-[max(0.5rem,var(--safe-left,env(safe-area-inset-left,0px)))] w-64 ${isMobilePhone ? '' : 'md:w-56'} py-2.5 px-3 rounded-[28px] overflow-y-auto overflow-x-hidden shrink-0 no-scrollbar tahoe-glass flex flex-col justify-between shadow-2xl`}
           >
             <nav className="space-y-1 group/sidebar">
               {(
@@ -13936,21 +14929,25 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 : undefined
             }
             className={
-              isPlayingVod
+              isAnyFullModePlayer
                 ? 'flex-1 min-h-0 overflow-hidden p-0 m-0'
                 : section === 'tv' && !activeVodItem
                   ? isCarMode
                     ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 sm:px-3 pt-1 pb-2 space-y-2 outline-none'
                     : isMobilePhone
-                      ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 ${!isPortraitViewport ? 'pt-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-20' : 'pt-[calc(3.35rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-24'} space-y-3 outline-none`
-                      : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 sm:px-6 max-md:pt-[calc(3.35rem+var(--safe-top,env(safe-area-inset-top,0px)))] pt-1.5 max-md:pb-24 pb-2 sm:pb-4 space-y-3 outline-none'
+                      ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 pt-2 ${!isPortraitViewport ? 'pb-24' : 'pb-24'} space-y-3 outline-none`
+                      : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2 sm:px-6 pt-2 md:pt-1.5 max-md:pb-24 pb-2 sm:pb-4 space-y-3 outline-none'
                   : section === 'music' && !activeVodItem
-                    ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none p-0 m-0 flex flex-col outline-none'
+                    ? isCarMode
+                      ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none p-0 m-0 flex flex-col outline-none'
+                      : isMobilePhone
+                        ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none pt-0 pb-0 m-0 outline-none'
+                        : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none pt-0 pb-0 m-0 md:flex md:flex-col outline-none'
                     : isCarMode
                       ? 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-2.5 sm:px-4 pt-1.5 pb-3 space-y-3 outline-none'
                       : isMobilePhone
-                        ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 ${!isPortraitViewport ? 'pt-[calc(3rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-20' : 'pt-[calc(3.45rem+var(--safe-top,env(safe-area-inset-top,0px)))] pb-24'} space-y-5 outline-none`
-                        : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 sm:px-8 max-md:pt-[calc(3.45rem+var(--safe-top,env(safe-area-inset-top,0px)))] pt-3.5 max-md:pb-24 pb-5 space-y-5 sm:space-y-6 outline-none'
+                        ? `flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 pt-2.5 pb-24 space-y-5 outline-none`
+                        : 'flex-1 min-h-0 w-full max-w-full overflow-y-auto overflow-x-hidden overscroll-x-none px-3 sm:px-8 pt-2.5 sm:pt-3.5 max-md:pb-24 pb-5 space-y-5 sm:space-y-6 outline-none'
             }
           >
             {/* 1A. ACTIVE MOVIE / SERIES 100% FULL MODE CINEMA PLAYER (WHEN PLAYING) */}
@@ -14578,10 +15575,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           }}
                           onSelectServer={(srvId) => {
                             userManuallySelectedServerRef.current = true;
-                            if (srvId !== 'filelist_torrent') {
+                            const safeSrv: VodServerId =
+                              srvId === 'filelist_torrent' ? 'filelist_torrent' : 'kinogram_hls';
+                            if (safeSrv !== 'filelist_torrent') {
                               userSelectedFlTorrentIdRef.current = null;
                             }
-                            setActiveServer(srvId as VodServerId);
+                            setActiveServer(safeSrv);
                           }}
                           onSelectAudioTrackIndex={(idx) =>
                             setSelectedAudioTrackIdx(idx)
@@ -14947,10 +15946,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           }}
                           onSelectServer={(srvId) => {
                             userManuallySelectedServerRef.current = true;
-                            if (srvId !== 'filelist_torrent') {
+                            const safeSrv: VodServerId =
+                              srvId === 'filelist_torrent' ? 'filelist_torrent' : 'kinogram_hls';
+                            if (safeSrv !== 'filelist_torrent') {
                               userSelectedFlTorrentIdRef.current = null;
                             }
-                            setActiveServer(srvId as VodServerId);
+                            setActiveServer(safeSrv);
                           }}
                           onSelectAudioTrackIndex={(idx) =>
                             setSelectedAudioTrackIdx(idx)
@@ -15026,72 +16027,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         isDirectStreamLoading ||
                         (!isCurrentVodForeign && isLocalHomeServer() && isFileListStreamLoading) ? (
                         <FilmioStartupLoader />
-                      ) : (!isCurrentVodForeign ||
-                          isRomanianVodItem(detailedMeta || activeVodItem) ||
-                          isFileListExclusiveRomanianTitle(
-                            detailedMeta || activeVodItem
-                          )) &&
-                        !activeVodItem.klubnichkaEmbedUrl &&
-                        !(isRomanianVodItem(detailedMeta || activeVodItem) && resolvedDirectStream?.embedUrl) ? (
-                        renderRoCloudRetryCard(false)
                       ) : (
-                        <iframe
-                          key={`vod_embed_primary_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
-                          src={
-                            activeVodItem.klubnichkaEmbedUrl ||
-                            resolvedDirectStream?.embedUrl ||
-                            buildVodEmbedUrl(
-                              'vidsrc_pm',
-                              detailedMeta || activeVodItem,
-                              selectedSeason,
-                              selectedEpisode,
-                              preferredSubLang,
-                              resumeStartSeconds,
-                              detailedMeta?.imdbId ||
-                              resolvedFileListStream?.selectedTorrent?.imdbId
-                            )
-                          }
-                          title={activeVodItem.name}
-                          style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
-                          className="relative z-10 w-full h-full border-0 bg-black"
-                          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-                          referrerPolicy="strict-origin-when-cross-origin"
-                          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                          allowFullScreen
-                        />
+                        renderRoCloudRetryCard(false)
                       )
-                    ) : (!isCurrentVodForeign ||
-                        isRomanianVodItem(detailedMeta || activeVodItem) ||
-                        isFileListExclusiveRomanianTitle(
-                          detailedMeta || activeVodItem
-                        )) &&
-                      !activeVodItem.klubnichkaEmbedUrl &&
-                      !(isRomanianVodItem(detailedMeta || activeVodItem) && resolvedDirectStream?.embedUrl) ? (
-                      renderRoCloudRetryCard(true)
                     ) : (
-                      <iframe
-                        key={`vod_embed_secondary_${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`}
-                        src={
-                          resolvedDirectStream?.embedUrl ||
-                          buildVodEmbedUrl(
-                            isCurrentVodForeign ? 'vidsrc_pm' : activeServer,
-                            detailedMeta || activeVodItem,
-                            selectedSeason,
-                            selectedEpisode,
-                            preferredSubLang,
-                            resumeStartSeconds,
-                            detailedMeta?.imdbId ||
-                            resolvedFileListStream?.selectedTorrent?.imdbId
-                          )
-                        }
-                        title={activeVodItem.name}
-                        style={{ backgroundColor: '#000000', colorScheme: 'dark' }}
-                        className="relative z-10 w-full h-full border-0 bg-black"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-                        referrerPolicy="strict-origin-when-cross-origin"
-                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                        allowFullScreen
-                      />
+                      renderRoCloudRetryCard(true)
                     )}
 
                     {/* FLOATING BOTTOM CONTROL BAR FOR IFRAME FALLBACK STREAMS (Time Seek + Next Episode + Source) */}
@@ -15368,11 +16308,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     {isInfoSheetOpen && (
                       <div
                         data-vod-sheet-open="true"
-                        className="absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto overflow-x-hidden p-6 sm:p-8 rounded-[32px] tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300"
+                        style={
+                          isMobilePhone && !(isMobileCustomFullscreen && isPortraitViewport)
+                            ? {
+                              bottom: 'max(0.75rem, var(--safe-bottom, env(safe-area-inset-bottom, 0px)))',
+                              left: 'max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))',
+                              right: 'max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)))',
+                              maxHeight:
+                                'calc(100% - var(--safe-top, env(safe-area-inset-top, 0px)) - var(--safe-bottom, env(safe-area-inset-bottom, 0px)) - 4.25rem)',
+                            }
+                            : undefined
+                        }
+                        className={`absolute bottom-4 inset-x-4 sm:inset-x-8 z-30 max-h-[calc(100%-5rem)] overflow-y-auto overflow-x-hidden ${isMobilePhone && !isPortraitViewport ? 'p-4 sm:p-5 rounded-2xl' : 'p-5 sm:p-8 rounded-[32px]'} tahoe-glass shadow-[0_24px_64px_rgba(0,0,0,0.85)] transition-all duration-300`}
                       >
-                        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start gap-6 sm:gap-8">
+                        <div className={`max-w-6xl mx-auto flex flex-col sm:flex-row items-start ${isMobilePhone && !isPortraitViewport ? 'gap-4' : 'gap-6 sm:gap-8'}`}>
                           {/* Left Poster Photo — Clean Apple TV+ Proportions */}
-                          <div className="relative w-32 h-48 sm:w-44 sm:h-64 rounded-[24px] overflow-hidden bg-zinc-900/90 border border-white/15 shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.85)] mx-auto sm:mx-0">
+                          <div className={`relative ${isMobilePhone && !isPortraitViewport ? 'w-24 h-36 sm:w-28 sm:h-42 rounded-2xl' : 'w-32 h-48 sm:w-44 sm:h-64 rounded-[24px]'} overflow-hidden bg-zinc-900/90 border border-white/15 shrink-0 shadow-[0_20px_50px_rgba(0,0,0,0.85)] mx-auto sm:mx-0`}>
                             <img
                               src={resolveSafeVodPosterUrl({
                                 ...activeVodItem,
@@ -15925,17 +16876,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               </>
             ) : activeVodItem ? (
               /* 1B. APPLE macOS TAHOE LIQUID GLASS MOVIE / SERIES CARD */
-              <div className="relative z-10 pb-16 pt-1 px-2 sm:px-4 space-y-7">
-                {/* HERO SECTION: Left Main Column (Poster + Actions + Synopsis immediately under Poster) + Right Compact Selectors */}
+              <div className="relative z-10 pb-24 pt-1 px-2 sm:px-4 space-y-6 sm:space-y-7">
+                {/* HERO SECTION: Left Main Column (Poster + Actions) + Right Detalii & Sinopsis (3-col on xl >= 1280px, clean 2-row on iPad/Phone landscape) */}
                 <div
                   data-top-hero-card="true"
-                  className="flex flex-col lg:flex-row lg:items-stretch w-full"
+                  data-vod-detail-hero="true"
+                  className="flex flex-col xl:flex-row xl:items-stretch w-full"
                 >
                   {/* Left Main Column: Poster + Airy Full-Height Metadata/Actions Column */}
-                  <div className="inline-flex flex-col items-stretch min-w-0 w-full sm:w-fit max-w-full shrink-0 lg:mr-6 mb-6 max-sm:mb-4 lg:mb-0">
-                    <div className="flex flex-row items-start w-full sm:w-fit max-w-full">
-                      {/* Left Poster (macOS Tahoe Super-Rounded Squircle Poster with Specular Ring — compact side-by-side on mobile) */}
-                      <div className="w-28 sm:w-52 lg:w-[225px] sm:h-[312px] lg:h-[337px] shrink-0 mr-3.5 sm:mr-6 lg:mr-7 mb-0">
+                  <div className="inline-flex flex-col items-stretch min-w-0 w-full xl:w-fit max-w-full shrink-0 xl:mr-6 mb-4 sm:mb-5 xl:mb-0">
+                    <div className="flex flex-row items-stretch sm:items-start w-full xl:w-fit max-w-full">
+                      {/* Left Poster (macOS Tahoe Super-Rounded Squircle Poster with Specular Ring — compact side-by-side on mobile/tablet landscape) */}
+                      <div className={`${isMobilePhone && !isPortraitViewport ? 'w-32 md:w-44 xl:w-[225px] xl:h-[337px] mr-3.5 md:mr-5' : 'w-28 sm:w-48 xl:w-[225px] sm:h-[288px] xl:h-[337px] mr-3.5 sm:mr-6 xl:mr-7'} shrink-0 mb-0`}>
                         <div className="aspect-[2/3] w-full rounded-2xl sm:rounded-[28px] overflow-hidden bg-[#1e1e1e] ring-1 ring-white/25 shadow-[0_24px_60px_rgba(0,0,0,0.75)] relative">
                           <img
                             src={resolveSafeVodPosterUrl({
@@ -15967,9 +16919,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           Row 3: Runtime • Genres
                           Row 4: TMDB / IMDb / KP / 16+ / Lansat
                           Row 5: Action Buttons (and Watch Progress Bar if started) */}
-                      <div className="inline-flex flex-col items-start justify-between flex-1 sm:flex-initial min-w-0 sm:h-[312px] lg:h-[337px] p-4 sm:p-5 rounded-2xl sm:rounded-[28px] tahoe-glass max-sm:space-y-2.5 overflow-hidden">
+                      <div className={`inline-flex flex-col items-start justify-between flex-1 xl:flex-initial min-w-0 ${isMobilePhone && !isPortraitViewport ? 'min-h-[192px] md:min-h-[264px] h-auto xl:h-[337px] p-3.5 md:p-5 space-y-2' : 'min-h-0 h-auto sm:min-h-[288px] xl:h-[337px] p-4 sm:p-5 space-y-2.5 sm:space-y-2'} rounded-2xl sm:rounded-[28px] tahoe-glass overflow-hidden`}>
                         {/* Row 1: Title + Provider / Studio Badge on the exact same row */}
-                        <div className="w-full sm:w-0 sm:min-w-full flex items-center gap-x-2.5 flex-nowrap overflow-hidden">
+                        <div className="w-full xl:w-0 xl:min-w-full flex items-center gap-x-2.5 flex-nowrap overflow-hidden">
                           <h1
                             title={detailedMeta?.name || activeVodItem.name}
                             className="text-xl sm:text-2xl lg:text-[26px] font-bold text-white tracking-tight leading-tight truncate min-w-0"
@@ -16019,7 +16971,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </div>
 
                         {/* Row 2: Year & Country right under the Title */}
-                        <div className="w-full sm:w-0 sm:min-w-full text-xs sm:text-sm text-zinc-300 font-medium truncate">
+                        <div className="w-full xl:w-0 xl:min-w-full text-xs sm:text-sm text-zinc-300 font-medium truncate">
                           {[
                             detailedMeta?.releaseInfo ||
                               activeVodItem.releaseInfo ||
@@ -16032,7 +16984,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </div>
 
                         {/* Row 3: Runtime • Genres separated by | */}
-                        <div className="w-full sm:w-0 sm:min-w-full text-xs sm:text-[15px] text-zinc-200 font-normal truncate">
+                        <div className="w-full xl:w-0 xl:min-w-full text-xs sm:text-[15px] text-zinc-200 font-normal truncate">
                           {[
                             detailedMeta?.runtime || '01:43',
                             (
@@ -16048,7 +17000,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </div>
 
                         {/* Row 4: TMDB / IMDB / KP Ratings + Age Rating + Status */}
-                        <div className="w-full sm:w-0 sm:min-w-full flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        <div className="w-full xl:w-0 xl:min-w-full flex flex-wrap items-center gap-1.5 sm:gap-2">
                           {(() => {
                             const rawImdb =
                               detailedMeta?.imdbRating ||
@@ -16103,8 +17055,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           </span>
                         </div>
 
-                        {/* Line 4: Action Buttons Row (Defines exact width of the Middle Column and the progress bar below) */}
-                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2">
+                        {/* Line 4: Action Buttons Row (Wraps cleanly on phone/tablet landscape; single row on xl desktop/TV) */}
+                        <div className="flex flex-wrap xl:flex-nowrap items-center gap-1.5 sm:gap-2">
                           {/* Primary Play Pill (Compact) */}
                           {(() => {
                             const savedProg = findWatchProgressEntry(watchProgressMap, activeVodItem);
@@ -16147,13 +17099,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   className="text-white font-extrabold"
                                   style={{ color: '#ffffff' }}
                                 >
-                                  {liveResumeSec > 10
-                                    ? activeVodItem.type === 'series'
-                                      ? `Play (S${selectedSeason}:E${selectedEpisode} • ${formatWatchSeconds(liveResumeSec)})`
-                                      : `Play (${formatWatchSeconds(liveResumeSec)})`
-                                    : activeVodItem.type === 'series'
-                                      ? `Play (S${selectedSeason}:E${selectedEpisode})`
-                                      : 'Play'}
+                                  {matchedOfflineVodItem
+                                    ? liveResumeSec > 10
+                                      ? activeVodItem.type === 'series'
+                                        ? `Play Offline (S${selectedSeason}:E${selectedEpisode} • ${formatWatchSeconds(liveResumeSec)})`
+                                        : `Play Offline (${formatWatchSeconds(liveResumeSec)})`
+                                      : activeVodItem.type === 'series'
+                                        ? `Play Offline (S${selectedSeason}:E${selectedEpisode})`
+                                        : 'Play Offline'
+                                    : liveResumeSec > 10
+                                      ? activeVodItem.type === 'series'
+                                        ? `Play (S${selectedSeason}:E${selectedEpisode} • ${formatWatchSeconds(liveResumeSec)})`
+                                        : `Play (${formatWatchSeconds(liveResumeSec)})`
+                                      : activeVodItem.type === 'series'
+                                        ? `Play (S${selectedSeason}:E${selectedEpisode})`
+                                        : 'Play'}
                                 </span>
                               </button>
                             );
@@ -16236,6 +17196,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   setDownloadError(null);
                                   setDownloadModalSeason(selectedSeason);
                                   if (isSeriesItem && episodesForSeason.length > 0) {
+                                    const isCurrentEpSaved = downloadedForSeason.some(
+                                      (x) => x.episode === selectedEpisode
+                                    );
                                     const nextUndownloaded = episodesForSeason.find(
                                       (ep) =>
                                         !downloadedForSeason.some(
@@ -16243,9 +17206,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         )
                                     );
                                     setSelectedDownloadEpisodes([
-                                      nextUndownloaded
-                                        ? nextUndownloaded.episode
-                                        : selectedEpisode,
+                                      !isCurrentEpSaved
+                                        ? selectedEpisode
+                                        : nextUndownloaded
+                                          ? nextUndownloaded.episode
+                                          : selectedEpisode,
                                     ]);
                                   } else {
                                     setSelectedDownloadEpisodes([selectedEpisode]);
@@ -16572,30 +17537,61 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             `vod_${activeVodItem.id}`
                           )
                         );
-                        const rawAudioIndexed = (
-                          resolvedDirectStream?.audioNames &&
-                          resolvedDirectStream.audioNames.length > 0
-                            ? resolvedDirectStream.audioNames
-                            : ['Original / Audio 1']
-                        ).map((aName, idx) => ({ aName, idx }));
+                        const modalAudioSource =
+                          activeServer === 'filelist_torrent' &&
+                          resolvedFileListStream?.audioNames &&
+                          resolvedFileListStream.audioNames.length > 0
+                            ? resolvedFileListStream.audioNames
+                            : resolvedDirectStream?.audioNames &&
+                                resolvedDirectStream.audioNames.length > 0
+                              ? resolvedDirectStream.audioNames
+                              : resolvedFileListStream?.audioNames &&
+                                  resolvedFileListStream.audioNames.length > 0
+                                ? resolvedFileListStream.audioNames
+                                : ['Original / Audio 1'];
+                        const rawAudioIndexed = modalAudioSource.map(
+                          (aName, idx) => ({ aName, idx })
+                        );
                         const displayModalAudioTracks = filterDisplayAudioItems(
                           rawAudioIndexed,
                           (x) => x.aName,
                           isCurrentVodForeign
                         );
+                        const vodWatchEntry = findWatchProgressEntry(
+                          watchProgressMap,
+                          activeVodItem
+                        );
+                        const unwatchedModalEpNums = modalSeasonEpisodes
+                          .filter((ep) => {
+                            const epProg =
+                              vodWatchEntry?.episodeProgressMap?.[
+                                `S${activeModalSeason}E${ep.episode}`
+                              ];
+                            return !isEpisodeProgressWatched(epProg);
+                          })
+                          .map((ep) => ep.episode);
 
-                        return (
+                        const modalOverlay = (
                           <div
-                            className="fixed inset-0 z-[260] bg-black/80 backdrop-blur-xl flex items-center justify-center p-2.5 sm:p-4"
+                            data-download-modal="true"
+                            role="dialog"
+                            aria-modal="true"
+                            style={{
+                              paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+                              paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+                              paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))',
+                              paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+                            }}
+                            className="fixed inset-0 z-[260] bg-black/80 flex items-center justify-center p-2 sm:p-4"
                             onClick={(e) => {
                               if (e.target === e.currentTarget) {
                                 setIsDownloadModalOpen(false);
                               }
                             }}
                           >
-                            <div className="w-full max-w-xl max-h-[88vh] flex flex-col rounded-2xl sm:rounded-3xl bg-[#10141d]/98 border border-white/15 shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden">
+                            <div className="w-full max-w-2xl max-h-[min(94dvh,760px)] flex flex-col rounded-2xl sm:rounded-3xl bg-[#10141d] border border-white/15 shadow-[0_24px_80px_rgba(0,0,0,0.92)] overflow-hidden text-white">
                               {/* Ultra-Compact Modal Header */}
-                              <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between gap-2 bg-white/[0.03]">
+                              <div className="shrink-0 px-4 py-3 border-b border-white/10 flex items-center justify-between gap-2 bg-white/[0.03]">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <HardDriveDownload className="w-4 h-4 text-blue-400 shrink-0" />
                                   <h3 className="text-xs sm:text-sm font-extrabold text-white truncate">
@@ -16613,7 +17609,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </div>
 
                               {/* Compact Scrollable Body: 1. Quality -> 2. Audio/Sub -> 3. Season & Episodes */}
-                              <div className="p-3.5 sm:p-4 overflow-y-auto overflow-x-hidden space-y-3">
+                              <div className="flex-1 min-h-0 p-3.5 sm:p-4 overflow-y-auto overflow-x-hidden space-y-3">
                                 {/* 1. VIDEO QUALITY (Compact Single-Line 4-Column Row) */}
                                 <div className="space-y-1.5">
                                   <span className="text-[11px] font-extrabold uppercase tracking-wider text-zinc-400 block">
@@ -16782,7 +17778,26 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                         })}
                                       </div>
 
-                                      <div className="flex items-center gap-1">
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        {unwatchedModalEpNums.length > 0 &&
+                                          unwatchedModalEpNums.length <
+                                            modalSeasonEpisodes.length && (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setSelectedDownloadEpisodes(
+                                                  unwatchedModalEpNums
+                                                )
+                                              }
+                                              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/45 text-[10px] font-bold text-emerald-200 cursor-pointer"
+                                            >
+                                              {tr(
+                                                `Nevăzute (${unwatchedModalEpNums.length})`,
+                                                `Unwatched (${unwatchedModalEpNums.length})`,
+                                                `Новые (${unwatchedModalEpNums.length})`
+                                              )}
+                                            </button>
+                                          )}
                                         <button
                                           type="button"
                                           onClick={() =>
@@ -16818,8 +17833,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                       </div>
                                     </div>
 
-                                    {/* Compact Episode Grid */}
-                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-44 overflow-y-auto pr-0.5">
+                                    {/* Compact Episode Grid with Watched / Progress Badges */}
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5 max-h-56 overflow-y-auto pr-0.5">
                                       {modalSeasonEpisodes.map((ep) => {
                                         const isChecked =
                                           selectedDownloadEpisodes.includes(
@@ -16830,6 +17845,30 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                           offlineItems.some(
                                             (x) => x.id === epOfflineId
                                           );
+                                        const epProg =
+                                          vodWatchEntry?.episodeProgressMap?.[
+                                            `S${activeModalSeason}E${ep.episode}`
+                                          ];
+                                        const isWatchedEp =
+                                          isEpisodeProgressWatched(epProg);
+                                        const epDur =
+                                          epProg?.duration && epProg.duration > 60
+                                            ? epProg.duration
+                                            : 2700;
+                                        const epPct =
+                                          !isWatchedEp &&
+                                          epProg &&
+                                          epProg.currentTime > 15
+                                            ? Math.min(
+                                                95,
+                                                Math.max(
+                                                  5,
+                                                  Math.round(
+                                                    (epProg.currentTime / epDur) * 100
+                                                  )
+                                                )
+                                              )
+                                            : 0;
                                         return (
                                           <button
                                             key={ep.episode}
@@ -16847,32 +17886,48 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                                     : [...prev, ep.episode]
                                               );
                                             }}
-                                            className={`px-2.5 py-1.5 rounded-xl border text-left flex items-center justify-between gap-1.5 transition-all cursor-pointer ${isChecked
+                                            className={`px-2.5 py-1.5 rounded-xl border text-left flex items-center justify-between gap-1.5 transition-all cursor-pointer ${
+                                              isChecked
                                                 ? 'bg-[#2563eb]/30 border-blue-400 text-white'
-                                                : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
-                                              }`}
+                                                : isWatchedEp
+                                                  ? 'bg-emerald-950/35 hover:bg-emerald-950/55 border-emerald-500/35 text-zinc-200'
+                                                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/10 text-zinc-300'
+                                            }`}
                                           >
                                             <div className="min-w-0">
-                                              <div className="flex items-center gap-1">
+                                              <div className="flex flex-wrap items-center gap-1">
                                                 <span className="text-xs font-extrabold text-white">
                                                   E{ep.episode}
                                                 </span>
+                                                {isWatchedEp && (
+                                                  <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/25 border border-emerald-400/40 text-[9px] font-extrabold text-emerald-300 leading-tight">
+                                                    ✓ {tr('Văzut', 'Seen', 'Просм.')}
+                                                  </span>
+                                                )}
+                                                {epPct > 0 && (
+                                                  <span className="px-1.5 py-0.2 rounded-full bg-amber-500/25 border border-amber-400/40 text-[9px] font-bold text-amber-200 tabular-nums leading-tight">
+                                                    {epPct}%
+                                                  </span>
+                                                )}
                                                 {isAlreadySaved && (
-                                                  <span className="px-1 py-0.2 rounded bg-blue-500/35 text-[8px] font-bold text-blue-200">
-                                                    OK
+                                                  <span className="px-1 py-0.2 rounded bg-blue-500/35 text-[8px] font-bold text-blue-200 leading-tight">
+                                                    OFFLINE
                                                   </span>
                                                 )}
                                               </div>
-                                              <div className="text-[10px] text-zinc-400 truncate">
+                                              <div className="text-[10px] text-zinc-400 truncate mt-0.5">
                                                 {ep.title ||
                                                   `Ep. ${ep.episode}`}
                                               </div>
                                             </div>
                                             <CheckCircle2
-                                              className={`w-3.5 h-3.5 shrink-0 ${isChecked
+                                              className={`w-3.5 h-3.5 shrink-0 ${
+                                                isChecked
                                                   ? 'text-blue-400'
-                                                  : 'text-white/15'
-                                                }`}
+                                                  : isWatchedEp
+                                                    ? 'text-emerald-400/70'
+                                                    : 'text-white/15'
+                                              }`}
                                             />
                                           </button>
                                         );
@@ -17007,7 +18062,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                               </div>
 
                               {/* Compact Modal Footer Actions */}
-                              <div className="px-4 py-2.5 border-t border-white/10 bg-white/[0.03] flex items-center justify-between gap-2">
+                              <div className="shrink-0 px-4 py-3 border-t border-white/10 bg-white/[0.03] flex items-center justify-between gap-2">
                                 <button
                                   type="button"
                                   onClick={() => setIsDownloadModalOpen(false)}
@@ -17035,7 +18090,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   <button
                                     type="button"
                                     disabled={
-                                      isDirectStreamLoading && !isSeriesVod
+                                      isDirectStreamLoading &&
+                                      !isSeriesVod &&
+                                      !(resolvedFileListStream?.ok && resolvedFileListStream.streamUrl)
                                     }
                                     onClick={() =>
                                       void handleStartOfflineDownload(
@@ -17066,6 +18123,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             </div>
                           </div>
                         );
+                        return typeof document !== 'undefined'
+                          ? createPortal(modalOverlay, document.body)
+                          : modalOverlay;
                       })()}
 
                   </div>
@@ -17427,7 +18487,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         })()}
                       </div>
                     ) : (
-                      <div className="w-full sm:h-[312px] lg:h-[337px] p-4 sm:p-6 rounded-2xl sm:rounded-[28px] tahoe-glass flex flex-col justify-between overflow-hidden">
+                      <div className="w-full h-auto xl:h-[337px] p-4 sm:p-5 xl:p-6 rounded-2xl sm:rounded-[28px] tahoe-glass flex flex-col justify-between gap-3 overflow-hidden">
                       <div className="flex flex-wrap items-center justify-between">
                         <h2 className="text-xl sm:text-[22px] font-semibold text-white tracking-tight">
                           {tr('Detalii & Sinopsis', 'Details & Synopsis', 'Подробно')}
@@ -17802,9 +18862,24 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                   />
                                 )}
                                 <div className="absolute inset-0 z-20 bg-gradient-to-t from-black/80 via-black/15 to-transparent pointer-events-none" />
-                                <span className="absolute top-2.5 left-2.5 z-20 px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/15 text-[11px] font-black text-white">
-                                  S{selectedSeason}:E{ep.episode}
-                                </span>
+                                <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5">
+                                  <span className="px-2.5 py-0.5 rounded-full bg-black/80 backdrop-blur-md border border-white/15 text-[11px] font-black text-white">
+                                    S{selectedSeason}:E{ep.episode}
+                                  </span>
+                                  {offlineItems.some(
+                                    (x) =>
+                                      x.id ===
+                                        `vod_${activeVodItem.id}_S${selectedSeason}E${ep.episode}` ||
+                                      (x.vodId === activeVodItem.id &&
+                                        (x.season || 1) === selectedSeason &&
+                                        (x.episode || 1) === ep.episode)
+                                  ) && (
+                                    <span className="px-2 py-0.5 rounded-full bg-[#2563eb]/90 backdrop-blur-md border border-blue-300/50 text-[10px] font-extrabold text-white inline-flex items-center gap-1 shadow">
+                                      <HardDriveDownload className="w-2.5 h-2.5 shrink-0" />
+                                      <span>Offline</span>
+                                    </span>
+                                  )}
+                                </div>
                                 <span
                                   role="button"
                                   tabIndex={-1}
@@ -17964,7 +19039,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     ) : (
                       <>
                         {/* NETFLIX-STYLE WIDESCREEN HERO BILLBOARD BANNER (Zero-flicker crossfade, strict height containment & zero page re-renders) */}
-                        {heroBillboardItems.length > 0 && (
+                        {!isMobilePhone && heroBillboardItems.length > 0 && (
                           <HomeHeroBillboard
                             heroBillboardItems={heroBillboardItems}
                             isCarMode={isCarMode}
@@ -18820,7 +19895,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     isShuffle={isMusicShuffle}
                     isRepeat={isMusicRepeat}
                     queue={musicQueue}
-                    onUpdateQueue={setMusicQueue}
+                    onUpdateQueue={handleUpdateMusicQueue}
                     likedTracks={likedMusicTracks}
                     recentTracksProp={recentMusicTracks}
                     onRecordRecentTrack={() => {}}
@@ -18835,6 +19910,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     onToggleLikeTrack={handleToggleLikeMusicTrack}
                     onChangeVolume={handleChangeMusicVolume}
                     onToggleMute={handleToggleMusicMute}
+                    onCloseMusic={handleStopAndCloseMusic}
                   />
                 )}
 
@@ -18861,9 +19937,14 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       cleanVodId: string;
                       title: string;
                       poster: string;
+                      backdrop: string;
+                      overview: string;
+                      releaseYear: string;
+                      rating: string;
                       isSeries: boolean;
                       qualityLabel: string;
                       totalBytes: number;
+                      latestCreatedAt: number;
                       items: OfflineMediaItem[];
                     }
                   >();
@@ -18878,427 +19959,649 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     if (existing) {
                       existing.items.push(item);
                       existing.totalBytes += item.sizeBytes || 0;
-                      if (!existing.poster && item.poster) {
-                        existing.poster = item.poster;
-                      }
+                      existing.latestCreatedAt = Math.max(
+                        existing.latestCreatedAt,
+                        item.createdAt || 0
+                      );
+                      if (!existing.poster && item.poster) existing.poster = item.poster;
+                      if (!existing.backdrop && item.backdrop) existing.backdrop = item.backdrop;
+                      if (!existing.overview && item.overview) existing.overview = item.overview;
+                      if (!existing.releaseYear && item.releaseYear) existing.releaseYear = item.releaseYear;
+                      if (!existing.rating && item.rating) existing.rating = item.rating;
                     } else {
                       groupsMap.set(cleanVodId, {
                         cleanVodId,
                         title: item.title,
                         poster: item.poster || '',
+                        backdrop: item.backdrop || '',
+                        overview: item.overview || '',
+                        releaseYear: item.releaseYear || '',
+                        rating: item.rating || '',
                         isSeries,
                         qualityLabel: item.qualityLabel || 'HD',
                         totalBytes: item.sizeBytes || 0,
+                        latestCreatedAt: item.createdAt || 0,
                         items: [item],
                       });
                     }
                   }
 
-                  const groupedList = Array.from(groupsMap.values()).map((g) => ({
-                    ...g,
-                    items: [...g.items].sort((a, b) => {
-                      const sDiff = (a.season || 1) - (b.season || 1);
-                      if (sDiff !== 0) return sDiff;
-                      return (a.episode || 1) - (b.episode || 1);
-                    }),
-                  }));
+                  const groupedList = Array.from(groupsMap.values())
+                    .map((g) => ({
+                      ...g,
+                      items: [...g.items].sort((a, b) => {
+                        const sDiff = (a.season || 1) - (b.season || 1);
+                        if (sDiff !== 0) return sDiff;
+                        return (a.episode || 1) - (b.episode || 1);
+                      }),
+                    }))
+                    .sort((a, b) => b.latestCreatedAt - a.latestCreatedAt);
 
-                  const activeSeriesGroup = selectedOfflineSeriesId
-                    ? groupedList.find((g) => g.cleanVodId === selectedOfflineSeriesId) || null
-                    : null;
+                  const movieGroups = groupedList.filter((g) => !g.isSeries);
+                  const seriesGroups = groupedList.filter((g) => g.isSeries);
+                  const totalVideoBytes = offlineItems.reduce(
+                    (acc, it) => acc + (it.sizeBytes || 0),
+                    0
+                  );
+                  const totalAllBytes =
+                    totalVideoBytes + (offlineMusicState.totalBytes || 0);
+                  const compactQualityTag = (raw: string): string => {
+                    if (/1080|full hd/i.test(raw)) return '1080p';
+                    if (/720/i.test(raw)) return '720p';
+                    if (/480/i.test(raw)) return '480p';
+                    if (/360/i.test(raw)) return '360p';
+                    if (/4k|2160/i.test(raw)) return '4K';
+                    return 'HD';
+                  };
 
-                  return (
-                    <div className="space-y-6 pb-20">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h1 className="text-xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
-                            <HardDriveDownload className="w-6 h-6 sm:w-7 sm:h-7 text-blue-400 shrink-0" />
-                            <span>
-                              {tr(
-                                `Descărcate Offline (${groupedList.length})`,
-                                `Offline Downloads (${groupedList.length})`,
-                                `Скачанные офлайн (${groupedList.length})`
-                              )}
+                  const buildVodItemFromOfflineGroup = (
+                    group: (typeof groupedList)[number]
+                  ): CinemetaItem => ({
+                    id: group.cleanVodId,
+                    name: group.title,
+                    type: group.isSeries ? 'series' : 'movie',
+                    poster: group.poster || undefined,
+                    background: group.backdrop || group.poster || undefined,
+                    description: group.overview || undefined,
+                    releaseInfo: group.releaseYear || undefined,
+                    imdbRating: group.rating || undefined,
+                  });
+
+                  const renderAppleOfflineVodCard = (
+                    group: (typeof groupedList)[number]
+                  ) => {
+                    const vodCardItem = buildVodItemFromOfflineGroup(group);
+                    const progEntry = findWatchProgressEntry(
+                      watchProgressMap,
+                      vodCardItem
+                    );
+                    const firstItem = group.items[0];
+                    // Resume smart episode: prefer last watched downloaded episode, else first unwatched downloaded episode, else first downloaded
+                    const targetEpItem = group.isSeries
+                      ? group.items.find(
+                          (it) =>
+                            progEntry?.season === (it.season || 1) &&
+                            progEntry?.episode === (it.episode || 1)
+                        ) ||
+                        group.items.find((it) => {
+                          const epP =
+                            progEntry?.episodeProgressMap?.[
+                              `S${it.season || 1}E${it.episode || 1}`
+                            ];
+                          return !isEpisodeProgressWatched(epP);
+                        }) ||
+                        firstItem
+                      : firstItem;
+                    const targetSeasonNum = targetEpItem?.season || 1;
+                    const targetEpisodeNum = targetEpItem?.episode || 1;
+                    const watchPct = (() => {
+                      if (!progEntry) return 0;
+                      if (group.isSeries) {
+                        const epP =
+                          progEntry.episodeProgressMap?.[
+                            `S${targetSeasonNum}E${targetEpisodeNum}`
+                          ];
+                        if (epP?.duration && epP.duration > 30) {
+                          return Math.min(
+                            100,
+                            Math.round((epP.currentTime / epP.duration) * 100)
+                          );
+                        }
+                        return 0;
+                      }
+                      if (progEntry.duration && progEntry.duration > 30) {
+                        return Math.min(
+                          100,
+                          Math.round((progEntry.currentTime / progEntry.duration) * 100)
+                        );
+                      }
+                      return 0;
+                    })();
+                    const isMovieWatched = !group.isSeries && watchPct >= 88;
+                    const qBadge = compactQualityTag(group.qualityLabel);
+                    const seasonNumbers = Array.from(
+                      new Set(group.items.map((it) => it.season || 1))
+                    ).sort((a, b) => a - b);
+                    const subtitleLine = group.isSeries
+                      ? `${
+                          seasonNumbers.length > 1
+                            ? `${seasonNumbers.length} sez.`
+                            : `Sezonul ${seasonNumbers[0] || 1}`
+                        } • ${group.items.length} ep. • ${formatBytes(group.totalBytes)}`
+                      : `${qBadge}${group.releaseYear ? ` • ${group.releaseYear}` : ''} • ${formatBytes(group.totalBytes)}`;
+
+                    return (
+                      <article
+                        key={`dl_group_${group.cleanVodId}`}
+                        data-vod-card="true"
+                        className="group relative flex flex-col max-w-[225px] w-full focus-within:outline-none"
+                      >
+                        <div className="aspect-[2/3] w-full rounded-2xl bg-[#161b26] relative overflow-hidden shadow-[0_14px_34px_rgba(0,0,0,0.55)] ring-1 ring-white/10 group-hover:ring-2 group-hover:ring-white/80 group-focus-within:ring-4 group-focus-within:ring-white group-hover:-translate-y-0.5 transition-all duration-200">
+                          {group.poster ? (
+                            <img
+                              src={group.poster}
+                              alt={group.title}
+                              loading="lazy"
+                              className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-300"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#1b2438] to-[#0b0f18] text-zinc-500">
+                              <Film className="w-10 h-10 opacity-40" />
+                            </div>
+                          )}
+
+                          {/* Subtle Apple cinematic bottom vignette */}
+                          <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/85 via-black/35 to-transparent pointer-events-none" />
+
+                          {/* Top-Left: Crisp Apple Offline Badge */}
+                          <div className="absolute top-2.5 left-2.5 z-10 pointer-events-none flex items-center gap-1">
+                            <span className="px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-md border border-blue-400/45 text-blue-200 text-[10px] font-extrabold tracking-tight inline-flex items-center gap-1 shadow">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                              <span>Offline</span>
                             </span>
-                          </h1>
-                          <p className="text-xs sm:text-sm text-zinc-400 mt-1">
-                            {tr(
-                              `${offlineItems.length} fișiere salvate • Spațiu ocupat: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`,
-                              `${offlineItems.length} files • Used: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`,
-                              `${offlineItems.length} файлов • Занято: ${formatBytes(offlineItems.reduce((acc, it) => acc + (it.sizeBytes || 0), 0))}`
-                            )}
-                          </p>
+                          </div>
+
+                          {/* Top-Right: Filmio Type/Episode Pill OR Apple Edit-Mode Delete Button */}
+                          {isDownloadsEditMode ? (
+                            <button
+                              type="button"
+                              title={tr('Șterge din descărcate', 'Remove download', 'Удалить')}
+                              aria-label={tr('Șterge din descărcate', 'Remove download', 'Удалить')}
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                for (const it of group.items) {
+                                  await deleteOfflineItem(it.id);
+                                }
+                                await refreshOfflineLibrary();
+                              }}
+                              className="absolute top-2 right-2 z-30 h-8 w-8 rounded-full bg-rose-600/95 hover:bg-rose-500 text-white border border-white/30 inline-flex items-center justify-center cursor-pointer shadow-lg transition-transform active:scale-95"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <div className="absolute top-2.5 right-2.5 z-10 pointer-events-none flex items-center gap-1">
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider shadow ${
+                                  group.isSeries
+                                    ? 'bg-[#172554]/95 text-white border border-[#3b82f6]/55'
+                                    : 'bg-black/80 backdrop-blur-md text-zinc-100 border border-white/15'
+                                }`}
+                              >
+                                {group.isSeries
+                                  ? `${group.items.length} EP.`
+                                  : qBadge}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Bottom Quick-Play Circle (elevated independent button) + Watched indicator */}
+                          {!isDownloadsEditMode && (
+                            <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-center justify-between gap-2 pointer-events-none">
+                              <button
+                                type="button"
+                                title={tr('Redă instant offline', 'Play offline now', 'Смотреть офлайн')}
+                                aria-label={tr('Redă instant offline', 'Play offline now', 'Смотреть офлайн')}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleOpenVod(
+                                    vodCardItem,
+                                    true,
+                                    targetSeasonNum,
+                                    targetEpisodeNum
+                                  );
+                                }}
+                                className="pointer-events-auto h-9 w-9 rounded-full bg-white/92 hover:bg-white text-zinc-950 shadow-[0_6px_18px_rgba(0,0,0,0.55)] inline-flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-95 transition-all cursor-pointer active:scale-95"
+                              >
+                                <Play className="w-4 h-4 fill-current ml-0.5" />
+                              </button>
+
+                              {isMovieWatched ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-600/90 backdrop-blur-md border border-emerald-300/50 text-white text-[10px] font-extrabold inline-flex items-center gap-1 shadow">
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                  <span>{tr('Văzut', 'Seen', 'Просм.')}</span>
+                                </span>
+                              ) : group.rating ? (
+                                <span className="px-1.5 py-0.5 rounded-md bg-black/75 backdrop-blur-md border border-white/15 text-amber-300 text-[10px] font-extrabold tabular-nums">
+                                  ★ {group.rating}
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
+
+                          {/* Subtle Apple Watch Progress Bar */}
+                          {watchPct > 2 && watchPct < 92 && (
+                            <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-white/20 pointer-events-none">
+                              <div
+                                className="h-full bg-white"
+                                style={{ width: `${watchPct}%` }}
+                              />
+                            </div>
+                          )}
                         </div>
 
-                        {!activeSeriesGroup && groupedList.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              for (const it of offlineItems) {
-                                await deleteOfflineItem(it.id);
-                              }
-                              setSelectedOfflineSeriesId(null);
-                              await refreshOfflineLibrary();
-                            }}
-                            title={tr('Șterge tot', 'Delete All', 'Удалить все')}
-                            aria-label={tr('Șterge tot', 'Delete All', 'Удалить все')}
-                            className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-rose-950/70 hover:bg-rose-900 text-rose-200 border border-rose-500/40 inline-flex items-center justify-center cursor-pointer"
+                        {/* Stretched Primary Card Trigger: Opens the EXACT SAME Movie / Series Detail Experience as all other pages! */}
+                        <button
+                          type="button"
+                          onFocus={() => handleFocusVodItem(vodCardItem)}
+                          onMouseEnter={() => handleFocusVodItem(vodCardItem)}
+                          onClick={() =>
+                            handleOpenVod(
+                              vodCardItem,
+                              false,
+                              targetSeasonNum,
+                              targetEpisodeNum
+                            )
+                          }
+                          className="mt-2.5 px-0.5 text-left focus:outline-none cursor-pointer after:content-[''] after:absolute after:inset-0 after:z-10"
+                        >
+                          <div className="text-sm sm:text-[15px] font-semibold text-zinc-100 group-hover:text-white group-focus-within:text-white leading-snug line-clamp-2">
+                            {group.title}
+                          </div>
+                          <div className="text-xs text-zinc-400 mt-0.5 truncate tabular-nums">
+                            {subtitleLine}
+                          </div>
+                        </button>
+                      </article>
+                    );
+                  };
+
+                  const showMoviesSection =
+                    (downloadsFilterTab === 'all' ||
+                      downloadsFilterTab === 'movies') &&
+                    movieGroups.length > 0;
+                  const showSeriesSection =
+                    (downloadsFilterTab === 'all' ||
+                      downloadsFilterTab === 'series') &&
+                    seriesGroups.length > 0;
+                  const showMusicSection =
+                    (downloadsFilterTab === 'all' ||
+                      downloadsFilterTab === 'music') &&
+                    offlineMusicState.recordsCount > 0;
+
+                  const filterOptions: Array<{
+                    id: 'all' | 'movies' | 'series' | 'music';
+                    label: string;
+                    count: number;
+                  }> = [
+                    {
+                      id: 'all',
+                      label: tr('Toate', 'All', 'Все'),
+                      count: groupedList.length + (offlineMusicState.recordsCount > 0 ? 1 : 0),
+                    },
+                    ...(movieGroups.length > 0
+                      ? [
+                          {
+                            id: 'movies' as const,
+                            label: tr('Filme', 'Movies', 'Фильмы'),
+                            count: movieGroups.length,
+                          },
+                        ]
+                      : []),
+                    ...(seriesGroups.length > 0
+                      ? [
+                          {
+                            id: 'series' as const,
+                            label: tr('Seriale', 'Series', 'Сериалы'),
+                            count: seriesGroups.length,
+                          },
+                        ]
+                      : []),
+                    ...(offlineMusicState.recordsCount > 0
+                      ? [
+                          {
+                            id: 'music' as const,
+                            label: tr('Muzică', 'Music', 'Музыка'),
+                            count: offlineMusicState.recordsCount,
+                          },
+                        ]
+                      : []),
+                  ];
+
+                  return (
+                    <div className="space-y-7 pb-24">
+                      {/* Apple TV+ / Tahoe Editorial Header + Segmented Filter Control */}
+                      <div className="flex flex-col gap-4 border-b border-white/[0.08] pb-5">
+                        <div className="flex flex-wrap items-end justify-between gap-3">
+                          <div className="space-y-1">
+                            <h1 className="text-2xl sm:text-4xl font-bold text-white tracking-tight">
+                              {tr('Descărcate', 'Downloads', 'Загрузки')}
+                            </h1>
+                            <p className="text-xs sm:text-sm text-zinc-400 font-medium tabular-nums">
+                              {groupedList.length > 0 || offlineMusicState.recordsCount > 0
+                                ? tr(
+                                    `${groupedList.length} ${groupedList.length === 1 ? 'titlu video' : 'titluri video'}${offlineMusicState.recordsCount > 0 ? ` • ${offlineMusicState.recordsCount} piese` : ''} • ${formatBytes(totalAllBytes)} pe dispozitiv`,
+                                    `${groupedList.length} video ${groupedList.length === 1 ? 'title' : 'titles'}${offlineMusicState.recordsCount > 0 ? ` • ${offlineMusicState.recordsCount} tracks` : ''} • ${formatBytes(totalAllBytes)} on device`,
+                                    `${groupedList.length} видео${offlineMusicState.recordsCount > 0 ? ` • ${offlineMusicState.recordsCount} треков` : ''} • ${formatBytes(totalAllBytes)} на устройстве`
+                                  )
+                                : tr(
+                                    'Filmele, serialele și muzica salvate pentru redare fără internet',
+                                    'Movies, series and music saved for offline playback',
+                                    'Фильмы, сериалы и музыка для просмотра без интернета'
+                                  )}
+                            </p>
+                          </div>
+
+                          {(groupedList.length > 0 || offlineMusicState.recordsCount > 0) && (
+                            <div className="flex items-center gap-2">
+                              {isDownloadsEditMode && offlineItems.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    for (const it of offlineItems) {
+                                      await deleteOfflineItem(it.id);
+                                    }
+                                    setIsDownloadsEditMode(false);
+                                    await refreshOfflineLibrary();
+                                  }}
+                                  className="h-9 px-3.5 rounded-full bg-rose-600/20 hover:bg-rose-600/35 text-rose-200 border border-rose-500/40 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>{tr('Șterge video', 'Clear videos', 'Удалить видео')}</span>
+                                </button>
+                              )}
+                              {groupedList.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIsDownloadsEditMode((v) => !v)}
+                                  className={`h-9 px-4 rounded-full text-xs font-semibold border transition-colors cursor-pointer ${
+                                    isDownloadsEditMode
+                                      ? 'bg-white text-zinc-950 border-white'
+                                      : 'bg-white/[0.07] hover:bg-white/[0.14] text-zinc-100 border-white/12'
+                                  }`}
+                                >
+                                  {isDownloadsEditMode
+                                    ? tr('Gata', 'Done', 'Готово')
+                                    : tr('Editează', 'Edit', 'Изменить')}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {filterOptions.length > 2 && (
+                          <div
+                            role="tablist"
+                            aria-label={tr('Filtrează descărcările', 'Filter downloads', 'Фильтр загрузок')}
+                            className="inline-flex flex-wrap items-center gap-1 p-1 rounded-full bg-white/[0.06] border border-white/10 w-fit"
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                            {filterOptions.map((tab) => {
+                              const isActive = downloadsFilterTab === tab.id;
+                              return (
+                                <button
+                                  key={tab.id}
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={isActive}
+                                  onClick={() => setDownloadsFilterTab(tab.id)}
+                                  className={`h-8 px-3.5 rounded-full text-xs font-semibold border border-transparent transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                                    isActive
+                                      ? 'bg-white text-zinc-950 shadow-sm'
+                                      : 'text-zinc-300 hover:text-white hover:bg-white/[0.06]'
+                                  }`}
+                                >
+                                  <span>{tab.label}</span>
+                                  {tab.id !== 'all' && (
+                                    <span
+                                      className={`text-[10px] tabular-nums ${
+                                        isActive ? 'text-zinc-600' : 'text-zinc-500'
+                                      }`}
+                                    >
+                                      {tab.count}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
                         )}
                       </div>
 
+                      {/* Active Background Download Card (Apple Liquid Glass) */}
                       {activeDownloadProgress && (
-                        <div className="p-4 rounded-2xl bg-[#111726] border border-blue-500/35 space-y-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-xs sm:text-sm font-extrabold text-blue-300 flex items-center gap-2">
-                              <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                              <span>
-                                {tr(
-                                  'Descărcare în curs...',
-                                  'Downloading...',
-                                  'Загрузка...'
-                                )}
-                              </span>
+                        <div className="p-4 sm:p-5 rounded-3xl bg-white/[0.05] backdrop-blur-2xl border border-blue-400/30 shadow-[0_14px_40px_rgba(0,0,0,0.45)] space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-9 h-9 rounded-2xl bg-blue-500/20 border border-blue-400/35 flex items-center justify-center shrink-0">
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-300" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold text-white truncate">
+                                    {activeDownloadProgress.title ||
+                                      offlineVideoDl.activeTitle ||
+                                      activeDownloadTargetId ||
+                                      'Descărcare'}
+                                  </span>
+                                  {offlineVideoDl.queueCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full bg-blue-500/25 border border-blue-400/35 text-[10px] font-bold text-blue-200 shrink-0 tabular-nums">
+                                      +{offlineVideoDl.queueCount}{' '}
+                                      {tr('în coadă', 'queued', 'в очереди')}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-zinc-400 truncate tabular-nums">
+                                  {activeDownloadProgress.stage ||
+                                    tr('Se descarcă în fundal...', 'Downloading in background...', 'Загрузка...')}
+                                </div>
+                              </div>
                             </div>
-                            {downloadAbortRef.current && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  downloadAbortRef.current?.abort();
-                                  downloadAbortRef.current = null;
-                                  setActiveDownloadProgress(null);
-                                  setActiveDownloadTargetId(null);
-                                }}
-                                className="h-7 px-3 rounded-lg bg-rose-900/70 hover:bg-rose-800 text-white text-[11px] font-bold cursor-pointer"
-                              >
-                                {tr('Oprește', 'Stop', 'Стоп')}
-                              </button>
-                            )}
-                          </div>
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between text-xs text-zinc-300 font-bold">
-                              <span className="truncate">
-                                {activeDownloadTargetId || 'Descărcare'}
-                              </span>
-                              <span className="tabular-nums text-blue-300">
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="text-xs sm:text-sm font-semibold text-blue-300 tabular-nums">
                                 {activeDownloadProgress.percent}% •{' '}
                                 {formatBytes(activeDownloadProgress.downloadedBytes)}
                               </span>
+                              <button
+                                type="button"
+                                onClick={handleCancelOfflineDownload}
+                                className="h-8 px-3.5 rounded-full bg-white/10 hover:bg-rose-600/85 text-zinc-100 hover:text-white text-xs font-semibold transition-colors cursor-pointer"
+                              >
+                                {tr('Oprește', 'Stop', 'Стоп')}
+                              </button>
                             </div>
-                            <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
-                              <div
-                                style={{ width: `${activeDownloadProgress.percent}%` }}
-                                className="h-full bg-[#2563eb] rounded-full transition-all"
-                              />
-                            </div>
+                          </div>
+                          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                            <div
+                              style={{ width: `${Math.max(2, activeDownloadProgress.percent)}%` }}
+                              className="h-full bg-gradient-to-r from-[#2563eb] to-[#60a5fa] rounded-full transition-all duration-200"
+                            />
                           </div>
                         </div>
                       )}
 
-                      {offlineMusicState.recordsCount > 0 && !activeSeriesGroup && (
-                        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-[#0f1d3a] via-[#111622] to-[#0b0f19] border border-[#3b82f6]/30 shadow-xl space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-11 h-11 rounded-2xl bg-[#1e3a8a]/40 border border-[#60a5fa]/35 flex items-center justify-center shrink-0">
-                                <OfflineDownloadedBadgeIcon className="w-5 h-5" />
-                              </div>
-                              <div className="min-w-0">
-                                <h2 className="text-sm sm:text-base font-extrabold text-white truncate">
-                                  {tr(
-                                    `Muzică Descărcată Offline (${offlineMusicState.recordsCount})`,
-                                    `Offline Music (${offlineMusicState.recordsCount})`,
-                                    `Скачанная музыка (${offlineMusicState.recordsCount})`
-                                  )}
-                                </h2>
-                                <p className="text-xs text-[#94a3b8] font-medium truncate">
-                                  {formatOfflineMusicBytes(offlineMusicState.totalBytes)} •{' '}
-                                  {tr(
-                                    'Disponibile fără internet pe acest dispozitiv',
-                                    'Ready for offline playback without internet',
-                                    'Доступно без интернета'
-                                  )}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const tracks = offlineMusicState.recordsList.map((r) => r.track);
-                                  if (tracks[0]) {
-                                    handlePlayMusicTrack(tracks[0], tracks);
-                                  }
-                                }}
-                                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
-                                className="h-9 px-4 rounded-full bg-[#2563eb] hover:bg-[#3b82f6] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Play className="w-3.5 h-3.5 fill-current text-white" />
-                                <span>{tr('Redă Offline', 'Play Offline', 'Слушать')}</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  try {
-                                    window.sessionStorage.setItem('filmio_open_music_offline', '1');
-                                  } catch {
-                                    // ignore
-                                  }
-                                  setSection('music');
-                                  window.setTimeout(() => {
-                                    window.dispatchEvent(new CustomEvent('filmio:open-music-offline-view'));
-                                  }, 80);
-                                }}
-                                className="h-9 px-4 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Music className="w-3.5 h-3.5 text-[#60a5fa]" />
-                                <span>{tr('Deschide în Muzică', 'Open in Music', 'Открыть в Музыке')}</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                title={tr('Șterge muzica offline', 'Clear offline music', 'Удалить музыку')}
-                                onClick={() => void clearAllOfflineMusic()}
-                                className="h-9 w-9 rounded-full bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-200 inline-flex items-center justify-center cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
+                      {/* Empty State (Apple Minimalist Glass) */}
+                      {groupedList.length === 0 && offlineMusicState.recordsCount === 0 && !activeDownloadProgress && (
+                        <div className="py-16 px-6 rounded-3xl bg-white/[0.03] border border-white/[0.08] text-center space-y-3">
+                          <div className="w-16 h-16 rounded-3xl bg-white/[0.06] border border-white/10 flex items-center justify-center mx-auto">
+                            <HardDriveDownload className="w-8 h-8 text-zinc-400" />
                           </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                            {offlineMusicState.recordsList.slice(0, 6).map((rec) => (
-                              <button
-                                key={rec.offlineKey}
-                                type="button"
-                                onClick={() =>
-                                  handlePlayMusicTrack(
-                                    rec.track,
-                                    offlineMusicState.recordsList.map((r) => r.track)
-                                  )
-                                }
-                                className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.1] flex items-center gap-2.5 text-left transition-colors cursor-pointer"
-                              >
-                                <img
-                                  src={rec.track.coverSmall || rec.track.cover}
-                                  alt=""
-                                  className="w-9 h-9 rounded-md object-cover shrink-0 bg-zinc-900"
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-xs font-semibold text-white truncate">
-                                    {rec.track.title}
-                                  </div>
-                                  <div className="text-[11px] text-[#94a3b8] truncate">
-                                    {rec.track.artist}
-                                  </div>
-                                </div>
-                                <OfflineDownloadedBadgeIcon className="w-3.5 h-3.5 shrink-0" />
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {groupedList.length === 0 ? (
-                        <div className="p-10 rounded-3xl bg-[#111622] border border-white/10 text-center space-y-3">
-                          <HardDriveDownload className="w-12 h-12 text-zinc-500 mx-auto" />
-                          <div className="text-base sm:text-lg font-extrabold text-white">
+                          <div className="text-lg sm:text-xl font-bold text-white tracking-tight">
                             {tr(
-                              'Nu ai niciun film sau serial descărcat',
-                              'No downloaded movies or series yet',
-                              'Нет скачанных фильмов или сериалов'
+                              'Nicio descărcare încă',
+                              'No Downloads Yet',
+                              'Пока нет загрузок'
                             )}
                           </div>
-                          <p className="text-xs sm:text-sm text-zinc-400 max-w-md mx-auto">
+                          <p className="text-xs sm:text-sm text-zinc-400 max-w-md mx-auto leading-relaxed">
                             {tr(
-                              'Deschide orice film sau serial și apasă iconița de descărcare pentru a salva episoadele offline.',
-                              'Open any movie or series and tap the download icon to save episodes offline.',
-                              'Откройте любой фильм или сериал и нажмите иконку скачивания.'
+                              'Deschide orice film sau serial și apasă butonul de descărcare. Titlurile salvate vor apărea aici ca în bibliotecă, gata de vizionat fără internet.',
+                              'Open any movie or series and tap Download. Saved titles appear here with the exact same library card experience, ready offline.',
+                              'Откройте любой фильм или сериал и нажмите «Скачать».'
                             )}
                           </p>
                         </div>
-                      ) : activeSeriesGroup ? (
-                        /* INSIDE A DOWNLOADED SERIES CARD: PICK EPISODE TO PLAY OR DELETE */
-                        <div className="space-y-4 p-4 sm:p-6 rounded-3xl bg-[#111622] border border-white/12 shadow-2xl">
-                          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-white/10">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedOfflineSeriesId(null)}
-                                title={tr('Înapoi', 'Back', 'Назад')}
-                                aria-label={tr('Înapoi', 'Back', 'Назад')}
-                                className="h-11 w-11 min-h-[44px] min-w-[44px] rounded-full bg-white/10 hover:bg-white/20 text-white inline-flex items-center justify-center cursor-pointer touch-manipulation shrink-0"
-                              >
-                                <ArrowLeft className="w-4 h-4 text-blue-400" />
-                              </button>
-                              <div className="min-w-0">
-                                <h2 className="text-base sm:text-xl font-black text-white truncate">
-                                  {activeSeriesGroup.title}
-                                </h2>
-                                <p className="text-xs text-blue-300 font-bold">
-                                  {activeSeriesGroup.items.length} episoade descărcate •{' '}
-                                  {formatBytes(activeSeriesGroup.totalBytes)}
-                                </p>
-                              </div>
-                            </div>
+                      )}
 
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleOpenVod(
-                                    {
-                                      id: activeSeriesGroup.cleanVodId,
-                                      name: activeSeriesGroup.title,
-                                      type: 'series',
-                                      poster: activeSeriesGroup.poster,
-                                    },
-                                    false,
-                                    activeSeriesGroup.items[0]?.season || 1,
-                                    activeSeriesGroup.items[0]?.episode || 1
-                                  )
-                                }
-                                className="h-9 px-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <span>{tr('Detalii Serial', 'Series Page', 'О сериале')}</span>
-                              </button>
-                            </div>
+                      {/* MOVIES SECTION (Identical Apple TV+ Cinema Poster Grid) */}
+                      {showMoviesSection && (
+                        <section className="space-y-4">
+                          <div className="flex items-center justify-between gap-2">
+                            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                              <span>{tr('Filme', 'Movies', 'Фильмы')}</span>
+                              <span className="text-sm font-medium text-zinc-500 tabular-nums">
+                                {movieGroups.length}
+                              </span>
+                            </h2>
                           </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                            {activeSeriesGroup.items.map((epItem) => (
-                              <div
-                                key={epItem.id}
-                                className="p-3 rounded-2xl bg-[#171d2b] border border-white/10 hover:border-blue-500/45 flex items-center justify-between gap-3 transition-colors"
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleOpenVod(
-                                      {
-                                        id: activeSeriesGroup.cleanVodId,
-                                        name: activeSeriesGroup.title,
-                                        type: 'series',
-                                        poster: activeSeriesGroup.poster,
-                                      },
-                                      true,
-                                      epItem.season || 1,
-                                      epItem.episode || 1
-                                    )
-                                  }
-                                  className="flex-1 min-w-0 flex items-center gap-3 text-left cursor-pointer group"
-                                >
-                                  <div className="w-10 h-10 rounded-xl bg-[#2563eb] group-hover:bg-blue-500 text-white font-black text-xs flex items-center justify-center shrink-0 shadow transition-colors">
-                                    <Play className="w-4 h-4 fill-current" />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-xs sm:text-sm font-extrabold text-white truncate">
-                                      Sezonul {epItem.season || 1} • Episodul {epItem.episode || 1}
-                                    </div>
-                                    <div className="text-[11px] text-zinc-400 font-semibold flex items-center gap-2 mt-0.5">
-                                      <span className="text-blue-300 font-bold">{epItem.qualityLabel}</span>
-                                      <span>•</span>
-                                      <span>{formatBytes(epItem.sizeBytes)}</span>
-                                    </div>
-                                  </div>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  title={tr('Șterge episodul', 'Delete Episode', 'Удалить серию')}
-                                  aria-label={tr('Șterge episodul', 'Delete Episode', 'Удалить серию')}
-                                  onClick={async () => {
-                                    await deleteOfflineItem(epItem.id);
-                                    await refreshOfflineLibrary();
-                                  }}
-                                  className="h-9 w-9 rounded-full bg-rose-950/70 hover:bg-rose-900 text-rose-300 inline-flex items-center justify-center cursor-pointer shrink-0 border border-rose-500/30"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            ))}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5">
+                            {movieGroups.map((group) => renderAppleOfflineVodCard(group))}
                           </div>
-                        </div>
-                      ) : (
-                        /* MAIN DOWNLOADS GRID: 1 SINGLE CARD PER SERIES OR MOVIE */
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
-                          {groupedList.map((group) => {
-                            const firstItem = group.items[0];
-                            return (
-                              <div
-                                key={`dl_group_${group.cleanVodId}`}
-                                className="relative p-2.5 sm:p-3 rounded-2xl bg-[#141923] border border-white/10 hover:border-blue-500/40 flex flex-col justify-between gap-2 shadow-lg transition-colors"
-                              >
+                        </section>
+                      )}
+
+                      {/* SERIES SECTION (Identical Apple TV+ Cinema Poster Grid) */}
+                      {showSeriesSection && (
+                        <section className="space-y-4">
+                          <div className="flex items-center justify-between gap-2">
+                            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                              <span>{tr('Seriale', 'Series', 'Сериалы')}</span>
+                              <span className="text-sm font-medium text-zinc-500 tabular-nums">
+                                {seriesGroups.length}
+                              </span>
+                            </h2>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-5">
+                            {seriesGroups.map((group) => renderAppleOfflineVodCard(group))}
+                          </div>
+                        </section>
+                      )}
+
+                      {/* OFFLINE MUSIC SHELF (Apple Music Glass Card) */}
+                      {showMusicSection && (
+                        <section className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                              <span>{tr('Muzică Offline', 'Offline Music', 'Музыка офлайн')}</span>
+                              <span className="text-sm font-medium text-zinc-500 tabular-nums">
+                                {offlineMusicState.recordsCount}
+                              </span>
+                            </h2>
+                          </div>
+                          <div className="p-4 sm:p-5 rounded-3xl bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-[0_14px_38px_rgba(0,0,0,0.45)] space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-11 h-11 rounded-2xl bg-[#1e3a8a]/40 border border-[#60a5fa]/35 flex items-center justify-center shrink-0">
+                                  <OfflineDownloadedBadgeIcon className="w-5 h-5" />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-sm sm:text-base font-semibold text-white truncate">
+                                    {tr(
+                                      `${offlineMusicState.recordsCount} piese salvate`,
+                                      `${offlineMusicState.recordsCount} saved tracks`,
+                                      `${offlineMusicState.recordsCount} треков`
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-zinc-400 font-medium truncate tabular-nums">
+                                    {formatOfflineMusicBytes(offlineMusicState.totalBytes)} •{' '}
+                                    {tr(
+                                      'Disponibile fără internet',
+                                      'Ready without internet',
+                                      'Доступно без интернета'
+                                    )}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
                                 <button
                                   type="button"
-                                  title={tr('Șterge', 'Delete', 'Удалить')}
-                                  aria-label={tr('Șterge', 'Delete', 'Удалить')}
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    for (const it of group.items) {
-                                      await deleteOfflineItem(it.id);
+                                  onClick={() => {
+                                    const tracks = offlineMusicState.recordsList.map((r) => r.track);
+                                    if (tracks[0]) {
+                                      handlePlayMusicTrack(tracks[0], tracks);
                                     }
-                                    await refreshOfflineLibrary();
                                   }}
-                                  className="absolute top-4 right-4 z-10 h-8 w-8 rounded-full bg-rose-950/85 hover:bg-rose-900 text-rose-200 border border-rose-500/40 inline-flex items-center justify-center cursor-pointer shadow-md"
+                                  className="h-9 px-4 rounded-full bg-white hover:bg-zinc-200 text-zinc-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                  <span>{tr('Redă', 'Play', 'Слушать')}</span>
                                 </button>
 
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (group.isSeries) {
-                                      setSelectedOfflineSeriesId(group.cleanVodId);
-                                    } else {
-                                      handleOpenVod(
-                                        {
-                                          id: group.cleanVodId,
-                                          name: group.title,
-                                          type: 'movie',
-                                          poster: group.poster,
-                                        },
-                                        true,
-                                        1,
-                                        1
-                                      );
+                                    try {
+                                      window.sessionStorage.setItem('filmio_open_music_offline', '1');
+                                    } catch {
+                                      // ignore
                                     }
+                                    setSection('music');
+                                    window.setTimeout(() => {
+                                      window.dispatchEvent(new CustomEvent('filmio:open-music-offline-view'));
+                                    }, 80);
                                   }}
-                                  className="group text-left focus:outline-none cursor-pointer w-full"
+                                  className="h-9 px-4 rounded-full bg-white/[0.08] hover:bg-white/[0.15] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors"
                                 >
-                                  <div className="aspect-[2/3] w-full rounded-xl bg-zinc-900 relative overflow-hidden mb-2">
-                                    {group.poster ? (
-                                      <img
-                                        src={group.poster}
-                                        alt={group.title}
-                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                                      />
-                                    ) : null}
-                                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-[#2563eb] text-white text-[10px] font-black uppercase shadow">
-                                      {group.isSeries
-                                        ? `${group.items.length} EP. • ${group.qualityLabel}`
-                                        : group.qualityLabel}
-                                    </span>
-                                    <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/80 text-white text-[10px] font-bold tabular-nums">
-                                      {formatBytes(group.totalBytes)}
-                                    </span>
-                                  </div>
-                                  <div className="text-xs sm:text-sm font-bold text-white line-clamp-1">
-                                    {group.title}
-                                  </div>
-                                  <div className="text-[11px] text-blue-300 font-semibold truncate mt-0.5">
-                                    {group.isSeries
-                                      ? `Sezonul ${firstItem?.season || 1} • ${group.items.length} episoade`
-                                      : 'Film salvat offline'}
-                                  </div>
+                                  <Music className="w-3.5 h-3.5 text-blue-400" />
+                                  <span>{tr('Deschide în Muzică', 'Open in Music', 'Открыть в Музыке')}</span>
                                 </button>
+
+                                {isDownloadsEditMode && (
+                                  <button
+                                    type="button"
+                                    title={tr('Șterge muzica offline', 'Clear offline music', 'Удалить музыку')}
+                                    onClick={() => void clearAllOfflineMusic()}
+                                    className="h-9 w-9 rounded-full bg-rose-600/25 hover:bg-rose-600/45 border border-rose-500/40 text-rose-200 inline-flex items-center justify-center cursor-pointer transition-colors"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
                               </div>
-                            );
-                          })}
-                        </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                              {offlineMusicState.recordsList.slice(0, 6).map((rec) => (
+                                <button
+                                  key={rec.offlineKey}
+                                  type="button"
+                                  onClick={() =>
+                                    handlePlayMusicTrack(
+                                      rec.track,
+                                      offlineMusicState.recordsList.map((r) => r.track)
+                                    )
+                                  }
+                                  className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.1] flex items-center gap-2.5 text-left transition-colors cursor-pointer"
+                                >
+                                  <img
+                                    src={rec.track.coverSmall || rec.track.cover}
+                                    alt=""
+                                    className="w-9 h-9 rounded-lg object-cover shrink-0 bg-zinc-900"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-xs font-semibold text-white truncate">
+                                      {rec.track.title}
+                                    </div>
+                                    <div className="text-[11px] text-zinc-400 truncate">
+                                      {rec.track.artist}
+                                    </div>
+                                  </div>
+                                  <OfflineDownloadedBadgeIcon className="w-3.5 h-3.5 shrink-0" />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </section>
                       )}
                     </div>
                   );
@@ -19420,18 +20723,23 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
 
       {/* MOBILE FLOATING FACEBOOK-STYLE CAPSULE NAVIGATION BAR (Auto-hides on scroll down, reappears on scroll up) */}
       {!isAnyFullModePlayer && (
-        <nav
+        <>
+          <div
+            aria-hidden="true"
+            className={`${isMobilePhone ? 'block' : 'md:hidden'} pointer-events-none absolute inset-x-0 bottom-0 transition-opacity duration-300 ${isMobileChromeHidden && !isSidebarOpen ? 'opacity-0' : 'opacity-100'} ${section === 'music' && !activeVodItem ? (!isPortraitViewport ? 'h-24 via-[#080b12]/95' : 'h-28 via-[#080b12]/95') : 'h-16 via-[#080b12]/90'} z-30 bg-gradient-to-t from-black to-transparent`}
+          />
+          <nav
           aria-label="Navigare Mobilă"
           style={{
-            bottom: 'max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.32))',
+            bottom: 'max(8px, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) * 0.65 + 4px))',
           }}
-          className={`${isMobilePhone ? 'block' : 'md:hidden'} fixed left-3 right-3 ${isMobilePhone && !isPortraitViewport ? 'max-w-sm' : 'max-w-md'} mx-auto z-40 select-none transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+          className={`${isMobilePhone ? 'block' : 'md:hidden'} absolute left-3 right-3 ${isMobilePhone && !isPortraitViewport ? 'max-w-sm' : 'max-w-md'} mx-auto ${isSidebarOpen ? 'z-[47]' : 'z-40'} select-none transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
             isMobileChromeHidden && !isSidebarOpen
               ? 'translate-y-[calc(100%+24px)] opacity-0 pointer-events-none'
               : 'translate-y-0 opacity-100 pointer-events-auto'
           }`}
         >
-          <div className={`${isMobilePhone && !isPortraitViewport ? 'h-[50px] p-[3px]' : 'h-[54px] p-1.5'} w-full rounded-full bg-[#1c1e24]/95 border border-white/[0.14] shadow-[0_12px_36px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.1)] flex items-center justify-between gap-1`}>
+          <div className={`${isMobilePhone && !isPortraitViewport ? 'h-[46px] p-[3px]' : 'h-[54px] p-1.5'} w-full rounded-full bg-[#1c1e24]/95 border border-white/[0.14] shadow-[0_12px_36px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.1)] flex items-center justify-between gap-1`}>
             {(
               [
                 {
@@ -19486,6 +20794,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                     if (id === 'movies') {
                       setSection(section === 'series' ? 'series' : 'movies');
                     } else {
+                      if (id === 'music' && section === 'music' && !activeVodItem) {
+                        window.dispatchEvent(new CustomEvent('filmio:music-go-home'));
+                      }
                       setSection(id);
                     }
                     const mainEl =
@@ -19500,7 +20811,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       setRadioCountry('FAV');
                     }
                   }}
-                  className={`flex-1 min-h-[44px] h-[44px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
+                  className={`flex-1 ${isMobilePhone && !isPortraitViewport ? 'h-[40px]' : 'min-h-[44px] h-[44px]'} rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
                     isActive
                       ? 'bg-[#32353e] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]'
                       : 'text-[#cfd4dc] hover:text-white active:scale-95'
@@ -19520,7 +20831,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 setIsMobileChromeHidden(false);
                 setIsSidebarOpen((prev) => !prev);
               }}
-              className={`flex-1 min-h-[44px] h-[44px] rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
+              className={`flex-1 ${isMobilePhone && !isPortraitViewport ? 'h-[40px]' : 'min-h-[44px] h-[44px]'} rounded-full flex items-center justify-center transition-all duration-200 cursor-pointer touch-manipulation ${
                 isSidebarOpen
                   ? 'bg-[#32353e] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]'
                   : 'text-[#cfd4dc] hover:text-white active:scale-95'
@@ -19532,7 +20843,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               />
             </button>
           </div>
-        </nav>
+          </nav>
+        </>
       )}
 
       <SmartTvDrawersAndModals
@@ -19639,9 +20951,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           'webkit-playsinline': 'true',
           'x-webkit-airplay': 'allow',
         } as Record<string, string>)}
+        onWaiting={() => {
+          scheduleMusicStallRecovery();
+        }}
+        onStalled={() => {
+          scheduleMusicStallRecovery();
+        }}
+        onPlaying={() => {
+          clearMusicStallTimer();
+        }}
         onTimeUpdate={(e) => {
           if (activeMusicBackendRef.current !== 'audio') return;
           const ct = e.currentTarget.currentTime || 0;
+          if (Math.abs(ct - lastMusicAudioTimeSecRef.current) >= 0.2) {
+            lastMusicAudioTimeSecRef.current = ct;
+            lastMusicAudioProgressMsRef.current = Date.now();
+            clearMusicStallTimer();
+            if (ct > 2) consecutiveMusicFailCountRef.current = 0;
+          }
+          const capDur = musicDoubleDurCapRef.current;
+          if (capDur >= 45 && ct >= capDur - 0.5) {
+            musicDoubleDurCapRef.current = 0;
+            if (isMusicRepeatRef.current) {
+              e.currentTarget.currentTime = 0;
+              e.currentTarget.play().catch(() => {});
+            } else {
+              handleNextMusicTrackRef.current();
+            }
+            return;
+          }
           setMusicElapsedSec(ct);
           if (Date.now() - lastMusicPosSyncMsRef.current >= 2000) {
             lastMusicPosSyncMsRef.current = Date.now();
@@ -19656,35 +20994,53 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           if (activeMusicBackendRef.current !== 'audio') return;
           const dur = e.currentTarget.duration;
           const expDur = currentMusicTrackRef.current?.durationSec || 0;
+          const curTrack = currentMusicTrackRef.current;
           if (
             !audioFallbackOnlyRef.current &&
             dur &&
             Number.isFinite(dur) &&
             dur > 0 &&
-            dur < 45 &&
+            dur < 42 &&
             expDur >= 75 &&
-            currentMusicTrackRef.current
+            curTrack
           ) {
+            if (musicAudioRetryRef.current < 2) {
+              musicAudioRetryRef.current += 1;
+              e.currentTarget.src = buildDirectFullAudioUrl(curTrack, musicAudioRetryRef.current);
+              e.currentTarget.play().catch(() => {});
+              return;
+            }
             e.currentTarget.pause();
             e.currentTarget.removeAttribute('src');
-            startYtTrackPlayback(currentMusicTrackRef.current, 0);
+            startYtTrackPlayback(curTrack, 0);
             return;
           }
           if (dur && Number.isFinite(dur) && dur > 5) {
-            setMusicDurationSec(dur);
+            // Safety guard for Apple Safari 2x DASH duration bug (e.g. 6:53 for a 3:27 track in Airplane Mode)
+            const isDoubleCoreMediaDur =
+              expDur >= 60 && dur >= expDur * 1.82 && dur <= expDur * 2.25;
+            const effectiveDur = isDoubleCoreMediaDur
+              ? Math.round(dur / 2)
+              : dur;
+            musicDoubleDurCapRef.current = isDoubleCoreMediaDur
+              ? effectiveDur
+              : 0;
+            setMusicDurationSec(effectiveDur);
             updateMediaSessionPosition(
               'music',
               e.currentTarget.currentTime || 0,
-              dur
+              effectiveDur
             );
           }
         }}
         onPlay={() => {
           if (activeMusicBackendRef.current !== 'audio') return;
+          lastMusicAudioProgressMsRef.current = Date.now();
           setIsMusicPlaying(true);
           updateMediaSessionPlaybackState('music', 'playing');
         }}
         onPause={() => {
+          clearMusicStallTimer();
           if (activeMusicBackendRef.current !== 'audio') return;
           setIsMusicPlaying(false);
           updateMediaSessionPlaybackState('music', 'paused');
@@ -19692,23 +21048,35 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         onEnded={(e) => {
           if (activeMusicBackendRef.current !== 'audio') return;
           const ct = e.currentTarget.currentTime || 0;
+          const mediaDur =
+            e.currentTarget.duration && Number.isFinite(e.currentTarget.duration)
+              ? e.currentTarget.duration
+              : 0;
           const expDur = currentMusicTrackRef.current?.durationSec || 0;
+          const curTrack = currentMusicTrackRef.current;
           if (
             !audioFallbackOnlyRef.current &&
             expDur >= 75 &&
-            ct < Math.max(45, expDur - 18) &&
-            currentMusicTrackRef.current
+            ct < 42 &&
+            (mediaDur <= 0 || ct < mediaDur - 5) &&
+            curTrack
           ) {
+            if (musicAudioRetryRef.current < 2) {
+              musicAudioRetryRef.current += 1;
+              e.currentTarget.src = buildDirectFullAudioUrl(curTrack, musicAudioRetryRef.current);
+              e.currentTarget.play().catch(() => {});
+              return;
+            }
             e.currentTarget.pause();
             e.currentTarget.removeAttribute('src');
-            startYtTrackPlayback(currentMusicTrackRef.current, ct > 3 && ct < 40 ? ct : 0);
+            startYtTrackPlayback(curTrack, ct > 3 && ct < 40 ? ct : 0);
             return;
           }
-          if (isMusicRepeat && musicAudioRef.current) {
+          if (isMusicRepeatRef.current && musicAudioRef.current) {
             musicAudioRef.current.currentTime = 0;
             musicAudioRef.current.play().catch(() => {});
           } else {
-            handleNextMusicTrack();
+            handleNextMusicTrackRef.current();
           }
         }}
         onError={(e) => {
@@ -19716,18 +21084,115 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           const el = e.currentTarget;
           const curTrack = currentMusicTrackRef.current;
           if (!audioFallbackOnlyRef.current && curTrack) {
+            if (musicAudioRetryRef.current < 2) {
+              musicAudioRetryRef.current += 1;
+              el.src = buildDirectFullAudioUrl(curTrack, musicAudioRetryRef.current);
+              el.play().catch(() => {});
+              return;
+            }
             el.pause();
             el.removeAttribute('src');
             startYtTrackPlayback(curTrack, Math.floor(musicElapsedSecRef.current || 0));
             return;
           }
-          if (curTrack?.previewUrl && el.src !== curTrack.previewUrl) {
-            el.src = curTrack.previewUrl;
-            el.play().catch(() => {});
+          // STRICT POLICY: Never fall back to 30-second previewUrl!
+          consecutiveMusicFailCountRef.current += 1;
+          if (
+            consecutiveMusicFailCountRef.current <= 3 &&
+            musicQueueRef.current.length > 1
+          ) {
+            handleNextMusicTrackRef.current();
+            return;
           }
+          activeMusicBackendRef.current = 'none';
+          setIsMusicPlaying(false);
         }}
         className="hidden"
       />
+
+      {/* Persistent Floating Background Video Download Indicator (visible across ALL pages & sections!) */}
+      {(activeDownloadProgress || offlineVideoDl.lastCompletedTitle) &&
+        !isDownloadModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-bg-download-pill="true"
+            style={{
+              bottom:
+                'calc(max(12px, env(safe-area-inset-bottom, 0px)) + 70px)',
+              right: 'max(12px, env(safe-area-inset-right, 0px))',
+            }}
+            className="fixed z-[195] max-w-[min(92vw,340px)] sm:!bottom-5 sm:!right-5 pointer-events-auto"
+          >
+            {activeDownloadProgress ? (
+              <div className="rounded-2xl bg-[#0e1526]/95 backdrop-blur-2xl border border-blue-400/40 shadow-[0_16px_44px_rgba(0,0,0,0.82),inset_0_1px_0_rgba(255,255,255,0.14)] px-3.5 py-2.5 text-white space-y-1.5">
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVodItem(null);
+                      setSection('downloads');
+                    }}
+                    className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
+                  >
+                    <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-extrabold text-white truncate">
+                          {activeDownloadProgress.title || offlineVideoDl.activeTitle || 'Descărcare'}
+                        </span>
+                        {offlineVideoDl.queueCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-blue-500/30 border border-blue-400/40 text-[9px] font-black text-blue-200 shrink-0 tabular-nums">
+                            +{offlineVideoDl.queueCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-semibold text-blue-200/90 truncate tabular-nums">
+                        {activeDownloadProgress.percent}% • {formatBytes(activeDownloadProgress.downloadedBytes)}
+                        {activeDownloadProgress.stage ? ` • ${activeDownloadProgress.stage}` : ''}
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    title={tr('Oprește descărcarea', 'Stop download', 'Остановить загрузку')}
+                    aria-label={tr('Oprește descărcarea', 'Stop download', 'Остановить загрузку')}
+                    onClick={handleCancelOfflineDownload}
+                    className="w-7 h-7 rounded-full bg-white/10 hover:bg-rose-600/85 text-zinc-200 hover:text-white inline-flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="w-full h-1.5 rounded-full bg-white/15 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-200"
+                    style={{ width: `${Math.max(2, activeDownloadProgress.percent)}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveVodItem(null);
+                  setSection('downloads');
+                }}
+                className="rounded-2xl bg-emerald-950/95 backdrop-blur-2xl border border-emerald-400/45 shadow-[0_14px_40px_rgba(0,0,0,0.8)] px-3.5 py-2.5 text-white flex items-center gap-2.5 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="min-w-0 text-left">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-300">
+                    {tr('Descărcat Offline', 'Saved Offline', 'Сохранено офлайн')}
+                  </div>
+                  <div className="text-xs font-bold text-white truncate max-w-[240px]">
+                    {offlineVideoDl.lastCompletedTitle}
+                  </div>
+                </div>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
 
       {/* Subtle Apple TV+ / Tahoe Liquid-Glass Capsule Notification for Favorite Toggle */}
       {favToast && (
@@ -19750,8 +21215,45 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         </div>
       )}
 
-      {/* Floating Picture-in-Picture Radio Player (outside the browser page) */}
+      {/* Floating Picture-in-Picture Radio & Music MiniPlayers (outside the browser page) */}
       <RadioPipPlayer />
+      <MusicPipPlayer
+        track={currentMusicTrack}
+        isPlaying={isMusicPlaying}
+        elapsedSec={musicElapsedSec}
+        durationSec={musicDurationSec}
+        volume={musicVolume}
+        isMuted={isMusicMuted}
+        isShuffle={isMusicShuffle}
+        isRepeat={isMusicRepeat}
+        isLiked={Boolean(
+          currentMusicTrack &&
+            likedMusicTracks.some((t) => t.id === currentMusicTrack.id)
+        )}
+        onTogglePlayPause={handleToggleMusicPlayPause}
+        onPrevTrack={handlePrevMusicTrack}
+        onNextTrack={handleNextMusicTrack}
+        onSeek={handleSeekMusic}
+        onToggleShuffle={() => setIsMusicShuffle((v) => !v)}
+        onToggleRepeat={() => setIsMusicRepeat((v) => !v)}
+        onToggleLike={() => {
+          if (currentMusicTrack) handleToggleLikeMusicTrack(currentMusicTrack);
+        }}
+        onChangeVolume={handleChangeMusicVolume}
+        onToggleMute={handleToggleMusicMute}
+        onRestoreNormalPlayer={() => {
+          setActiveVodItem(null);
+          setSection('music');
+          window.dispatchEvent(new CustomEvent('filmio:open-music-song-view'));
+        }}
+        queueIndex={
+          currentMusicTrack
+            ? musicQueue.findIndex((t) => t.id === currentMusicTrack.id)
+            : -1
+        }
+        queueTotal={musicQueue.length}
+        tr={tr}
+      />
     </div>
   );
 };

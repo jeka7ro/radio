@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v56';
+const CACHE_NAME = 'aether-radio-v77';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -72,7 +72,8 @@ self.addEventListener('fetch', (event) => {
 
   if (request.method !== 'GET') return;
 
-  // Serve downloaded Offline HLS manifests & .ts segments directly from IndexedDB for iOS native AVPlayer
+  // Serve downloaded Offline HLS manifests & .ts/.mp4 segments directly from IndexedDB for iOS native AVPlayer
+  // (MUST run before the Range header bypass because iOS AVPlayer sends Range headers for offline segments!)
   if (url.pathname.startsWith('/offline-hls/')) {
     event.respondWith(
       (async () => {
@@ -109,16 +110,40 @@ self.addEventListener('fetch', (event) => {
             });
           }
 
+          const initMatch = subPath.match(/^seg\/([va]_init)\.mp4$/);
           const segMatch = subPath.match(/^seg\/([va]_\d+)\.ts$/);
-          if (segMatch && segMatch[1]) {
-            const chunk = await getOfflineBlobSw(`${itemId}::${segMatch[1]}`);
+          const keySuffix = initMatch?.[1] || segMatch?.[1] || '';
+          if (keySuffix) {
+            const chunk = await getOfflineBlobSw(`${itemId}::${keySuffix}`);
             if (!chunk) return new Response('Segment not found', { status: 404 });
             const ab = chunk instanceof Blob ? await chunk.arrayBuffer() : chunk;
+            const total = ab.byteLength;
+            const contentType = initMatch ? 'video/mp4' : 'video/mp2t';
+            const rangeHeader = request.headers.get('range');
+            if (rangeHeader && /^bytes=/i.test(rangeHeader)) {
+              const [startStr, endStr] = rangeHeader.replace(/^bytes=/i, '').split('-');
+              const start = Math.max(0, parseInt(startStr || '0', 10) || 0);
+              const end = endStr
+                ? Math.min(total - 1, parseInt(endStr, 10) || total - 1)
+                : total - 1;
+              const slice = ab.slice(start, end + 1);
+              return new Response(slice, {
+                status: 206,
+                headers: {
+                  'Content-Type': contentType,
+                  'Content-Range': `bytes ${start}-${end}/${total}`,
+                  'Accept-Ranges': 'bytes',
+                  'Content-Length': String(slice.byteLength),
+                  'Cache-Control': 'no-store',
+                },
+              });
+            }
             return new Response(ab, {
               status: 200,
               headers: {
-                'Content-Type': 'video/mp2t',
-                'Content-Length': String(ab.byteLength),
+                'Content-Type': contentType,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': String(total),
                 'Cache-Control': 'no-store',
               },
             });
@@ -133,11 +158,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  if (request.headers.has('range')) return;
+
   // Never intercept live audio/video streams, local API endpoints, Vite dev modules, or non-GET requests
   if (
     url.hostname === 'localhost' ||
     url.hostname === '127.0.0.1' ||
     url.hostname.startsWith('192.168.') ||
+    url.hostname.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(url.hostname) ||
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/msx/') ||
     url.pathname === '/start.json' ||

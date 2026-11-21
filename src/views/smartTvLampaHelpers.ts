@@ -1881,7 +1881,11 @@ function dispatchCloudProgressPost(cleanProf: string, payload: string): void {
     // ignore
   }
   const servedByLocalNode =
-    typeof window !== 'undefined' && window.location.port === '8769';
+    typeof window !== 'undefined' &&
+    (window.location.port === '8769' ||
+      /\.(lhr\.life|trycloudflare\.com|serveousercontent\.com)$/i.test(
+        window.location.hostname
+      ));
   if (isLocalHomeServer() && !servedByLocalNode) {
     try {
       fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
@@ -2090,7 +2094,11 @@ export function saveSavedVodItems(
     // ignore
   }
   const servedByLocalNode =
-    typeof window !== 'undefined' && window.location.port === '8769';
+    typeof window !== 'undefined' &&
+    (window.location.port === '8769' ||
+      /\.(lhr\.life|trycloudflare\.com|serveousercontent\.com)$/i.test(
+        window.location.hostname
+      ));
   if (isLocalHomeServer() && !servedByLocalNode) {
     try {
       fetch(`https://filmio.my/api/tv-saved?profileId=${cleanProf}`, {
@@ -2108,92 +2116,17 @@ export function saveSavedVodItems(
 }
 
 export function buildVodEmbedUrl(
-  server: VodServerId,
-  item: CinemetaItem,
-  season: number,
-  episode: number,
-  subLang: SubtitleLangId,
-  startSeconds: number,
-  fallbackImdbId?: string
+  _server: VodServerId,
+  _item: CinemetaItem,
+  _season: number,
+  _episode: number,
+  _subLang: SubtitleLangId,
+  _startSeconds: number,
+  _fallbackImdbId?: string
 ): string {
-  const rawItemImdb = String(
-    (item as { imdbId?: string; imdb_id?: string }).imdbId ||
-    (item as { imdbId?: string; imdb_id?: string }).imdb_id ||
-    ''
-  ).trim();
-  const imdbId = item.id.startsWith('tt')
-    ? item.id.split(':')[0]
-    : rawItemImdb.startsWith('tt')
-      ? rawItemImdb.split(':')[0]
-      : fallbackImdbId && fallbackImdbId.startsWith('tt')
-        ? fallbackImdbId.split(':')[0]
-        : '';
-  const kpId =
-    item.kpId || (item.id.startsWith('kp_') ? item.id.replace(/^kp_/, '') : '');
-  const tmdbOrImdbId = item.moviedb_id
-    ? String(item.moviedb_id)
-    : imdbId || kpId;
-  const isSeries = item.type === 'series';
-  const start = Math.max(0, Math.floor(startSeconds || 0));
-
-  const isRu = isRussianVodItem(item);
-
-  // If item is foreign, NEVER return api.namy.ws (Russian pirate embed with Russian dubbing)!
-  if (!isRu) {
-    if (!imdbId && !item.moviedb_id && !tmdbOrImdbId) return '';
-    const params = new URLSearchParams();
-    params.set('autoplay', 'true');
-    params.set('ds_lang', subLang);
-    if (start > 5) {
-      params.set('startAt', String(start));
-      params.set('t', String(start));
-    }
-    return isSeries
-      ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
-      : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
-  }
-
-  // If no IMDb ID or TMDB ID is available and only kpId exists, fallback to Kinogram embed for Russian titles
-  if (!imdbId && !item.moviedb_id && kpId) {
-    const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-    return `https://api.namy.ws/embed/kp/${kpId}${qs}`;
-  }
-
-  switch (server) {
-    case 'filelist_torrent': {
-      const params = new URLSearchParams();
-      params.set('autoplay', 'true');
-      params.set('ds_lang', subLang);
-      if (start > 5) {
-        params.set('startAt', String(start));
-        params.set('t', String(start));
-      }
-      return isSeries
-        ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
-    }
-    case 'kinogram_hls':
-    case 'kinogram_embed': {
-      const path = kpId ? `kp/${kpId}` : `imdb/${imdbId}`;
-      const qs = isSeries ? `?season=${season}&episode=${episode}` : '';
-      return `https://api.namy.ws/embed/${path}${qs}`;
-    }
-    case 'vidspark':
-    case 'vidzee':
-    case 'nontongo':
-    case 'vidsrc_pm': {
-      const params = new URLSearchParams();
-      params.set('autoplay', 'true');
-      params.set('ds_lang', subLang);
-      if (start > 5) {
-        params.set('startAt', String(start));
-        params.set('t', String(start));
-      }
-      return isSeries
-        ? `https://vidsrc.pm/embed/tv/${imdbId || tmdbOrImdbId}/${season}/${episode}?${params.toString()}`
-        : `https://vidsrc.pm/embed/movie/${imdbId || tmdbOrImdbId}?${params.toString()}`;
-    }
-  }
+  // STRICT FILMIO POLICY: Third-party website iframe players (vidsrc, vidspark, multiembed,
+  // kinogram embed, etc.) are permanently disabled. All VOD plays exclusively via VodNativeHlsPlayer.
+  return '';
 }
 
 export const SMART_TV_SETTINGS_STORAGE_KEY = 'aether_smart_tv_settings_v2';

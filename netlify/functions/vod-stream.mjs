@@ -2744,32 +2744,20 @@ async function resolveFromRomanianCloudVod({
   });
 
   if (orderedStreams.length === 0) {
-    if (vmIds[0] || rumbleIds[0]) {
-      const cleanEpTitleFallback = normalizeRoAscii(
-        targetPost.title?.rendered || `${descriptor.canonicalQuery} • S${appSeason}:E${targetEp}`
-      );
-      return {
-        ok: true,
-        type: 'series',
-        sourcePath: 'România Cloud HD (Embed Direct)',
-        season: appSeason,
-        episode: targetEp,
-        title: cleanEpTitleFallback,
-        embedUrl: vmIds[0]
-          ? `https://vidmoly.net/embed-${vmIds[0]}.html`
-          : `https://rumble.com/embed/${rumbleIds[0]}/`,
-        audioNames: ['Română (Original)'],
-        ...(builtSeasonsCatalog ? { seasons: builtSeasonsCatalog } : {}),
-      };
-    }
+    // STRICT POLICY: Never return third-party site embedUrl iframes (vidmoly/rumble embeds).
+    // Only native direct HLS/MP4 streams are allowed for Filmio's own VodNativeHlsPlayer.
     return builtSeasonsCatalog
       ? {
         ok: false,
         type: 'series',
         seasons: builtSeasonsCatalog,
-        error: 'No direct HLS stream extracted from Romanian episode page',
+        error: 'No direct native HLS stream extracted from Romanian episode page',
       }
-      : null;
+      : {
+        ok: false,
+        type: 'series',
+        error: 'No direct native HLS stream extracted from Romanian episode page',
+      };
   }
 
   const primary = orderedStreams[0];
@@ -3067,8 +3055,8 @@ export async function resolveVodStreamData({
       }
     }
 
-    if (rutubeFallbackRes || curatedOrFallbackSeasons) {
-      const activeSeasons = curatedOrFallbackSeasons || rutubeFallbackRes?.seasons;
+    if (rutubeFallbackRes || fallbackSeasonsCatalog) {
+      const activeSeasons = fallbackSeasonsCatalog || rutubeFallbackRes?.seasons;
       return {
         ...(rutubeFallbackRes || {
           ok: false,

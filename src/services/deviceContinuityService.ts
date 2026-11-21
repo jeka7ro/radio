@@ -697,7 +697,10 @@ export function isDirectLocalHost(): boolean {
     h.startsWith('10.') ||
     h.startsWith('100.') ||
     /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) ||
-    h.endsWith('.local')
+    h.endsWith('.local') ||
+    h.endsWith('.lhr.life') ||
+    h.endsWith('.trycloudflare.com') ||
+    h.endsWith('.serveousercontent.com')
   );
 }
 

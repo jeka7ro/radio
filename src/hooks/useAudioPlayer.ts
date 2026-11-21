@@ -7,6 +7,7 @@ import {
   registerStationClick,
   toHttpsStreamUrl,
 } from '../services/radioBrowserApi';
+import { isDirectLocalHost } from '../services/deviceContinuityService';
 import {
   extractTextFromHlsId3Sample,
   parseRawStreamMetadata,
@@ -18,6 +19,8 @@ import {
 } from '../utils/mediaSessionManager';
 
 export const MAX_AUTO_RETRIES = 2;
+const MAX_SESSION_RECOVERIES = 3;
+const STABLE_PLAYBACK_RESET_MS = 20_000;
 
 export function useAudioPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -26,6 +29,8 @@ export function useAudioPlayer() {
   const lastClickedUuidRef = useRef<string | null>(null);
 
   const currentStation = useRadioStore((state) => state.currentStation);
+  const currentStationRef = useRef(currentStation);
+  currentStationRef.current = currentStation;
   const playerStatus = useRadioStore((state) => state.playerStatus);
   const volume = useRadioStore((state) => state.volume);
   const isMuted = useRadioStore((state) => state.isMuted);
@@ -40,6 +45,15 @@ export function useAudioPlayer() {
   const setUsingHttpsUpgrade = useRadioStore((state) => state.setUsingHttpsUpgrade);
   const playNextAvailableStation = useRadioStore((state) => state.playNextAvailableStation);
   const playPreviousStation = useRadioStore((state) => state.playPreviousStation);
+
+  const normalizedStationRawUrl = currentStation
+    ? (currentStation.url_resolved || currentStation.url || '')
+        .trim()
+        .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/')
+    : '';
+  const stationPlaybackKey = currentStation
+    ? `${currentStation.stationuuid}::${normalizedStationRawUrl}`
+    : '';
 
   // Initialize singleton Audio instance once
   useEffect(() => {
@@ -101,10 +115,16 @@ export function useAudioPlayer() {
     }
   }, [playerStatus, currentStation]);
 
-  // Load and play stream whenever currentStation or streamReloadToken changes
+  // Load and play stream whenever active station key or explicit streamReloadToken changes
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !currentStation) return;
+    const station = currentStationRef.current;
+    if (!audio || !station || !stationPlaybackKey) return;
+
+    const currentStatusSnapshot = useRadioStore.getState().playerStatus;
+    if (currentStatusSnapshot === 'paused' || currentStatusSnapshot === 'idle') {
+      return;
+    }
 
     if (retryTimerRef.current) {
       window.clearTimeout(retryTimerRef.current);
@@ -117,55 +137,82 @@ export function useAudioPlayer() {
     }
 
     // Register station play click once per unique station selection
-    if (lastClickedUuidRef.current !== currentStation.stationuuid) {
-      lastClickedUuidRef.current = currentStation.stationuuid;
-      registerStationClick(currentStation.stationuuid);
+    if (lastClickedUuidRef.current !== station.stationuuid) {
+      lastClickedUuidRef.current = station.stationuuid;
+      registerStationClick(station.stationuuid);
     }
 
     let isCancelled = false;
     let localRetryCount = 0;
+    let playingSinceMs = 0;
+    let sessionRecoveries = 0;
 
-    const rawUrl = (currentStation.url_resolved || currentStation.url || '')
-      .trim()
-      .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/');
+    const rawUrl = normalizedStationRawUrl;
     const isPageHttps =
       typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const isSmartTvOrLan =
-      typeof window !== 'undefined' &&
-      (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
-        window.location.hostname
-      ) ||
-        /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
-          navigator.userAgent
-        ) ||
-        document.documentElement.classList.contains('smart-tv-mode'));
+    const isLocalNodeProxy = isDirectLocalHost();
 
-    const buildAudioProxyUrl = (target: string) =>
-      `/api/tv-proxy?url=${encodeURIComponent(target)}&skipAd=1`;
+    const buildAudioProxyUrl = (
+      target: string,
+      withSkipAd: boolean,
+      cacheBust = false
+    ) =>
+      `/api/tv-proxy?url=${encodeURIComponent(target)}${
+        withSkipAd ? '&skipAd=1' : ''
+      }${cacheBust ? `&_nc=${Date.now()}` : ''}`;
 
     const getEffectiveStreamUrl = (attempt: number, forceHttps: boolean) => {
-      // Always prefer local proxy with automatic 2x Preroll Ad-Skipper on attempt 0
-      if (attempt === 0) {
-        return buildAudioProxyUrl(rawUrl);
-      }
-
-      if (attempt === 1) {
-        if (
-          (forceHttps || isPageHttps) &&
-          isInsecureHttpStream(rawUrl)
-        ) {
-          return toHttpsStreamUrl(rawUrl);
+      // On local Node/LAN server, use local proxy with 2x preroll ad-skipper & unlimited TCP pipe
+      if (isLocalNodeProxy) {
+        if (attempt === 0) {
+          return buildAudioProxyUrl(rawUrl, true);
         }
-        return rawUrl;
+        if (attempt === 1) {
+          if (
+            (forceHttps || isPageHttps) &&
+            isInsecureHttpStream(rawUrl)
+          ) {
+            return toHttpsStreamUrl(rawUrl);
+          }
+          return rawUrl;
+        }
+        return isInsecureHttpStream(rawUrl)
+          ? buildAudioProxyUrl(toHttpsStreamUrl(rawUrl), true)
+          : buildAudioProxyUrl(rawUrl, true);
       }
 
-      return isInsecureHttpStream(rawUrl)
-        ? buildAudioProxyUrl(toHttpsStreamUrl(rawUrl))
-        : buildAudioProxyUrl(rawUrl);
+      // On Cloud (Netlify Serverless / filmio.my): play HTTPS radio streams DIRECTLY so they never
+      // hit Netlify Function timeouts, 302 query mutation, or Edge CDN caching.
+      if (!isInsecureHttpStream(rawUrl)) {
+        if (attempt === 0) {
+          return rawUrl;
+        }
+        if (attempt === 1) {
+          return isHlsStation(station, rawUrl)
+            ? buildAudioProxyUrl(rawUrl, false)
+            : rawUrl;
+        }
+        return buildAudioProxyUrl(rawUrl, false, true);
+      }
+
+      // HTTP-only station on HTTPS cloud page: try direct HTTPS upgrade first, then cache-busted no-store proxy
+      if (attempt === 0) {
+        return forceHttps || isPageHttps ? toHttpsStreamUrl(rawUrl) : rawUrl;
+      }
+      return buildAudioProxyUrl(rawUrl, false, true);
     };
 
     const scheduleRetryOrError = () => {
       if (isCancelled) return;
+      if (
+        playingSinceMs > 0 &&
+        Date.now() - playingSinceMs >= STABLE_PLAYBACK_RESET_MS &&
+        sessionRecoveries < MAX_SESSION_RECOVERIES
+      ) {
+        playingSinceMs = 0;
+        localRetryCount = 0;
+        sessionRecoveries += 1;
+      }
       if (localRetryCount < MAX_AUTO_RETRIES) {
         localRetryCount += 1;
         setRetryAttempt(localRetryCount);
@@ -193,6 +240,9 @@ export function useAudioPlayer() {
 
     const handlePlaying = () => {
       if (isCancelled) return;
+      if (playingSinceMs === 0) {
+        playingSinceMs = Date.now();
+      }
       setRetryAttempt(0);
       setPlayerStatus('playing');
       updateMediaSessionPlaybackState('radio', 'playing');
@@ -200,7 +250,9 @@ export function useAudioPlayer() {
 
     const handleWaiting = () => {
       if (isCancelled) return;
-      setPlayerStatus('loading');
+      if (playingSinceMs === 0) {
+        setPlayerStatus('loading');
+      }
     };
 
     const handleError = () => {
@@ -208,9 +260,15 @@ export function useAudioPlayer() {
       scheduleRetryOrError();
     };
 
+    const handleEnded = () => {
+      if (isCancelled) return;
+      scheduleRetryOrError();
+    };
+
     audio.addEventListener('playing', handlePlaying);
     audio.addEventListener('waiting', handleWaiting);
     audio.addEventListener('error', handleError);
+    audio.addEventListener('ended', handleEnded);
 
     const startPlayback = async (streamUrl: string) => {
       if (isCancelled) return;
@@ -224,9 +282,14 @@ export function useAudioPlayer() {
       audio.removeAttribute('src');
       audio.load();
 
-      const useHls = isHlsStation(currentStation, streamUrl);
+      const useHls = isHlsStation(station, streamUrl);
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+      const preferNativeAppleHls =
+        Boolean(audio.canPlayType('application/vnd.apple.mpegurl')) &&
+        /Safari/i.test(ua) &&
+        !/Chrome|Chromium|Edg|OPR|Android/i.test(ua);
 
-      if (useHls) {
+      if (useHls && !preferNativeAppleHls) {
         try {
           const { default: HlsLib } = await import('hls.js');
           if (isCancelled) return;
@@ -234,7 +297,10 @@ export function useAudioPlayer() {
           if (HlsLib.isSupported()) {
             const hls = new HlsLib({
               enableWorker: true,
-              lowLatencyMode: true,
+              lowLatencyMode: false,
+              liveSyncDurationCount: 3,
+              liveMaxLatencyDurationCount: 8,
+              backBufferLength: 30,
             });
             hlsRef.current = hls;
 
@@ -257,7 +323,7 @@ export function useAudioPlayer() {
                   if (extracted) {
                     const parsedLocal = parseRawStreamMetadata(
                       extracted,
-                      currentStation.name
+                      station.name
                     );
                     if (parsedLocal && parsedLocal.title) {
                       setNowPlayingTitle(
@@ -269,7 +335,7 @@ export function useAudioPlayer() {
                     void fetch(
                       `/api/radio-meta?rawTitle=${encodeURIComponent(
                         extracted
-                      )}&name=${encodeURIComponent(currentStation.name)}`
+                      )}&name=${encodeURIComponent(station.name)}`
                     )
                       .then((r) => (r.ok ? r.json() : null))
                       .then((json) => {
@@ -336,9 +402,10 @@ export function useAudioPlayer() {
       audio.removeEventListener('playing', handlePlaying);
       audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('error', handleError);
+      audio.removeEventListener('ended', handleEnded);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStation, streamReloadToken]);
+  }, [stationPlaybackKey, streamReloadToken]);
 
   // Poll live ICY / Icecast metadata & Deezer/iTunes cover + artist avatar only while station is actively playing/loading
   useEffect(() => {
@@ -473,6 +540,16 @@ export function useAudioPlayer() {
             return;
           }
           if (state.currentStation) {
+            if (
+              state.playerStatus === 'playing' ||
+              state.playerStatus === 'loading'
+            ) {
+              const el = audioRef.current;
+              if (el && el.paused && el.src) {
+                el.play().catch(() => { });
+              }
+              return;
+            }
             state.triggerStreamReload();
           }
         },
@@ -495,7 +572,9 @@ export function useAudioPlayer() {
     );
     updateMediaSessionPlaybackState(
       'radio',
-      playerStatus === 'playing' ? 'playing' : 'paused'
+      playerStatus === 'playing' || playerStatus === 'loading'
+        ? 'playing'
+        : 'paused'
     );
   }, [
     currentStation,

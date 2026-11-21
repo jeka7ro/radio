@@ -34,6 +34,7 @@ import {
   OfflineMediaItem,
   createOfflineAwareHlsLoader,
   getBlobChunk,
+  getOfflineFileBlob,
   buildIosNativeOfflineHlsBlobUrl,
 } from '../../services/offlineMediaService';
 import {
@@ -2846,16 +2847,112 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         return;
       }
 
-      // Case 1: Offline Blob file (.mp4 / .mkv / .webm) or pre-built MP4 from HLS offline download
+      // Case 1: Offline Blob file (.mp4 / .mkv / .webm / chunked FileList or VK MP4) or pre-built MP4 from HLS offline download
       if (offlineItem) {
-        const chunk = await getBlobChunk(`${offlineItem.id}::file`);
+        const fileBlob = await getOfflineFileBlob(offlineItem);
         if (cancelled) return;
-        if (chunk) {
-          const blob =
-            chunk instanceof Blob
-              ? chunk
-              : new Blob([chunk], { type: offlineItem.mimeType || 'video/mp4' });
-          objectUrlToRevoke = URL.createObjectURL(blob);
+        if (fileBlob) {
+          objectUrlToRevoke = URL.createObjectURL(fileBlob);
+          let triedOfflineMse = false;
+          const tryPlayBlobViaMse = () => {
+            if (
+              triedOfflineMse ||
+              cancelled ||
+              typeof window === 'undefined' ||
+              typeof window.MediaSource === 'undefined'
+            ) {
+              return false;
+            }
+            triedOfflineMse = true;
+            try {
+              const ms = new window.MediaSource();
+              const mseUrl = URL.createObjectURL(ms);
+              const prevUrl = objectUrlToRevoke;
+              objectUrlToRevoke = mseUrl;
+              if (prevUrl) {
+                try {
+                  URL.revokeObjectURL(prevUrl);
+                } catch {
+                  // ignore
+                }
+              }
+              video.onerror = null;
+              video.src = mseUrl;
+              ms.addEventListener(
+                'sourceopen',
+                () => {
+                  void (async () => {
+                    try {
+                      const mimeCandidates = [
+                        'video/mp4; codecs="avc1.640028, mp4a.40.2"',
+                        'video/mp4; codecs="avc1.4d401f, mp4a.40.2"',
+                        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+                        'video/mp4',
+                      ];
+                      const chosenMime =
+                        mimeCandidates.find((m) =>
+                          window.MediaSource.isTypeSupported(m)
+                        ) || mimeCandidates[0];
+                      const sb = ms.addSourceBuffer(chosenMime);
+                      const waitUpdate = () =>
+                        new Promise<void>((res) => {
+                          if (!sb.updating) {
+                            res();
+                            return;
+                          }
+                          sb.addEventListener('updateend', () => res(), {
+                            once: true,
+                          });
+                        });
+                      const CHUNK = 2 * 1024 * 1024;
+                      let offset = 0;
+                      while (offset < fileBlob.size && !cancelled && ms.readyState === 'open') {
+                        const sliceAb = await fileBlob
+                          .slice(offset, Math.min(fileBlob.size, offset + CHUNK))
+                          .arrayBuffer();
+                        if (cancelled || ms.readyState !== 'open') break;
+                        await waitUpdate();
+                        sb.appendBuffer(sliceAb);
+                        await waitUpdate();
+                        offset += CHUNK;
+                        // Keep ahead buffer bounded during playback
+                        if (offset > 24 * 1024 * 1024 && video.readyState >= 2) {
+                          while (
+                            !cancelled &&
+                            ms.readyState === 'open' &&
+                            sb.buffered.length > 0 &&
+                            sb.buffered.end(sb.buffered.length - 1) - video.currentTime > 60
+                          ) {
+                            await new Promise((r) => setTimeout(r, 400));
+                          }
+                        }
+                      }
+                      if (!cancelled && ms.readyState === 'open') {
+                        await waitUpdate();
+                        try {
+                          ms.endOfStream();
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    } catch {
+                      if (!cancelled) setStatus('error');
+                    }
+                  })();
+                },
+                { once: true }
+              );
+              return true;
+            } catch {
+              return false;
+            }
+          };
+          video.onerror = () => {
+            if (cancelled) return;
+            if (!tryPlayBlobViaMse()) {
+              setStatus('error');
+            }
+          };
           video.src = objectUrlToRevoke;
           video.onloadedmetadata = () => {
             syncVideoDims(video);
@@ -6801,12 +6898,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           {/* ROW 2: APPLE LIQUID GLASS TRANSPORT CONTROLS (LEFT) + AUDIO / SERVER / SUBTITLES / QUALITY (RIGHT) — STRICTLY 1 SINGLE ROW */}
           <div
             data-vod-bottom-row="true"
-            className={`w-full flex items-center justify-between flex-nowrap ${isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
+            className={`w-full flex items-center justify-between flex-nowrap ${isMobilePhone ? 'gap-2' : 'gap-2 lg:gap-2.5'
               }`}
           >
             {/* Left Transport & Episode Controls */}
             <div
-              className={`flex items-center flex-nowrap shrink-0 ${isMobilePhone ? 'gap-1' : 'gap-1.5 lg:gap-2'
+              className={`flex items-center flex-nowrap shrink-0 ${isMobilePhone ? 'gap-2.5 sm:gap-3' : 'gap-2 lg:gap-2.5'
                 }`}
             >
               <button
@@ -6817,14 +6914,14 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   handleRemotePlayPause('toggle');
                 }}
                 className={`${isMobilePhone
-                  ? 'h-8 w-8 justify-center'
-                  : 'h-8 w-8 sm:h-9 sm:w-auto sm:px-3.5 justify-center sm:justify-start'
-                  } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer`}
+                  ? 'h-10 w-10 sm:h-11 sm:w-11 justify-center'
+                  : 'h-9 w-9 sm:h-10 sm:w-auto sm:px-3.5 justify-center sm:justify-start'
+                  } rounded-full tahoe-emerald-card hover:bg-white/20 active:scale-95 text-white/95 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-md focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer touch-manipulation`}
               >
                 {isPaused ? (
-                  <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+                  <Play className={`${isMobilePhone ? 'w-4 h-4 sm:w-[18px] sm:h-[18px] ml-0.5' : 'w-3.5 h-3.5'} fill-current shrink-0`} />
                 ) : (
-                  <Pause className="w-3.5 h-3.5 fill-current shrink-0" />
+                  <Pause className={`${isMobilePhone ? 'w-4 h-4 sm:w-[18px] sm:h-[18px]' : 'w-3.5 h-3.5'} fill-current shrink-0`} />
                 )}
                 {!isMobilePhone && (
                   <span className="hidden sm:inline">
@@ -6880,9 +6977,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }}
                 title="Înapoi (Smart Seek: 15s -> 15s -> 30s -> 1 min)"
                 aria-label="Înapoi cu 15 secunde"
-                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none"
+                className={`${isMobilePhone
+                  ? 'h-10 sm:h-11 px-3 sm:px-3.5 text-xs sm:text-[13px] gap-1.5'
+                  : 'h-9 sm:h-10 px-2.5 sm:px-3.5 text-xs gap-1'
+                  } rounded-full tahoe-emerald-card hover:bg-white/20 active:scale-95 text-white/95 font-semibold inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none touch-manipulation`}
               >
-                <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden="true" />
+                <RotateCcw className={`${isMobilePhone ? 'w-4 h-4' : 'w-3.5 h-3.5'} shrink-0`} aria-hidden="true" />
                 <span>15s</span>
               </button>
 
@@ -6933,9 +7033,12 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 }}
                 title="Înainte (Smart Seek: 15s -> 15s -> 30s -> 1 min)"
                 aria-label="Înainte cu 15 secunde"
-                className="h-8 sm:h-9 px-2 sm:px-3 text-[11px] sm:text-xs gap-0.5 sm:gap-1 rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 font-medium inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none"
+                className={`${isMobilePhone
+                  ? 'h-10 sm:h-11 px-3 sm:px-3.5 text-xs sm:text-[13px] gap-1.5'
+                  : 'h-9 sm:h-10 px-2.5 sm:px-3.5 text-xs gap-1'
+                  } rounded-full tahoe-emerald-card hover:bg-white/20 active:scale-95 text-white/95 font-semibold inline-flex items-center transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer select-none touch-manipulation`}
               >
-                <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" aria-hidden="true" />
+                <RotateCw className={`${isMobilePhone ? 'w-4 h-4' : 'w-3.5 h-3.5'} shrink-0`} aria-hidden="true" />
                 <span>{isNarrowPortraitMobile ? '15s' : '+15s'}</span>
               </button>
 
@@ -7000,11 +7103,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                   title={`Episoade S${season}·E${episode}`}
                   aria-label={`Episoade S${season}·E${episode}`}
                   className={`${isMobilePhone
-                    ? 'h-8 w-8 justify-center'
-                    : 'h-8 w-8 sm:h-9 sm:w-auto sm:px-3 justify-center sm:justify-start'
-                    } rounded-full tahoe-emerald-card hover:bg-white/20 text-white/95 text-[11px] sm:text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer`}
+                    ? 'h-10 w-10 sm:h-11 sm:w-11 justify-center'
+                    : 'h-9 w-9 sm:h-10 sm:w-auto sm:px-3 justify-center sm:justify-start'
+                    } rounded-full tahoe-emerald-card hover:bg-white/20 active:scale-95 text-white/95 text-[11px] sm:text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none focus:bg-white focus:text-zinc-950 shrink-0 whitespace-nowrap cursor-pointer touch-manipulation`}
                 >
-                  <SfEpisodesIcon className="w-3.5 h-3.5 shrink-0" />
+                  <SfEpisodesIcon className={`${isMobilePhone ? 'w-4 h-4' : 'w-3.5 h-3.5'} shrink-0`} />
                   {!isMobilePhone && (
                     <span className="hidden sm:inline">Episoade</span>
                   )}

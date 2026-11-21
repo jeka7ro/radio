@@ -547,9 +547,29 @@ console.log('VECTOR3_NODE_OK');
             errors.append(
                 "src/services/musicStreamEngine.ts nu inițializează engine-ul oficial YT IFrame (`youtube.com/iframe_api` 200x200)"
             )
+        elif "isMobileLockScreenDevice()) return" in me_txt:
+            errors.append(
+                "src/services/musicStreamEngine.ts blochează prewarmYoutubeMusicEngine() pe mobil/iPad (provoacă fallback 30s)!"
+            )
         else:
             details.append(
-                "musicStreamEngine.ts activ (motor hibrid: Residential Direct Audio + YouTube `iframe_api` YT.Player 200x200 full-track)"
+                "musicStreamEngine.ts activ (motor hibrid: Residential Direct Audio + YouTube `iframe_api` YT.Player 200x200 full-track pe toate dispozitivele)"
+            )
+
+    lampa_music_p = ROOT_DIR / "src" / "views" / "SmartTvLampaViewCore.tsx"
+    if lampa_music_p.exists():
+        lm_txt = lampa_music_p.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"\b(?:el|audioEl)\.src\s*=\s*[^;\n]*previewUrl", lm_txt):
+            errors.append(
+                "SmartTvLampaViewCore.tsx conține fallback audio către `previewUrl` (30 secunde) — STRICT INTERZIS!"
+            )
+        elif "!isMobileLockScreenDevice()" in lm_txt:
+            errors.append(
+                "SmartTvLampaViewCore.tsx blochează redarea full-track YT.Player pe iPhone/iPad (`!isMobileLockScreenDevice()`)!"
+            )
+        else:
+            details.append(
+                "SmartTvLampaViewCore.tsx: 0 fallback-uri 30s `previewUrl` + full-track activ pe iPhone, iPad, Android, PC și TV"
             )
 
     if errors:
@@ -580,39 +600,89 @@ def vector4_ui_and_architecture(skip_build: bool = False) -> Tuple[bool, str, Li
     else:
         details.append("0 apeluri `alert()` sau `window.confirm()` în `src/`")
 
-    # 2. Verificare interdicție `vidspark.to` (sursă generatoare de pop-up-uri Booking/AliExpress)
-    helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
+    # 2. Verificare interdicție absolută surse externe iframe în frontend (vidsrc.pm, vidspark.to, multiembed, vidzee, frembed, vidmoly/rumble embed)
+    #    și interdicție returnare `embedUrl:` din netlify/functions/vod-stream.mjs
+    forbidden_embed_patterns = [
+        "vidspark.to",
+        "vidsrc.pm",
+        "player.vidzee.wtf",
+        "multiembed.mov",
+        "frembed.live",
+        "vidmoly.net/embed",
+        "rumble.com/embed",
+    ]
+    embed_violations: List[str] = []
+    for path_str in sorted(glob.glob(str(ROOT_DIR / "src" / "**" / "*.*"), recursive=True)):
+        if not path_str.endswith((".ts", ".tsx", ".js")):
+            continue
+        p = Path(path_str)
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        for pat in forbidden_embed_patterns:
+            if pat in txt:
+                embed_violations.append(f"{p.relative_to(ROOT_DIR)} ({pat})")
+    vod_fn_p = ROOT_DIR / "netlify" / "functions" / "vod-stream.mjs"
+    if vod_fn_p.exists():
+        vod_fn_txt = vod_fn_p.read_text(encoding="utf-8", errors="ignore")
+        if re.search(r"\bembedUrl\s*:", vod_fn_txt):
+            embed_violations.append("netlify/functions/vod-stream.mjs (returnează embedUrl:)")
+    if embed_violations:
+        errors.append(
+            f"Surse externe iframe INTERZISE detectate: {', '.join(embed_violations[:6])}"
+        )
+    else:
+        details.append(
+            "0 referințe la playere externe terțe (vidsrc.pm / vidspark.to / multiembed / vidzee / frembed / embedUrl eliminate 100%)"
+        )
+
+    # 3. Verificare ZERO <iframe> VOD externe în SmartTvLampaViewCore.tsx și playerul VOD din MediatecaView.tsx (permise DOAR YouTube oficial & tab-ul explicit Lampa)
     lampa_core_p = ROOT_DIR / "src" / "views" / "SmartTvLampaViewCore.tsx"
     lampa_txt = (
         lampa_core_p.read_text(encoding="utf-8", errors="ignore")
         if lampa_core_p.exists()
         else (ROOT_DIR / "src" / "views" / "SmartTvLampaView.tsx").read_text(encoding="utf-8", errors="ignore")
     )
-    if "vidspark.to" in helpers_txt or "vidspark.to" in lampa_txt:
-        errors.append("Sursa cu reclame pop-up `vidspark.to` este încă prezentă în smartTvLampaHelpers.ts sau SmartTvLampaView.tsx!")
+    mediateca_p = ROOT_DIR / "src" / "views" / "MediatecaView.tsx"
+    mediateca_txt = mediateca_p.read_text(encoding="utf-8", errors="ignore") if mediateca_p.exists() else ""
+    vod_iframes_found: List[str] = []
+    yt_iframe_count = 0
+    for label_name, content_txt in [("SmartTvLampaViewCore.tsx", lampa_txt), ("MediatecaView.tsx", mediateca_txt)]:
+        for m in re.finditer(r"<iframe\b[^>]*>", content_txt, flags=re.DOTALL):
+            tag = m.group(0)
+            if "youtube-nocookie.com" in tag or "youtube.com/embed" in tag:
+                yt_iframe_count += 1
+            elif label_name == "MediatecaView.tsx" and "src={lampaServer}" in tag:
+                continue
+            else:
+                line_no = content_txt[: m.start()].count("\n") + 1
+                vod_iframes_found.append(f"{label_name}:{line_no}")
+    if vod_iframes_found:
+        errors.append(
+            f"Iframe-uri VOD externe INTERZISE găsite ({', '.join(vod_iframes_found)}) — redarea VOD trebuie să folosească EXCLUSIV VodNativeHlsPlayer!"
+        )
     else:
-        details.append("0 referințe `vidspark.to` (reclamele pop-up Booking/AliExpress sunt eliminate 100%)")
+        details.append(
+            f"0 elemente `<iframe>` VOD externe în SmartTvLampaViewCore.tsx / MediatecaView.tsx (exclusiv VodNativeHlsPlayer; +{yt_iframe_count} YouTube oficial)"
+        )
 
-    # 3. Verificare atribut `sandbox` pe iframe-urile VOD externe din SmartTvLampaView.tsx
-    iframes = list(re.finditer(r"<iframe\b[^>]*>", lampa_txt, flags=re.DOTALL))
-    if not iframes:
-        details.append("Niciun element <iframe> în SmartTvLampaView.tsx")
+    # 3b. Verificare runtime vod-stream.mjs fără ReferenceError și fără embedUrl extern
+    vod_rt_test = r"""
+import { resolveVodStreamData } from './netlify/functions/vod-stream.mjs';
+const res = await resolveVodStreamData({ imdb: 'tt15239678', title: 'Dune: Part Two', mediaType: 'movie', ru: '0' });
+if (!res || typeof res !== 'object') {
+  throw new Error('resolveVodStreamData returned non-object');
+}
+if (res.embedUrl) {
+  throw new Error('resolveVodStreamData returned forbidden external embedUrl: ' + res.embedUrl);
+}
+console.log('VOD_RT_OK', JSON.stringify({ ok: res.ok, hasHls: !!res.hlsUrl, hasEmbed: !!res.embedUrl }));
+"""
+    rt_code, rt_out, rt_err = run_cmd(["node", "--input-type=module", "-e", vod_rt_test], timeout=35)
+    if rt_code != 0 or "VOD_RT_OK" not in rt_out:
+        errors.append(
+            f"Runtime check `vod-stream.mjs` a eșuat: {(rt_err or rt_out).strip()[-280:]}"
+        )
     else:
-        vod_iframes = [m.group(0) for m in iframes if "youtube-nocookie.com" not in m.group(0)]
-        yt_iframes = [m.group(0) for m in iframes if "youtube-nocookie.com" in m.group(0)]
-        unsandboxed = 0
-        popup_allowed = 0
-        for tag in vod_iframes:
-            if "sandbox=" not in tag:
-                unsandboxed += 1
-            elif "allow-popups" in tag:
-                popup_allowed += 1
-        if unsandboxed > 0 or popup_allowed > 0:
-            errors.append(f"Iframe-uri VOD nesecurizate în SmartTvLampaView.tsx: {unsandboxed} fără sandbox, {popup_allowed} cu allow-popups")
-        else:
-            details.append(
-                f"Toate cele {len(vod_iframes)} elemente `<iframe>` VOD externe au `sandbox` strict fără `allow-popups` (+ {len(yt_iframes)} trailere YouTube oficiale)"
-            )
+        details.append("Runtime `netlify/functions/vod-stream.mjs` executat fără excepții și 0 `embedUrl` externe")
 
     # 4. Compilare completă TypeScript + Vite (`npm run build`) sau Typecheck rapid (`npx tsc --noEmit`)
     if skip_build:
@@ -1025,7 +1095,7 @@ def vector6_anti_loop_and_netlify_consumption() -> Tuple[bool, str, List[str]]:
     if re.search(r"precacheShellAndBundles[\s\S]*cache\.add\(", sw_txt) or "/assets/" in sw_txt and "cache.add(" in sw_txt:
         errors.append("public/sw.js descarcă dublu bundle-urile `/assets/` în faza `install`")
     else:
-        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v56'` fără re-descărcarea bundle-urilor în `install`")
+        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v77'` fără re-descărcarea bundle-urilor în `install`")
 
     helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
     rse_m = re.search(r"export\s+async\s+function\s+resolveSeriesEpisodeStats\b([\s\S]*?)\nexport\s+function\s+formatSeriesCardBadgeText\b", helpers_txt)
