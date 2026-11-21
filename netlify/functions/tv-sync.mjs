@@ -21,6 +21,7 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   radioFavsByProfile: {},
   tvFavChannelsByProfile: {},
   musicByProfile: {},
+  homeBridge: null,
   blobReadCache: {},
   lastBlobWrittenJson: {},
 };
@@ -751,6 +752,79 @@ export default async (req) => {
         status: 200,
         headers: corsHeaders,
       });
+    }
+
+    // 2e. /api/tv-bridge (Auto-synced HTTPS Home Bridge origin for FileList.io & Apple-native M4A audio)
+    if (path.includes('tv-bridge')) {
+      const normalizeSafeBridgeOrigin = (raw) => {
+        const s = String(raw || '').trim();
+        if (!s || s.length > 180 || !s.startsWith('https://')) return '';
+        try {
+          const parsed = new URL(s);
+          if (parsed.protocol !== 'https:' || !parsed.hostname) return '';
+          const h = parsed.hostname.toLowerCase();
+          if (
+            h === 'localhost' ||
+            h === '127.0.0.1' ||
+            h === '0.0.0.0' ||
+            h.startsWith('10.') ||
+            h.startsWith('192.168.') ||
+            /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) ||
+            h.startsWith('169.254.') ||
+            h.endsWith('.local') ||
+            h.endsWith('.internal') ||
+            h.includes(':')
+          ) {
+            return '';
+          }
+          return parsed.origin;
+        } catch {
+          return '';
+        }
+      };
+
+      const { data: blobBridge } = await readBlobState(blobStore, 'home_bridge_v1');
+      let currentBridge = globalStore.homeBridge || null;
+      if (blobBridge && typeof blobBridge === 'object' && blobBridge.bridgeUrl) {
+        const blobTs = Number(blobBridge.updatedAt) || 0;
+        const curTs = Number(currentBridge?.updatedAt) || 0;
+        if (!currentBridge || blobTs >= curTs) {
+          currentBridge = {
+            bridgeUrl: normalizeSafeBridgeOrigin(blobBridge.bridgeUrl),
+            updatedAt: blobTs,
+          };
+          globalStore.homeBridge = currentBridge;
+        }
+      }
+
+      if (req.method === 'POST') {
+        const incoming = await req.json().catch(() => null);
+        const nextUrl = normalizeSafeBridgeOrigin(incoming?.bridgeUrl);
+        if (nextUrl) {
+          const nextRecord = {
+            bridgeUrl: nextUrl,
+            updatedAt: Date.now(),
+          };
+          const changed = currentBridge?.bridgeUrl !== nextUrl;
+          currentBridge = changed ? nextRecord : currentBridge;
+          globalStore.homeBridge = currentBridge;
+          if (changed) {
+            await writeBlobState(blobStore, 'home_bridge_v1', nextRecord);
+          }
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          bridgeUrl: currentBridge?.bridgeUrl || '',
+          updatedAt: Number(currentBridge?.updatedAt) || 0,
+        }),
+        {
+          status: 200,
+          headers: corsHeaders,
+        }
+      );
     }
 
     // 3. /api/tv-progress

@@ -6,6 +6,19 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-21 15:40 — Auto-Conectare HTTPS Home Bridge pe `filmio.my` (`/api/tv-bridge`) pentru Filme/Seriale Străine (`The Westies`) & Muzică M4A Apple pe iPad/iPhone/TV (`aether-radio-v78`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Endpoint Cloud Auto-Bridge (`/api/tv-bridge` în [netlify/functions/tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs) + [netlify.toml](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify.toml))**: Stochează în Netlify Blobs (`home_bridge_v1`, cu write-dedupe și validare strictă anti-SSRF exclusiv `https://` public) URL-ul activ al tunelului HTTPS către serverul local de acasă (FileList.io VIP + motor M4A curat Apple).
+  2. **Auto-descoperire zero-config pe `https://filmio.my` ([src/services/deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts))**: `probeLocalBridge()` citește o singură dată `/api/tv-bridge`, prioritizează origin-ul HTTPS al tunelului (evitând blocarea Mixed Content a `http://192.168.*` în Safari pe iPad/iPhone), și expune `isLocalBridgeProbePending()` + `waitForLocalBridgeProbe()` pentru eliminarea race-condition-ului la pornire.
+  3. **Auto-publicare din serverul local ([vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts), [src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts))**: Înregistrează automat o singură dată pe sesiune origin-ul activ `*.trycloudflare.com` în `https://filmio.my/api/tv-bridge` și adaugă `Cache-Control: no-store` pe `/api/filelist/status`.
+  4. **Eliminare eroare la pornire pe filme/seriale străine și muzică ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx))**: Rezolvarea VOD (`The Westies` etc.) și redarea audio așteaptă finalizarea handshake-ului `waitForLocalBridgeProbe` înainte de fallback, eliminând flash-ul de eroare și rutarea greșită către Netlify Lambda.
+  5. Incrementat SW cache la `aether-radio-v78` ([public/sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html), `run_prepush_audit.py`).
+- **De ce:** Pe `https://filmio.my` deschis de pe iPad, Safari bloca sondarea `http://192.168.*` (Mixed Content), așa că aplicația nu descoperea automat serverul local FileList/M4A prin tunelul HTTPS; serialele străine (`The Westies`) primeau eroare (Collaps geo-blocat HTTP 422), iar muzica ocolea motorul curat M4A Apple.
+- **Fișiere:** `netlify.toml`, `netlify/functions/tv-sync.mjs`, `src/services/deviceContinuityService.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/server/filelistServer.ts`, `vite.config.ts`, `public/sw.js`, `index.html`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-21 11:48 — Check-up Complet de Sistem: Anti-SSRF Local `/api/tv-proxy`, Pornire Instant `<1ms` `/api/tv-profiles` & SW Offline PWA pe Tunel Cloudflare (`vite.config.ts`)
 - **Autor:** Antigravity
 - **Ce:**

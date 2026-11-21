@@ -711,10 +711,51 @@ const LOCAL_CANDIDATE_BRIDGE_ORIGINS = [
   'http://127.0.0.1:8769',
   'http://100.79.113.57:8769',
 ];
-const LOCAL_BRIDGE_ORIGIN = LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
 let activeBridgeOrigin = '';
 let localBridgeAvailable: boolean | null = null;
 let localBridgeProbeStarted = false;
+let inFlightBridgeProbePromise: Promise<boolean> | null = null;
+let cachedCloudBridgeOrigin = '';
+let cloudBridgeFetchedOnce = false;
+
+function normalizeSafeHttpsBridgeOrigin(raw: unknown): string {
+  const s = String(raw || '').trim();
+  if (!s || s.length > 180 || !s.startsWith('https://')) return '';
+  try {
+    const parsed = new URL(s);
+    if (parsed.protocol !== 'https:' || !parsed.hostname) return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
+}
+
+async function fetchRegisteredCloudBridgeOrigin(force = false): Promise<string> {
+  if (typeof window === 'undefined' || isDirectLocalHost()) return '';
+  if (cloudBridgeFetchedOnce && !force) return cachedCloudBridgeOrigin;
+  cloudBridgeFetchedOnce = true;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 2200);
+  try {
+    const res = await fetch('/api/tv-bridge', {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!res.ok) return cachedCloudBridgeOrigin;
+    const data = (await res.json().catch(() => null)) as {
+      bridgeUrl?: string;
+    } | null;
+    const clean = normalizeSafeHttpsBridgeOrigin(data?.bridgeUrl);
+    if (clean) {
+      cachedCloudBridgeOrigin = clean;
+    }
+    return cachedCloudBridgeOrigin;
+  } catch {
+    return cachedCloudBridgeOrigin;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 function notifyLocalBridgeChanged(nextVal: boolean): void {
   if (typeof window === 'undefined') return;
@@ -727,12 +768,34 @@ function notifyLocalBridgeChanged(nextVal: boolean): void {
   }
 }
 
+export function isLocalBridgeProbePending(): boolean {
+  if (typeof window === 'undefined' || isDirectLocalHost()) return false;
+  return Boolean(inFlightBridgeProbePromise) || localBridgeAvailable === null;
+}
+
+export async function waitForLocalBridgeProbe(maxWaitMs = 2400): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  if (isDirectLocalHost()) return true;
+  if (localBridgeAvailable === true && activeBridgeOrigin) return true;
+  const pending = inFlightBridgeProbePromise || probeLocalBridge(false);
+  if (maxWaitMs <= 0) return pending;
+  return Promise.race([
+    pending,
+    new Promise<boolean>((resolve) =>
+      window.setTimeout(() => resolve(Boolean(localBridgeAvailable)), maxWaitMs)
+    ),
+  ]);
+}
+
 function probeLocalBridge(force = false): Promise<boolean> {
   if (typeof window === 'undefined') return Promise.resolve(false);
   if (isDirectLocalHost()) {
     localBridgeAvailable = true;
     localBridgeProbeStarted = true;
     return Promise.resolve(true);
+  }
+  if (!force && inFlightBridgeProbePromise) {
+    return inFlightBridgeProbePromise;
   }
   if (localBridgeProbeStarted && !force) {
     return Promise.resolve(Boolean(localBridgeAvailable));
@@ -764,15 +827,14 @@ function probeLocalBridge(force = false): Promise<boolean> {
     }
   })();
 
-  const originsToProbe = Array.from(
-    new Set([storedOrigin, ...LOCAL_CANDIDATE_BRIDGE_ORIGINS].filter(Boolean))
-  );
+  const isHttpsPage = window.location.protocol === 'https:';
 
   const probeOne = async (origin: string): Promise<string> => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 2000);
+    const timer = window.setTimeout(() => controller.abort(), 2600);
     try {
       const r = await fetch(`${origin}/api/filelist/status`, {
+        cache: 'no-store',
         signal: controller.signal,
       });
       if (r.ok) return origin;
@@ -782,9 +844,39 @@ function probeLocalBridge(force = false): Promise<boolean> {
     }
   };
 
-  return Promise.any(originsToProbe.map((o) => probeOne(o)))
-    .then((winner) => {
+  const runProbe = (async (): Promise<boolean> => {
+    const cloudOrigin = await fetchRegisteredCloudBridgeOrigin(force);
+    const localCandidates = isHttpsPage
+      ? LOCAL_CANDIDATE_BRIDGE_ORIGINS.filter(
+          (o) =>
+            o.startsWith('https://') ||
+            o.startsWith('http://localhost:') ||
+            o.startsWith('http://127.0.0.1:')
+        )
+      : LOCAL_CANDIDATE_BRIDGE_ORIGINS;
+    const filteredStored =
+      storedOrigin &&
+      (!isHttpsPage ||
+        storedOrigin.startsWith('https://') ||
+        storedOrigin.startsWith('http://localhost:') ||
+        storedOrigin.startsWith('http://127.0.0.1:'))
+        ? storedOrigin
+        : '';
+    const originsToProbe = Array.from(
+      new Set([cloudOrigin, filteredStored, ...localCandidates].filter(Boolean))
+    );
+
+    if (originsToProbe.length === 0) {
       const prev = localBridgeAvailable;
+      localBridgeAvailable = false;
+      if (prev !== false) notifyLocalBridgeChanged(false);
+      return false;
+    }
+
+    try {
+      const winner = await Promise.any(originsToProbe.map((o) => probeOne(o)));
+      const prev = localBridgeAvailable;
+      const prevOrigin = activeBridgeOrigin;
       localBridgeAvailable = true;
       activeBridgeOrigin = winner;
       try {
@@ -794,14 +886,14 @@ function probeLocalBridge(force = false): Promise<boolean> {
       } catch {
         // ignore
       }
-      if (prev !== true) {
+      if (prev !== true || prevOrigin !== winner) {
         notifyLocalBridgeChanged(true);
       }
       return true;
-    })
-    .catch(() => {
+    } catch {
       const prev = localBridgeAvailable;
       localBridgeAvailable = false;
+      activeBridgeOrigin = '';
       try {
         sessionStorage.removeItem('filmio_local_bridge_ok');
       } catch {
@@ -811,7 +903,13 @@ function probeLocalBridge(force = false): Promise<boolean> {
         notifyLocalBridgeChanged(false);
       }
       return false;
-    });
+    } finally {
+      inFlightBridgeProbePromise = null;
+    }
+  })();
+
+  inFlightBridgeProbePromise = runProbe;
+  return runProbe;
 }
 
 export function retryProbeLocalBridge(): Promise<boolean> {

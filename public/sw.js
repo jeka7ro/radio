@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v77';
+const CACHE_NAME = 'aether-radio-v78';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

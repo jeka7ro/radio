@@ -2878,8 +2878,53 @@ function tvStreamProxyPlugin(): Plugin {
         });
       });
 
+      // Auto-register active HTTPS Home Bridge origin (Cloudflare Tunnel) to https://filmio.my/api/tv-bridge once per unique origin
+      let lastPublishedBridgeOrigin = '';
+      const publishHomeBridgeOriginOnce = (rawOrigin: string) => {
+        const clean = String(rawOrigin || '').trim().replace(/\/+$/, '');
+        if (!clean.startsWith('https://') || clean === lastPublishedBridgeOrigin) return;
+        let safeOrigin = '';
+        try {
+          const parsed = new URL(clean);
+          const host = parsed.hostname.toLowerCase();
+          if (
+            parsed.protocol === 'https:' &&
+            (host.endsWith('.trycloudflare.com') ||
+              host.endsWith('.lhr.life') ||
+              host.endsWith('.serveousercontent.com') ||
+              Boolean(process.env.FILMIO_BRIDGE_URL))
+          ) {
+            safeOrigin = parsed.origin;
+          }
+        } catch {
+          return;
+        }
+        if (!safeOrigin || safeOrigin === lastPublishedBridgeOrigin) return;
+        lastPublishedBridgeOrigin = safeOrigin;
+        void fetch('https://filmio.my/api/tv-bridge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bridgeUrl: safeOrigin }),
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {
+          lastPublishedBridgeOrigin = '';
+        });
+      };
+
+      if (process.env.FILMIO_BRIDGE_URL) {
+        publishHomeBridgeOriginOnce(process.env.FILMIO_BRIDGE_URL);
+      }
+
       // FileList.io Live Torrent Catalog, Resolver & Remux Streaming Engine
       server.middlewares.use(async (req, res, next) => {
+        const reqHost = String(req.headers.host || '').trim().toLowerCase();
+        if (
+          reqHost.endsWith('.trycloudflare.com') ||
+          reqHost.endsWith('.lhr.life') ||
+          reqHost.endsWith('.serveousercontent.com')
+        ) {
+          publishHomeBridgeOriginOnce(`https://${reqHost}`);
+        }
         if (req.url && req.url.startsWith('/api/filelist')) {
           const handled = await handleFileListRequest(req, res);
           if (handled) return;

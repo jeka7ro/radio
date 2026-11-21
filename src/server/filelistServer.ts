@@ -2873,6 +2873,7 @@ export async function handleFileListRequest(
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store',
     });
     res.end(
       JSON.stringify({

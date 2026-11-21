@@ -199,6 +199,8 @@ import {
   unmarkProfileDeleted,
   normalizeProfile,
   isLocalHomeServer,
+  isLocalBridgeProbePending,
+  waitForLocalBridgeProbe,
   retryProbeLocalBridge,
   isFileListExclusiveRomanianTitle,
   buildFileListApiUrl,
@@ -867,28 +869,41 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const audioEl = musicAudioRef.current;
       const startOnlinePlayback = () => {
         if (musicPlaybackSeqRef.current !== playbackSeq) return;
-        // On Cloud (filmio.my without LAN Bridge), Netlify Lambda IPs are blocked by YouTube InnerTube (HTTP 404).
-        // Start full-track YT.Player IMMEDIATELY inside the user's tap gesture on ALL devices (iPhone/iPad/Android/PC/TV)!
-        if (!canUseResidentialDirectAudio()) {
-          startYtTrackPlayback(track, 0);
-          return;
-        }
-        if (audioEl) {
-          activeMusicBackendRef.current = 'audio';
-          audioFallbackOnlyRef.current = false;
-          musicAudioRetryRef.current = 0;
-          audioEl.src = buildDirectFullAudioUrl(track, 0);
-          audioEl.volume = isMusicMuted ? 0 : musicVolume;
-          const playPromise = audioEl.play();
-          if (playPromise !== undefined) {
-            playPromise.catch(() => {
-              if (musicPlaybackSeqRef.current !== playbackSeq) return;
-              startYtTrackPlayback(track, 0);
-            });
+        const launchResolvedOnlineAudio = () => {
+          if (musicPlaybackSeqRef.current !== playbackSeq) return;
+          if (!canUseResidentialDirectAudio()) {
+            startYtTrackPlayback(track, 0);
+            return;
           }
+          if (audioEl) {
+            activeMusicBackendRef.current = 'audio';
+            audioFallbackOnlyRef.current = false;
+            musicAudioRetryRef.current = 0;
+            audioEl.src = buildDirectFullAudioUrl(track, 0);
+            audioEl.volume = isMusicMuted ? 0 : musicVolume;
+            const playPromise = audioEl.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(() => {
+                if (musicPlaybackSeqRef.current !== playbackSeq) return;
+                startYtTrackPlayback(track, 0);
+              });
+            }
+            return;
+          }
+          startYtTrackPlayback(track, 0);
+        };
+        if (!canUseResidentialDirectAudio() && isLocalBridgeProbePending()) {
+          if (audioEl) {
+            try {
+              audioEl.load();
+            } catch {
+              // preserve iOS Safari gesture unlock while HTTPS bridge finishes probing
+            }
+          }
+          void waitForLocalBridgeProbe(2000).then(() => launchResolvedOnlineAudio());
           return;
         }
-        startYtTrackPlayback(track, 0);
+        launchResolvedOnlineAudio();
       };
 
       if (!isTrackOfflineSync(track)) {
@@ -974,29 +989,42 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         musicAudioRetryRef.current = 0;
         const resumeOnline = () => {
           if (musicPlaybackSeqRef.current !== seq) return;
-          if (!canUseResidentialDirectAudio()) {
-            startYtTrackPlayback(currentMusicTrack, resumeAt);
+          const launchResumeOnline = () => {
+            if (musicPlaybackSeqRef.current !== seq) return;
+            if (!canUseResidentialDirectAudio()) {
+              startYtTrackPlayback(currentMusicTrack, resumeAt);
+              return;
+            }
+            activeMusicBackendRef.current = 'audio';
+            audioFallbackOnlyRef.current = false;
+            musicAudioRetryRef.current = 0;
+            audioEl.src = buildDirectFullAudioUrl(currentMusicTrack, 0);
+            audioEl.volume = isMusicMuted ? 0 : musicVolume;
+            if (resumeAt > 2) {
+              const seekOnce = () => {
+                try {
+                  audioEl.currentTime = resumeAt;
+                } catch {
+                  // ignore seek before ready
+                }
+              };
+              audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
+            }
+            audioEl.play().catch(() => {
+              if (musicPlaybackSeqRef.current !== seq) return;
+              startYtTrackPlayback(currentMusicTrack, resumeAt);
+            });
+          };
+          if (!canUseResidentialDirectAudio() && isLocalBridgeProbePending()) {
+            try {
+              audioEl.load();
+            } catch {
+              // preserve iOS Safari gesture unlock while HTTPS bridge finishes probing
+            }
+            void waitForLocalBridgeProbe(2000).then(() => launchResumeOnline());
             return;
           }
-          activeMusicBackendRef.current = 'audio';
-          audioFallbackOnlyRef.current = false;
-          musicAudioRetryRef.current = 0;
-          audioEl.src = buildDirectFullAudioUrl(currentMusicTrack, 0);
-          audioEl.volume = isMusicMuted ? 0 : musicVolume;
-          if (resumeAt > 2) {
-            const seekOnce = () => {
-              try {
-                audioEl.currentTime = resumeAt;
-              } catch {
-                // ignore seek before ready
-              }
-            };
-            audioEl.addEventListener('loadedmetadata', seekOnce, { once: true });
-          }
-          audioEl.play().catch(() => {
-            if (musicPlaybackSeqRef.current !== seq) return;
-            startYtTrackPlayback(currentMusicTrack, resumeAt);
-          });
+          launchResumeOnline();
         };
 
         if (!isTrackOfflineSync(currentMusicTrack)) {
@@ -2501,8 +2529,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
   const roCloudAutoRetryKeyRef = useRef<string>('');
 
   useEffect(() => {
-    const onBridgeChange = () => {
+    const onBridgeChange = (ev: Event) => {
       setLocalBridgeTick((t) => t + 1);
+      if ((ev as CustomEvent<boolean>)?.detail === true) {
+        setYtUseEmbedFallback(false);
+      }
     };
     window.addEventListener('aether:local-bridge-changed', onBridgeChange);
     return () =>
@@ -9295,7 +9326,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     let directIsVk = false;
     let directFinished = false;
     let flResolvedOk = false;
-    let flFinished = !isLocalHomeServer();
+    let flFinished = !isLocalHomeServer() && !isLocalBridgeProbePending();
 
     const syncPreferredVodServer = (prefTrackIdx?: number) => {
       if (
@@ -10099,6 +10130,21 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
             }
           });
       }
+    } else if (isLocalBridgeProbePending()) {
+      setIsFileListStreamLoading(true);
+      void waitForLocalBridgeProbe(2800).then((bridgeOk) => {
+        if (cancelled) return;
+        if (!bridgeOk) {
+          userSelectedFlTorrentIdRef.current = null;
+          setIsFileListStreamLoading(false);
+          setResolvedFileListStream(null);
+          if (!isForeignVod && isRussianVodItem(activeVodItem)) {
+            setActiveServer((prev) =>
+              prev === 'filelist_torrent' ? 'kinogram_hls' : prev
+            );
+          }
+        }
+      });
     } else {
       userSelectedFlTorrentIdRef.current = null;
       setIsFileListStreamLoading(false);
