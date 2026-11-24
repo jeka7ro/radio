@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aether-radio-v78';
+const CACHE_NAME = 'aether-radio-v80';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -8,12 +8,38 @@ const STATIC_ASSETS = [
   '/icons/icon-512.svg',
 ];
 
+let cachedOfflineDbPromiseSw = null;
+
 function openOfflineDbSw() {
-  return new Promise((resolve, reject) => {
+  if (cachedOfflineDbPromiseSw) return cachedOfflineDbPromiseSw;
+  cachedOfflineDbPromiseSw = new Promise((resolve, reject) => {
     const req = indexedDB.open('aether_offline_media_db_v1', 1);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('items')) {
+        db.createObjectStore('items', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('blobs')) {
+        db.createObjectStore('blobs');
+      }
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => {
+        cachedOfflineDbPromiseSw = null;
+      };
+      db.onversionchange = () => {
+        db.close();
+        cachedOfflineDbPromiseSw = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      cachedOfflineDbPromiseSw = null;
+      reject(req.error);
+    };
   });
+  return cachedOfflineDbPromiseSw;
 }
 
 async function getOfflineItemSw(id) {
@@ -200,7 +226,7 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => caches.match(request))
+        .catch(async () => (await caches.match(request)) || new Response('[]', { status: 503, headers: { 'Content-Type': 'application/json' } }))
     );
     return;
   }
@@ -254,8 +280,27 @@ self.addEventListener('fetch', (event) => {
             }
             return response;
           })
-          .catch(() => cached);
+          .catch(() => cached || new Response('', { status: 504 }));
         return cached || net;
+      })
+    );
+    return;
+  }
+
+  // Cache-first for content-hashed immutable Vite bundles so PWA reloads skip re-downloading 4MB assets
+  if (url.origin === self.location.origin && url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request)
+          .then((response) => {
+            if (response && response.ok) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            }
+            return response;
+          })
+          .catch(() => new Response('', { status: 503 }));
       })
     );
     return;
@@ -272,7 +317,7 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         })
-        .catch(() => caches.match(request))
+        .catch(async () => (await caches.match(request)) || new Response('', { status: 503 }))
     );
   }
 });

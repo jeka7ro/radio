@@ -32,6 +32,8 @@ export interface OfflineMediaItem {
   releaseYear?: string;
   rating?: string;
   backdrop?: string;
+  profileId?: string;
+  isAdult18?: boolean;
 }
 
 export interface OfflineDownloadProgress {
@@ -564,6 +566,8 @@ export async function downloadHlsToOfflineDb(params: {
   releaseYear?: string;
   rating?: string;
   backdrop?: string;
+  profileId?: string;
+  isAdult18?: boolean;
   signal?: AbortSignal;
   onProgress?: (prog: OfflineDownloadProgress) => void;
 }): Promise<OfflineMediaItem> {
@@ -590,6 +594,8 @@ export async function downloadHlsToOfflineDb(params: {
     releaseYear,
     rating,
     backdrop,
+    profileId,
+    isAdult18,
     signal,
     onProgress,
   } = params;
@@ -798,6 +804,8 @@ export async function downloadHlsToOfflineDb(params: {
         releaseYear,
         rating,
         backdrop,
+        profileId,
+        isAdult18,
       };
 
       await saveOfflineItemMeta(item);
@@ -1232,6 +1240,8 @@ export async function downloadHlsToOfflineDb(params: {
     releaseYear,
     rating,
     backdrop,
+    profileId,
+    isAdult18,
   };
 
   await saveOfflineItemMeta(item);

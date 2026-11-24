@@ -306,14 +306,23 @@ export const SmartTvKlubnichkaSection: React.FC<
 
   // Restore focus to the last-watched video card on return from player, or to the active category pill
   useEffect(() => {
+    const onCloseTvKeyboard = () => setIsKeyboardOpen(false);
+    window.addEventListener('aether:close-tv-keyboard', onCloseTvKeyboard);
     const timer = window.setTimeout(() => {
       if (persistedKlubCache.lastClickedCardId) {
         const lastCard = document.querySelector<HTMLElement>(
           `[data-klub-card-id="${persistedKlubCache.lastClickedCardId}"]`
         );
         if (lastCard) {
-          lastCard.focus({ preventScroll: false });
-          lastCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          lastCard.focus({ preventScroll: true });
+          const mainEl = lastCard.closest('main');
+          if (mainEl) {
+            const cRect = lastCard.getBoundingClientRect();
+            const mRect = mainEl.getBoundingClientRect();
+            const targetTop =
+              mainEl.scrollTop + (cRect.top - mRect.top) - Math.max(80, mRect.height * 0.25);
+            mainEl.scrollTop = Math.max(0, targetTop);
+          }
           return;
         }
       }
@@ -322,7 +331,10 @@ export const SmartTvKlubnichkaSection: React.FC<
       );
       activePill?.focus({ preventScroll: true });
     }, 65);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('aether:close-tv-keyboard', onCloseTvKeyboard);
+    };
   }, []);
 
   return (
@@ -505,7 +517,7 @@ export const SmartTvKlubnichkaSection: React.FC<
         </div>
 
         {isKeyboardOpen && (
-          <div className="pt-2 border-t border-white/10 space-y-2">
+          <div data-tv-keyboard-open="true" className="pt-2 border-t border-white/10 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-[#60a5fa]">
                 {tr(
@@ -518,14 +530,14 @@ export const SmartTvKlubnichkaSection: React.FC<
                 <button
                   type="button"
                   onClick={() => setSearchQuery((q) => q + ' ')}
-                  className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-[#1e3a8a] focus:text-white text-white text-xs font-bold border border-white/10 cursor-pointer"
+                  className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white text-xs font-bold border border-white/10 cursor-pointer"
                 >
                   {tr('Spațiu', 'Space', 'Пробел')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setSearchQuery((q) => q.slice(0, -1))}
-                  className="h-9 px-3.5 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-rose-600 focus:text-white text-rose-400 text-xs font-bold inline-flex items-center gap-1 border border-white/10 cursor-pointer"
+                  className="h-9 px-3.5 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-rose-600 focus:text-white focus:ring-2 focus:ring-white focus:outline-none text-rose-400 text-xs font-bold inline-flex items-center gap-1 border border-white/10 cursor-pointer"
                 >
                   <Delete className="w-3.5 h-3.5" />
                   <span>{tr('Șterge', 'Backspace', 'Стереть')}</span>
@@ -538,7 +550,7 @@ export const SmartTvKlubnichkaSection: React.FC<
                   key={`klub_key_${ch}`}
                   type="button"
                   onClick={() => setSearchQuery((q) => q + ch)}
-                  className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-[#1e3a8a] focus:text-white text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
+                  className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
                 >
                   {ch}
                 </button>

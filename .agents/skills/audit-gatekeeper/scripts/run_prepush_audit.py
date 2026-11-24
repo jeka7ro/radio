@@ -1095,7 +1095,7 @@ def vector6_anti_loop_and_netlify_consumption() -> Tuple[bool, str, List[str]]:
     if re.search(r"precacheShellAndBundles[\s\S]*cache\.add\(", sw_txt) or "/assets/" in sw_txt and "cache.add(" in sw_txt:
         errors.append("public/sw.js descarcă dublu bundle-urile `/assets/` în faza `install`")
     else:
-        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v78'` fără re-descărcarea bundle-urilor în `install`")
+        details.append("public/sw.js folosește `CACHE_NAME = 'aether-radio-v80'` fără re-descărcarea bundle-urilor în `install`")
 
     helpers_txt = (ROOT_DIR / "src" / "views" / "smartTvLampaHelpers.ts").read_text(encoding="utf-8", errors="ignore")
     rse_m = re.search(r"export\s+async\s+function\s+resolveSeriesEpisodeStats\b([\s\S]*?)\nexport\s+function\s+formatSeriesCardBadgeText\b", helpers_txt)

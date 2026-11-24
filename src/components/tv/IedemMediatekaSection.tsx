@@ -148,6 +148,12 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
     return () => window.clearInterval(timer);
   }, [topBannerItems.length, debouncedQuery]);
 
+  useEffect(() => {
+    const onCloseDetail = () => setActiveItem(null);
+    window.addEventListener('aether:close-iedem-detail', onCloseDetail);
+    return () => window.removeEventListener('aether:close-iedem-detail', onCloseDetail);
+  }, []);
+
   const attemptedEpCountsRef = React.useRef<Set<number>>(new Set());
 
   useEffect(() => {
@@ -158,7 +164,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           it.fid > 0 &&
           !attemptedEpCountsRef.current.has(it.fid)
       )
-      .slice(0, 40);
+      .slice(0, 12);
     if (seriesToFetch.length === 0) return;
 
     let cancelled = false;
@@ -1198,6 +1204,7 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
       {activeItem && (() => {
         const detailModal = (
         <div
+          data-iedem-detail-modal="true"
           role="dialog"
           aria-modal="true"
           style={{
@@ -1210,13 +1217,14 @@ export const IedemMediatekaSection: React.FC<IedemMediatekaSectionProps> = ({
           onClick={() => setActiveItem(null)}
         >
           <div
-            className="relative w-full max-w-3xl max-h-[min(92dvh,820px)] overflow-y-auto overflow-x-hidden rounded-2xl sm:rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
+            className="relative w-full max-w-3xl max-h-[min(92vh,820px)] overflow-y-auto overflow-x-hidden rounded-2xl sm:rounded-3xl bg-zinc-900 border border-white/15 p-4 sm:p-6 text-white shadow-2xl space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
             <button
               type="button"
+              autoFocus
               onClick={() => setActiveItem(null)}
-              className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-zinc-300 hover:text-white"
+              className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:outline-none flex items-center justify-center text-zinc-300 hover:text-white"
             >
               <X className="w-5 h-5" />
             </button>

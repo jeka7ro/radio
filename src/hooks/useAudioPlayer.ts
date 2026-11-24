@@ -48,8 +48,8 @@ export function useAudioPlayer() {
 
   const normalizedStationRawUrl = currentStation
     ? (currentStation.url_resolved || currentStation.url || '')
-        .trim()
-        .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/')
+      .trim()
+      .replace(/\/\/live7digi\.antenaplay\.ro\//gi, '//live4ro.antenaplay.ro/')
     : '';
   const stationPlaybackKey = currentStation
     ? `${currentStation.stationuuid}::${normalizedStationRawUrl}`
@@ -157,8 +157,7 @@ export function useAudioPlayer() {
       withSkipAd: boolean,
       cacheBust = false
     ) =>
-      `/api/tv-proxy?url=${encodeURIComponent(target)}${
-        withSkipAd ? '&skipAd=1' : ''
+      `/api/tv-proxy?url=${encodeURIComponent(target)}${withSkipAd ? '&skipAd=1' : ''
       }${cacheBust ? `&_nc=${Date.now()}` : ''}`;
 
     const getEffectiveStreamUrl = (attempt: number, forceHttps: boolean) => {
@@ -465,7 +464,7 @@ export function useAudioPlayer() {
     };
 
     void fetchMetadata(false, true);
-    const intervalId = window.setInterval(() => void fetchMetadata(false, false), 30_000);
+    const intervalId = window.setInterval(() => void fetchMetadata(false, false), 60_000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {

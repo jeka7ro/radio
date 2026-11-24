@@ -16,6 +16,7 @@ import {
   rememberProfileOnDevice,
 } from '../../services/deviceContinuityService';
 import { CrossDeviceHandoffModal } from '../tv/CrossDeviceHandoffModal';
+import { HeaderWeatherWidget } from '../tv/HeaderWeatherWidget';
 
 interface HeaderProps {
   selectedCountry: EnrichedCountry;
@@ -224,6 +225,11 @@ export const Header: React.FC<HeaderProps> = ({ selectedCountry }) => {
             <span className="hidden sm:inline">Mod Smart TV</span>
             <span className="sm:hidden">TV</span>
           </button>
+
+          <HeaderWeatherWidget
+            uiLang={language === 'en' ? 'en' : 'ro'}
+            variant="classic"
+          />
 
           <button
             type="button"

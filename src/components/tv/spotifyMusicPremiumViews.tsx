@@ -194,7 +194,12 @@ export function parseLrcLyrics(raw?: string | null): ParsedLyricLine[] {
   const lines = raw.split(/\r?\n/);
   const tagRe = /\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]/g;
   for (const line of lines) {
-    const matches = [...line.matchAll(tagRe)];
+    tagRe.lastIndex = 0;
+    const matches: RegExpExecArray[] = [];
+    let execMatch: RegExpExecArray | null;
+    while ((execMatch = tagRe.exec(line)) !== null) {
+      matches.push(execMatch);
+    }
     if (matches.length === 0) continue;
     const text = line.replace(tagRe, '').trim();
     for (const m of matches) {
@@ -2972,8 +2977,13 @@ export const PremiumFullscreenPlayerModal: React.FC<
         onClose();
       }
     };
+    const onCloseEvent = () => onClose();
     window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    window.addEventListener('aether:close-music-fullscreen', onCloseEvent);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('aether:close-music-fullscreen', onCloseEvent);
+    };
   }, [onClose]);
 
   const fullscreenOverlay = (
@@ -3138,7 +3148,13 @@ export const TrackQuickActionsDialog: React.FC<{
     // Mandatory Safari light-dismiss fallback for browsers lacking <dialog closedby="any">
     useEffect(() => {
       const dialog = dialogRef.current;
-      if (!dialog || 'closedBy' in HTMLDialogElement.prototype) return;
+      if (
+        !dialog ||
+        (typeof HTMLDialogElement !== 'undefined' &&
+          'closedBy' in HTMLDialogElement.prototype)
+      ) {
+        return;
+      }
 
       const handleClickOutside = (event: MouseEvent) => {
         if (event.target !== dialog) return;

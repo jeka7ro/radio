@@ -19,4 +19,15 @@
    *(sau cu `--skip-build` pentru verificări intermediare rapide).*
 3. Agentul are voie să ceară permisiunea utilizatorului pentru `git commit` / `git push` **DOAR** atunci când rezultatul auditului este **`🟢 VERDE — 100% SIGUR PENTRU PUSH`** și toți cei 6 vectori au trecut (inclusiv **Vector 5: Securitate & Anti-SSRF** și **Vector 6: Anti-Loop & Protecție Consum Netlify** — zero bucle de refresh, zero bucle `useEffect`, polling cloud `>= 60s`, fără `.reload()` automat și fără scrieri redundante în `@netlify/blobs`). Dacă verdictul este **`🔴 BLOCAT`**, orice operațiune de commit/push este oprită până la remedierea tuturor vectorilor eșuați.
 
+---
+
+# REGULĂ PERMANENTĂ DE CODARE — Karpathy Guidelines (`multica-ai/andrej-karpathy-skills`)
+
+Regula completă se află în `.agents/rules/karpathy-guidelines.md` (activă permanent pentru Antigravity și Paperclip):
+
+1. **Think Before Coding:** Nu face presupuneri tăcute. Dacă ceva e neclar sau are mai multe interpretări, oprește-te și întreabă; semnalează compromisurile.
+2. **Simplicity First:** Scrie minimul de cod necesar pentru cerință. Fără funcționalități necerute, abstracții speculative sau supra-inginerie.
+3. **Surgical Changes:** Modifică strict liniile legate direct de cerința utilizatorului. Nu refactoriza, nu reformata și nu „îmbunătăți” cod adiacent care funcționează. Curăță doar importurile/variabilele rămase orfane din propriile modificări.
+4. **Goal-Driven Execution:** Transformă task-ul într-un criteriu clar de verificare și validează rezultatul cap-coadă înainte să îl declari rezolvat.
+
 

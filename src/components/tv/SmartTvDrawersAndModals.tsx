@@ -141,6 +141,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
   setActiveSubVttUrl,
   setActiveSubLabel,
   setActiveSubCues,
+  setUseManualOnlineSub,
 }) => {
   const modalBackTouchRef = React.useRef<{ x: number; y: number } | null>(null);
   const lastModalBackAtRef = React.useRef<number>(0);
@@ -1025,8 +1026,8 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     </span>
                   </button>
 
-                  {/* 8. Conținut pentru Adulți (18+) & Mediateca iEdem — VIZIBIL EXCLUSIV PENTRU PROFILUL ADMIN JEKA */}
-                  {isAdminJekaProfile(activeProfile) && (
+                  {/* 8. Conținut pentru Adulți (18+) & Mediateca iEdem — VIZIBIL EXCLUSIV PENTRU PROFILUL ADMIN JEKA DEBLOCAT */}
+                  {!isPinLockRequired && isAdminJekaProfile(activeProfile) && (
                     <>
                       <div className="w-full p-4 sm:p-5 rounded-2xl bg-white/[0.04] border border-emerald-500/25 space-y-3">
                         <div className="flex items-start justify-between gap-3">
@@ -2124,7 +2125,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
       {isTrailerModalOpen && activeVodItem && (
         <div
           data-trailer-fullscreen-box="true"
-          className="fixed inset-0 w-full h-[100dvh] z-[260] bg-black flex flex-col overflow-hidden select-none"
+          className="fixed inset-0 w-full h-[100vh] z-[260] bg-black flex flex-col overflow-hidden select-none"
           onClick={() => setIsTrailerModalOpen(false)}
         >
           {/* Floating Cinema Top HUD */}
@@ -2327,6 +2328,9 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
         initialEpisode={selectedEpisode}
         initialLangFilter={preferredSubLang}
         onApplySubtitle={({ vttBlobUrl, label, cues }) => {
+          if (typeof setUseManualOnlineSub === 'function') {
+            setUseManualOnlineSub(true);
+          }
           setActiveSubVttUrl(vttBlobUrl);
           setActiveSubLabel(label);
           setActiveSubCues(cues);

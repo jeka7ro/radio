@@ -56,6 +56,7 @@ export type TvSectionId =
   | 'uhd_4k'
   | 'iedem_vod'
   | 'ru_shows'
+  | 'adult_18'
   | StreamingPlatformId
   | 'youtube'
   | 'torrents'
@@ -142,6 +143,7 @@ export interface CinemetaItem {
   klubnichkaRawId?: string;
   klubnichkaEmbedUrl?: string;
   isAdultKlubnichka?: boolean;
+  isAdult18?: boolean;
 }
 
 export interface SeriesEpisodeStats {
@@ -978,6 +980,19 @@ export interface FileListTorrentInfo {
   audioInfo?: string;
 }
 
+export interface EmbeddedSubtitleTrack {
+  index: number;
+  lang: string;
+  langCode2: string;
+  langLabel: string;
+  codec: string;
+  title: string;
+  label: string;
+  forced: boolean;
+  sdh: boolean;
+  isText: boolean;
+}
+
 export interface ResolvedFileListStream {
   ok: boolean;
   error?: string;
@@ -991,6 +1006,7 @@ export interface ResolvedFileListStream {
   durationSec?: number;
   videoCodec?: string;
   audioNames?: string[];
+  subtitleTracks?: EmbeddedSubtitleTrack[];
 }
 
 export interface SeriesEpisode {
@@ -1535,6 +1551,9 @@ export function mergeTwoProgressEntries(
   const mergedItem: CinemetaItem = {
     ...secondary.item,
     ...primary.item,
+    ...(isAdult18WatchItem(primary.item) || isAdult18WatchItem(secondary.item)
+      ? { isAdult18: true }
+      : {}),
     id: canonicalId,
     imdbId: resolvedImdb,
     kpId: resolvedKp,
@@ -1577,6 +1596,21 @@ export function mergeTwoProgressEntries(
   };
 }
 
+export function isAdult18WatchItem(
+  item?: Partial<CinemetaItem> | null
+): boolean {
+  if (!item) return false;
+  if (item.isAdult18 === true || item.isAdultKlubnichka === true) return true;
+  if (String(item.id || '').startsWith('klub_')) return true;
+  if (
+    Array.isArray(item.genres) &&
+    item.genres.some((g) => /^erotic$/i.test(String(g || '').trim()))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function deduplicateProgressMap(
   map: Record<string, VodWatchProgressEntry>
 ): Record<string, VodWatchProgressEntry> {
@@ -1608,10 +1642,11 @@ export function deduplicateProgressMap(
     if (group.length === 1) {
       const single = group[0];
       const targetKey = getVodCanonicalKey(single) || single.item.id;
-      if (single.item.imdbId?.startsWith('tt') && !single.item.id.startsWith('tt')) {
-        single.item = { ...single.item, id: single.item.imdbId };
-      }
-      result[targetKey] = single;
+      const clonedSingle =
+        single.item.imdbId?.startsWith('tt') && !single.item.id.startsWith('tt')
+          ? { ...single, item: { ...single.item, id: single.item.imdbId } }
+          : single;
+      result[targetKey] = clonedSingle;
     } else {
       let merged = group[0];
       for (let i = 1; i < group.length; i++) {

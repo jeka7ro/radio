@@ -33,7 +33,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
 
   if (!isOpen) return null;
 
-  const hostDomain = 'radiotv-jk.netlify.app';
+  const hostDomain = 'filmio.my';
   const fullAppUrl = `https://${hostDomain}/?tvmode=1`;
 
   const handleCopy = (value: string, key: string) => {
@@ -58,7 +58,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl max-h-[92dvh] overflow-y-auto overflow-x-hidden rounded-[28px] bg-zinc-900 border border-white/15 text-zinc-100 shadow-2xl p-4 sm:p-6 space-y-5"
+        className="w-full max-w-3xl max-h-[92vh] overflow-y-auto overflow-x-hidden rounded-[28px] bg-zinc-900 border border-white/15 text-zinc-100 shadow-2xl p-4 sm:p-6 space-y-5"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -72,7 +72,7 @@ export const SmartTvMsxModal: React.FC<SmartTvMsxModalProps> = ({
                 id="smart-tv-msx-title"
                 className="text-base sm:text-lg font-bold text-white flex items-center gap-2"
               >
-                AetherRadio Smart TV — Portal TV LG & Media Station X
+                Filmio Smart TV — Portal TV LG & Media Station X
               </h2>
               <p className="text-xs text-zinc-400 mt-0.5">
                 Interfață Smart TV pentru telecomandă LG + Configurare Media Station X

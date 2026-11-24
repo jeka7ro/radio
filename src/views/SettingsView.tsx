@@ -205,7 +205,15 @@ export const SettingsView: React.FC = () => {
           <div className="inline-flex p-1 rounded-full bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 shrink-0">
             <button
               type="button"
-              onClick={() => setAdultContentEnabled(true)}
+              onClick={() => {
+                try {
+                  const activeId = (localStorage.getItem('aether_tv_active_profile') || 'p1').trim();
+                  if (activeId !== 'p1') return;
+                } catch {
+                  return;
+                }
+                setAdultContentEnabled(true);
+              }}
               aria-pressed={adultContentEnabled}
               className={`min-h-[36px] px-4 py-1 rounded-full text-xs sm:text-sm font-bold transition-all cursor-pointer ${
                 adultContentEnabled

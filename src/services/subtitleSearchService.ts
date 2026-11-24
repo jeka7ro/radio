@@ -294,6 +294,18 @@ export function parseSrtToCues(
           l
             .replace(/<[^>]+>/g, '')
             .replace(/\{[^}]+\}/g, '')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#0?39;|&apos;/gi, "'")
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&#(\d+);/g, (_, n) => {
+              const code = Number(n);
+              return Number.isFinite(code) && code > 0 && code < 0x10ffff
+                ? String.fromCodePoint(code)
+                : '';
+            })
             .trim()
         )
         .filter(Boolean);
@@ -311,18 +323,43 @@ export function parseSrtToCues(
   return cues;
 }
 
+function decodeSubtitleBytes(buf: ArrayBuffer, langHint = ''): string {
+  const bytes = new Uint8Array(buf);
+  let text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  if (text.includes('\uFFFD')) {
+    const preferCyrillic = /\b(ru|rus|uk|ukr|bg|bul|sr|srp)\b/i.test(langHint);
+    const encodings = preferCyrillic
+      ? ['windows-1251', 'windows-1250', 'iso-8859-2']
+      : ['windows-1250', 'windows-1251', 'iso-8859-2'];
+    for (const enc of encodings) {
+      try {
+        const decoded = new TextDecoder(enc, { fatal: false }).decode(bytes);
+        if (!decoded.includes('\uFFFD')) {
+          text = decoded;
+          break;
+        }
+      } catch {
+        // encoding not supported on legacy TV browser
+      }
+    }
+  }
+  return text;
+}
+
 /**
  * Download an online subtitle track and return both raw SRT text and a WebVTT Blob URL for `<track>`.
  */
 export async function downloadSubtitleAsVttBlobUrl(
   subUrl: string,
-  offsetSeconds = 0
+  offsetSeconds = 0,
+  langHint = ''
 ): Promise<{ vttBlobUrl: string; rawSrt: string; cues: SubtitleCue[] }> {
   const res = await fetch(subUrl);
   if (!res.ok) {
     throw new Error(`Nu am putut descărca subtitrarea (${res.status})`);
   }
-  const rawSrt = await res.text();
+  const buf = await res.arrayBuffer();
+  const rawSrt = decodeSubtitleBytes(buf, langHint);
   const vttText = convertSrtToWebVtt(rawSrt, offsetSeconds);
   const cues = parseSrtToCues(rawSrt, offsetSeconds);
   const blob = new Blob([vttText], { type: 'text/vtt;charset=utf-8' });
@@ -577,12 +614,13 @@ export async function autoResolveAndFetchBestRoRuSubtitle(params: {
         .toLowerCase()
         .replace(/\(\d{4}\)/g, '')
         .replace(/[^\p{L}\p{N}]+/gu, '');
-      const exactMatch = candidates.find((c) => {
-        const normC = (c.name || '')
-          .toLowerCase()
-          .replace(/[^\p{L}\p{N}]+/gu, '');
-        return Boolean(normC && (normC === normQ || normC.includes(normQ) || normQ.includes(normC)));
-      });
+      const exactMatch =
+        candidates.find((c) => {
+          const normC = (c.name || '')
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, '');
+          return Boolean(normC && (normC === normQ || normC.includes(normQ) || normQ.includes(normC)));
+        }) || candidates[0];
       if (exactMatch?.imdbId) {
         cleanImdb = exactMatch.imdbId;
       }
@@ -612,23 +650,41 @@ export async function autoResolveAndFetchBestRoRuSubtitle(params: {
     requestedLang,
     ...baseOrder.filter((c) => c !== requestedLang),
   ];
-  let chosen: OnlineSubtitleTrack | undefined;
+  const candidateTracks: OnlineSubtitleTrack[] = [];
+  const seenUrls = new Set<string>();
   for (const code of pref) {
-    chosen = tracks.find((t) => t.langCode2 === code);
-    if (chosen) break;
+    for (const t of tracks) {
+      if (t.langCode2 === code && t.url && !seenUrls.has(t.url)) {
+        seenUrls.add(t.url);
+        candidateTracks.push(t);
+        if (candidateTracks.length >= 4) break;
+      }
+    }
+    if (candidateTracks.length >= 4) break;
   }
 
-  if (!chosen) return null;
+  for (const chosen of candidateTracks) {
+    try {
+      const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(
+        chosen.url,
+        0,
+        chosen.langCode2
+      );
+      if (cues && cues.length > 0) {
+        return {
+          resolvedImdbId: cleanImdb,
+          track: chosen,
+          vttBlobUrl,
+          cues,
+        };
+      }
+      URL.revokeObjectURL(vttBlobUrl);
+    } catch {
+      // try next subtitle candidate if upstream returned 404/empty
+    }
+  }
 
-  const { vttBlobUrl, cues } = await downloadSubtitleAsVttBlobUrl(chosen.url);
-  if (!cues || cues.length === 0) return null;
-
-  return {
-    resolvedImdbId: cleanImdb,
-    track: chosen,
-    vttBlobUrl,
-    cues,
-  };
+  return null;
 }
 
 

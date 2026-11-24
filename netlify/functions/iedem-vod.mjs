@@ -1,5 +1,10 @@
+import {
+  fetchSafeExternalUrl,
+  sanitizeImageContentType,
+} from './_ssrfGuard.mjs';
+
 const IEDEM_VOD_BASE_URL = 'http://895890bd73a7.jmeekos.com/api/v1/';
-const IEDEM_VOD_KEY = 'b55f67862ee6fe7-798a6b713ccb40d';
+const IEDEM_VOD_KEY = process.env.IEDEM_VOD_KEY || 'b55f67862ee6fe7-798a6b713ccb40d';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -14,19 +19,32 @@ export default async (req) => {
 
   try {
     const reqUrl = new URL(req.url);
+    const reqHost = req.headers.get('host') || reqUrl.hostname || '';
     const posterUrl = reqUrl.searchParams.get('poster');
 
-    // Proxy HTTP poster images over HTTPS to avoid Mixed Content
+    // Proxy HTTP poster images over HTTPS to avoid Mixed Content (SSRF & XSS hardened)
     if (posterUrl && /^https?:\/\//i.test(posterUrl)) {
-      const imgRes = await fetch(posterUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (SmartTV; Linux; Tizen 6.5) AppleWebKit/537.36',
+      const { res: imgRes } = await fetchSafeExternalUrl(
+        posterUrl,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (SmartTV; Linux; Tizen 6.5) AppleWebKit/537.36',
+          },
+          signal: AbortSignal.timeout(8000),
         },
-      });
+        reqHost
+      );
       if (!imgRes.ok) {
         return new Response('Poster not found', {
           status: imgRes.status,
+          headers: CORS_HEADERS,
+        });
+      }
+      const safeCt = sanitizeImageContentType(imgRes.headers.get('content-type'));
+      if (!safeCt) {
+        return new Response('Unsupported poster content type', {
+          status: 415,
           headers: CORS_HEADERS,
         });
       }
@@ -35,7 +53,9 @@ export default async (req) => {
         status: 200,
         headers: {
           ...CORS_HEADERS,
-          'Content-Type': imgRes.headers.get('content-type') || 'image/jpeg',
+          'Content-Type': safeCt,
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': 'sandbox',
           'Cache-Control': 'public, max-age=604800',
         },
       });

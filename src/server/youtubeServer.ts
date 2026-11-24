@@ -1123,6 +1123,7 @@ export async function handleYouTubeRequest(
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -1954,6 +1955,7 @@ export async function handleYouTubeRequest(
       const proc = spawn(ffmpegBinaryPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      proc.stderr?.resume();
 
       proc.stdout.pipe(res);
 
@@ -2373,6 +2375,7 @@ export async function handleYouTubeRequest(
       const proc = spawn(ffmpegBinaryPath, ffmpegArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      proc.stderr?.resume();
       proc.stdout.pipe(res);
 
       const cleanup = () => {

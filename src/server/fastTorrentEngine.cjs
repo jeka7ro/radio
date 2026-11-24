@@ -409,6 +409,7 @@ function fastTorrentStream(link, opts, cb) {
   });
 
   const ontorrent = function (torrent) {
+    if (destroyed) return;
     const storage = opts.storage || FSChunkStore;
     const diskFiles = torrent.files.map(function (file) {
       return {
@@ -1038,6 +1039,7 @@ function fastTorrentStream(link, opts, cb) {
   };
 
   const exchange = createExchangeMetadata(engine, function (rawMeta) {
+    if (destroyed) return;
     const buf = bncode.encode({
       info: bncode.decode(rawMeta),
       'announce-list': [],

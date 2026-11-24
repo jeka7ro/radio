@@ -51,7 +51,7 @@ interface CrossDeviceHandoffModalProps {
   onClose: () => void;
   profiles: SharedTvProfile[];
   activeProfileId: string;
-  onSelectProfile: (profileId: string) => void;
+  onSelectProfile: (profileId: string, options?: { pinVerified?: boolean }) => void;
   onProfilesChange?: (profiles: SharedTvProfile[]) => void;
   activeMedia?: HandoffMediaInfo | null;
   uiLang?: 'ro' | 'en' | 'ru';
@@ -467,14 +467,18 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
   };
 
   const performDeleteAccount = (idToDelete: string) => {
-    if (profiles.length <= 1) return;
+    if (profiles.length <= 1 || idToDelete === 'p1') return;
     markProfileDeleted(idToDelete);
     const nextList = profiles.filter((p) => p.id !== idToDelete);
     applyUpdatedProfiles(nextList, { allowShrink: true });
     forgetProfileOnDevice(idToDelete);
-    if (activeProfileId === idToDelete && nextList[0]) {
-      saveSharedActiveProfileId(nextList[0].id);
-      onSelectProfile(nextList[0].id);
+    if (activeProfileId === idToDelete && nextList.length > 0) {
+      const fallbackUnpinned =
+        nextList.find((p) => !(p.pin && p.pin.trim())) || nextList[0];
+      saveSharedActiveProfileId(fallbackUnpinned.id);
+      onSelectProfile(fallbackUnpinned.id, {
+        pinVerified: !(fallbackUnpinned.pin && fallbackUnpinned.pin.trim()),
+      });
     }
     setViewMode('list');
   };
@@ -586,7 +590,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
         return;
       }
       saveSharedActiveProfileId(targetPinProfile.id);
-      onSelectProfile(targetPinProfile.id);
+      onSelectProfile(targetPinProfile.id, { pinVerified: true });
       setViewMode('list');
       setTargetPinProfile(null);
       onClose();
@@ -852,7 +856,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   const handleDeleteAccount = (idToDelete: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (profiles.length <= 1) return;
+    if (profiles.length <= 1 || isPinLockRequired || idToDelete === 'p1') return;
     const prof = profiles.find((p) => p.id === idToDelete);
     if (prof?.pin && prof.pin.trim() && !isCurrentActiveAdminJeka) {
       setTargetPinProfile(prof);
@@ -1754,11 +1758,13 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           : 'border-white/10 opacity-80 hover:opacity-100 hover:scale-105'
                       }`}
                     >
-                      <img
-                        src={preset.avatarUrl}
-                        alt={preset.label}
-                        className="w-full aspect-square object-cover"
-                      />
+                      <div className="aspect-square w-full overflow-hidden">
+                        <img
+                          src={preset.avatarUrl}
+                          alt={preset.label}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
                     </button>
                   );
                 })}

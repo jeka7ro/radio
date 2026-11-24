@@ -172,7 +172,8 @@ export async function fetchAndParseXmltvFeed(feedUrl) {
 }
 
 export function getEpgFeedUrlsForCountry(countryCode) {
-  const upper = (countryCode || 'RO').trim().toUpperCase();
+  const rawUpper = (countryCode || 'RO').trim().toUpperCase();
+  const upper = rawUpper === 'ALL' || /^[A-Z]{2}$/.test(rawUpper) ? rawUpper : 'RO';
   if (upper === 'ALL') {
     return [
       'https://epgshare01.online/epgshare01/epg_ripper_RO1.xml.gz',

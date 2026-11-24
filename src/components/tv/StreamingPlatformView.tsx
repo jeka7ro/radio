@@ -238,16 +238,15 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
         )}
 
         {/* Card Poster Box */}
-        <div
+        <button
+          type="button"
           data-vod-card="true"
           data-vod-id={item.id}
-          tabIndex={0}
-          role="button"
           onFocus={() => handleFocusVodItem(item)}
           onMouseEnter={() => handleFocusVodItem(item)}
           onClick={() => handleOpenVod(item)}
           onKeyDown={(e) => handleCardPlayKey(e, item)}
-          className={`relative z-10 w-[145px] sm:w-[175px] md:w-[195px] flex flex-col focus:outline-none transition-all duration-200 group-focus:scale-[1.04] group-hover:scale-[1.02]`}
+          className={`relative z-10 w-[145px] sm:w-[175px] md:w-[195px] flex flex-col text-left focus:outline-none transition-all duration-200 group-focus:scale-[1.04] group-hover:scale-[1.02]`}
         >
           <div
             className={`aspect-[2/3] w-full rounded-2xl bg-[#1c1c1c] relative overflow-hidden shadow-xl border border-white/10 transition-all ${theme.cardFocusRing}`}
@@ -291,9 +290,10 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
               </span>
             </div>
 
-            {/* Interactive Favorite Heart Button (PC hover / iPad tap / Remote RED button) */}
-            <button
-              type="button"
+            {/* Interactive Favorite Heart Control (PC hover / iPad tap / Remote RED button — span avoids nested button trap) */}
+            <span
+              role="button"
+              tabIndex={-1}
               data-fav-btn="true"
               title={
                 isFav
@@ -314,7 +314,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
               }`}
             >
               <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
-            </button>
+            </span>
 
             <VodPosterWatchedControl
               item={item}
@@ -334,7 +334,7 @@ export const StreamingPlatformView: React.FC<StreamingPlatformViewProps> = React
               {formatSeriesCardSubtitleText(item, seriesEpStatsMap[item.id] || uhdSeriesEpStats[item.id], tr)}
             </div>
           </div>
-        </div>
+        </button>
       </div>
     );
   };

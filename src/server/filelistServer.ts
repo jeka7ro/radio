@@ -114,9 +114,12 @@ interface ActiveTorrentEngine {
   readyPromise: Promise<void>;
   lastAccessed: number;
   activeStreams: Set<() => void>;
+  activeDownloads?: number;
   verifiedPieces: Set<number>;
   prewarmedFiles?: Set<number>;
   lastTrackerError?: string;
+  infoHash?: string;
+  lastDirectHttpAnnounceAt?: number;
   files: Array<{
     index: number;
     name: string;
@@ -135,6 +138,7 @@ interface ActiveTorrentEngine {
         title: string;
         label: string;
       }>;
+      subtitleTracks?: EmbeddedSubtitleTrack[];
     }
   >;
 }
@@ -147,6 +151,35 @@ interface ActiveHlsSession {
   exited: boolean;
   startedAt: number;
   lastAccessed: number;
+}
+
+export interface EmbeddedSubtitleTrack {
+  index: number;
+  lang: string;
+  langCode2: string;
+  langLabel: string;
+  codec: string;
+  title: string;
+  label: string;
+  forced: boolean;
+  sdh: boolean;
+  isText: boolean;
+}
+
+interface LiveSubCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+interface LiveSubBucket {
+  track: EmbeddedSubtitleTrack;
+  cues: LiveSubCue[];
+  cueKeys: Set<string>;
+  listeners: Set<(cue: LiveSubCue) => void>;
+  updatedAt: number;
+  fullDiskExtracted?: boolean;
+  fullDiskExtracting?: Promise<void> | null;
 }
 
 interface GlobalFileListState {
@@ -168,6 +201,7 @@ interface GlobalFileListState {
   rangePrioritySeq: number;
   lastFlIpVerifiedAt?: number;
   inFlightFlUnlockPromise?: Promise<boolean> | null;
+  liveSubBuckets?: Map<string, LiveSubBucket>;
 }
 
 const gState: GlobalFileListState =
@@ -183,6 +217,183 @@ const gState: GlobalFileListState =
 
 if (!gState.magnetMetaById) {
   gState.magnetMetaById = new Map();
+}
+if (!gState.liveSubBuckets) {
+  gState.liveSubBuckets = new Map();
+}
+
+const MKV_SUB_LANG_MAP: Record<string, { code2: string; label: string }> = {
+  ron: { code2: 'ro', label: 'Română' },
+  rum: { code2: 'ro', label: 'Română' },
+  mol: { code2: 'ro', label: 'Română' },
+  ro: { code2: 'ro', label: 'Română' },
+  eng: { code2: 'en', label: 'English' },
+  en: { code2: 'en', label: 'English' },
+  rus: { code2: 'ru', label: 'Русский' },
+  ru: { code2: 'ru', label: 'Русский' },
+  spa: { code2: 'es', label: 'Español' },
+  es: { code2: 'es', label: 'Español' },
+  fre: { code2: 'fr', label: 'Français' },
+  fra: { code2: 'fr', label: 'Français' },
+  fr: { code2: 'fr', label: 'Français' },
+  ger: { code2: 'de', label: 'Deutsch' },
+  deu: { code2: 'de', label: 'Deutsch' },
+  de: { code2: 'de', label: 'Deutsch' },
+  ita: { code2: 'it', label: 'Italiano' },
+  it: { code2: 'it', label: 'Italiano' },
+  ukr: { code2: 'uk', label: 'Українська' },
+  uk: { code2: 'uk', label: 'Українська' },
+  por: { code2: 'pt', label: 'Português' },
+  pol: { code2: 'pl', label: 'Polski' },
+  hun: { code2: 'hu', label: 'Magyar' },
+  tur: { code2: 'tr', label: 'Türkçe' },
+  bul: { code2: 'bg', label: 'Български' },
+};
+
+function mapMkvSubLang(rawLang: string, metaTitle: string): { code2: string; label: string } {
+  const l = String(rawLang || '').toLowerCase().trim();
+  if (MKV_SUB_LANG_MAP[l]) return MKV_SUB_LANG_MAP[l];
+  const t = String(metaTitle || '').toLowerCase();
+  if (/\b(romanian|romana|română)\b/.test(t)) return { code2: 'ro', label: 'Română' };
+  if (/\b(english|eng)\b/.test(t)) return { code2: 'en', label: 'English' };
+  if (/\b(russian|русский|rus)\b/.test(t)) return { code2: 'ru', label: 'Русский' };
+  if (/\b(spanish|español)\b/.test(t)) return { code2: 'es', label: 'Español' };
+  return { code2: l.slice(0, 2) || 'und', label: l.toUpperCase() || 'MKV' };
+}
+
+function pickEmbeddedSubtitleTrack(
+  tracks: EmbeddedSubtitleTrack[] | undefined,
+  subLang: string,
+  explicitSubIdx: number
+): EmbeddedSubtitleTrack | null {
+  if (!Array.isArray(tracks) || tracks.length === 0) return null;
+  const textTracks = tracks.filter((t) => t.isText);
+  if (textTracks.length === 0) return null;
+  if (explicitSubIdx >= 0) {
+    return textTracks.find((t) => t.index === explicitSubIdx) || null;
+  }
+  const cleanLang = String(subLang || '').toLowerCase().trim();
+  if (!cleanLang || cleanLang === 'off') return null;
+  const matching = textTracks.filter((t) => t.langCode2 === cleanLang);
+  if (matching.length === 0) return null;
+  return (
+    matching.find((t) => !t.forced && !t.sdh) ||
+    matching.find((t) => !t.forced) ||
+    matching[0]
+  );
+}
+
+function getOrCreateLiveSubBucket(
+  key: string,
+  track: EmbeddedSubtitleTrack
+): LiveSubBucket {
+  const map = gState.liveSubBuckets || (gState.liveSubBuckets = new Map());
+  let bucket = map.get(key);
+  if (!bucket) {
+    if (map.size >= 24) {
+      let oldestKey = '';
+      let oldestTs = Infinity;
+      for (const [k, v] of map.entries()) {
+        if (v.updatedAt < oldestTs && v.listeners.size === 0) {
+          oldestTs = v.updatedAt;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey) map.delete(oldestKey);
+    }
+    bucket = {
+      track,
+      cues: [],
+      cueKeys: new Set(),
+      listeners: new Set(),
+      updatedAt: Date.now(),
+    };
+    map.set(key, bucket);
+  } else {
+    bucket.track = track;
+    bucket.updatedAt = Date.now();
+  }
+  return bucket;
+}
+
+function parseVttTimestampSec(ts: string): number {
+  const parts = ts.trim().replace(',', '.').split(':');
+  if (parts.length === 3) {
+    return (Number(parts[0]) || 0) * 3600 + (Number(parts[1]) || 0) * 60 + (Number(parts[2]) || 0);
+  }
+  if (parts.length === 2) {
+    return (Number(parts[0]) || 0) * 60 + (Number(parts[1]) || 0);
+  }
+  return 0;
+}
+
+function attachLiveVttPipeReader(
+  stream: NodeJS.ReadableStream,
+  bucket: LiveSubBucket,
+  offsetSec: number
+): void {
+  let buf = '';
+  const timeRe =
+    /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})/;
+
+  const flushBlocks = (isFinal: boolean) => {
+    const normalized = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const parts = normalized.split('\n\n');
+    if (!isFinal) {
+      buf = parts.pop() || '';
+    } else {
+      buf = '';
+    }
+    for (const block of parts) {
+      const lines = block
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (lines.length === 0) continue;
+      let tIdx = -1;
+      let m: RegExpMatchArray | null = null;
+      for (let i = 0; i < Math.min(lines.length, 3); i++) {
+        const hit = lines[i].match(timeRe);
+        if (hit) {
+          tIdx = i;
+          m = hit;
+          break;
+        }
+      }
+      if (tIdx < 0 || !m) continue;
+      const start = Math.max(0, Number((parseVttTimestampSec(m[1]) + offsetSec).toFixed(3)));
+      const end = Math.max(0, Number((parseVttTimestampSec(m[2]) + offsetSec).toFixed(3)));
+      const text = lines
+        .slice(tIdx + 1)
+        .map((l) => l.replace(/<[^>]+>/g, '').replace(/\{[^}]+\}/g, '').trim())
+        .filter(Boolean)
+        .join('\n');
+      if (!text || end <= start) continue;
+      if (bucket.cues.length >= 4000) continue;
+      const ck = `${Math.round(start * 10)}|${Math.round(end * 10)}|${text}`;
+      if (bucket.cueKeys.has(ck)) continue;
+      bucket.cueKeys.add(ck);
+      const cue: LiveSubCue = { start, end, text };
+      bucket.cues.push(cue);
+      bucket.updatedAt = Date.now();
+      for (const listener of bucket.listeners) {
+        try {
+          listener(cue);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
+
+  stream.on('data', (chunk: Buffer | string) => {
+    buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (buf.includes('\n\n') || buf.includes('\r\n\r\n')) {
+      flushBlocks(false);
+    }
+  });
+  stream.on('end', () => flushBlocks(true));
+  stream.on('error', () => {});
 }
 const activeEngines = gState.activeEngines;
 const magnetMetaById = gState.magnetMetaById;
@@ -1054,6 +1265,94 @@ const DEFAULT_PUBLIC_TRACKERS = [
   'http://tracker.opentrackr.org:1337/announce',
 ];
 
+const RUSSIAN_OPEN_HTTP_TRACKERS = [
+  'http://bt.t-ru.org/ann',
+  'http://bt2.t-ru.org/ann',
+  'http://bt3.t-ru.org/ann',
+  'http://bt4.t-ru.org/ann',
+  'http://tracker.opentrackr.org:1337/announce',
+];
+
+async function announceDirectHttpPeersForEngine(
+  infoHash: string,
+  engine: any,
+  entry?: ActiveTorrentEngine
+): Promise<number> {
+  const cleanHash = String(infoHash || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/.test(cleanHash) || typeof engine?.connect !== 'function') {
+    return 0;
+  }
+  const now = Date.now();
+  if (entry?.lastDirectHttpAnnounceAt && now - entry.lastDirectHttpAnnounceAt < 30_000) {
+    return 0;
+  }
+  if (entry) {
+    entry.lastDirectHttpAnnounceAt = now;
+  }
+
+  let encodedHash = '';
+  for (let i = 0; i < cleanHash.length; i += 2) {
+    encodedHash += `%${cleanHash.slice(i, i + 2)}`;
+  }
+  const peerId = `-qB4650-${cleanHash.slice(0, 12)}`;
+  const discovered = new Set<string>();
+
+  await Promise.all(
+    RUSSIAN_OPEN_HTTP_TRACKERS.map(async (trUrl) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3500);
+      try {
+        const announceUrl = `${trUrl}?info_hash=${encodedHash}&peer_id=${encodeURIComponent(peerId)}&port=6881&uploaded=0&downloaded=0&left=1000000&compact=1&numwant=100`;
+        const res = await fetch(announceUrl, {
+          signal: controller.signal,
+          headers: { 'User-Agent': 'qBittorrent/4.6.5' },
+        });
+        if (!res.ok) return;
+        const buf = Buffer.from(await res.arrayBuffer());
+        const marker = Buffer.from('5:peers');
+        const idx = buf.indexOf(marker);
+        if (idx === -1) return;
+        const colon = buf.indexOf(0x3a, idx + marker.length);
+        if (colon === -1) return;
+        const byteLen = parseInt(buf.slice(idx + marker.length, colon).toString('ascii'), 10);
+        if (!Number.isFinite(byteLen) || byteLen < 6) return;
+        const peersBuf = buf.slice(colon + 1, Math.min(buf.length, colon + 1 + byteLen));
+        for (let i = 0; i + 6 <= peersBuf.length; i += 6) {
+          const a = peersBuf[i];
+          const b = peersBuf[i + 1];
+          const c = peersBuf[i + 2];
+          const d = peersBuf[i + 3];
+          const port = peersBuf.readUInt16BE(i + 4);
+          if (
+            port <= 0 ||
+            a === 0 ||
+            a === 10 ||
+            a === 127 ||
+            (a === 192 && b === 168) ||
+            (a === 172 && b >= 16 && b <= 31)
+          ) {
+            continue;
+          }
+          discovered.add(`${a}.${b}.${c}.${d}:${port}`);
+        }
+      } catch {
+        // ignore tracker timeout / unreachable host
+      } finally {
+        clearTimeout(timer);
+      }
+    })
+  );
+
+  for (const addr of discovered) {
+    try {
+      engine.connect(addr);
+    } catch {
+      // ignore
+    }
+  }
+  return discovered.size;
+}
+
 function hashToSyntheticId(infoHash: string): number {
   const clean = infoHash.trim().toLowerCase();
   let h = 2166136261;
@@ -1376,39 +1675,150 @@ async function fetchKinozalRussianTorrents(
   ];
 
   try {
-    const pages = await Promise.all(
-      urls.map(async (u, idx) => {
-        try {
-          const controller = new AbortController();
-          const t = setTimeout(() => controller.abort(), 4500);
-          const res = await fetch(u, {
-            headers: { 'User-Agent': USER_AGENT },
-            signal: controller.signal,
+    const fetchJacRedRussian = async (): Promise<FileListTorrentCard[]> => {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 6000);
+      try {
+        const res = await fetch(
+          `https://jr.maxvol.pro/api/v1.0/torrents?search=${encodeURIComponent(cleanQuery)}`,
+          { headers: { 'User-Agent': USER_AGENT }, signal: controller.signal }
+        );
+        if (!res.ok) return [];
+        const rawArr = (await res.json()) as any[];
+        if (!Array.isArray(rawArr)) return [];
+        const out: FileListTorrentCard[] = [];
+        for (const row of rawArr) {
+          const rawTitle = String(row?.title || '').trim();
+          const magnet = String(row?.magnet || '');
+          const mHash = magnet.match(/btih:([a-f0-9]{40})/i);
+          if (!rawTitle || !mHash || !/[а-яёА-ЯЁ]/i.test(rawTitle)) continue;
+          const infoHash = mHash[1].toLowerCase();
+          const preYearPart = rawTitle.split(/\s*(?:\(\d{4}|\[|\bS\d{1,2}|\(\d+\s*сезон)/i)[0] || rawTitle;
+          if (/\/\s*[A-Za-z]{2,}/.test(preYearPart)) continue;
+          const cleanName = preYearPart
+            .replace(/\s*\[.*?\]\s*/g, ' ')
+            .replace(/\s*\(\d{4}.*$/g, '')
+            .replace(/\s*\(.*$/g, '')
+            .replace(/\s*\/.*$/g, '')
+            .replace(/[.\s-]*(?:\d+\s*сезон|сезон\s*\d+)\.?/gi, '')
+            .replace(/\s+/g, ' ')
+            .replace(/[\[\]().,\s-]+$/g, '')
+            .trim();
+          const quality = /(?:^|[^a-zа-яё0-9])(2160[pр]|4k|uhd)(?=$|[^a-zа-яё0-9])/i.test(rawTitle)
+            ? '4K UHD'
+            : /(?:^|[^a-zа-яё0-9])1080[piр](?=$|[^a-zа-яё0-9])|\bHDTV\b/i.test(rawTitle)
+              ? '1080p Full HD'
+              : /(?:^|[^a-zа-яё0-9])720[pр](?=$|[^a-zа-яё0-9])/i.test(rawTitle)
+                ? '720p HD'
+                : '480p SD';
+          const seeders = Math.max(0, Number(row?.sid) || 0);
+          const leechers = Math.max(0, Number(row?.pir) || 0);
+          const sizeBytes = Math.max(0, Number(row?.size) || 0);
+          const sizeFormatted = String(row?.sizeName || '2.8 GB');
+          const yearMatch = rawTitle.match(/\((\d{4})(?:-\d{4})?\)/) || rawTitle.match(/\b(202\d)\b/);
+          const year = yearMatch ? yearMatch[1] : '2026';
+          const synId = hashToSyntheticId(infoHash);
+          const magTrackers = [...magnet.matchAll(/tr=([^&]+)/gi)]
+            .map((m) => {
+              try {
+                return decodeURIComponent(m[1]);
+              } catch {
+                return '';
+              }
+            })
+            .filter(Boolean);
+          const existingMeta = magnetMetaById.get(synId);
+          magnetMetaById.set(synId, {
+            infoHash,
+            trackers: Array.from(
+              new Set([
+                ...(existingMeta?.trackers || []),
+                ...magTrackers,
+                ...DEFAULT_PUBLIC_TRACKERS,
+              ])
+            ),
+            releaseTitle: existingMeta?.releaseTitle || rawTitle,
+            rutorId: existingMeta?.rutorId,
+            provider: 'kinozal',
           });
-          clearTimeout(t);
-          if (!res.ok) return [];
-          const html = await res.text();
-          return parseKinozalRowsFromHtml(
-            html,
+          out.push({
+            id: synId,
+            flId: `kz:${infoHash}`,
+            name: cleanName || rawTitle,
+            releaseTitle: rawTitle,
+            year,
             type,
-            idx === urls.length - 1
-          );
-        } catch {
-          return [];
+            imdbId: '',
+            poster: '',
+            category: `Kinozal VIP • RU (${String(row?.tracker || 'RU')})`,
+            quality,
+            isRo: false,
+            freeleech: true,
+            doubleup: true,
+            sizeBytes,
+            sizeFormatted,
+            seeders,
+            leechers,
+            uploadDate: String(row?.createTime || 'Kinozal RU').slice(0, 10),
+            genres: [],
+            provider: 'kinozal',
+            infoHash,
+            rutorId: existingMeta?.rutorId,
+            audioInfo: 'RU Original (Лицензия)',
+          });
         }
-      })
-    );
+        return out;
+      } catch {
+        return [];
+      } finally {
+        clearTimeout(t);
+      }
+    };
 
-    const seenHashes = new Set<string>();
-    const combined: FileListTorrentCard[] = [];
-    for (const list of pages) {
+    const [pages, jacRedList] = await Promise.all([
+      Promise.all(
+        urls.map(async (u, idx) => {
+          try {
+            const controller = new AbortController();
+            const t = setTimeout(() => controller.abort(), 4500);
+            const res = await fetch(u, {
+              headers: { 'User-Agent': USER_AGENT },
+              signal: controller.signal,
+            });
+            clearTimeout(t);
+            if (!res.ok) return [];
+            const html = await res.text();
+            return parseKinozalRowsFromHtml(
+              html,
+              type,
+              idx === urls.length - 1
+            );
+          } catch {
+            return [];
+          }
+        })
+      ),
+      fetchJacRedRussian(),
+    ]);
+
+    const byHash = new Map<string, FileListTorrentCard>();
+    for (const list of [...pages, jacRedList]) {
       for (const item of list) {
         const key = item.infoHash || String(item.id);
-        if (seenHashes.has(key)) continue;
-        seenHashes.add(key);
-        combined.push(item);
+        const prev = byHash.get(key);
+        if (!prev) {
+          byHash.set(key, item);
+        } else {
+          // Merge best seeders/leechers while preserving Rutor .torrent id & cleanest releaseTitle
+          prev.seeders = Math.max(prev.seeders, item.seeders);
+          prev.leechers = Math.max(prev.leechers, item.leechers);
+          if (!prev.rutorId && item.rutorId) {
+            prev.rutorId = item.rutorId;
+          }
+        }
       }
     }
+    const combined: FileListTorrentCard[] = Array.from(byHash.values());
 
     // Filter to items whose clean name matches our Russian query (prefer exact title match so "Тверская" never pollutes "Тверская: Здесь и сейчас")
     const stripGenericShowPrefix = (s: string) =>
@@ -1457,9 +1867,22 @@ async function fetchKinozalRussianTorrents(
             ? 2
             : 1;
     const rawPool = matched;
+    const seededHdPool = rawPool.filter(
+      (t) => getKzQualityScore(t.quality) >= 2 && t.seeders >= 1
+    );
+    const seededAnyPool = rawPool.filter((t) => t.seeders >= 1);
     const hdPool = rawPool.filter((t) => getKzQualityScore(t.quality) >= 2);
-    const pool = (hdPool.length > 0 ? hdPool : rawPool).sort(
+    const pool = (
+      seededHdPool.length > 0
+        ? seededHdPool
+        : seededAnyPool.length > 0
+          ? seededAnyPool
+          : hdPool.length > 0
+            ? hdPool
+            : rawPool
+    ).sort(
       (a, b) =>
+        (b.seeders > 0 ? 1 : 0) - (a.seeders > 0 ? 1 : 0) ||
         getKzQualityScore(b.quality) - getKzQualityScore(a.quality) ||
         b.seeders - a.seeders
     );
@@ -1822,6 +2245,7 @@ async function getOrStartTorrentEngine(
       let oldestKey: number | null = null;
       let oldestTime = Infinity;
       for (const [k, v] of activeEngines.entries()) {
+        if ((v.activeDownloads || 0) > 0) continue;
         if (v.lastAccessed < oldestTime) {
           oldestTime = v.lastAccessed;
           oldestKey = k;
@@ -1871,6 +2295,7 @@ async function getOrStartTorrentEngine(
             const dlRes = await safeFetch(
               `https://d.rutor.info/download/${magnetMeta.rutorId}`,
               { headers: { 'User-Agent': USER_AGENT } },
+              1,
               4000
             );
             if (dlRes.ok) {
@@ -1925,7 +2350,7 @@ async function getOrStartTorrentEngine(
           id: peerId,
           dht: true,
           tracker: true,
-          trackers: DEFAULT_PUBLIC_TRACKERS,
+          trackers: cleanTrackers,
           connections: 75,
           uploads: 2,
           verify: true,
@@ -2001,9 +2426,16 @@ async function getOrStartTorrentEngine(
       verifiedPieces: preservedVerified || new Set<number>(),
       prewarmedFiles: new Set<number>(),
       lastTrackerError: undefined,
+      infoHash: magnetMeta?.infoHash,
       files: [],
       probeCache: preservedProbes || new Map(),
     };
+
+    if (torrentId < 0 && magnetMeta?.infoHash) {
+      announceDirectHttpPeersForEngine(magnetMeta.infoHash, engine, entry).catch(
+        () => {}
+      );
+    }
 
     if (torrentId > 0) {
       let lastTrackerWarnUnlockAt = 0;
@@ -2262,6 +2694,10 @@ function prewarmVideoTailCues(
 
     const rawFile = entry.engine?.files?.[fileIdx];
     if (!rawFile || Number(rawFile.length) <= 4 * 1024 * 1024) return;
+    if (/\.ts$/i.test(rawFile.name || '')) {
+      entry.prewarmedFiles.add(fileIdx);
+      return;
+    }
     if (getVerifiedCompleteDiskFilePath(entry, fileIdx)) {
       entry.prewarmedFiles.add(fileIdx);
       return;
@@ -2333,6 +2769,7 @@ async function probeTorrentVideoFile(
     title: string;
     label: string;
   }>;
+  subtitleTracks?: EmbeddedSubtitleTrack[];
 }> {
   const cached = entry.probeCache.get(fileIdx);
   if (cached) return cached;
@@ -2360,6 +2797,7 @@ async function probeTorrentVideoFile(
       title: string;
       label: string;
     }>;
+    subtitleTracks?: EmbeddedSubtitleTrack[];
   }>((resolve) => {
     const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
     const ff = spawn(ffmpegPath as string, [
@@ -2437,22 +2875,53 @@ async function probeTorrentVideoFile(
         codec: string;
         extra: string;
         metaTitle: string;
+        isDefault: boolean;
       }> = [];
 
-      const streamRegex = /Stream #0:(\d+)(?:\(([a-zA-Z]{2,3})\))?[^:]*:\s*Audio:\s*([a-zA-Z0-9_]+)([^\r\n]*)(?:\r?\n\s*Metadata:\r?\n(?:\s+[^\r\n]+\r?\n)*?\s+title\s*:\s*([^\r\n]+))?/gi;
-      let match: RegExpExecArray | null;
+      const stderrLines = stderr.split(/\r?\n/);
+      const streamBlocks: Array<{ header: string; metaTitle: string }> = [];
+      for (let li = 0; li < stderrLines.length; li++) {
+        const line = stderrLines[li];
+        if (/^\s*Stream #0:\d+/.test(line)) {
+          let metaTitle = '';
+          let inMeta = false;
+          for (let lj = li + 1; lj < stderrLines.length; lj++) {
+            const subLine = stderrLines[lj];
+            if (/^\s*(?:Stream #|Chapter #|Output #|Press |At least |Trailing )/i.test(subLine)) {
+              break;
+            }
+            if (/^\s*Metadata:\s*$/i.test(subLine)) {
+              inMeta = true;
+              continue;
+            }
+            if (inMeta) {
+              const titleM = subLine.match(/^\s+title\s*:\s*(.+)$/i);
+              if (titleM && !metaTitle) {
+                metaTitle = titleM[1].trim();
+              }
+            }
+          }
+          streamBlocks.push({ header: line, metaTitle });
+        }
+      }
+
       let audioOrder = 0;
-      while ((match = streamRegex.exec(stderr)) !== null) {
-        const lang = (match[2] || 'orig').toUpperCase();
-        const codec = (match[3] || 'audio').toUpperCase();
-        const extra = (match[4] || '').includes('5.1') ? '5.1' : 'Stereo';
-        const metaTitle = (match[5] || '').trim();
+      for (const blk of streamBlocks) {
+        const m = blk.header.match(
+          /Stream #0:(\d+)(?:\[[^\]]+\])?(?:\(([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,4})?)\))?[^:]*:\s*Audio:\s*([a-zA-Z0-9_]+)([^\r\n]*)/i
+        );
+        if (!m) continue;
+        const lang = (m[2] || 'orig').split('-')[0].toUpperCase();
+        const codec = (m[3] || 'audio').toUpperCase();
+        const rest = m[4] || '';
+        const extra = rest.includes('5.1') ? '5.1' : 'Stereo';
         rawProbedTracks.push({
           index: audioOrder,
           lang,
           codec,
           extra,
-          metaTitle,
+          metaTitle: blk.metaTitle,
+          isDefault: /\(default\)/i.test(rest),
         });
         audioOrder++;
       }
@@ -2510,7 +2979,42 @@ async function probeTorrentVideoFile(
         });
       }
 
-      const result = { durationSec, videoCodec, audioTracks };
+      const subtitleTracks: EmbeddedSubtitleTrack[] = [];
+      let subOrder = 0;
+      for (const blk of streamBlocks) {
+        const subMatch = blk.header.match(
+          /Stream #0:(\d+)(?:\[[^\]]+\])?(?:\(([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,4})?)\))?[^:]*:\s*Subtitle:\s*([a-zA-Z0-9_]+)([^\r\n]*)/i
+        );
+        if (!subMatch) continue;
+        const rawLang = (subMatch[2] || 'und').split('-')[0].toUpperCase();
+        const codec = (subMatch[3] || '').toLowerCase();
+        const extra = subMatch[4] || '';
+        const metaTitle = blk.metaTitle;
+        const mapped = mapMkvSubLang(rawLang, metaTitle);
+        const forced = /\(forced\)|\bforced\b/i.test(`${extra} ${metaTitle}`);
+        const sdh = /\b(sdh|cc|hearing|hi)\b/i.test(`${extra} ${metaTitle}`);
+        const isText = /^(subrip|srt|ass|ssa|webvtt|mov_text|text)$/i.test(codec);
+        const tagSuffix = forced ? ' [Forced]' : sdh ? ' [SDH]' : '';
+        const titleSuffix =
+          metaTitle && metaTitle.toLowerCase() !== mapped.label.toLowerCase()
+            ? ` • ${metaTitle}`
+            : '';
+        subtitleTracks.push({
+          index: subOrder,
+          lang: rawLang,
+          langCode2: mapped.code2,
+          langLabel: mapped.label,
+          codec,
+          title: metaTitle || mapped.label,
+          label: `MKV • ${mapped.label}${tagSuffix}${titleSuffix}`,
+          forced,
+          sdh,
+          isText,
+        });
+        subOrder++;
+      }
+
+      const result = { durationSec, videoCodec, audioTracks, subtitleTracks };
       if (videoMatch && durationSec > 0) {
         entry.probeCache.set(fileIdx, result);
       }
@@ -2541,6 +3045,11 @@ function ensureTorrentSwarmAlive(
     if (wiresCount < 5 || typeof targetPiece === 'number') {
       eng.pokePeers?.(targetPiece);
       eng.discovery?.tracker?.update?.();
+    }
+    if (entry.id < 0 && entry.infoHash && wiresCount < 4) {
+      announceDirectHttpPeersForEngine(entry.infoHash, eng, entry).catch(
+        () => {}
+      );
     }
   } catch {
     // ignore
@@ -2963,6 +3472,214 @@ export async function handleFileListRequest(
     );
     return true;
   }
+  // 1C. GET /api/filelist/live-sub — Live Embedded MKV Subtitles (JSON snapshot or SSE push, 0ms sync!)
+  if (pathname === '/api/filelist/live-sub' && req.method === 'GET') {
+    const id = parseInt(parsedUrl.searchParams.get('id') || '0', 10);
+    const fileIdx = Math.max(0, parseInt(parsedUrl.searchParams.get('fileIdx') || '0', 10) || 0);
+    const subLang = (parsedUrl.searchParams.get('subLang') || 'ro').trim().toLowerCase();
+    const rawSubIdx = parsedUrl.searchParams.get('subIdx');
+    const explicitSubIdx =
+      rawSubIdx !== null && rawSubIdx !== '' && rawSubIdx !== '-1'
+        ? parseInt(rawSubIdx, 10)
+        : -1;
+    const isSse = parsedUrl.searchParams.get('sse') === '1';
+
+    if (!id) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ ok: false, cues: [] }));
+      return true;
+    }
+
+    let entry = activeEngines.get(id);
+    if (!entry) {
+      try {
+        entry = await getOrStartTorrentEngine(id);
+      } catch {
+        // ignore
+      }
+    }
+    let cachedProbe = entry?.probeCache.get(fileIdx);
+    if (entry && (!cachedProbe || !Array.isArray(cachedProbe.subtitleTracks))) {
+      try {
+        cachedProbe = await Promise.race([
+          probeTorrentVideoFile(entry, fileIdx),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2500)),
+        ]);
+      } catch {
+        // ignore
+      }
+    }
+    const probePending = Boolean(entry && (!cachedProbe || !Array.isArray(cachedProbe.subtitleTracks)));
+    const textTracks = (cachedProbe?.subtitleTracks || []).filter((t) => t.isText);
+    const chosenSub = pickEmbeddedSubtitleTrack(textTracks, subLang, explicitSubIdx);
+    if (!chosenSub) {
+      if (isSse) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store',
+          'Access-Control-Allow-Origin': '*',
+          Connection: 'keep-alive',
+        });
+        res.write(`data: ${JSON.stringify({ type: 'none', probing: probePending, tracks: textTracks })}\n\n`);
+        res.end();
+      } else {
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify({ ok: false, probing: probePending, tracks: textTracks, cues: [] }));
+      }
+      return true;
+    }
+
+    const liveKey = `${id}:${fileIdx}:${chosenSub.index}`;
+    const bucket = getOrCreateLiveSubBucket(liveKey, chosenSub);
+
+    // If the MKV file is already 100% downloaded on disk and not yet extracted, run single-flight extraction fast!
+    if (entry && !bucket.fullDiskExtracted && ffmpegPath) {
+      const diskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
+      if (diskPath) {
+        if (!bucket.fullDiskExtracting) {
+          bucket.fullDiskExtracting = new Promise<void>((resolve) => {
+            const ffSub = spawn(ffmpegPath as string, [
+              '-hide_banner',
+              '-loglevel',
+              'error',
+              '-i',
+              diskPath,
+              '-map',
+              `0:s:${chosenSub.index}`,
+              '-c:s',
+              'webvtt',
+              '-f',
+              'webvtt',
+              'pipe:1',
+            ]);
+            ffSub.stderr?.resume();
+            attachLiveVttPipeReader(ffSub.stdout, bucket, 0);
+            const tm = setTimeout(() => {
+              try { ffSub.kill('SIGKILL'); } catch { /* ignore */ }
+              resolve();
+            }, 8000);
+            ffSub.on('close', () => {
+              clearTimeout(tm);
+              bucket.fullDiskExtracted = true;
+              resolve();
+            });
+            ffSub.on('error', () => {
+              clearTimeout(tm);
+              resolve();
+            });
+          }).finally(() => {
+            bucket.fullDiskExtracting = null;
+          });
+        }
+        await bucket.fullDiskExtracting;
+      }
+    }
+
+    if (isSse) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store',
+        'Access-Control-Allow-Origin': '*',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(
+        `data: ${JSON.stringify({
+          type: 'init',
+          track: chosenSub,
+          tracks: textTracks,
+          cues: bucket.cues,
+        })}\n\n`
+      );
+      const onCue = (cue: LiveSubCue) => {
+        if (res.destroyed || res.writableEnded) return;
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'cue', cue })}\n\n`);
+        } catch {
+          // ignore
+        }
+      };
+      bucket.listeners.add(onCue);
+      let pingTimer: ReturnType<typeof setTimeout> | null = null;
+      const schedulePing = () => {
+        pingTimer = setTimeout(() => {
+          if (res.destroyed || res.writableEnded) {
+            bucket.listeners.delete(onCue);
+            return;
+          }
+          try {
+            res.write(': ping\n\n');
+            schedulePing();
+          } catch {
+            bucket.listeners.delete(onCue);
+          }
+        }, 25000);
+      };
+      schedulePing();
+      const closeSse = () => {
+        if (pingTimer) clearTimeout(pingTimer);
+        bucket.listeners.delete(onCue);
+      };
+      req.once('close', closeSse);
+      req.once('aborted', closeSse);
+      res.once('close', closeSse);
+      return true;
+    }
+
+    const sinceCount = Math.max(0, parseInt(parsedUrl.searchParams.get('since') || '0', 10) || 0);
+    const waitSec = Math.min(20, Math.max(0, parseInt(parsedUrl.searchParams.get('wait') || '0', 10) || 0));
+
+    if (waitSec > 0 && bucket.cues.length <= sinceCount && !res.destroyed && !req.destroyed && !res.writableEnded) {
+      await new Promise<void>((resolve) => {
+        let done = false;
+        let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timeoutTimer);
+          if (coalesceTimer) clearTimeout(coalesceTimer);
+          bucket.listeners.delete(onCue);
+          req.off('close', finish);
+          req.off('aborted', finish);
+          resolve();
+        };
+        const onCue = () => {
+          if (!coalesceTimer) {
+            coalesceTimer = setTimeout(finish, 120);
+          }
+        };
+        const timeoutTimer = setTimeout(finish, waitSec * 1000);
+        bucket.listeners.add(onCue);
+        req.once('close', finish);
+        req.once('aborted', finish);
+      });
+    }
+
+    if (res.destroyed || res.writableEnded) return true;
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store, no-transform',
+    });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        track: chosenSub,
+        tracks: textTracks,
+        total: bucket.cues.length,
+        cues: sinceCount > 0 ? bucket.cues.slice(sinceCount) : bucket.cues,
+      })
+    );
+    return true;
+  }
+
   if (pathname === '/api/filelist/auth' && req.method === 'POST') {
     let body = '';
     req.on('data', (chunk) => {
@@ -3588,7 +4305,7 @@ export async function handleFileListRequest(
 
       // Use cached probe if available; otherwise infer codec immediately so resolve responds in <1s and warm probeCache in background
       let cachedProbe = entry.probeCache.get(selectedFileIdx);
-      if (cachedProbe && !cachedProbe.durationSec) {
+      if (cachedProbe && (!cachedProbe.durationSec || !Array.isArray(cachedProbe.subtitleTracks))) {
         entry.probeCache.delete(selectedFileIdx);
         cachedProbe = undefined;
       }
@@ -3660,6 +4377,7 @@ export async function handleFileListRequest(
           videoCodec: probe.videoCodec,
           audioNames: probe.audioTracks.map((a) => a.label),
           audioTracks: probe.audioTracks,
+          subtitleTracks: (probe.subtitleTracks || []).filter((t) => t.isText),
         })
       );
     } catch (err) {
@@ -3703,6 +4421,12 @@ export async function handleFileListRequest(
         parsedUrl.searchParams.get('vtranscode') === '1';
       const isOfflineDownload =
         parsedUrl.searchParams.get('download') === '1';
+      const subLangParam = (parsedUrl.searchParams.get('subLang') || 'ro').trim().toLowerCase();
+      const rawSubIdxParam = parsedUrl.searchParams.get('subIdx');
+      const explicitSubIdxParam =
+        rawSubIdxParam !== null && rawSubIdxParam !== '' && rawSubIdxParam !== '-1'
+          ? parseInt(rawSubIdxParam, 10)
+          : -1;
       const clientUa = String(req.headers['user-agent'] || '');
       const isSmartTvClientUa =
         /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
@@ -3719,7 +4443,12 @@ export async function handleFileListRequest(
         return true;
       }
 
-      const rawIp = String(req.socket?.remoteAddress || 'local');
+      const forwardedIp = String(
+        req.headers['cf-connecting-ip'] ||
+          String(req.headers['x-forwarded-for'] || '').split(',')[0] ||
+          ''
+      ).trim();
+      const rawIp = forwardedIp || String(req.socket?.remoteAddress || 'local');
       const clientKey =
         rawIp === '::1' || rawIp === '::ffff:127.0.0.1' || rawIp === '127.0.0.1'
           ? 'localhost'
@@ -3798,7 +4527,7 @@ export async function handleFileListRequest(
       restrictTorrentSelectionToFile(entry, fileIdx);
 
       let cachedProbe = entry.probeCache.get(fileIdx);
-      if (cachedProbe && !cachedProbe.durationSec) {
+      if (cachedProbe && (!cachedProbe.durationSec || !Array.isArray(cachedProbe.subtitleTracks))) {
         entry.probeCache.delete(fileIdx);
         cachedProbe = undefined;
       }
@@ -3811,6 +4540,7 @@ export async function handleFileListRequest(
         !looksMultiOrDualAudio &&
         /\b(x264|h\.?264|avc)\b/i.test(rawFile.name || '') &&
         /\baac2?\.?0?\b/i.test(rawFile.name || '');
+      const isMpegTsFile = /\.ts$/i.test(rawFile?.name || '');
       if (!cachedProbe) {
         if (verifiedDiskPath) {
           try {
@@ -3833,7 +4563,7 @@ export async function handleFileListRequest(
           }
         } else if (startSec <= 1) {
           probeTorrentVideoFile(entry, fileIdx).catch(() => {});
-        } else {
+        } else if (!isMpegTsFile) {
           setTimeout(() => {
             probeTorrentVideoFile(entry, fileIdx).catch(() => {});
           }, 3500);
@@ -3953,8 +4683,32 @@ export async function handleFileListRequest(
 
       res.writeHead(200, streamHeaders);
 
+      const liveSubTrack = !isOfflineDownload
+        ? pickEmbeddedSubtitleTrack(
+            cachedProbe?.subtitleTracks,
+            subLangParam,
+            explicitSubIdxParam
+          )
+        : null;
+
       const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
-      const useDirectPipe = !verifiedDiskPath && startSec <= 1;
+      if (liveSubTrack) {
+        ffArgs.push('-copyts');
+      }
+      const useDirectPipe = !verifiedDiskPath && (startSec <= 1 || isMpegTsFile);
+      let directPipeStartByte = 0;
+      if (useDirectPipe && isMpegTsFile && startSec > 1) {
+        const totalTsBytes = Math.max(0, Number(rawFile?.length || 0));
+        const tsEstDur =
+          cachedProbe?.durationSec && cachedProbe.durationSec > 60
+            ? cachedProbe.durationSec
+            : Math.max(startSec + 600, Math.round(totalTsBytes / (720 * 1024)));
+        const rawOffset = Math.floor(
+          (Math.min(startSec, tsEstDur * 0.96) / Math.max(1, tsEstDur)) *
+            totalTsBytes
+        );
+        directPipeStartByte = Math.max(0, Math.floor(rawOffset / 188) * 188);
+      }
       const hwDecodeArgs =
         needsVideoTranscode && process.platform === 'darwin'
           ? ['-hwaccel', 'videotoolbox']
@@ -3981,6 +4735,18 @@ export async function handleFileListRequest(
           `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
         );
       } else {
+        if (isMpegTsFile) {
+          ffArgs.push(
+            '-probesize',
+            '1200000',
+            '-analyzeduration',
+            '1200000'
+          );
+          if (directPipeStartByte > 0) {
+            ffArgs.push('-fflags', '+discardcorrupt+genpts');
+          }
+          ffArgs.push('-f', 'mpegts');
+        }
         ffArgs.push(...hwDecodeArgs, '-i', 'pipe:0');
       }
 
@@ -4091,19 +4857,56 @@ export async function handleFileListRequest(
         'pipe:1'
       );
 
-      const ff = spawn(ffmpegPath as string, ffArgs);
+      if (liveSubTrack) {
+        ffArgs.push(
+          '-map',
+          `0:s:${liveSubTrack.index}`,
+          '-c:s',
+          'webvtt',
+          '-flush_packets',
+          '1',
+          '-f',
+          'webvtt',
+          'pipe:3'
+        );
+      }
+
+      if (isOfflineDownload) {
+        entry.activeDownloads = (entry.activeDownloads || 0) + 1;
+      }
+
+      const ff = spawn(
+        ffmpegPath as string,
+        ffArgs,
+        liveSubTrack ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] } : undefined
+      );
+      if (liveSubTrack && ff.stdio && ff.stdio[3]) {
+        const subBucket = getOrCreateLiveSubBucket(
+          `${id}:${fileIdx}:${liveSubTrack.index}`,
+          liveSubTrack
+        );
+        attachLiveVttPipeReader(
+          ff.stdio[3] as NodeJS.ReadableStream,
+          subBucket,
+          0
+        );
+      }
       if (!isOfflineDownload) {
         gState.activeStreamProcess = ff;
       }
 
       let directReadStream: any = null;
+      let closeDirectRef: (() => void) | null = null;
       if (useDirectPipe) {
-        directReadStream = rawFile.createReadStream();
+        directReadStream =
+          directPipeStartByte > 0
+            ? rawFile.createReadStream({ start: directPipeStartByte })
+            : rawFile.createReadStream();
         attachRollingPieceReadahead(
           entry,
           directReadStream,
           Number(rawFile?.offset || 0),
-          0,
+          directPipeStartByte,
           Number(rawFile?.length || 0)
         );
         const closeDirect = () => {
@@ -4113,6 +4916,7 @@ export async function handleFileListRequest(
             // ignore
           }
         };
+        closeDirectRef = closeDirect;
         if (!isOfflineDownload) {
           entry.activeStreams.add(closeDirect);
         }
@@ -4175,7 +4979,17 @@ export async function handleFileListRequest(
         }
       });
 
+      let cleanedUp = false;
       const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        if (isOfflineDownload) {
+          entry.activeDownloads = Math.max(0, (entry.activeDownloads || 1) - 1);
+        }
+        if (closeDirectRef) {
+          entry.activeStreams.delete(closeDirectRef);
+          closeDirectRef = null;
+        }
         if ((gState as any).activeStreamCleanupByClient?.get(clientKey) === cleanup) {
           (gState as any).activeStreamCleanupByClient.delete(clientKey);
         }
@@ -4247,7 +5061,13 @@ export async function handleFileListRequest(
         return true;
       }
 
-      const sessionKey = `${id}:${fileIdx}:${startSec}:${audioIdx}`;
+      const hlsSubLang = (parsedUrl.searchParams.get('subLang') || 'ro').trim().toLowerCase();
+      const hlsRawSubIdx = parsedUrl.searchParams.get('subIdx');
+      const hlsExplicitSubIdx =
+        hlsRawSubIdx !== null && hlsRawSubIdx !== '' && hlsRawSubIdx !== '-1'
+          ? parseInt(hlsRawSubIdx, 10)
+          : -1;
+      const sessionKey = `${id}:${fileIdx}:${startSec}:${audioIdx}:${hlsSubLang}:${hlsExplicitSubIdx}`;
       let hlsSession = gState.activeHlsSession;
       const m3u8ExistingPath = hlsSession
         ? path.join(hlsSession.dir, 'stream.m3u8')
@@ -4304,12 +5124,22 @@ export async function handleFileListRequest(
         }
 
         let cachedProbe = entry.probeCache.get(fileIdx);
-        if (cachedProbe && !cachedProbe.durationSec) {
+        if (cachedProbe && (!cachedProbe.durationSec || !Array.isArray(cachedProbe.subtitleTracks))) {
           entry.probeCache.delete(fileIdx);
           cachedProbe = undefined;
         }
         if (!cachedProbe) {
-          probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+          try {
+            cachedProbe = await Promise.race([
+              probeTorrentVideoFile(entry, fileIdx),
+              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
+            ]);
+          } catch {
+            // ignore
+          }
+          if (!cachedProbe) {
+            probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+          }
         }
         const isHevc =
           (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
@@ -4326,14 +5156,31 @@ export async function handleFileListRequest(
         const sessionDir = path.join(TORRENT_CACHE_DIR, `hls_${sessionId}`);
         fs.mkdirSync(sessionDir, { recursive: true });
 
+        const hlsSubTrack = pickEmbeddedSubtitleTrack(
+          cachedProbe?.subtitleTracks,
+          hlsSubLang,
+          hlsExplicitSubIdx
+        );
+        const verifiedDiskPathHls = getVerifiedCompleteDiskFilePath(entry, fileIdx);
         const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
-        const useDirectPipeHls = startSec <= 1;
+        if (hlsSubTrack) {
+          ffArgs.push('-copyts');
+        }
+        const useDirectPipeHls = !verifiedDiskPathHls && startSec <= 1;
         const hwDecodeArgsHls =
           isHevc && process.platform === 'darwin'
             ? ['-hwaccel', 'videotoolbox']
             : [];
 
-        if (!useDirectPipeHls) {
+        if (verifiedDiskPathHls) {
+          if (startSec > 1) {
+            if (!isHevc) {
+              ffArgs.push('-noaccurate_seek');
+            }
+            ffArgs.push('-ss', String(startSec));
+          }
+          ffArgs.push(...hwDecodeArgsHls, '-i', verifiedDiskPathHls);
+        } else if (!useDirectPipeHls) {
           const rangePort = await ensureInternalRangeServer();
           if (!isHevc) {
             ffArgs.push('-noaccurate_seek');
@@ -4443,7 +5290,37 @@ export async function handleFileListRequest(
           path.join(sessionDir, 'stream.m3u8')
         );
 
-        const ff = spawn(ffmpegPath as string, ffArgs);
+        if (hlsSubTrack) {
+          ffArgs.push(
+            '-map',
+            `0:s:${hlsSubTrack.index}`,
+            '-c:s',
+            'webvtt',
+            '-flush_packets',
+            '1',
+            '-f',
+            'webvtt',
+            'pipe:3'
+          );
+        }
+
+        const ff = spawn(
+          ffmpegPath as string,
+          ffArgs,
+          hlsSubTrack ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] } : undefined
+        );
+        ff.stderr?.resume();
+        if (hlsSubTrack && ff.stdio && ff.stdio[3]) {
+          const subBucket = getOrCreateLiveSubBucket(
+            `${id}:${fileIdx}:${hlsSubTrack.index}`,
+            hlsSubTrack
+          );
+          attachLiveVttPipeReader(
+            ff.stdio[3] as NodeJS.ReadableStream,
+            subBucket,
+            0
+          );
+        }
         let directHlsReadStream: any = null;
         if (useDirectPipeHls) {
           directHlsReadStream = rawFile.createReadStream();
@@ -4478,6 +5355,21 @@ export async function handleFileListRequest(
           startedAt: Date.now(),
           lastAccessed: Date.now(),
         };
+        const hlsIdleReaper = setInterval(() => {
+          if (gState.activeHlsSession !== newSession) {
+            clearInterval(hlsIdleReaper);
+            return;
+          }
+          if (Date.now() - newSession.lastAccessed > 90_000) {
+            clearInterval(hlsIdleReaper);
+            try { newSession.proc?.kill('SIGKILL'); } catch { /* ignore */ }
+            try { fs.rmSync(newSession.dir, { recursive: true, force: true }); } catch { /* ignore */ }
+            if (gState.activeHlsSession === newSession) {
+              gState.activeHlsSession = null;
+            }
+          }
+        }, 15_000);
+        hlsIdleReaper.unref?.();
         ff.on('close', () => {
           if (directHlsReadStream) {
             try {
@@ -4566,9 +5458,15 @@ export async function handleFileListRequest(
     const total = stat.size;
     const range = req.headers.range;
     if (range) {
-      const start = parseInt(range.replace(/bytes=/, '').split('-')[0], 10) || 0;
-      const endPart = range.replace(/bytes=/, '').split('-')[1] || '';
-      const end = endPart ? Math.min(total - 1, parseInt(endPart, 10)) : total - 1;
+      const parts = range.replace(/bytes=/i, '').split('-');
+      const start = Math.max(0, parseInt(parts[0], 10) || 0);
+      const parsedEnd = parts[1] ? parseInt(parts[1], 10) : total - 1;
+      const end = Number.isFinite(parsedEnd) ? Math.min(total - 1, parsedEnd) : total - 1;
+      if (total <= 0 || start >= total || end < start) {
+        res.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Access-Control-Allow-Origin': '*' });
+        res.end();
+        return true;
+      }
       res.writeHead(206, {
         'Content-Range': `bytes ${start}-${end}/${total}`,
         'Accept-Ranges': 'bytes',

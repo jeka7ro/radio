@@ -64,6 +64,7 @@
   html.ios-pwa-standalone {
     --safe-top: max(env(safe-area-inset-top, 0px), var(--ios-pwa-top-floor, 0px));
     --safe-bottom: var(--ios-pwa-bottom-floor, 8px);
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ios-pwa-bottom-floor, 8px));
     --safe-left: env(safe-area-inset-left, 0px);
     --safe-right: env(safe-area-inset-right, 0px);
     --ios-portrait-header-pad: 14px;
@@ -80,10 +81,21 @@
   html.ios-pwa-standalone {
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: var(--ios-pwa-bottom-floor, 6px);
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ios-pwa-bottom-floor, 6px));
     --safe-left: max(env(safe-area-inset-left, 0px), var(--ios-pwa-side-floor, 44px));
     --safe-right: max(env(safe-area-inset-right, 0px), var(--ios-pwa-side-floor, 44px));
     --ios-portrait-header-pad: 0px;
   }
+}
+
+/* iPad PWA Standalone (iPadOS status bar + multitasking 3-dot / Liquid Glass top blur clearance in both portrait & landscape) */
+html.ipad-pwa-standalone {
+  --safe-top: max(env(safe-area-inset-top, 0px), 36px);
+  --ios-portrait-header-pad: 6px;
+}
+
+html.ipad-pwa-standalone [data-lampa-root="true"]>div>main {
+  scroll-padding-top: calc(4.5rem + max(env(safe-area-inset-top, 0px), 36px));
 }
 
 html,
@@ -160,7 +172,8 @@ body {
 
 /* Prevent iOS Safari / Mobile browsers from auto-zooming when focusing inputs or selects,
    and strictly lock mobile horizontal panning except explicit horizontal carousels */
-@media (max-width: 767px), ((max-height: 540px) and (pointer: coarse)) {
+@media (max-width: 767px),
+((max-height: 540px) and (pointer: coarse)) {
 
   html,
   body,
@@ -172,6 +185,7 @@ body {
   }
 
   @supports (overflow-x: clip) {
+
     html,
     body,
     #root,
@@ -180,7 +194,7 @@ body {
     }
   }
 
-  [data-lampa-root="true"] > div > main,
+  [data-lampa-root="true"]>div>main,
   [role="dialog"] {
     max-width: 100vw;
     overflow-x: hidden !important;
@@ -188,7 +202,7 @@ body {
     touch-action: pan-y pinch-zoom;
   }
 
-  [data-lampa-root="true"] > div > main {
+  [data-lampa-root="true"]>div>main {
     scroll-padding-bottom: 5rem;
   }
 
@@ -277,7 +291,7 @@ body {
   }
 }
 
-[data-lampa-root="true"][data-mobile-phone="true"] > div > main {
+[data-lampa-root="true"][data-mobile-phone="true"]>div>main {
   scroll-padding-bottom: 6.5rem;
 }
 
@@ -411,8 +425,8 @@ body {
   }
 }
 
-/* Visually hidden utility (accessible to screen readers, visible on focus for skip links) */
-.visually-hidden:where(:not(:focus-within, :active)) {
+/* Visually hidden utility (accessible to screen readers, legacy Chromium < 88 safe) */
+.visually-hidden:not(:focus):not(:active) {
   position: absolute !important;
   clip-path: inset(50%) !important;
   overflow: hidden !important;
@@ -495,12 +509,150 @@ select:focus-visible {
     0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
-/* Bulletproof Smart TV Remote Focus Highlight on OSD & Popover Buttons (scoped to Smart TV or keyboard :focus-visible so mobile touch taps never turn pills solid white) */
-html.smart-tv-mode .tahoe-emerald-card:focus,
-html.smart-tv-mode [data-vod-bottom-row="true"] button:focus,
-html.smart-tv-mode [data-vod-menu-popover="true"] button:focus,
-html.smart-tv-mode [data-vod-top-back-btn="true"]:focus,
+/* ============================================================================
+   APPLE TV+ / tvOS 26 / iPadOS 26 LIQUID GLASS VOD OSD SKIN
+   True translucent specular glass on iPad/iPhone/Mac/PC; ultra-fast smoked
+   glass fallback on legacy Smart TV GPUs (html.hardware-tv-gpu / no-flex-gap).
+   ============================================================================ */
+.apple-vod-liquid-dock {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.17) 0%,
+      rgba(255, 255, 255, 0.05) 28%,
+      rgba(14, 17, 24, 0.36) 100%),
+    rgba(22, 24, 32, 0.44);
+  backdrop-filter: blur(44px) saturate(210%) brightness(1.06) !important;
+  -webkit-backdrop-filter: blur(44px) saturate(210%) brightness(1.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.44),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.26),
+    0 24px 64px rgba(0, 0, 0, 0.52),
+    0 4px 18px rgba(0, 0, 0, 0.26);
+}
+
+.apple-vod-liquid-popover {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.15) 0%,
+      rgba(255, 255, 255, 0.04) 24%,
+      rgba(14, 17, 24, 0.52) 100%),
+    rgba(20, 23, 32, 0.62);
+  backdrop-filter: blur(44px) saturate(210%) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(44px) saturate(210%) brightness(1.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.38),
+    0 22px 60px rgba(0, 0, 0, 0.62);
+}
+
+.apple-vod-liquid-pill {
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.20) 0%,
+      rgba(255, 255, 255, 0.09) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.34),
+    0 4px 14px rgba(0, 0, 0, 0.20);
+}
+
+.apple-vod-liquid-pill:hover {
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.30) 0%,
+      rgba(255, 255, 255, 0.16) 100%);
+  border-color: rgba(255, 255, 255, 0.38);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.48),
+    0 6px 18px rgba(0, 0, 0, 0.26);
+}
+
+.apple-vod-liquid-pill-primary {
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.14) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.48),
+    0 6px 18px rgba(0, 0, 0, 0.24);
+}
+
+.apple-vod-liquid-pill-primary:hover {
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.38) 0%,
+      rgba(255, 255, 255, 0.22) 100%);
+  border-color: rgba(255, 255, 255, 0.48);
+}
+
+.apple-vod-liquid-badge {
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.07) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
+}
+
+.apple-vod-liquid-bubble {
+  background: linear-gradient(180deg,
+      rgba(44, 48, 60, 0.72) 0%,
+      rgba(22, 25, 34, 0.78) 100%);
+  backdrop-filter: blur(28px) saturate(200%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(200%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.42),
+    0 10px 28px rgba(0, 0, 0, 0.46);
+}
+
+html.hardware-tv-gpu .apple-vod-liquid-dock,
+html.no-flex-gap .apple-vod-liquid-dock {
+  background: linear-gradient(180deg,
+      rgba(36, 40, 52, 0.80) 0%,
+      rgba(16, 19, 28, 0.88) 100%);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.hardware-tv-gpu .apple-vod-liquid-popover,
+html.no-flex-gap .apple-vod-liquid-popover,
+html.hardware-tv-gpu .apple-vod-liquid-bubble,
+html.no-flex-gap .apple-vod-liquid-bubble {
+  background: linear-gradient(180deg,
+      rgba(30, 34, 46, 0.90) 0%,
+      rgba(16, 19, 28, 0.94) 100%);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Bulletproof Smart TV Remote Focus Highlight on OSD & Popover Buttons.
+   CRITICAL: Keep :focus and :focus-visible in SEPARATE rule blocks because LG webOS Chromium 68
+   does not support :focus-visible and drops the ENTIRE comma-separated selector list when mixed! */
+html.hardware-tv-gpu .tahoe-emerald-card:focus,
+html.hardware-tv-gpu .apple-vod-liquid-pill:focus,
+html.hardware-tv-gpu .apple-vod-liquid-pill-primary:focus,
+html.hardware-tv-gpu [data-vod-bottom-row="true"] button:focus,
+html.hardware-tv-gpu [data-vod-menu-popover="true"] button:focus,
+html.hardware-tv-gpu [data-vod-top-back-btn="true"]:focus,
+html.no-flex-gap [data-vod-bottom-row="true"] button:focus,
+html.no-flex-gap [data-vod-menu-popover="true"] button:focus,
+html.no-flex-gap [data-vod-top-back-btn="true"]:focus {
+  background: #ffffff !important;
+  background-color: #ffffff !important;
+  color: #09090b !important;
+  border: 2px solid #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.95),
+    0 8px 24px rgba(0, 0, 0, 0.7) !important;
+  transition: none !important;
+}
+
 .tahoe-emerald-card:focus-visible,
+.apple-vod-liquid-pill:focus-visible,
+.apple-vod-liquid-pill-primary:focus-visible,
 [data-vod-bottom-row="true"] button:focus-visible,
 [data-vod-menu-popover="true"] button:focus-visible,
 [data-vod-top-back-btn="true"]:focus-visible {
@@ -516,11 +668,21 @@ html.smart-tv-mode [data-vod-top-back-btn="true"]:focus,
   transition: none !important;
 }
 
-html.smart-tv-mode .tahoe-emerald-card:focus *,
-html.smart-tv-mode [data-vod-bottom-row="true"] button:focus *,
-html.smart-tv-mode [data-vod-menu-popover="true"] button:focus *,
-html.smart-tv-mode [data-vod-top-back-btn="true"]:focus *,
+html.hardware-tv-gpu .tahoe-emerald-card:focus *,
+html.hardware-tv-gpu .apple-vod-liquid-pill:focus *,
+html.hardware-tv-gpu .apple-vod-liquid-pill-primary:focus *,
+html.hardware-tv-gpu [data-vod-bottom-row="true"] button:focus *,
+html.hardware-tv-gpu [data-vod-menu-popover="true"] button:focus *,
+html.hardware-tv-gpu [data-vod-top-back-btn="true"]:focus *,
+html.no-flex-gap [data-vod-bottom-row="true"] button:focus *,
+html.no-flex-gap [data-vod-menu-popover="true"] button:focus *,
+html.no-flex-gap [data-vod-top-back-btn="true"]:focus * {
+  color: #09090b !important;
+}
+
 .tahoe-emerald-card:focus-visible *,
+.apple-vod-liquid-pill:focus-visible *,
+.apple-vod-liquid-pill-primary:focus-visible *,
 [data-vod-bottom-row="true"] button:focus-visible *,
 [data-vod-menu-popover="true"] button:focus-visible *,
 [data-vod-top-back-btn="true"]:focus-visible * {
@@ -528,7 +690,11 @@ html.smart-tv-mode [data-vod-top-back-btn="true"]:focus *,
 }
 
 html.smart-tv-mode [data-music-root="true"] button:focus {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85) !important;
+  box-shadow: inset 0 0 0 3px #ffffff !important;
+}
+
+[data-music-root="true"] button:focus-visible {
+  box-shadow: inset 0 0 0 3px #ffffff !important;
 }
 
 /* Ensure horizontal & vertical spacing between OSD transport pills ONLY on legacy Smart TV Chromium engines (< 84) that lack Flexbox gap */
@@ -789,7 +955,7 @@ div.aspect-square.w-full>svg {
   object-fit: cover !important;
 }
 
-div.aspect-square.w-full > button[data-cover-fill="true"] {
+div.aspect-square.w-full>button[data-cover-fill="true"] {
   position: absolute !important;
   top: 0 !important;
   right: 0 !important;
@@ -976,9 +1142,9 @@ html.smart-tv-mode button[data-tv-channel-card="true"] {
   overflow: visible !important;
 }
 
-html.smart-tv-mode button[data-vod-card="true"] > div,
-html.smart-tv-mode button[data-klub-card="true"] > div,
-html.smart-tv-mode button[data-watched-poster-btn="true"] > div {
+html.smart-tv-mode button[data-vod-card="true"]>div,
+html.smart-tv-mode button[data-klub-card="true"]>div,
+html.smart-tv-mode button[data-watched-poster-btn="true"]>div {
   transition: none !important;
 }
 
@@ -1198,9 +1364,13 @@ tbody td {
 html.car-widescreen-mode,
 html.car-widescreen-mode body,
 html.car-widescreen-mode #root {
+  width: 100vw !important;
   width: 100dvw !important;
+  max-width: 100vw !important;
   max-width: 100dvw !important;
+  height: 100vh !important;
   height: 100dvh !important;
+  max-height: 100vh !important;
   max-height: 100dvh !important;
   margin: 0 !important;
   padding: 0 !important;
@@ -1230,51 +1400,23 @@ html.car-widescreen-mode [data-top-hero-card="true"] h2 {
 }
 
 /* ============================================================================
-   HARDWARE-OVERLAY-SAFE 21:9 CINEMA ZOOM (1.16x) FOR LG webOS OLED / TIZEN / GLE
-   Keeps <video> at exact 100%x100% viewport bounds with `transform: none` so
-   LG webOS SVP hardware video-guard stays active and never triggers standby/screensaver.
+   CINEMA ZOOM (21:9 = 1.18x) & FULL-SCREEN LETTERBOX ZOOM (1.33x) FOR ALL DEVICES
+   Works identically on LG webOS (Chromium 68), Samsung Tizen, Sony Android TV,
+   iPadOS Safari/Chrome, iPhone, Mac & PC (never silently collapses to no-op).
    ============================================================================ */
 .vod-fit-cinema-xy,
 .vod-fit-cinema-x,
 .vod-fit-cinema-y {
   object-fit: contain;
-  transform: scale(1.16);
+  transform: scale(1.18);
+  transform-origin: center center;
 }
 
-@supports (object-view-box: inset(6.9%)) {
-  .vod-fit-cinema-xy {
-    object-fit: contain;
-    object-view-box: inset(6.9% 6.9% 6.9% 6.9%);
-    transform: none !important;
-  }
-
-  .vod-fit-cinema-x {
-    object-fit: contain;
-    object-view-box: inset(0% 6.9% 0% 6.9%);
-    transform: none !important;
-  }
-
-  .vod-fit-cinema-y {
-    object-fit: contain;
-    object-view-box: inset(6.9% 0% 6.9% 0%);
-    transform: none !important;
-  }
-}
-
-html.smart-tv-mode .vod-fit-cinema-xy,
-html.smart-tv-mode .vod-fit-cinema-x,
-html.smart-tv-mode .vod-fit-cinema-y {
-  transform: none !important;
-}
-
-@supports not (object-view-box: inset(6.9%)) {
-
-  html.smart-tv-mode .vod-fit-cinema-xy,
-  html.smart-tv-mode .vod-fit-cinema-x,
-  html.smart-tv-mode .vod-fit-cinema-y {
-    object-fit: cover;
-    object-position: 50% 50%;
-  }
+.vod-fit-cover-letterbox {
+  object-fit: cover;
+  object-position: 50% 50%;
+  transform: scale(1.33);
+  transform-origin: center center;
 }
 
 /* ============================================================================

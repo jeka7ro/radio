@@ -18,6 +18,8 @@ import {
   TvUiLang,
   VodWatchProgressEntry,
   formatWatchSeconds,
+  isAdult18WatchItem,
+  isEpisodeProgressWatched,
 } from '../../views/smartTvLampaHelpers';
 
 export interface CalendarEpisodeItem {
@@ -317,12 +319,12 @@ export const SmartTvSeriesCalendarSection: React.FC<
   >({});
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
-  // Favorite series from savedVodItems
+  // Favorite series from savedVodItems (strictly exclude Cinema 18+ / Klubnichka)
   const favoriteSeriesList = useMemo(() => {
     const seen = new Set<string>();
     const list: CinemetaItem[] = [];
     for (const item of savedVodItems) {
-      if (item && item.type === 'series' && !seen.has(item.id)) {
+      if (item && item.type === 'series' && !isAdult18WatchItem(item) && !seen.has(item.id)) {
         seen.add(item.id);
         list.push(item);
       }
@@ -330,12 +332,26 @@ export const SmartTvSeriesCalendarSection: React.FC<
     return list;
   }, [savedVodItems]);
 
-  // Series from watch history
+  // Series from watch history (strictly exclude Cinema 18+ / Klubnichka & cleared entries)
   const historySeriesList = useMemo(() => {
     const seen = new Set<string>();
     const list: CinemetaItem[] = [];
     const entries = Object.values(watchProgressMap)
-      .filter((e) => e && e.item && e.item.type === 'series')
+      .filter(
+        (e) =>
+          e &&
+          e.item &&
+          e.item.type === 'series' &&
+          !isAdult18WatchItem(e.item) &&
+          (e.isWatched === true ||
+            (e.currentTime || 0) > 0 ||
+            Boolean(
+              e.episodeProgressMap &&
+                Object.values(e.episodeProgressMap).some(
+                  (ep) => isEpisodeProgressWatched(ep) || (ep?.currentTime || 0) > 0
+                )
+            ))
+      )
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     for (const entry of entries) {
       if (!seen.has(entry.item.id)) {
@@ -785,9 +801,12 @@ export const SmartTvSeriesCalendarSection: React.FC<
           {/* Top Right: Favorite + Watched / New status */}
           <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
             {epItem.isWatched ? (
-              <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/45 text-emerald-200 text-[10px] font-bold backdrop-blur-md inline-flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                {tr('Văzut', 'Watched', 'Просмотрено')}
+              <span
+                title={tr('Văzut', 'Watched', 'Просмотрено')}
+                aria-label={tr('Văzut', 'Watched', 'Просмотрено')}
+                className="w-6 h-6 rounded-full bg-emerald-600/95 border border-emerald-300/70 text-white inline-flex items-center justify-center shadow"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" aria-hidden="true" />
               </span>
             ) : !epItem.isUpcoming ? (
               <span className="px-2 py-0.5 rounded-full bg-sky-500/90 text-zinc-950 text-[10px] font-extrabold tracking-tight shadow">

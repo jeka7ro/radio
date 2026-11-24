@@ -261,6 +261,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
                       type="button"
                       data-vod-card="true"
                       data-vod-id={heroItem.id}
+                      disabled={!isCurrent}
                       tabIndex={isCurrent ? 0 : -1}
                       onFocus={() => handleFocusVodItem(heroItem)}
                       onMouseEnter={() => handleFocusVodItem(heroItem)}
@@ -278,6 +279,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
                       type="button"
                       data-vod-card="true"
                       data-vod-id={heroItem.id}
+                      disabled={!isCurrent}
                       tabIndex={isCurrent ? 0 : -1}
                       onFocus={() => handleFocusVodItem(heroItem)}
                       onMouseEnter={() => handleFocusVodItem(heroItem)}

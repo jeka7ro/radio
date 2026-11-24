@@ -23,12 +23,7 @@ export function isAdminJekaProfile(
   profile?: Partial<SharedTvProfile> | null
 ): boolean {
   if (!profile) return false;
-  return (
-    profile.id === 'p1' ||
-    String(profile.name || '')
-      .trim()
-      .toUpperCase() === 'JEKA'
-  );
+  return profile.id === 'p1';
 }
 
 export function canProfileAccessAdult(
@@ -874,7 +869,27 @@ function probeLocalBridge(force = false): Promise<boolean> {
     }
 
     try {
-      const winner = await Promise.any(originsToProbe.map((o) => probeOne(o)));
+      const winner = await new Promise<string>((resolve, reject) => {
+        let remaining = originsToProbe.length;
+        let settled = false;
+        originsToProbe.forEach((o) => {
+          probeOne(o).then(
+            (okOrigin) => {
+              if (!settled) {
+                settled = true;
+                resolve(okOrigin);
+              }
+            },
+            () => {
+              remaining -= 1;
+              if (remaining <= 0 && !settled) {
+                settled = true;
+                reject(new Error('All bridge probes failed'));
+              }
+            }
+          );
+        });
+      });
       const prev = localBridgeAvailable;
       const prevOrigin = activeBridgeOrigin;
       localBridgeAvailable = true;
@@ -1003,15 +1018,21 @@ export function isFileListExclusiveRomanianTitle(
 
 export function getFileListServerBase(): string {
   if (typeof window === 'undefined' || isDirectLocalHost()) return '';
-  if (activeBridgeOrigin) return activeBridgeOrigin;
+  const isHttpsPage = window.location.protocol === 'https:';
+  if (activeBridgeOrigin && (!isHttpsPage || activeBridgeOrigin.startsWith('https://'))) {
+    return activeBridgeOrigin;
+  }
   try {
     const stored =
       sessionStorage.getItem('filmio_local_bridge_origin') ||
       localStorage.getItem('filmio_local_bridge_origin');
-    if (stored) return stored;
+    if (stored && (!isHttpsPage || stored.startsWith('https://'))) {
+      return stored;
+    }
   } catch {
     // ignore
   }
+  if (isHttpsPage) return '';
   return LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
 }
 
@@ -1823,7 +1844,7 @@ export function getActiveProfileMediaPrefs(
       ? prof.autoSkipIntro
       : typeof settingsParsed.autoSkipIntro === 'boolean'
         ? (settingsParsed.autoSkipIntro as boolean)
-        : true;
+        : false;
 
   return {
     defaultAudioPref: audioPref,

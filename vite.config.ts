@@ -6,7 +6,94 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import https from 'node:https';
+import dns from 'node:dns/promises';
 import { spawn } from 'node:child_process';
+
+function isPrivateOrReservedDevIp(ipRaw: string): boolean {
+  const ip = String(ipRaw || '').replace(/^\[|\]$/g, '').toLowerCase().trim();
+  if (!ip) return true;
+  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]), c = Number(m[3]), d = Number(m[4]);
+    if (a > 255 || b > 255 || c > 255 || d > 255) return true;
+    if (a === 127 || a === 10 || a === 0 || a >= 224) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (
+    ip === '::' || ip === '::1' ||
+    /^f[cd][0-9a-f]{2}:/i.test(ip) ||
+    /^fe[89ab][0-9a-f]:/i.test(ip) ||
+    /^ff[0-9a-f]{2}:/i.test(ip)
+  ) return true;
+  if (ip.startsWith('::ffff:')) {
+    const mapped = ip.slice(7);
+    if (isPrivateOrReservedDevIp(mapped)) return true;
+    const hm = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (hm) {
+      const hi = parseInt(hm[1], 16), lo = parseInt(hm[2], 16);
+      if (isPrivateOrReservedDevIp(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`)) return true;
+    }
+  }
+  return false;
+}
+
+function isDisallowedDevTargetUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return true;
+    const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').trim();
+    if (
+      !h || h === 'localhost' || h === '0.0.0.0' ||
+      h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') ||
+      h === 'metadata' || h === 'metadata.google.internal' ||
+      isPrivateOrReservedDevIp(h)
+    ) return true;
+    if (u.pathname.toLowerCase().includes('/api/tv-proxy')) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+async function fetchSafeDevExternalUrl(targetUrl: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+  let cur = targetUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    if (isDisallowedDevTargetUrl(cur)) {
+      throw new Error('Forbidden proxy target');
+    }
+    const parsed = new URL(cur);
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !host.includes(':')) {
+      const recs = await dns.lookup(host, { all: true });
+      if (!recs.length || recs.some((r) => isPrivateOrReservedDevIp(r.address))) {
+        throw new Error('Forbidden proxy target (private DNS)');
+      }
+    }
+    const r = await fetch(cur, { ...init, redirect: 'manual' });
+    if (r.status >= 300 && r.status < 400 && r.headers.get('location') && hop < maxRedirects) {
+      try { r.body?.cancel(); } catch { /* ignore */ }
+      cur = new URL(r.headers.get('location')!, cur).toString();
+      continue;
+    }
+    return r;
+  }
+  throw new Error('Too many proxy redirects');
+}
+
+function sanitizeDevProxyContentType(rawCt: string | null | undefined, fallback: string): string {
+  const base = String(rawCt || '').split(';')[0].trim().toLowerCase();
+  if (!base) return fallback;
+  if (
+    base === 'text/html' || base === 'application/xhtml+xml' ||
+    base === 'image/svg+xml' || base === 'text/javascript' ||
+    base === 'application/javascript' || base === 'application/x-javascript'
+  ) return 'application/octet-stream';
+  return String(rawCt);
+}
 import ffmpegPath from 'ffmpeg-static';
 import { handleFileListRequest } from './src/server/filelistServer';
 import { handleYouTubeRequest } from './src/server/youtubeServer';
@@ -1264,7 +1351,7 @@ function tvStreamProxyPlugin(): Plugin {
         if (req.method === 'OPTIONS') {
           res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, HEAD, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': '*',
             'Access-Control-Allow-Private-Network': 'true',
           });
@@ -1642,16 +1729,31 @@ function tvStreamProxyPlugin(): Plugin {
               }
             }
           }
+          const preserveAdult18 =
+            Boolean(prev.item?.isAdult18) ||
+            Boolean(cleanV.item?.isAdult18) ||
+            (Array.isArray(prev.item?.genres) &&
+              prev.item.genres.some((g: unknown) => /^erotic$/i.test(String(g || '').trim()))) ||
+            (Array.isArray(cleanV.item?.genres) &&
+              cleanV.item.genres.some((g: unknown) => /^erotic$/i.test(String(g || '').trim())));
           if ((cleanV.updatedAt || 0) >= (prev.updatedAt || 0)) {
+            const mergedItem = cleanV.item
+              ? { ...(prev.item || {}), ...cleanV.item, ...(preserveAdult18 ? { isAdult18: true } : {}) }
+              : prev.item;
             merged[k] = {
               ...prev,
               ...cleanV,
+              ...(mergedItem ? { item: mergedItem } : {}),
               episodeProgressMap: mergedEpMap,
             };
           } else {
+            const mergedItem = prev.item
+              ? { ...(cleanV.item || {}), ...prev.item, ...(preserveAdult18 ? { isAdult18: true } : {}) }
+              : cleanV.item;
             merged[k] = {
               ...cleanV,
               ...prev,
+              ...(mergedItem ? { item: mergedItem } : {}),
               episodeProgressMap: mergedEpMap,
             };
           }
@@ -1720,14 +1822,21 @@ function tvStreamProxyPlugin(): Plugin {
               const oTime = other.updatedAt || 0;
               const primary = oTime >= fTime ? other : finalEntry;
               const secondary = oTime >= fTime ? finalEntry : other;
-              const mergedEpMap = {
+              const mergedEpMap: Record<string, any> = {
                 ...(secondary.episodeProgressMap || {}),
-                ...(primary.episodeProgressMap || {}),
               };
-              const mergedItem = {
+              for (const [ek, ev] of Object.entries(primary.episodeProgressMap || {})) {
+                const prevEv = mergedEpMap[ek];
+                if (!prevEv || (Number((ev as any)?.updatedAt) || 0) >= (Number(prevEv?.updatedAt) || 0)) {
+                  mergedEpMap[ek] = ev;
+                }
+              }
+              const mergedItem: any = {
                 ...(secondary.item || {}),
                 ...(primary.item || {}),
               };
+              if (primary.item?.isAdult18 || secondary.item?.isAdult18) mergedItem.isAdult18 = true;
+              if (primary.item?.isAdultKlubnichka || secondary.item?.isAdultKlubnichka) mergedItem.isAdultKlubnichka = true;
               const canonImdb =
                 primary.item?.imdbId ||
                 secondary.item?.imdbId ||
@@ -3018,7 +3127,13 @@ function tvStreamProxyPlugin(): Plugin {
               ];
 
             const proc = spawn(ffBin, ffArgs);
+            proc.stderr?.resume();
+            const ffTimer = setTimeout(() => {
+              try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+            }, 90_000);
+            proc.on('close', () => clearTimeout(ffTimer));
             proc.on('error', () => {
+              clearTimeout(ffTimer);
               cleanupTmp();
               if (!res.headersSent) {
                 res.statusCode = 500;
@@ -3073,7 +3188,7 @@ function tvStreamProxyPlugin(): Plugin {
             return Boolean(parsed && (parsed.title || parsed.artist));
           };
 
-          if (!rawTitle && streamUrl && /^https?:\/\//i.test(streamUrl)) {
+          if (!rawTitle && streamUrl && /^https?:\/\//i.test(streamUrl) && !isDisallowedDevTargetUrl(streamUrl)) {
             const icyTitle = await readIcyStreamTitle(streamUrl);
             if (icyTitle && isValidSongCandidate(icyTitle)) {
               rawTitle = icyTitle;
@@ -3709,22 +3824,7 @@ function tvStreamProxyPlugin(): Plugin {
           }
 
           const parsedTarget = new URL(targetUrl);
-          const targetHost = parsedTarget.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-          const isBlockedPrivateHost =
-            targetHost === 'localhost' ||
-            targetHost === '0.0.0.0' ||
-            targetHost === '::1' ||
-            targetHost === 'metadata.google.internal' ||
-            targetHost.endsWith('.local') ||
-            targetHost.endsWith('.internal') ||
-            targetHost.endsWith('.localhost') ||
-            /^127\./.test(targetHost) ||
-            /^10\./.test(targetHost) ||
-            /^192\.168\./.test(targetHost) ||
-            /^169\.254\./.test(targetHost) ||
-            /^172\.(1[6-9]|2\d|3[0-1])\./.test(targetHost) ||
-            /^(fc|fd|fe80)/i.test(targetHost);
-          if (isBlockedPrivateHost) {
+          if (isDisallowedDevTargetUrl(targetUrl)) {
             res.writeHead(403, { 'Content-Type': 'text/plain' });
             res.end('Forbidden target host');
             return;
@@ -3757,7 +3857,7 @@ function tvStreamProxyPlugin(): Plugin {
               const warmTimer = setTimeout(() => warmCtrl.abort(), 1400);
               try {
                 const warmCookie = getRadioCookieHeader(targetUrl);
-                const warmRes = await fetch(targetUrl, {
+                const warmRes = await fetchSafeDevExternalUrl(targetUrl, {
                   method: 'GET',
                   headers: {
                     'User-Agent': effectiveUa,
@@ -3766,7 +3866,6 @@ function tvStreamProxyPlugin(): Plugin {
                     Accept: '*/*',
                     ...(warmCookie ? { Cookie: warmCookie } : {}),
                   },
-                  redirect: 'follow',
                   signal: warmCtrl.signal,
                 });
                 saveRadioResponseCookies(targetUrl, warmRes.headers);
@@ -4082,14 +4181,21 @@ function tvStreamProxyPlugin(): Plugin {
                             ]);
                             const outChunks: Buffer[] = [];
                             let settled = false;
+                            ff.stderr?.resume();
+                            const remuxTimer = setTimeout(() => {
+                              try { ff.kill('SIGKILL'); } catch { /* ignore */ }
+                              if (!settled) { settled = true; resolveRemux(rawTsBuf); }
+                            }, 25_000);
                             ff.stdout.on('data', (c: Buffer) => outChunks.push(c));
                             ff.on('error', () => {
+                              clearTimeout(remuxTimer);
                               if (!settled) {
                                 settled = true;
                                 resolveRemux(rawTsBuf);
                               }
                             });
                             ff.on('close', (code) => {
+                              clearTimeout(remuxTimer);
                               if (!settled) {
                                 settled = true;
                                 const merged = Buffer.concat(outChunks);
@@ -4810,9 +4916,12 @@ function tvStreamProxyPlugin(): Plugin {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Expose-Headers':
               'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-            'Content-Type':
-              upstreamRes.headers.get('content-type') ||
-              (isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'),
+            'Content-Type': sanitizeDevProxyContentType(
+              upstreamRes.headers.get('content-type'),
+              isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'
+            ),
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': 'sandbox',
             'Cache-Control': isLiveAudioStream
               ? 'no-cache, no-store'
               : 'public, max-age=10',
@@ -4924,16 +5033,26 @@ function tvStreamProxyPlugin(): Plugin {
           const reqUrl = new URL(req.url || '', 'http://localhost');
           const posterUrl = reqUrl.searchParams.get('poster');
           if (posterUrl && /^https?:\/\//i.test(posterUrl)) {
-            const imgRes = await fetch(posterUrl);
+            const imgRes = await fetchSafeDevExternalUrl(posterUrl, {
+              signal: AbortSignal.timeout(8000),
+            });
             if (!imgRes.ok) {
               res.writeHead(imgRes.status);
               res.end('Not found');
               return;
             }
+            const baseCt = String(imgRes.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+            if (!baseCt.startsWith('image/') || baseCt === 'image/svg+xml') {
+              res.writeHead(415, { 'Access-Control-Allow-Origin': '*' });
+              res.end('Unsupported poster content type');
+              return;
+            }
             const buf = Buffer.from(await imgRes.arrayBuffer());
             res.writeHead(200, {
               'Access-Control-Allow-Origin': '*',
-              'Content-Type': imgRes.headers.get('content-type') || 'image/jpeg',
+              'Content-Type': baseCt,
+              'X-Content-Type-Options': 'nosniff',
+              'Content-Security-Policy': 'sandbox',
               'Cache-Control': 'public, max-age=604800',
             });
             res.end(buf);

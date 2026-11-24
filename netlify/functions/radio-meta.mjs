@@ -6,6 +6,8 @@
  * and enriches with verified Album Cover Art & Artist Portrait from Deezer + iTunes.
  */
 
+import { fetchSafeExternalUrl } from './_ssrfGuard.mjs';
+
 const trackRichMetaCache = new Map();
 const latestStreamTitleByUrl = new Map();
 
@@ -25,13 +27,12 @@ async function probeSingleIcyStreamTitle(streamUrl) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 3200);
   try {
-    const res = await fetch(streamUrl, {
+    const { res } = await fetchSafeExternalUrl(streamUrl, {
       headers: {
         'Icy-MetaData': '1',
         'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
         Connection: 'close',
       },
-      redirect: 'follow',
       signal: controller.signal,
     });
 
@@ -163,7 +164,7 @@ async function readIcecastStatusTitle(streamUrl) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
     const statusUrl = `${parsed.origin}/status-json.xsl`;
-    const res = await fetch(statusUrl, {
+    const { res } = await fetchSafeExternalUrl(statusUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
       signal: controller.signal,
     });

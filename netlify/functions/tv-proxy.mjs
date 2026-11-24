@@ -1,6 +1,11 @@
 import { gzipSync } from 'node:zlib';
 import http from 'node:http';
 import https from 'node:https';
+import {
+  isDisallowedTargetUrl as isDisallowedProxyTarget,
+  fetchSafeExternalUrl as fetchSafeUpstream,
+  sanitizeProxyContentType,
+} from './_ssrfGuard.mjs';
 
 const vkHttpsAgent = new https.Agent({
   keepAlive: true,
@@ -374,115 +379,6 @@ async function refreshVkSignedTargetUrl(
 }
 
 const vkMetaCache = new Map();
-
-function isPrivateOrReservedIpv4(ipv4Str) {
-  const m = ipv4Str.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const a = Number(m[1]);
-  const b = Number(m[2]);
-  if (a === 127 || a === 10 || a === 0) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
-}
-
-function isDisallowedProxyTarget(parsedUrl, reqHost = '') {
-  if (!parsedUrl || (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:')) {
-    return true;
-  }
-  const host = String(parsedUrl.hostname || '')
-    .replace(/^\[|\]$/g, '')
-    .toLowerCase()
-    .trim();
-  if (!host || /\s/.test(host)) return true;
-
-  const cleanReqHost = String(reqHost || '')
-    .split(':')[0]
-    .replace(/^\[|\]$/g, '')
-    .toLowerCase()
-    .trim();
-
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host === '0.0.0.0' ||
-    host === '::1' ||
-    host === '::' ||
-    host === 'metadata' ||
-    host === 'metadata.google.internal' ||
-    host.endsWith('.internal') ||
-    host === 'fd00:ec2::254' ||
-    host.startsWith('fe80:') ||
-    host.startsWith('fc00:') ||
-    host.startsWith('fd00:')
-  ) {
-    return true;
-  }
-
-  if (isPrivateOrReservedIpv4(host)) {
-    return true;
-  }
-
-  if (host.startsWith('::ffff:')) {
-    const mapped = host.slice(7);
-    if (isPrivateOrReservedIpv4(mapped)) return true;
-    const hexMatch = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-    if (hexMatch) {
-      const hi = parseInt(hexMatch[1], 16);
-      const lo = parseInt(hexMatch[2], 16);
-      const dotted = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
-      if (isPrivateOrReservedIpv4(dotted)) return true;
-    }
-  }
-
-  const lowerPath = String(parsedUrl.pathname || '').toLowerCase();
-  if (lowerPath.includes('/api/tv-proxy')) {
-    return true;
-  }
-  const isSelfOrigin =
-    host === 'filmio.my' ||
-    host === 'www.filmio.my' ||
-    host.endsWith('.netlify.app') ||
-    (cleanReqHost && host === cleanReqHost);
-  if (isSelfOrigin && lowerPath.startsWith('/api/')) {
-    return true;
-  }
-
-  return false;
-}
-
-async function fetchSafeUpstream(targetUrl, fetchInit, reqHost = '', maxRedirects = 5) {
-  let currentUrl = targetUrl;
-  for (let hop = 0; hop <= maxRedirects; hop++) {
-    const parsed = new URL(currentUrl);
-    if (isDisallowedProxyTarget(parsed, reqHost)) {
-      throw new Error('Forbidden proxy target');
-    }
-    const res = await fetch(currentUrl, {
-      ...fetchInit,
-      redirect: 'manual',
-    });
-    if (
-      res.status >= 300 &&
-      res.status < 400 &&
-      res.headers.get('location') &&
-      hop < maxRedirects
-    ) {
-      try {
-        res.body?.cancel();
-      } catch {
-        // ignore cancel error
-      }
-      const nextUrl = new URL(res.headers.get('location'), currentUrl).toString();
-      currentUrl = nextUrl;
-      continue;
-    }
-    return { res, finalUrl: res.url || currentUrl };
-  }
-  throw new Error('Too many proxy redirects');
-}
 
 export default async (req) => {
   if (req.method === 'OPTIONS') {
@@ -866,18 +762,21 @@ export default async (req) => {
               const singleCtrl = new AbortController();
               const singleTimer = setTimeout(() => singleCtrl.abort(), 8000);
               try {
-                const sr = await fetch(resolvedMediaUrl, {
-                  method: 'GET',
-                  headers: {
-                    'User-Agent': effectiveUa,
-                    Referer: refererHeader,
-                    Origin: originHeader,
-                    Accept: '*/*',
-                    Range: `bytes=${s}-${e}`,
+                const { res: sr } = await fetchSafeUpstream(
+                  resolvedMediaUrl,
+                  {
+                    method: 'GET',
+                    headers: {
+                      'User-Agent': effectiveUa,
+                      Referer: refererHeader,
+                      Origin: originHeader,
+                      Accept: '*/*',
+                      Range: `bytes=${s}-${e}`,
+                    },
+                    signal: singleCtrl.signal,
                   },
-                  redirect: 'follow',
-                  signal: singleCtrl.signal,
-                });
+                  reqHost
+                );
                 clearTimeout(singleTimer);
                 if (sr.ok || sr.status === 206) {
                   return new Response(sr.body, {
@@ -887,9 +786,12 @@ export default async (req) => {
                       'Access-Control-Allow-Private-Network': 'true',
                       'Access-Control-Expose-Headers':
                         'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-                      'Content-Type': isTsSeg
-                        ? headCt || 'video/mp2t'
-                        : headCt || 'video/mp4',
+                      'Content-Type': sanitizeProxyContentType(
+                        headCt,
+                        isTsSeg ? 'video/mp2t' : 'video/mp4'
+                      ),
+                      'X-Content-Type-Options': 'nosniff',
+                      'Content-Security-Policy': 'sandbox',
                       'Content-Range': `bytes ${s}-${e}/${totalBytes}`,
                       'Content-Length': String(e - s + 1),
                       'Accept-Ranges': 'bytes',
@@ -1387,8 +1289,12 @@ export default async (req) => {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Expose-Headers':
           'Content-Length, Content-Range, Accept-Ranges, Content-Type',
-        'Content-Type':
-          contentType || (isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'),
+        'Content-Type': sanitizeProxyContentType(
+          contentType,
+          isLiveAudioStream ? 'audio/mpeg' : 'video/mp2t'
+        ),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox',
         'Cache-Control': isLiveAudioStream
           ? 'no-cache, no-store, must-revalidate'
           : 'public, max-age=15',

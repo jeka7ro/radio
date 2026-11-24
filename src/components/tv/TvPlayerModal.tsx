@@ -2014,9 +2014,9 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
         effectiveTvFullMode
           ? 'fixed inset-0 z-[190] m-0 w-full h-full max-w-none max-h-none rounded-none bg-black text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden flex flex-col'
           : inlineEmbeddedMode && isSplitFullscreen
-            ? 'fixed inset-0 z-[190] m-0 w-full h-[100dvh] max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
+            ? 'fixed inset-0 z-[190] m-0 w-full h-[100vh] max-w-none max-h-none rounded-none bg-[#090d16] text-zinc-100 border-0 shadow-2xl p-0 overflow-hidden'
             : inlineEmbeddedMode
-              ? 'relative w-full h-[calc(100dvh-7.75rem)] md:h-[calc(100dvh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
+              ? 'relative w-full h-[calc(100vh-7.75rem)] md:h-[calc(100vh-5.25rem)] min-h-[420px] flex flex-col overflow-hidden rounded-2xl bg-[#090d16] text-zinc-100 border border-white/15 shadow-2xl'
               : 'fixed inset-0 z-[190] w-full max-w-[100vw] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-0 sm:p-3 overflow-y-auto overflow-x-hidden overscroll-x-none no-scrollbar'
       }
     >
@@ -2028,7 +2028,7 @@ export const TvPlayerModal: React.FC<TvPlayerModalProps> = ({
               ? 'relative flex flex-col w-full h-full overflow-hidden bg-[#090d16]'
               : inlineEmbeddedMode
                 ? 'relative flex flex-col w-full h-full flex-1 min-h-0 overflow-hidden bg-[#090d16]'
-                : 'mx-auto m-0 sm:my-auto w-screen h-[100dvh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94dvh] overflow-hidden'
+                : 'mx-auto m-0 sm:my-auto w-screen h-[100vh] sm:h-auto sm:w-[96vw] max-w-[1440px] rounded-none sm:rounded-3xl bg-[#090d16] text-zinc-100 border-0 sm:border sm:border-zinc-800 shadow-2xl flex flex-col max-h-none sm:max-h-[94vh] overflow-hidden'
         }
       >
         {/* Top bar — Normal Web Mode only (Smart TV Full Mode uses authentic Smart IPTV Bottom Info Banner & OK Channel List OSD) */}

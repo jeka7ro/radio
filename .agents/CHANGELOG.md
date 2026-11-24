@@ -6,6 +6,259 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-23 17:44 — Eliminat Complet Mesajele de Eroare Blocate din Player (`renderRoCloudRetryCard` & overlay `status === 'error'`) + Auto-Fallback Imediat pe Torrent Local
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Eliminat complet cardurile de eroare interzise de utilizator** din player ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)): șters `renderRoCloudRetryCard` (`„Streamul nativ direct pentru acest titlu este temporar indisponibil sau încă se încarcă...”`) și overlay-ul `status === 'error'` (`„Streamul curent a întâmpinat o întrerupere...”`), înlocuite exclusiv cu loaderul curat `<FilmioStartupLoader />`.
+  2. **Auto-fallback garantat către sursa locală Kinozal / FileList** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): dacă `resolvedDirectStream` nu are stream activ și `resolvedFileListStream` are `streamUrl` valid, playerul redă automat stream-ul local chiar și când progresul salvat vechi avea `activeServer === 'kinogram_hls'` (cazul **Шоу Воли S4:E1**).
+- **De ce:** Utilizatorul a interzis categoric afișarea mesajului `„Streamul nativ direct pentru acest titlu este temporar indisponibil sau încă se încarcă...”` în aplicație; mesajul bloca inclusiv redarea `Шоу Воли S4:E1` atunci când sursa directă lipsea, dar torrentul local era disponibil.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 17:38 — Fix Critic Sortare Episoade („De la ultimul” N→1) & Eliminare Înghețare Telecomandă la Derularea Manuală prin Episoade
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Sortare reală „De la ultimul (N - 1)” vs „De la primul (1 - N)”** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): corectat `displayedEpisodesForSeason` care fusese hardcodat să sorteze mereu crescător (`a.episode - b.episode`) ignorând complet `episodesSortDesc`! Acum respectă `episodesSortDesc` atât în pagina de Detalii cât și în sertarul de Episoade din player (iar „Episodul următor” rămâne cronologic 1→2→3). Adăugat `focus:outline-none focus:ring-4 focus:ring-white` pe ambele butoane de sortare.
+  2. **Eliminat înghețarea totală a TV-ului și blocarea telecomenzii la navigarea prin lista de episoade** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): eliminat `onFocus={() => setSelectedEpisode(ep.episode)}` de pe cardurile de episoade din pagina de Detalii (care declanșa la fiecare apăsare `Săgeată Jos` un re-render complet de 21k linii + câte un fetch nou `/api/vod-stream` + `/api/filelist/resolve` + subtitrări, confirmate 15 apeluri simultane `[VOD-STREAM] By the Way` în logul serverului pe LG webOS Chrome 68!). Acum navigarea cu săgețile folosește exclusiv focus CSS instant fără re-render sau rețea, iar episodul se selectează și pornește la OK / Play.
+- **De ce:** La deschiderea **Шоу Кстати** pe TV LG, selectarea „De la ultimul” afișa tot episoadele de la 1 la N, iar coborârea manuală cu telecomanda declanșa o furtună de cereri și re-randări care îngheța complet TV-ul și bloca telecomanda.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 17:33 — Fix Redare Emisiuni Rusești (Шоу Воли Sezon 4 / 2026): Trackere HTTP Rusești (`bt.t-ru.org`), MPEG-TS Fast Startup (`-probesize 1200000`) & JacRed Fallback
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Anunțare directă pe trackerele HTTP deschise rusești** ([src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)): adăugat `announceDirectHttpPeersForEngine` (`http://bt.t-ru.org/ann`..`bt4.t-ru.org/ann` + `http://tracker.opentrackr.org:1337/announce`, cu `User-Agent: qBittorrent/4.6.5`, timeout 3.5s și throttle `>= 30s` per engine) și corectat fallback-ul `trackers: cleanTrackers` la inițializarea magnet-urilor (`id < 0`). `bittorrent-tracker` primea `HTTP 403` pe `bt.t-ru.org`, iar fișierele `.torrent` de pe Rutor nu includeau aceste trackere — lăsând episoadele rusești (ex. `Шоу Воли [04x01]..[04x26]`) cu `0 peers / 0 bytes`.
+  2. **Pornire rapidă & seek direct pe fluxurile HDTV `.ts` (MPEG-TS)** ([src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)):
+     - Adăugat `-probesize 1200000 -analyzeduration 1200000 -f mpegts` (și `-fflags +discardcorrupt+genpts` la resume `startSec > 1`), eliminând blocajul în care `ffmpeg` aștepta implicit `5 MB` (`> 1` piesă de `4 MB`) înainte să emită primul cadru MP4.
+     - Adăugat seek direct pe offset aliniat la 188 bytes (`directPipeStartByte`) pentru reluarea fișierelor `.ts` ne-cachate, evitând 5–6 seek-uri aleatorii HTTP Range (20–24 MB) înainte de pornire; sărit `prewarmVideoTailCues` și probe-ul de la byte 0 la seek pe `.ts` (MPEG-TS nu are index `moov`/`Cues` la final).
+  3. **Îmbunătățire agregare & prioritizare torrente rusești** ([src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts)): adăugat agregare paralelă fail-silent din `jr.maxvol.pro` (cu deduplicare după `infoHash` și păstrarea numărului maxim de seeders) și corectat selecția `hdPool` astfel încât torrentele cu `seeders >= 1` să fie prioritizate mereu înaintea celor cu `0` seeders.
+- **De ce:** Emisiunea **Шоу Воли (ТНТ)** Sezon 4 (2026) nu mai pornea: pe Rutube PREMIER episoadele S3E26–50 și S4E1–42 sunt blocate cu abonament (`common_subscription`), toate mirror-urile Collaps/Kinogram returnează acum `HTTP 422` în afara CSI, iar fallback-ul local Kinozal/Rutor rămânea blocat la `0 peers / 0 bytes / End of file` și fără ieșire MP4 pe fișierele `.ts` de 4 MB/piesă. Verificat live end-to-end pe serverul local (`S4E2` 1920x1080 H.264 High + AAC stereo decodat curat în `282ms`, `S1E1`/`S3E1` Rutube Official `ok=true`).
+- **Fișiere:** `src/server/filelistServer.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 16:08 — Fix Hard Refresh TV (`data-header-refresh-btn`) & Reguli CSS `:focus` separate de `:focus-visible` pe LG webOS Chromium 68
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Reîncărcare garantată din butonul Refresh pe Smart TV LG webOS / MSX** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): înlocuit apelul simplu `window.location.reload()` (care nu avea feedback vizual, putea fi anulat de dublu-clic/repeat pe telecomandă și se bloca pe conexiuni deschise / cache WebAppManager) cu `handleHardRefreshTvApp`: blocare single-flight anti-anulare, feedback instant (`animate-spin`), oprire conexiuni media/socket (`pause()` + `window.stop()`), navigare forțată fără cache `window.location.replace(url?_r=<timestamp>)` (cu curățare automată a parametrului `_r` la boot via `history.replaceState` și fallback `window.location.reload()`), suport direct atât pe `onClick` cât și pe `onKeyDown` (`Enter`/`keyCode 13`), și contrast de focus întărit (`focus:!bg-white focus:!text-zinc-950 focus:ring-2 focus:ring-sky-400 shrink-0`).
+  2. **Fix focus invizibil pe LG webOS Chromium 68** ([src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css)): separat regulile `:focus` (Smart TV `html.hardware-tv-gpu`/`no-flex-gap`/`smart-tv-mode`) de regulile `:focus-visible` în blocuri CSS distincte (în Chromium 68 combinarea `:focus, :focus-visible` în același selector invalida și arunca întreaga regulă de focus din OSD și Muzică).
+- **De ce:** Pe LG webOS TV (`WebAppManager` / Chrome 68), apăsarea butonului Refresh din header trimitea multiple `GET /tv` anulate în zbor fără reîncărcare vizibilă, iar regulile CSS combinate `:focus + :focus-visible` erau ignorate complet de Chrome 68.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:50 — Fix Schimbare Reală Format Video (`16:9` / `Zoom Cinema 21:9` / `Ecran Plin 100%`) pe LG webOS TV & iPad
+- **Autor:** Antigravity
+- **Ce:** Eliminat regula `html.smart-tv-mode .vod-fit-cinema-* { transform: none !important; object-fit: cover; }` din [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css) (care făcea toate cele 3 moduri să arate identic `16:9` pe LG webOS și iPad Safari deoarece niciunul nu suportă `object-view-box`, iar filmele `3840x2160` cu bare negre încorporate au deja raport 16:9). Acum `cinema` aplică `transform: scale(1.18)` real și animat lin, iar `cover` aplică `.vod-fit-cover-letterbox` (`scale(1.33)`) pentru stream-uri 16:9 cu bare negre cinemascope pe ecrane 16:9 și `object-cover` nativ când raportul diferă ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)).
+- **De ce:** La apăsarea butonului Galben pe TV LG nu se vedea nicio diferență pe ecran între cele 3 formate video.
+- **Fișiere:** `src/index.css`, `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:44 — Fix Critic Sertar Episoade (`ArrowDown`): eliminat schimbarea automată a episodului la focus (`onFocus`)
+- **Autor:** Antigravity
+- **Ce:** Eliminat `onFocus={() => setSelectedEpisode(ep.episode)}` din sertarul de Episoade din interiorul playerului ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)) și schimbat focusul inițial al sertarului pe episodul curent (`[data-drawer-initial-focus="true"]`) în loc de `[data-drawer-next-ep="true"]`. Acum apăsarea `ArrowDown` deschide lista de episoade fără să întrerupă sau să schimbe episodul curent — episodul se schimbă exclusiv la apăsarea **OK / Enter** (`onClick`).
+- **De ce:** La apăsarea `Săgeată Jos` pentru deschiderea listei de episoade, focusul pica pe următorul episod și declanșa vechiul `onFocus={() => setSelectedEpisode(ep.episode)}`, sărind automat la episodul următor fără acordul utilizatorului.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:39 — Derulare instant cu imagine live (0 „refresh” / 0 splash la seek) + Apple Liquid Glass Seek HUD & Toast
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Eliminat „refresh-ul” și blocarea imaginii la derulare** ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)):
+     - Adăugat `isTargetInsideVideoBuffer()` înainte de reconectarea FFmpeg pe FileList/YouTube MSE: orice derulare în interiorul buffer-ului RAM (`±15s`, `±30s`, `+1 min` etc.) sare acum nativ (`v.currentTime`) în `< 16ms` cu imagine live direct pe ecran și 0 reconectare server.
+     - Eliminat înghețarea prematură `captureFrozenFrame()` pe `triggerSeek`, pe seek-urile native HLS/MP4/Offline și pe `onPointerDown` al barei de progres, și activat live scrubbing (`110ms` throttle) la tragerea slider-ului sau la apăsarea săgeților astfel încât cadrul video să se actualizeze vizibil pe ecran în timp real.
+     - Eliminat declanșarea ecranului complet `<FilmioStartupLoader />` la derulare (`status === 'loading'` afișează splash-ul exclusiv la pornirea inițială `!hasRenderedFirstFrameRef.current`; pentru salturile mari în afara buffer-ului pe FileList se folosește doar un discret spinner alb în capsula Seek HUD `isSeekBuffering`).
+  2. **Capsulă Seek HUD & Toast în stil Apple TV+ / tvOS 26 Liquid Glass** ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)): înlocuit capsula opacă verde/neagră cu `.apple-vod-liquid-dock` translucid cu reflexie speculară, badge-uri frosted glass monocrome albe și bară de progres luminoasă albă; ridicat suplimentar subtitrările cu OSD deschis la `bottom-60 sm:bottom-64`.
+- **De ce:** Solicitarea utilizatorului ca la derulare să existe un HUD Apple style și să se vadă imaginea curat fără să se oprească ecranul și să dea efect de refresh.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:34 — Ridicare poziție subtitrări deasupra barei OSD când OSD-ul este vizibil
+- **Autor:** Antigravity
+- **Ce:** Crescut offset-ul vertical al subtitrărilor când OSD-ul sau un meniu este deschis (`bottom-44 sm:bottom-48` → `bottom-56 sm:bottom-60` pe TV/iPad/Desktop și `bottom-16` → `bottom-24` pe telefon) în [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), lăsând un spațiu curat deasupra barei OSD fără tăierea rândului de jos.
+- **De ce:** Solicitarea utilizatorului de a ridica subtitrările mai sus când OSD-ul este deschis ca să rămână 100% vizibile.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:30 — Aliniere grup taste colorate (`🔴 🟢 🟡 🔵`) & AirPlay ultimul buton (ascuns pe TV LG / Smart TV)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Reordonat butoanele din dreapta OSD în ordinea fizică exactă a telecomenzii Smart TV — **🔴 Sursă & Calitate → 🟢 Subtitrări → 🟡 Format Video / Ecran Complet → 🔵 Pistă Audio** — urmat ultimul de **AirPlay / Apple TV** ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)).
+  2. Ascuns complet butonul **AirPlay / Apple TV** pe televizoarele hardware Smart TV (`isRealHardwareTv`: LG webOS / Samsung Tizen / Sony Bravia / Android TV — prin `html.hardware-tv-gpu` + UA explicit TV), păstrându-l vizibil doar pe celelalte dispozitive (iPad, iPhone, Mac, PC, Android); pe iPad/Mac `/tv` funcționează corect atât AirPlay, cât și intrarea în Fullscreen (reparând detecția fals-pozitivă `isSmartTvDevice()`).
+- **De ce:** Solicitarea utilizatorului ca iconițele colorate să fie aliniate împreună, iar butonul AirPlay/Apple TV să fie ultimul și afișat doar pe celelalte device-uri, nu pe TV LG.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:26 — Fix Critic Double-Fire pe toate cele 4 taste colorate Smart TV (Roșu/Verde/Galben/Albastru)
+- **Autor:** Antigravity
+- **Ce:** Eliminat dubla declanșare simultană a tastelor `403/404/405/406` dintre `VodNativeHlsPlayer.tsx` și `SmartTvLampaViewCore.tsx` (care deschidea și închidea instant meniul Roșu în același tick React, dubla saltul pe Galben și amesteca Verde/Albastru):
+  1. [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) devine sursa unică de adevăr pentru toate cele 4 taste colorate cu `e.stopImmediatePropagation()` și acoperire completă webOS/Tizen/Sony Android TV (`403/183/Red/ColorF0Red/F1/r` = Sursă & Calitate, `404/184/Green/ColorF1Green/F2/g` = Subtitrări, `405/185/Yellow/ColorF2Yellow/F3/y` = Format Video `16:9`/`21:9`/`PLIN`, `406/186/Blue/ColorF3Blue/F4/b` = Pistă Audio).
+  2. [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx) ignoră tastele colorate când rulează sub `[data-lampa-root="true"]` și păstrează maparea identică doar în modul standalone (`MediatecaView`).
+- **De ce:** Apăsarea butonului Roșu pe telecomanda Smart TV nu părea să facă nimic deoarece ambii listeneri de pe `window` rulau simultan și își anulau reciproc toggle-ul `openMenu`.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:21 — Fix Buton Galben telecomandă → Schimbare Format Video (`16:9` / `21:9` / `Ecran Plin 100%`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Eliminat vechiul handler din [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx) (linia 4967, capture phase) care încă apela `onOpenInfoSheet?.()` pe tasta Galbenă (`405 / F3 / ColorF2Yellow / y`) înaintea lui `SmartTvLampaViewCore.tsx`; acum apelează direct `cycleVideoFitModeRef.current()` (`Format Original 16:9` → `Zoom Cinema 21:9` → `Ecran Plin 100%`).
+  2. Legat și handler-ul Galben din [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) la `aether:vod-cycle-format`, iar pe butonul de Format/Fullscreen din OSD (`handleToggleVodFullscreen`) pe Smart TV (`isSmartTvDevice()`) și pe iPad în fullscreen nativ se schimbă direct formatul video (`cycleVideoFitMode()`).
+- **De ce:** Butonul Galben al telecomenzii mai deschidea Info din cauza handler-ului duplicat din `VodNativeHlsPlayer.tsx` și nu schimba formatul video.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:17 — Auto-focus garantat pe butoanele Skip Intro / Recapitulare & Următorul Episod (1-click OK/Enter pe telecomandă)
+- **Autor:** Antigravity
+- **Ce:** Întărit auto-focusul pe `[data-vod-skip-intro-btn="true"]` și `[data-vod-autonext-btn="true"]` în [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx) (focus imediat + retry `45ms` și `180ms` pentru Smart TV webOS/Tizen, cu gard anti-furt focus când panoul Info sau sertarul de Episoade sunt deschise).
+- **De ce:** Asigură că imediat ce apare pill-ul de skip / următorul episod, focusul este deja pe el pentru activare dintr-un singur clic OK/Enter cu telecomanda.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:10 — Dezactivare Auto-Skip Intro/Recap (doar propunere manuală), Remapare Buton Galben → Fullscreen/Format & Săgeată Sus → Info (când nu ești pe OSD)
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Eliminat auto-skip-ul automat pe Intro & Recapitulare** ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts)): playerul nu mai sare niciodată singur; afișează și focalizează exclusiv butonul `Sari peste Intro` / `Sari peste Recapitulare` pentru confirmare manuală (`autoSkipIntro` implicit `false`).
+  2. **Butonul Galben telecomandă → Ecran Complet / Format Ecran** ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx)): `VK_YELLOW` (`405 / F3 / ColorF2Yellow`) declanșează acum `aether:vod-toggle-fullscreen`; eliminat iconița separată Info (`i`) din bara OSD (posterul din stânga rămâne clicabil pentru Info pe touch) și mutat indicatorul galben (`#FFD60A`) pe iconița de Format/Fullscreen din dreapta.
+  3. **Săgeată Sus (`ArrowUp`) în timpul filmului când nu ești pe OSD → Info & Descriere** ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): cu OSD-ul ascuns/nefocolizat, `ArrowUp` deschide instant panoul Info/Detalii, `ArrowDown` deschide Episoade (pe seriale), `OK/Enter` trezește OSD-ul, iar `Stânga/Dreapta` fac seek ±15s.
+- **De ce:** Solicitarea utilizatorului de a nu mai sări automat la intro/recapitulare (doar propunere), de a muta Fullscreen/Format pe butonul galben și de a deschide Info din Săgeată Sus în timpul redării.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/services/deviceContinuityService.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:06 — Indicator „Văzut” transformat în bulină verde curată cu bifă albă (`✓`), fără text
+- **Autor:** Antigravity
+- **Ce:** Înlocuit pastilele cu text `✓ Văzut` de pe toate posterele, cardurile de episoade, sertarul de episoade, Descărcări Offline și Calendar cu bulină rotundă verde (`bg-emerald-600/95 border-emerald-300/70`) + bifă albă (`Check` stroke 3), fără text, în [VodPosterWatchedControl.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/common/VodPosterWatchedControl.tsx), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) și [SmartTvSeriesCalendarSection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvSeriesCalendarSection.tsx).
+- **De ce:** Solicitarea utilizatorului ca badge-ul „Văzut” să fie doar bulina verde cu semnul check alb, fără text.
+- **Fișiere:** `src/components/common/VodPosterWatchedControl.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/SmartTvSeriesCalendarSection.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 15:03 — Fix vizibilitate bară de progres (timeline track) în VOD OSD (`bg-white/22` → `bg-white/35`)
+- **Autor:** Antigravity
+- **Ce:** Înlocuit clasa nevalidă Tailwind `bg-white/22` (care lăsa canalul barei de derulare aproape negru) cu `bg-white/35 ring-1 ring-white/15` pentru porțiunea nerulată și `bg-white/55` pentru buffer în [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx).
+- **De ce:** Linia neparcursă a timeline-ului era aproape invizibilă/neagră în OSD.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 14:39 — Finisare OSD Apple Liquid Glass: eliminare fullscreen redundant sus, unificare iconițe Apple, eliminare buton Episoade (Săgeată Jos TV) și 0 emoji la buffer
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Bară superioară curată** ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): eliminat butonul duplicat de Fullscreen din colțul dreapta-sus (`Maximize2`), stilizat butonul `Înapoi` în stil Apple Liquid Glass (`apple-vod-liquid-dock` + `ChevronLeft`) și ascuns automat în fullscreen nativ pe iPadOS (unde sistemul afișează propriul `[X]` în colțul stânga-sus, eliminând suprapunerea `[X]napoi`).
+  2. **Unificare 100% Apple Liquid Glass pe toate iconițele OSD** ([VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css)): toate cele 6 iconițe din dreapta (Sursă, Subtitrări, Descriere, Audio, AirPlay, Format/Fullscreen) au acum aceeași suprafață translucidă Apple Liquid Glass cu simboluri SF albe + punct indicator discret de 4px pentru cele 4 taste colorate ale telecomenzii; pill-ul de unmute din partea de sus transformat în Apple Liquid Glass; izolat `:focus` alb solid strict pe `html.hardware-tv-gpu`/`no-flex-gap` și `:focus-visible` (astfel încât pe iPad touch `Pauză` să rămână sticlă translucidă, nu alb opac).
+  3. **Eliminat butonul `Episoade` din bara OSD + acces instant cu Săgeată Jos pe telecomandă**: eliminat `data-vod-bottom-episodes-btn` și importurile `SfEpisodesIcon`; pe seriale, apăsarea tastei `ArrowDown` pe telecomandă (atât cu OSD-ul ascuns, cât și din rândul de jos al OSD-ului) deschide imediat sertarul de Episoade (iar pe touch/iPad se poate atinge direct linia `S1 · E2 • Titlu episod`).
+  4. **Zero emoji la buffer / viteză**: înlocuit `⬇` (randat ca emoji albastru `⬇️` pe iPadOS) cu iconița vectorială `<ArrowDown />` și `⚡` cu `<Sparkles />`.
+- **De ce:** Solicitarea utilizatorului de curățare a barei de sus, unificare Apple style pe toate iconițele, eliminare buton Episoade (cu deschidere din `Săgeată Jos` pe telecomandă) și eliminare emoji-uri din indicatorul de buffer.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 14:23 — Eliminare butoane duplicate Wide (`21:9`) + Upgrade Apple TV+ / tvOS 26 Liquid Glass Skin pe VOD OSD
+- **Autor:** Antigravity
+- **Ce:**
+  1. Eliminat ambele butoane duplicate de format wide (`data-vod-aspect-btn="true"` — pastila `21:9`/`16:9`/`PLIN` din bara de jos și varianta din colțul dreapta-sus mobil portret) și importul orfan `Expand` în [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), păstrând intactă ultima iconiță albastră de Format/Ecran Complet și absolut toate celelalte elemente prezente în OSD.
+  2. Aplicat skin autentic **Apple TV+ / tvOS 26 / iPadOS 26 Liquid Glass** pe dock-ul OSD și popovere ([src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css), [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html)): sticlă reală translucidă (`backdrop-filter: blur(44px) saturate(210%)`) cu reflexie speculară fină pe marginea superioară pe iPad/iPhone/Mac/PC, pastile transport frosted glass cu reflexie speculară, badge-uri hairline glass (`4K UHD`, viteză torrent), scrubber Liquid Glass + curățare `hoverPreview` la `pointerType === 'touch'`, și fallback ultra-rapid smoked-glass fără blur doar pe GPU-urile reale Smart TV (`html.hardware-tv-gpu` / `html.no-flex-gap`).
+- **De ce:** Solicitarea utilizatorului de a elimina butoanele redundante de wide (existând deja ultima iconiță de format) și de a oferi un skin autentic Apple Liquid Glass pe OSD fără a elimina sau muta elementele existente.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/index.css`, `index.html`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-23 12:19 — Iconiță & Widget „Vremea Locală” în Header Bar (Smart TV / Desktop / iPad / iPhone / Auto & Classic Web)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Creat [src/components/tv/HeaderWeatherWidget.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/HeaderWeatherWidget.tsx): buton compact în bara de sus (`<header>`) cu iconiță dinamică meteo (zi/noapte, senin, nori, ceață, burniță, ploaie, ninsoare, furtună) și temperatura curentă în timp real (`°C`), complet gratuit și fără consum Netlify Functions (auto-detectare locație prin IP `geojs.io` → fallback `ipwho.is` → fallback timezone, prognoză prin Open-Meteo cu cache `localStorage` 20 min, ES2018-safe pentru LG webOS 4/5).
+  2. La clic / OK pe iconiță se deschide panoul de prognoză (Tahoe Liquid Glass): temperatură curentă, resimțită, umiditate, vânt, prognoză pe următoarele 8 ore, prognoză pe 5 zile, plus butoane `Auto (IP)`, `GPS Exact` (doar la cerere pe HTTPS) și căutare manuală oraș (Open-Meteo Geocoding) tradus RO/EN/RU.
+  3. Integrat în [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) (lângă ceas/dată, cu navigare D-Pad TV + închidere din tasta Back/Esc) și în [src/components/layout/Header.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/layout/Header.tsx) (modul Classic Web).
+- **De ce:** Solicitarea utilizatorului de a adăuga sus în header bar iconița pentru vremea locală.
+- **Fișiere:** `src/components/tv/HeaderWeatherWidget.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/layout/Header.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-22 22:55 — Audit Complet Multi-Agent & Remediere End-to-End (Securitate/SSRF/PIN, Streaming/MKV `pipe:3`, Telecomandă TV & LG webOS, Izolare 18+, PWA/SW & Quota Netlify)
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Securitate, Anti-SSRF/XSS, PIN & Izolare 18+:**
+     - Creat [netlify/functions/_ssrfGuard.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/_ssrfGuard.mjs) cu validare completă IPv4/IPv6/DNS (`dns.lookup`) + redirect hop-by-hop + sanitizare `Content-Type` (`nosniff` + `CSP: sandbox`), integrat în [netlify/functions/iedem-vod.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/iedem-vod.mjs), [netlify/functions/tv-proxy.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-proxy.mjs) (inclusiv ruta Range mic VK), [netlify/functions/radio-meta.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/radio-meta.mjs) și [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts); validat `countryCode` în [netlify/functions/_epgUtils.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/_epgUtils.mjs), restricționat `/api/tv-bridge` la `*.trycloudflare.com` / `filmio.my`, adăugat `DELETE` la CORS global `OPTIONS`, și adăugat headere de securitate (`nosniff`, `SAMEORIGIN`, `HSTS`) + cache imutabil `/assets/*` în [netlify.toml](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify.toml) + fix `/msx/*.json` în [public/_headers](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/_headers).
+     - Închis ambele bypass-uri de PIN pe profilul `p1` (JEKA) — `?resume=...&profile=p1` și ștergerea profilului activ fără PIN — în [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) și [src/components/tv/CrossDeviceHandoffModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/CrossDeviceHandoffModal.tsx); `isAdminJekaProfile` verifică strict `profile.id === 'p1'` în [src/services/deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts); blocat toggle-ul 18+ în modul Classic Web pentru non-`p1` ([src/views/SettingsView.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SettingsView.tsx)); blocat scurgerile 18+ / Klubnichka din `Calendar Episoade Noi` ([src/components/tv/SmartTvSeriesCalendarSection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvSeriesCalendarSection.tsx)), `Favorite`, `Descărcări Offline` și la schimbarea profilului; adăugat garduri `!isPinLockRequired` în [src/components/tv/SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx) și [src/components/tv/SmartTvDrawersAndModals.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvDrawersAndModals.tsx).
+  2. **Streaming, Subtitrări MKV Live (`pipe:3`), Torrent Engine, Sync Cloud & Muzică:**
+     - Reparat empiric pe FFmpeg 6.0 shift-ul de timp al `pipe:3` în [src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts) (`-copyts` înainte de `-i`, eliminat `-avoid_negative_ts make_zero` de pe `pipe:3`, `offsetSec = 0`), rescris parser-ul `probeTorrentVideoFile` per bloc `Stream #0:` (fără amestecarea titlurilor/indecșilor), reparat bucla de 4000 cue-uri, single-flight pe extracția de pe disc, retry pe `probing: true`, `sessionKey` HLS cu `subLang:subIdx` + idle reaper 90s + validare `Range` 416, `safeFetch(..., 1, 4000)`, `clientKey` din `cf-connecting-ip`, protecție descărcări `?download=1` la eviction; adăugat gard `if (destroyed) return` în [src/server/fastTorrentEngine.cjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/fastTorrentEngine.cjs), drenaj `stderr` + PNA în [src/server/youtubeServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/youtubeServer.ts), HTTP 200 fără Range + timeout în [netlify/functions/youtube.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/youtube.mjs), decodare CP1250/CP1251 + entități HTML + retry candidați în [src/services/subtitleSearchService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/subtitleSearchService.ts), și recovery buffering/startSec în [src/services/musicStreamEngine.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/musicStreamEngine.ts).
+     - În [netlify/functions/tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs): bypass cache 15s la scrieri (`forceFresh`), oprit învierea favoritelor/progresului șters, protecție împotriva fuzionării titlurilor cu IMDb/KP diferit, fuziune `episodeProgressMap` după `updatedAt`, păstrare `isAdult18`/`isAdultKlubnichka` și sanitizare `profileId`.
+     - În [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx) și [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx): eliminat race-ul OpenSubtitles vs MKV live subs, eliminat rewind-ul la `00:00` la schimbarea subtitrării MKV/serverului, păstrat `orig=1`/audio la seek FileList, reparat `flBufferingTimerRef`, suport cue-uri simultane, schimbare audio in-band fără reload HLS/DASH, fix `openMenuRef`/`MediaStop` în keydown capture, reset `hasAutoSkippedSegmentRef` între episoade, reparat contaminarea async multi-profil (`activeProfileIdRef`), și reparat ștergerea din Istoric pentru titlurile marcate `✓ Văzut`.
+  3. **Telecomandă Smart TV, LG webOS/Tizen Legacy, iPad/iPhone PWA, Performance & Quota Netlify:**
+     - Eliminat toate butoanele `<button data-fav-btn>` imbricate în cardurile poster (Acasă, Filme, Seriale, Platforme Streaming — [src/components/tv/StreamingPlatformView.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/StreamingPlatformView.tsx), [src/components/tv/SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx), [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)), scoping D-Pad & Back complet pe modalele portale (`SubFinder`, `Download`, `iEdem`, `Music Fullscreen`, `Trailer`, tastaturi TV, sub-vues Muzică), scroll automat pe containerele interne din drawer-e (`Setări`, `Filtru`, `Catalog`, `Actor`), eliminat `String.prototype.matchAll` pentru LG webOS 4/5 & Tizen 4/5 ([src/components/tv/spotifyMusicPremiumViews.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/spotifyMusicPremiumViews.tsx)), eliminat capcana `ArrowDown` în playerul Klubnichka, fix `HomeHeroBillboard` slide-uri invizibile, fix `dvh` → `vh` pe modale/Live TV, fix `.visually-hidden` + `inset` focus ring Muzică + eliminare override duplicat `macos-tahoe-skin` 12px ([index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html), [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css)), fix iPad PWA VOD Top Bar `--safe-top` & wrap filtre portrait + iPhone PWA Home Indicator `--safe-bottom` & popovers centrate, fix tablete Android 16:10 ([src/utils/mediaSessionManager.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/utils/mediaSessionManager.ts)).
+     - Optimizare Quota Netlify & PWA: eliminat polling-ul de fundal 12×/min `/api/radio-meta` din [src/components/tv/SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx), urcat polling-ul din [src/hooks/useAudioPlayer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/hooks/useAudioPlayer.ts) la 60s, limitat burst-ul `/api/iedem-vod` la 12 în [src/components/tv/IedemMediatekaSection.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/IedemMediatekaSection.tsx), memoizat conexiunea IDB + Cache-First pe `/assets/*` + răspunsuri valide offline în [public/sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), fix race/pagination/loader compact + ștergere individuală istoric 18+ cu telecomanda în [src/components/tv/SmartTvAdult18Section.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvAdult18Section.tsx) și actualizat brandingul MSX în [src/components/tv/SmartTvMsxModal.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvMsxModal.tsx).
+- **De ce:** Solicitarea utilizatorului de audit complet cap-coadă al întregii aplicații pe toate dimensiunile (sistem, securitate, design, funcționalități, comunicare, telecomandă, mobil/iPad).
+- **Fișiere:** `netlify/functions/_ssrfGuard.mjs`, `netlify/functions/iedem-vod.mjs`, `netlify/functions/tv-proxy.mjs`, `netlify/functions/radio-meta.mjs`, `netlify/functions/_epgUtils.mjs`, `netlify/functions/tv-sync.mjs`, `netlify/functions/youtube.mjs`, `netlify.toml`, `public/_headers`, `public/sw.js`, `index.html`, `vite.config.ts`, `src/index.css`, `src/server/filelistServer.ts`, `src/server/fastTorrentEngine.cjs`, `src/server/youtubeServer.ts`, `src/services/deviceContinuityService.ts`, `src/services/subtitleSearchService.ts`, `src/services/musicStreamEngine.ts`, `src/services/offlineMediaService.ts`, `src/utils/mediaSessionManager.ts`, `src/hooks/useAudioPlayer.ts`, `src/views/SettingsView.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/components/tv/SmartTvAdult18Section.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `src/components/tv/SmartTvDrawersAndModals.tsx`, `src/components/tv/SmartTvKlubnichkaSection.tsx`, `src/components/tv/SmartTvMusicSpotifySection.tsx`, `src/components/tv/spotifyMusicPremiumViews.tsx`, `src/components/tv/SmartTvSeriesCalendarSection.tsx`, `src/components/tv/StreamingPlatformView.tsx`, `src/components/tv/HomeHeroBillboard.tsx`, `src/components/tv/CrossDeviceHandoffModal.tsx`, `src/components/tv/IedemMediatekaSection.tsx`, `src/components/tv/OnlineSubtitleFinderModal.tsx`, `src/components/tv/SmartTvMsxModal.tsx`, `src/components/tv/TvPlayerModal.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-22 21:15 — Fix Header Bar în modul iPad PWA Standalone (coborât sub bara blurată iPadOS)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Adăugat detecție dedicată `ipad-pwa-standalone` pe `<html>` în [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html) (`isIosDevice && !isIosPhone && isPwaStandalone`, acoperind atât UA `iPad` cât și `MacIntel + maxTouchPoints > 1`).
+  2. Setat `--safe-top: max(env(safe-area-inset-top, 0px), 36px)` + `--ios-portrait-header-pad: 6px` (total `42px+` spațiu curat deasupra butoanelor din `<header>`, atât în landscape cât și în portrait) și `scroll-padding-top` pe `<main>` în [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css).
+- **De ce:** În modul PWA pe iPadOS, bara de status și zona blurată Liquid Glass/Multitasking de sus acopereau parțial `<header>` deoarece clasa `ios-pwa-standalone` era aplicată doar pe iPhone.
+- **Fișiere:** `index.html`, `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-22 21:10 — Subtitrări MKV încorporate Live (Sincron 100%, 0ms drift) pentru FileList / Kinozal / Torrentio + Sync rapid (`Cien años de soledad S01`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Extragere live din MKV (`pipe:3` + long-poll instant)** în [src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts): `probeTorrentVideoFile` detectează acum toate pistele de subtitrări text (`subrip`/`ass`/`webvtt`) din MKV (ex. toate cele 32 piste oficiale Netflix din *Cien años de soledad S01*, inclusiv `MKV • Română`), iar `/api/filelist/stream` și `/api/filelist/hls.m3u8` (inclusiv iPad/iPhone Safari) extrag în paralel subtitrarea prin a doua ieșire `ffmpeg` (`pipe:3`, `-avoid_negative_ts make_zero -flush_packets 1`) cu 0% trafic torrent suplimentar și o livrează instant fără buffering Cloudflare prin `/api/filelist/live-sub?since=N&wait=15`.
+  2. **Prioritizare automată MKV 100% sincron** în [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx) și [src/views/smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts): dacă MKV-ul conține subtitrare în limba preferată (`RO`/`EN`/`RU`), se activează automat în locul OpenSubtitles (unde *Cien años de soledad* avea drift non-liniar de `+66s` la minutul 25 și `+100s` la final, iar episoadele `E09–E16` aveau 0 subtitrări online); dacă MKV-ul nu are limba cerută, rămâne automat fallback-ul OpenSubtitles (cu fix matching titluri traduse în [src/services/subtitleSearchService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/subtitleSearchService.ts)).
+  3. **Selector `⚡ Din fișier MKV (Sincron 100%)` + controale rapide de sincronizare** (`-10s`, `-1s`, `0s`, `+1s`, `+10s`, `±0.5s`) în [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx) și remediere `useEffect` pentru a nu reseta offset-ul/pauza la primirea fiecărui cue live SSE.
+- **De ce:** Subtitrările OpenSubtitles pentru *Cien años de soledad S01* (playWEB 4K/HD 16 episoade) aveau drift non-liniar masiv (`+66s` la min 25, `+100s` la min 62 pe E01; `+188s` pe E02; 0 subtitrări pe E09–E16), deși fișierele MKV de pe FileList conțineau deja subtitrările oficiale Netflix în Română sincronizate la milisecundă.
+- **Fișiere:** `src/server/filelistServer.ts`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/services/subtitleSearchService.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-22 17:41 — Pagină dedicată „Cinema 18+” (Filme & Seriale Erotice / Adulți) exclusiv pentru JEKA (`aether-radio-v80`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Creat [src/components/tv/SmartTvAdult18Section.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvAdult18Section.tsx): pagină dedicată pentru filme și seriale erotice / cinema pentru adulți (fără anime/familie/documentare), cu **90 titluri flagship verificate** (inclusiv cinema explicit/ne-simulat 90–99%: *Baise-moi*, *Love*, *Romance*, *Nymphomaniac Vol. I & II*, *Anatomy of Hell*, *The Idiots*, *Ken Park*, *Lie with Me*, *Antichrist*, selecția Tinto Brass *Paprika* / *All Ladies Do It* / *Frivolous Lola* / *Miranda* / *Cheeky* / *The Voyeur* / *Salon Kitty* / *The Key*, *Emmanuelle* 1974 & 2024, *The Story of O*, *Pleasure*, *Hotel Desire*, *Wetlands*, *Stranger by the Lake*) + TMDB Discover live paginat (`include_adult=true` + cuvinte-cheie explicite `unsimulated sex` / `softcore` / `bdsm` / `erotic`), **bară compactă de căutare + tastatură TV pentru telecomandă** integrată direct pe pagina 18+ (caută în cele 90 de titluri flagship + TMDB `/search/movie` & `/search/tv` cu `include_adult=true`) și rezolvare automată `imdbId` (`external_ids`) la clic pentru deschiderea nativă în Filmio.
+  2. Bară de filtre compactă pe un singur rând (fără spațiu pierdut, stil Tahoe Liquid Glass identic cu Top IMDb): **Toate / Filme / Seriale** + droplist-uri **An**, **Țară** (`SUA`, `Franța`, `Italia`, `Spania`, `Marea Britanie`, `Coreea de Sud`, `Polonia`, `Germania`, `Japonia`), **Gen / Temă** (`Erotic / Senzual`, `Thriller Erotic`, `Dramă 18+`, `Romantic 18+`, `Comedie 18+`), **Sortare după intensitate erotică `%`** (`Intens → Soft (%)` implicit `98% → 35%`, `Soft → Intens (%)` + buton rapid 1-click de inversare sens, `Populare`, `Rating IMDb`, `Cele mai noi`), badge `%` pe fiecare poster și `Reset`.
+  3. Carduri `<article>` 100% identice ca stilizare cu restul paginilor (`aspect-[2/3]`, rating, `FILM`/`SERIAL`, bară progres, `★`, `VodPosterWatchedControl` `✓ Văzut` în interiorul containerului posterului fără wrapper duplicat `.aspect-[2/3]`, focus ring TV), corectat 4 IMDb ID-uri flagship (`Emmanuelle (2024)` `tt20247888`, `The Key (1983)` `tt0085328`, `Dark Desire (2020)` `tt12540080`, `Obsession (2023)` `tt18831118`) și eliminat 100% dublurile între lista flagship și TMDB Discover (`mergeDedupe` deduplică după `id`, `imdbId`, maparea exactă `FLAGSHIP_IMDB_TO_TMDB_ID` pe toate cele 65 de titluri — inclusiv în RO/EN/RU — plus ambele variante `name`/`nameOriginal` normalizate la ±1 an).
+  4. Izolare strictă exclusiv pentru **JEKA** (`!isPinLockRequired && isAdminJekaProfile(activeProfile)`) și **istoric complet separat (`isAdult18WatchItem`)**: secțiune orizontală `Continuă vizionarea 18+` (identică cu cea de pe `Acasă`, cu bară progres, reluare episod exact, `✓ Văzut` și ștergere individuală/totală doar pentru 18+) vizibilă **exclusiv pe pagina Cinema 18+** — niciodată în `Acasă`, `Istoric` sau quick-play Home; `isAdult18WatchItem` detectează inclusiv intrările 18+ salvate anterior (`Secretary` cu gen `Erotic`), iar sincronizarea locală/cloud păstrează permanent `isAdult18: true` ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [src/views/smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts), [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts), [netlify/functions/tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs)).
+  5. **Fix navigare telecomandă pe rânduri multiple de categorii (Klubnichka 18+, Cinema 18+, Torrente FL)** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): corectat `focusTvTarget` (`isTopHeroOrPlayer` bloca scroll-ul înapoi sus când `mainEl.scrollTop >= 120`, ascunzând 4 din 5 rânduri de categorii în Klubnichka; acum resetează `scrollTop = 0` instant când orice pill de sus încape în viewport, sau face scroll precis în viewport), restrâns banda `alignedRow`/`closestRow` (`48px/52px → 24px`) ca săgețile Sus/Jos să nu mai sară peste rândurile de pill-uri (`44px` pas vertical), extins fereastra de detecție sus la `-vhLimit * 1.2`, și aliniat intrarea din Header (`ArrowDown`) și Sidebar (`ArrowRight`) către `[data-top-pill="true"]` / `[data-klub-active-cat="true"]` / `[data-klub-card="true"]`.
+  6. Incrementat SW cache la `aether-radio-v80` ([public/sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html), `run_prepush_audit.py`).
+- **De ce:** Cerința utilizatorului pentru o pagină dedicată `18+` exclusiv pe profilul JEKA, cu filme și seriale erotice/pentru adulți (nu porno), cu filtre compacte pe ani, țări și genuri și aceeași stilizare ca restul aplicației.
+- **Fișiere:** `src/components/tv/SmartTvAdult18Section.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `vite.config.ts`, `netlify/functions/tv-sync.mjs`, `public/sw.js`, `index.html`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-22 10:38 — Adăugare Regulă Permanentă `karpathy-guidelines` (`multica-ai/andrej-karpathy-skills`) pentru Antigravity & Paperclip
+- **Autor:** Antigravity
+- **Ce:**
+  1. Creat [.agents/rules/karpathy-guidelines.md](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/rules/karpathy-guidelines.md) (`trigger: always_on`) cu cele 4 principii oficiale din `multica-ai/andrej-karpathy-skills` (*Think Before Coding*, *Simplicity First*, *Surgical Changes*, *Goal-Driven Execution*).
+  2. Referențiat și sintetizat regula în [.agents/AGENTS.md](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/AGENTS.md) pentru a fi aplicată automat și de agenții Paperclip.
+- **De ce:** Impunerea modificărilor chirurgicale, simple și verificate în proiect pentru reducerea regresiilor între dispozitive.
+- **Fișiere:** `.agents/rules/karpathy-guidelines.md`, `.agents/AGENTS.md`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-21 20:31 — Fix Critic Telecomandă LG webOS: Eliminat selectorul CSS Level 4 `:not([data-home-billboard="true"] *)` care bloca intrarea în pagina Torrente FL & compatibilitate ES2018 fără `Promise.any` (`aether-radio-v79`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Eliminat crash-ul `DOMException` din `querySelector` pe LG webOS (Chromium < 88)** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): înlocuit toate cele 3 apeluri `[data-vod-card="true"]:not([data-home-billboard="true"] *)` cu helper-ul universal `findFirstNonBillboardVodCard(container)` (care folosește `.closest(...)`), eliminând excepția ce bloca tasta `ArrowRight` la intrarea din meniul lateral în **Torrente FL** (și alte secțiuni fără `[data-watched-poster-btn="true"]`).
+  2. **Toate butoanele din meniul lateral `<aside>` mereu navigabile** ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)): `sidebarItems` citește direct toate `<button>` din `<aside>` fără tăiere pe `vhLimit`, plus fallback direct pe `[data-top-pill="true"]` la intrarea în `Torrente FL`.
+  3. **Compatibilitate LG webOS 4/5 (`Promise.any` → ES2018)** ([src/services/deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts)): înlocuit `Promise.any` cu helper ES2018 nativ.
+  4. Incrementat SW cache la `aether-radio-v79` ([public/sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), [index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html), `run_prepush_audit.py`).
+- **De ce:** Pe LG webOS (Chromium < 88), selectorul complex `:not([data-home-billboard="true"] *)` arunca `SyntaxError` în `onKeyDown` la apăsarea `ArrowRight` din bara laterală către pagina **Torrente FL**, blocând complet intrarea cu telecomanda.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/services/deviceContinuityService.ts`, `public/sw.js`, `index.html`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-21 15:40 — Auto-Conectare HTTPS Home Bridge pe `filmio.my` (`/api/tv-bridge`) pentru Filme/Seriale Străine (`The Westies`) & Muzică M4A Apple pe iPad/iPhone/TV (`aether-radio-v78`)
 - **Autor:** Antigravity
 - **Ce:**

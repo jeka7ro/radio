@@ -638,6 +638,19 @@ export const SmartTvMusicSpotifySection: React.FC<
       scrollMusicToTop();
     }, [scrollMusicToTop]);
 
+    // Handle Smart TV Back / Escape inside Music sub-views before exiting Music section to Home
+    useEffect(() => {
+      const onMusicBack = (ev: Event) => {
+        const ce = ev as CustomEvent<{ handled?: boolean }>;
+        if (viewMode !== 'home') {
+          if (ce?.detail) ce.detail.handled = true;
+          handleGoBack();
+        }
+      };
+      window.addEventListener('aether:music-back', onMusicBack);
+      return () => window.removeEventListener('aether:music-back', onMusicBack);
+    }, [viewMode, handleGoBack]);
+
     const activePlaylist = useMemo(
       () =>
         SPOTIFY_PLAYLISTS.find((p) => p.id === activePlaylistId) ||
@@ -2650,13 +2663,14 @@ export const SmartTvMusicSpotifySection: React.FC<
                               type="button"
                               title={tr('Radio Piesă', 'Song Radio', 'Радио трека')}
                               onClick={() => void handleStartSongRadio(rTrack)}
-                              className="absolute left-2 bottom-2 w-8 h-8 rounded-full bg-black/75 hover:bg-[#2563eb] text-white hover:text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                              className="absolute left-2 bottom-2 w-8 h-8 rounded-full bg-black/75 hover:bg-[#2563eb] focus:bg-white focus:text-[#141414] focus:opacity-100 text-white hover:text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
                             >
                               <Radio className="w-4 h-4" />
                             </button>
 
                             <button
                               type="button"
+                              tabIndex={-1}
                               title={tr('Redă', 'Play', 'Слушать')}
                               onClick={() => onPlayTrack(rTrack, recentTracks)}
                               style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
@@ -2743,13 +2757,14 @@ export const SmartTvMusicSpotifySection: React.FC<
                           type="button"
                           title={tr(`Profil ${art.name}`, `${art.name} Profile`, 'Профиль')}
                           onClick={() => void handleOpenArtist(art.name, art.artistId)}
-                          className="absolute left-2 bottom-2 w-8 h-8 rounded-full bg-black/75 hover:bg-white text-white hover:text-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                          className="absolute left-2 bottom-2 w-8 h-8 rounded-full bg-black/75 hover:bg-white focus:bg-white focus:text-black focus:opacity-100 text-white hover:text-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
                         >
                           <User className="w-4 h-4" />
                         </button>
 
                         <button
                           type="button"
+                          tabIndex={-1}
                           title={tr(`Pornește Radio ${art.name}`, `Start ${art.name} Radio`, 'Включить радио')}
                           onClick={() => {
                             if (art.seedTrack) {

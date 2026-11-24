@@ -49,16 +49,20 @@ export const VodPosterWatchedControl: React.FC<VodPosterWatchedControlProps> = (
         role="button"
         tabIndex={-1}
         data-watched-toggle-btn="true"
+        aria-label={tr(
+          'Văzut (apasă pentru a anula)',
+          'Watched (click to unmark)',
+          'Просмотрено (нажмите, чтобы снять)'
+        )}
         title={tr(
           'Marcat ca văzut (apasă pentru a anula)',
           'Marked as watched (click to unmark)',
           'Просмотрено (нажмите, чтобы снять)'
         )}
         onClick={handleTrigger}
-        className={`absolute ${positionClass} z-20 px-2 py-1 rounded-full bg-emerald-600/95 hover:bg-emerald-500 text-white border border-emerald-300/70 text-[10px] font-extrabold uppercase tracking-wide shadow-lg inline-flex items-center gap-1 opacity-100 transition-all cursor-pointer`}
+        className={`absolute ${positionClass} z-20 w-7 h-7 rounded-full bg-emerald-600/95 hover:bg-emerald-500 text-white border border-emerald-300/70 shadow-lg inline-flex items-center justify-center opacity-100 transition-all cursor-pointer`}
       >
-        <Check className="w-3 h-3 stroke-[3]" />
-        <span>{tr('Văzut', 'Watched', 'Просм.')}</span>
+        <Check className="w-3.5 h-3.5 stroke-[3]" aria-hidden="true" />
       </span>
     );
   }

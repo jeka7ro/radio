@@ -631,7 +631,7 @@ export function isSmartTvDevice(): boolean {
     const sw = window.screen?.width || window.innerWidth || 0;
     const sh = window.screen?.height || window.innerHeight || 0;
     const aspect = Math.max(sw, sh) / Math.max(1, Math.min(sw, sh));
-    if (aspect >= 1.5) {
+    if (aspect >= 1.7 && (navigator.maxTouchPoints || 0) === 0) {
       return true;
     }
   }

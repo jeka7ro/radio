@@ -266,6 +266,7 @@ export const OnlineSubtitleFinderModal: React.FC<
 
   const modalContent = (
     <div
+      data-sub-finder-modal="true"
       role="dialog"
       aria-modal="true"
       style={{
@@ -278,7 +279,7 @@ export const OnlineSubtitleFinderModal: React.FC<
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl max-h-[min(92dvh,760px)] rounded-2xl sm:rounded-3xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-2xl max-h-[min(92vh,760px)] rounded-2xl sm:rounded-3xl bg-zinc-900 border border-zinc-700/90 text-zinc-100 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -299,8 +300,9 @@ export const OnlineSubtitleFinderModal: React.FC<
 
           <button
             type="button"
+            autoFocus
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center shrink-0"
+            className="w-8 h-8 rounded-full bg-zinc-800 hover:bg-zinc-700 focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:outline-none text-zinc-300 flex items-center justify-center shrink-0"
           >
             <X className="w-4 h-4" />
           </button>

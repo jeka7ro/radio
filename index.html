@@ -92,7 +92,7 @@
         var sMin = Math.max(1, Math.min(sw, sh));
         var isExplicitTvUa = /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(uaRaw);
         var isMobilePhoneUa = !isExplicitTvUa && /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(uaRaw);
-        var isAndroidLandscapeTv = /Android/i.test(uaRaw) && !/Mobile/i.test(uaRaw) && ((sMax / sMin) >= 1.5 || isExplicitTvUa);
+        var isAndroidLandscapeTv = /Android/i.test(uaRaw) && !/Mobile/i.test(uaRaw) && (((sMax / sMin) >= 1.7 && (navigator.maxTouchPoints || 0) === 0) || isExplicitTvUa);
         var isTvRoute = !isMobilePhoneUa && (window.location.pathname.toLowerCase().indexOf('/tv') === 0 || window.location.search.indexOf('tv') !== -1 || (window.self !== window.top) || isExplicitTvUa || isAndroidLandscapeTv);
         var isDark = storedScheme !== 'light';
         if (meta) {
@@ -102,6 +102,11 @@
           document.documentElement.classList.add('dark');
         } else {
           document.documentElement.classList.remove('dark');
+        }
+        if (isExplicitTvUa || isAndroidLandscapeTv) {
+          document.documentElement.classList.add('hardware-tv-gpu');
+        } else {
+          document.documentElement.classList.remove('hardware-tv-gpu');
         }
         if (isTvRoute) {
           window.__IS_SMART_TV_DEVICE__ = true;
@@ -152,10 +157,15 @@
         var uaStr = navigator.userAgent || '';
         var isIosPhone = /iPhone|iPod/i.test(uaStr);
         var isIosDevice = isIosPhone || /iPad/i.test(uaStr) || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+        var isIpadDevice = isIosDevice && !isIosPhone;
         if (isIosDevice) {
           document.documentElement.classList.add('ios-device');
         }
         var isPwaStandalone = !!(window.navigator && window.navigator.standalone) || !!(window.matchMedia && (window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: fullscreen)').matches || window.matchMedia('(display-mode: minimal-ui)').matches));
+        if (isIpadDevice && isPwaStandalone) {
+          document.documentElement.classList.add('ipad-pwa-standalone');
+          document.documentElement.style.backgroundColor = '#080b12';
+        }
         if (isIosPhone) {
           var syncIosNotchFloor = function () {
             try {
@@ -267,7 +277,7 @@
             } catch (guardErr) {}
             try {
               if (window.location.port === '8769' || /\.(lhr\.life|trycloudflare\.com|serveousercontent\.com)$/i.test(window.location.hostname)) {
-                var diagInfo = 'iw=' + (window.innerWidth || 0) + ',ih=' + (window.innerHeight || 0) + ',sw=' + (window.screen ? window.screen.width : 0) + ',sh=' + (window.screen ? window.screen.height : 0) + ',p=' + (isPwaStandalone ? 1 : 0) + ',nsa=' + (document.documentElement.style.getPropertyValue('--ios-pwa-top-floor') || '') + '|' + (document.documentElement.style.getPropertyValue('--ios-pwa-fixed-offset') || '') + ',et=' + Math.round(envTop);
+                var diagInfo = 'iw=' + (window.innerWidth || 0) + ',ih=' + (window.innerHeight || 0) + ',sw=' + (window.screen ? window.screen.width : 0) + ',sh=' + (window.screen ? window.screen.height : 0) + ',p=' + (isPwaStandalone ? 1 : 0) + ',nsa=' + (document.documentElement.style.getPropertyValue('--ios-pwa-top-floor') || '') + '|' + (document.documentElement.style.getPropertyValue('--ios-pwa-fixed-offset') || '');
                 fetch('/api/tv-log?ios_geom=' + encodeURIComponent(diagInfo)).catch(function(){});
               }
             } catch (diagErr) {}
@@ -283,6 +293,7 @@
         }
 
         // Prevent iOS standalone viewport rubber-banding / bounce & horizontal sideways wobble when gestures start on vertical pages or non-scrollable chrome
+        if (isIosDevice) {
         var _touchStartX = 0;
         var _touchStartY = 0;
         document.addEventListener('touchstart', function (e) {
@@ -337,6 +348,7 @@
             e.preventDefault();
           }
         }, { passive: false });
+        }
         window.addEventListener('scroll', function () {
           if (window.scrollX !== 0) {
             window.scrollTo(0, window.scrollY || 0);
@@ -349,7 +361,7 @@
         if ('caches' in window) {
           caches.keys().then(function(keys) {
             for (var i = 0; i < keys.length; i++) {
-              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v78') {
+              if (keys[i].indexOf('aether-radio-') === 0 && keys[i] !== 'aether-radio-v80') {
                 caches.delete(keys[i]);
               }
             }
@@ -368,7 +380,7 @@
           }
           var bootEl = document.getElementById('tv-boot-status');
           if (bootEl) {
-            bootEl.innerHTML = 'Eroare pornire TV: ' + msg;
+            bootEl.textContent = 'Eroare pornire TV: ' + msg;
             bootEl.style.color = '#f87171';
           }
         } catch (e) {}
@@ -382,6 +394,7 @@
       content="Filmio — Filme 4K/1080p, Seriale, TV Online IPTV și Radio Live pe Smart TV și Web."
     />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Filmio" />
     <meta name="application-name" content="Filmio" />
@@ -404,104 +417,7 @@
       rel="stylesheet"
     />
     <title>Filmio</title>
-  
-<style id="macos-tahoe-skin">
-/* === macOS Tahoe Native Skin (Apple HIG · Finder/Numbers Tables · Zero Robotic Fonts) === */
-:root {
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
-  --tabular-nums: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
-  --tahoe-border-light: rgba(15, 23, 42, 0.08);
-  --tahoe-border-dark: rgba(255, 255, 255, 0.08);
-}
-
-html, body, #root, #app, button, input, select, textarea {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
-  -webkit-font-smoothing: antialiased !important;
-  -moz-osx-font-smoothing: grayscale !important;
-}
-
-/* Eliminare completă fonturi robotizate / monospace și aliniere numerică tabelară Apple */
-.tabular-nums,
-[class*="tabular-nums"],
-code, pre, kbd, samp,
-td, th,
-[class*="tabular-nums"] {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif !important;
-  font-variant-numeric: tabular-nums !important;
-}
-
-/* Eliminare etichete cu aspect robotizat (tracking exagerat) */
-[class*="tracking-widest"],
-[class*="tracking-wider"],
-[class*="tracking-["] {
-  letter-spacing: -0.005em !important;
-}
-
-/* === Tabele Native stil macOS Tahoe (Finder / Numbers) === */
-table {
-  width: 100%;
-  border-collapse: separate !important;
-  border-spacing: 0 !important;
-  font-size: 13px !important;
-  line-height: 1.35 !important;
-  font-variant-numeric: tabular-nums !important;
-}
-
-thead th {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  backdrop-filter: blur(18px) saturate(180%);
-  -webkit-backdrop-filter: blur(18px) saturate(180%);
-  font-weight: 600 !important;
-  font-size: 12px !important;
-  letter-spacing: -0.01em !important;
-  text-transform: none !important;
-  padding: 9px 12px !important;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.22) !important;
-  white-space: nowrap;
-}
-
-tbody tr {
-  height: 38px;
-  transition: background-color 120ms ease !important;
-}
-
-tbody tr:nth-child(even) {
-  background-color: rgba(148, 163, 184, 0.03);
-}
-
-tbody tr:hover {
-  background-color: rgba(59, 130, 246, 0.07) !important;
-}
-
-tbody td {
-  padding: 7px 12px !important;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12) !important;
-  vertical-align: middle !important;
-}
-
-/* Panouri și ferestre macOS Tahoe Liquid Glass discret */
-[class*="rounded-2xl"],
-[class*="rounded-xl"] {
-  border-radius: 12px !important;
-}
-
-/* Optimizare iPhone / Mobil — Zero scroll orizontal pe pagină */
-@media (max-width: 768px) {
-  html, body {
-    max-width: 100vw !important;
-    overflow-x: hidden !important;
-  }
-  table {
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-}
-
-</style>
-</head>
+  </head>
   <body class="bg-[#080b12] text-slate-900 dark:bg-[#080b12] dark:text-zinc-100 antialiased selection:bg-brand-600 selection:text-white" style="background-color:#080b12;color:#f4f4f5;">
     <div id="root">
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#070e1a;color:#f4f4f5;font-family:sans-serif;text-align:center;padding:24px;">

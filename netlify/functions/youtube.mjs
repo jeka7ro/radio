@@ -1350,6 +1350,7 @@ export async function handler(event) {
             try {
               const cRes = await fetch(`${baseUrl}${sep}range=${pos}-${chunkEnd}`, {
                 headers: { 'User-Agent': streamInfo.userAgent },
+                signal: AbortSignal.timeout(8000),
               });
               if (cRes.status === 403 && !refreshedOnce) {
                 refreshedOnce = true;
@@ -1379,7 +1380,7 @@ export async function handler(event) {
         if (chunks.length > 0) {
           const outBuf = Buffer.concat(chunks);
           const actualEnd = reqStart + outBuf.byteLength - 1;
-          const isPartial = Boolean(rangeMatch) || actualEnd < totalSize - 1;
+          const isPartial = Boolean(rangeMatch);
           return {
             statusCode: isPartial ? 206 : 200,
             isBase64Encoded: true,

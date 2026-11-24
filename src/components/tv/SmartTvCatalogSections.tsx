@@ -63,6 +63,7 @@ import {
   formatSeriesCardBadgeText,
   formatSeriesCardSubtitleText,
   getVodCardRatingInfo,
+  isAdult18WatchItem,
   resolveSafeVodPosterUrl,
   handleVodPosterImgError,
   isAdminJekaProfile,
@@ -231,7 +232,7 @@ const TopImdbSmartBanner: React.FC<TopImdbSmartBannerProps> = ({
     <div
       ref={bannerRef}
       data-imdb-smart-banner="true"
-      className="relative z-30 px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl tahoe-glass border border-white/15 flex items-center justify-between gap-1 sm:gap-3 flex-nowrap"
+      className="relative z-30 px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl tahoe-glass border border-white/15 flex items-center justify-between gap-1 sm:gap-3 flex-wrap lg:flex-nowrap"
     >
       {/* Left: IMDb badge + responsive single-line title */}
       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
@@ -496,6 +497,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   seriesEpStatsMap = {},
   toggleSaveVodItem,
   handleToggleWatchedStatus,
+  isPinLockRequired = false,
 }: Record<string, any> & {
   vodItems: any[];
   savedVodItems: any[];
@@ -588,6 +590,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   >({});
   const [isKlubnichkaOpen, setIsKlubnichkaOpenState] = React.useState<boolean>(
     () =>
+      !isPinLockRequired &&
       persistedIsKlubnichkaOpen &&
       section === 'torrents' &&
       isAdminJekaProfile(activeProfile)
@@ -653,10 +656,10 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
   }, [section, radioSearchQuery]);
 
   React.useEffect(() => {
-    if (section !== 'torrents' || !isAdminJekaProfile(activeProfile)) {
+    if (section !== 'torrents' || isPinLockRequired || !isAdminJekaProfile(activeProfile)) {
       setIsKlubnichkaOpen(false);
     }
-  }, [section, activeProfile, setIsKlubnichkaOpen]);
+  }, [section, activeProfile, isPinLockRequired, setIsKlubnichkaOpen]);
 
   React.useEffect(() => {
     if (currentStation?.stationuuid && activeRadioTrack?.title) {
@@ -667,101 +670,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     }
   }, [currentStation?.stationuuid, activeRadioTrack]);
 
-  React.useEffect(() => {
-    if (section !== 'favorites' && section !== 'radio') return;
-    let cancelled = false;
-
-    const stationsToPoll =
-      section === 'favorites'
-        ? favorites.slice(0, 12)
-        : [
-            ...favorites.slice(0, 8),
-            ...radioStations
-              .filter(
-                (r: any) =>
-                  !favorites.some((f: any) => f.stationuuid === r.stationuuid)
-              )
-              .slice(0, 4),
-          ].slice(0, 12);
-
-    if (stationsToPoll.length === 0) return;
-
-    const pollStations = async () => {
-      if (
-        cancelled ||
-        (typeof document !== 'undefined' && document.visibilityState === 'hidden')
-      ) {
-        return;
-      }
-      const batchSize = 6;
-      for (let i = 0; i < stationsToPoll.length; i += batchSize) {
-        if (cancelled) return;
-        const batch = stationsToPoll.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (st: any) => {
-            const streamUrl = String(st?.url_resolved || st?.url || '').trim();
-            if (!streamUrl || !st?.stationuuid) return;
-            try {
-              const res = await fetch(
-                `/api/radio-meta?url=${encodeURIComponent(
-                  streamUrl
-                )}&name=${encodeURIComponent(st.name || '')}&_t=${Date.now()}`
-              );
-              if (!res.ok || cancelled) return;
-              const data = await res.json();
-              if (!cancelled && data?.track?.title) {
-                const nextCover =
-                  data.track.coverUrl ||
-                  data.track.artistAvatarUrl ||
-                  undefined;
-                const nextAvatar =
-                  data.track.artistAvatarUrl ||
-                  data.track.coverUrl ||
-                  undefined;
-                const nextArtist = data.track.artist || undefined;
-                const nextAlbum = data.track.album || undefined;
-                setStationLiveTracks((prev) => {
-                  const cur = prev[st.stationuuid];
-                  if (
-                    cur &&
-                    cur.title === data.track.title &&
-                    cur.artist === nextArtist &&
-                    cur.album === nextAlbum &&
-                    cur.coverUrl === nextCover &&
-                    cur.artistAvatarUrl === nextAvatar
-                  ) {
-                    return prev;
-                  }
-                  return {
-                    ...prev,
-                    [st.stationuuid]: {
-                      title: data.track.title,
-                      artist: nextArtist,
-                      album: nextAlbum,
-                      coverUrl: nextCover,
-                      artistAvatarUrl: nextAvatar,
-                    },
-                  };
-                });
-              }
-            } catch {
-              // ignore individual station error
-            }
-          })
-        );
-      }
-    };
-
-    void pollStations();
-    const timer = window.setInterval(() => {
-      void pollStations();
-    }, 60_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [section, favorites, radioStations]);
+  // Live track metadata is synced by useAudioPlayer for the actively playing station (avoids 12x/min idle /api/radio-meta Netlify invocations).
 
   // 4K UHD Dedicated Section State & Fetcher (Movies + Series in 4K, newest first, with LG TV optimized search)
   const [uhdMediaFilter, setUhdMediaFilter] = React.useState<'all' | 'movie' | 'series'>('all');
@@ -1255,8 +1164,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                       <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
                                         <VodCardProducerBadge item={item} />
                                       </div>
-                                      <button
-                                        type="button"
+                                      <span
+                                        role="button"
+                                        tabIndex={-1}
                                         data-fav-btn="true"
                                         title={
                                           isFav
@@ -1277,7 +1187,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         }`}
                                       >
                                         <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
-                                      </button>
+                                      </span>
                                     </div>
                                     <div className="mt-2.5 px-0.5">
                                       <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -1350,8 +1260,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                         <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1.5 pointer-events-none">
                                           <VodCardProducerBadge item={item} />
                                         </div>
-                                        <button
-                                          type="button"
+                                        <span
+                                          role="button"
+                                          tabIndex={-1}
                                           data-fav-btn="true"
                                           title={
                                             isFav
@@ -1372,7 +1283,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                           }`}
                                         >
                                           <Heart className={`w-3.5 h-3.5 ${isFav ? 'fill-white text-white' : ''}`} />
-                                        </button>
+                                        </span>
                                       </div>
                                       <div className="mt-2.5 px-0.5">
                                         <div className="text-sm sm:text-[15px] font-normal text-zinc-100 group-focus:text-white leading-snug line-clamp-2">
@@ -3879,7 +3790,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               <button
                                 type="button"
                                 onClick={() => setYtSearchQuery((q) => q + ' ')}
-                                className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-[#1e3a8a] focus:text-white text-white text-xs font-bold border border-white/10 cursor-pointer"
+                                className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white text-xs font-bold border border-white/10 cursor-pointer"
                               >
                                 {tr('Spațiu', 'Space', 'Пробел')}
                               </button>
@@ -3901,7 +3812,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 key={`yt_key_${ch}`}
                                 type="button"
                                 onClick={() => setYtSearchQuery((q) => q + ch)}
-                                className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-[#1e3a8a] focus:text-white text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
+                                className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
                               >
                                 {ch}
                               </button>
@@ -4007,7 +3918,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
 
                 {/* SECTION 5B: FILELIST.IO LIVE TORRENTS CATALOG ("Торренты FileList") + HIDDEN KLUBNICHKA 18+ FOR JEKA */}
                 {section === 'torrents' && (
-                  isKlubnichkaOpen && isAdminJekaProfile(activeProfile) ? (
+                  isKlubnichkaOpen && !isPinLockRequired && isAdminJekaProfile(activeProfile) ? (
                     <SmartTvKlubnichkaSection
                       tr={tr}
                       uiLang={
@@ -4106,7 +4017,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           );
                         })}
 
-                        {isAdminJekaProfile(activeProfile) && (
+                        {!isPinLockRequired && isAdminJekaProfile(activeProfile) && (
                           <button
                             type="button"
                             data-top-pill="true"
@@ -4201,7 +4112,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       </div>
 
                       {isFlKeyboardOpen && (
-                        <div className="pt-2 border-t border-white/10 space-y-2">
+                        <div data-tv-keyboard-open="true" className="pt-2 border-t border-white/10 space-y-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-xs font-bold text-[#60a5fa]">
                               {tr(
@@ -4214,7 +4125,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                               <button
                                 type="button"
                                 onClick={() => setFlSearchQuery((q) => q + ' ')}
-                                className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-[#1e3a8a] focus:text-white text-white text-xs font-bold border border-white/10 cursor-pointer"
+                                className="h-9 px-4 rounded-lg bg-[#2a2a2a] hover:bg-[#343434] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white text-xs font-bold border border-white/10 cursor-pointer"
                               >
                                 {tr('Spațiu', 'Space', 'Пробел')}
                               </button>
@@ -4236,7 +4147,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                 key={`fl_key_${ch}`}
                                 type="button"
                                 onClick={() => setFlSearchQuery((q) => q + ch)}
-                                className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-[#1e3a8a] focus:text-white text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
+                                className="h-10 rounded-lg bg-[#141414] hover:bg-white hover:text-[#141414] focus:bg-white focus:text-[#141414] focus:ring-2 focus:ring-white focus:outline-none text-white font-extrabold text-xs sm:text-sm transition-colors border border-white/10 cursor-pointer"
                               >
                                 {ch}
                               </button>
@@ -4604,16 +4515,18 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                 })()}
 
                 {/* SECTION 7: UNIFIED SMART TV FAVORITES HUB ("Избранное / My List / Favorite") */}
-                {section === 'saved' && (
+                {section === 'saved' && (() => {
+                  const nonAdultSavedVodItems = savedVodItems.filter((it: CinemetaItem) => !isAdult18WatchItem(it));
+                  return (
                   <div className="space-y-8 pb-16">
                     {/* Group 1: Favorite Movies & Series */}
                     <div className="space-y-3.5">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <h2 className="text-xl sm:text-[22px] font-normal text-zinc-100 tracking-tight">
                           {tr(
-                            `Favorite (${activeProfile.name}) — Filme & Seriale (${savedVodItems.length})`,
-                            `My List (${activeProfile.name}) — Movies & TV Series (${savedVodItems.length})`,
-                            `Избранное (${activeProfile.name}) — Фильмы и Сериалы (${savedVodItems.length})`
+                            `Favorite (${activeProfile.name}) — Filme & Seriale (${nonAdultSavedVodItems.length})`,
+                            `My List (${activeProfile.name}) — Movies & TV Series (${nonAdultSavedVodItems.length})`,
+                            `Избранное (${activeProfile.name}) — Фильмы и Сериалы (${nonAdultSavedVodItems.length})`
                           )}
                         </h2>
                         <button
@@ -4631,7 +4544,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                           </span>
                         </button>
                       </div>
-                      {savedVodItems.length === 0 ? (
+                      {nonAdultSavedVodItems.length === 0 ? (
                         <p className="text-xs sm:text-sm text-zinc-400">
                           {tr(
                             'Niciun film sau serial salvat la Favorite în acest profil încă.',
@@ -4641,7 +4554,7 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                         </p>
                       ) : (
                         <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(175px,1fr))] gap-x-3 sm:gap-x-4 gap-y-5 sm:gap-y-6">
-                          {savedVodItems.map((item) => {
+                          {nonAdultSavedVodItems.map((item: CinemetaItem) => {
                             const posterUrl = resolveSafeVodPosterUrl(item);
                             return (
                               <button
@@ -5018,7 +4931,8 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                       )}
                     </div>
                   </div>
-                )}
+                  );
+                })()}
     </>
   );
 });

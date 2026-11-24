@@ -457,6 +457,8 @@ function applyYtPlayerVolume(player: YtPlayerInstance | null): void {
   }
 }
 
+let activeStartSeconds = 0;
+
 function loadCandidateAtIndex(
   player: YtPlayerInstance,
   idx: number,
@@ -480,6 +482,7 @@ function loadCandidateAtIndex(
   promotedForActiveSeq = false;
   lastLoadedAtMs = Date.now();
   const safeStart = Math.max(0, Math.floor(startSeconds));
+  activeStartSeconds = safeStart;
   try {
     applyYtPlayerVolume(player);
     player.loadVideoById({
@@ -505,13 +508,26 @@ function loadCandidateAtIndex(
         }
       }, 900);
 
-      candidateWatchdogTimer = window.setTimeout(() => {
-        candidateWatchdogTimer = null;
-        if (seq !== activeSeq || !shouldBePlaying || hasCandidateReachedPlaying) {
-          return;
-        }
-        loadCandidateAtIndex(player, idx + 1, safeStart, seq);
-      }, 3200);
+      let bufferingGraceUsed = false;
+      const scheduleWatchdog = (delayMs: number) => {
+        candidateWatchdogTimer = window.setTimeout(() => {
+          candidateWatchdogTimer = null;
+          if (seq !== activeSeq || !shouldBePlaying || hasCandidateReachedPlaying) {
+            return;
+          }
+          try {
+            if (!bufferingGraceUsed && player.getPlayerState() === 3) {
+              bufferingGraceUsed = true;
+              scheduleWatchdog(3500);
+              return;
+            }
+          } catch {
+            // ignore state read error
+          }
+          loadCandidateAtIndex(player, idx + 1, safeStart, seq);
+        }, delayMs);
+      };
+      scheduleWatchdog(3200);
     }
   } catch {
     loadCandidateAtIndex(player, idx + 1, safeStart, seq);
@@ -576,10 +592,19 @@ function ensureYoutubeIframeApiLoaded(): Promise<void> {
       const s = document.createElement('script');
       s.src = 'https://www.youtube.com/iframe_api';
       s.async = true;
-      s.onerror = () => resolve();
+      s.onerror = () => {
+        s.remove();
+        ytApiLoadPromise = null;
+        resolve();
+      };
       document.head.appendChild(s);
     }
-    window.setTimeout(resolve, 6000);
+    window.setTimeout(() => {
+      if (!(win.YT && typeof win.YT.Player === 'function')) {
+        ytApiLoadPromise = null;
+      }
+      resolve();
+    }, 6000);
   });
 
   return ytApiLoadPromise;
@@ -711,7 +736,7 @@ async function ensureYoutubePlayerReady(): Promise<YtPlayerInstance | null> {
           onError: () => {
             if (!activeCallbacks) return;
             clearCandidateTimers();
-            loadCandidateAtIndex(player, activeCandidateIdx + 1, 0, activeSeq);
+            loadCandidateAtIndex(player, activeCandidateIdx + 1, activeStartSeconds, activeSeq);
           },
         },
       });

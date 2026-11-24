@@ -16,6 +16,7 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
   profiles: Array.isArray(SEED_PROFILES) ? [...SEED_PROFILES] : [],
   deletedProfileMap: {},
   progressByProfile: { ...(SEED_PROGRESS_BY_PROFILE || {}) },
+  progressDeletedByProfile: {},
   savedByProfile: { ...(SEED_SAVED_BY_PROFILE || {}) },
   savedRemovedByProfile: {},
   radioFavsByProfile: {},
@@ -27,6 +28,9 @@ const globalStore = globalThis.__aetherCloudSyncStore || {
 };
 if (!globalStore.savedRemovedByProfile) {
   globalStore.savedRemovedByProfile = {};
+}
+if (!globalStore.progressDeletedByProfile) {
+  globalStore.progressDeletedByProfile = {};
 }
 if (!globalStore.deletedProfileMap || typeof globalStore.deletedProfileMap !== 'object') {
   globalStore.deletedProfileMap = {};
@@ -61,11 +65,11 @@ function getCloudBlobStore() {
   }
 }
 
-async function readBlobState(store, key) {
+async function readBlobState(store, key, forceFresh = false) {
   if (!store) return { active: false, data: null };
   const storeScopeKey = `${globalThis.__aetherTestBlobStore ? 'test:' : ''}${key}`;
   const cached = globalStore.blobReadCache[storeScopeKey];
-  if (cached && Date.now() - cached.ts < BLOB_READ_CACHE_TTL_MS) {
+  if (!forceFresh && cached && Date.now() - cached.ts < BLOB_READ_CACHE_TTL_MS) {
     return { active: true, data: cached.data };
   }
   try {
@@ -224,16 +228,31 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
       Object.keys(mergedEpMap).length > 0 ||
       Boolean(v.episodeProgressMap) ||
       Boolean(existing.episodeProgressMap);
+    const preserveAdult18 =
+      Boolean(existing.item?.isAdult18) ||
+      Boolean(v.item?.isAdult18) ||
+      (Array.isArray(existing.item?.genres) &&
+        existing.item.genres.some((g) => /^erotic$/i.test(String(g || '').trim()))) ||
+      (Array.isArray(v.item?.genres) &&
+        v.item.genres.some((g) => /^erotic$/i.test(String(g || '').trim())));
     if ((v.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      const mergedItem = v.item
+        ? { ...(existing.item || {}), ...v.item, ...(preserveAdult18 ? { isAdult18: true } : {}) }
+        : existing.item;
       merged[k] = {
         ...existing,
         ...v,
+        ...(mergedItem ? { item: mergedItem } : {}),
         ...(hasEpMap ? { episodeProgressMap: mergedEpMap } : {}),
       };
     } else {
+      const mergedItem = existing.item
+        ? { ...(v.item || {}), ...existing.item, ...(preserveAdult18 ? { isAdult18: true } : {}) }
+        : v.item;
       merged[k] = {
         ...v,
         ...existing,
+        ...(mergedItem ? { item: mergedItem } : {}),
         ...(hasEpMap ? { episodeProgressMap: mergedEpMap } : {}),
       };
     }
@@ -260,6 +279,8 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
       const aKp = String(a?.kpId || (aId.startsWith('kp_') ? aId.replace('kp_', '') : '')).trim();
       const bKp = String(b?.kpId || (bId.startsWith('kp_') ? bId.replace('kp_', '') : '')).trim();
       if (aKp && bKp && aKp === bKp) { g.push(pEntry); matched = true; break; }
+      if (aImdb.startsWith('tt') && bImdb.startsWith('tt') && aImdb !== bImdb) continue;
+      if (aKp && bKp && aKp !== bKp) continue;
       const aT = String(a?.name || a?.title || a?.nameOriginal || '').toLowerCase().trim();
       const bT = String(b?.name || b?.title || b?.nameOriginal || '').toLowerCase().trim();
       if (aT && bT && aT.length > 2 && aT === bT) { g.push(pEntry); matched = true; break; }
@@ -276,8 +297,16 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
         const oT = other.updatedAt || 0;
         const prim = oT >= fT ? other : fin;
         const sec = oT >= fT ? fin : other;
-        const epMap = { ...(sec.episodeProgressMap || {}), ...(prim.episodeProgressMap || {}) };
+        const epMap = { ...(sec.episodeProgressMap || {}) };
+        for (const [ek, ev] of Object.entries(prim.episodeProgressMap || {})) {
+          const prevEv = epMap[ek];
+          if (!prevEv || (Number(ev?.updatedAt) || 0) >= (Number(prevEv?.updatedAt) || 0)) {
+            epMap[ek] = ev;
+          }
+        }
         const itm = { ...(sec.item || {}), ...(prim.item || {}) };
+        if (prim.item?.isAdult18 || sec.item?.isAdult18) itm.isAdult18 = true;
+        if (prim.item?.isAdultKlubnichka || sec.item?.isAdultKlubnichka) itm.isAdultKlubnichka = true;
         const cImdb = prim.item?.imdbId || sec.item?.imdbId || (String(prim.item?.id || '').startsWith('tt') ? prim.item.id : String(sec.item?.id || '').startsWith('tt') ? sec.item.id : undefined);
         if (cImdb) { itm.imdbId = cImdb; itm.id = cImdb; }
         const strictlyNewer = Math.abs(oT - fT) > 1500;
@@ -453,17 +482,25 @@ export default async (req) => {
   try {
     const url = new URL(req.url);
     const path = url.pathname;
-    const profileId = (url.searchParams.get('profileId') || 'p1').replace(
-      /[^a-zA-Z0-9_-]/g,
-      ''
-    );
+    const rawProfileId = (url.searchParams.get('profileId') || 'p1')
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .slice(0, 64);
+    const profileId =
+      !rawProfileId ||
+      rawProfileId === '__proto__' ||
+      rawProfileId === 'constructor' ||
+      rawProfileId === 'prototype'
+        ? 'p1'
+        : rawProfileId;
+    const isMutation = req.method === 'POST' || req.method === 'DELETE' || Boolean(url.searchParams.get('deleteId'));
     const blobStore = getCloudBlobStore();
 
     // 1. /api/tv-profiles
     if (path.includes('tv-profiles')) {
       const { active: blobActive, data: blobState } = await readBlobState(
         blobStore,
-        'profiles_state_v1'
+        'profiles_state_v1',
+        isMutation
       );
       const deletedMap = {
         ...(globalStore.deletedProfileMap || {}),
@@ -549,7 +586,7 @@ export default async (req) => {
 
     // 2. /api/tv-saved
     if (path.includes('tv-saved')) {
-      const { data: blobSaved } = await readBlobState(blobStore, `saved_v1_${profileId}`);
+      const { data: blobSaved } = await readBlobState(blobStore, `saved_v1_${profileId}`, isMutation);
       const blobItems = Array.isArray(blobSaved)
         ? blobSaved
         : Array.isArray(blobSaved?.items)
@@ -597,7 +634,7 @@ export default async (req) => {
             if (!it?.id) continue;
             const remTs = Number(mergedRemovedMap[it.id]) || 0;
             const incSavedTs = Number(it.savedAt) || 0;
-            if (remTs > 0 && (incSavedTs > remTs || (!incomingRemoved[it.id] && incSavedTs > 0))) {
+            if (remTs > 0 && incSavedTs > remTs) {
               delete mergedRemovedMap[it.id];
             }
           }
@@ -638,7 +675,7 @@ export default async (req) => {
 
     // 2b. /api/tv-radio-favorites (Per-profile Radio Favorites with timestamped sync)
     if (path.includes('tv-radio-favorites')) {
-      const { data: blobRadio } = await readBlobState(blobStore, `radio_v1_${profileId}`);
+      const { data: blobRadio } = await readBlobState(blobStore, `radio_v1_${profileId}`, isMutation);
       let currentRadioFavs = globalStore.radioFavsByProfile[profileId] || null;
       if (blobRadio && Array.isArray(blobRadio.stations)) {
         const blobTs = Number(blobRadio.updatedAt) || 0;
@@ -683,7 +720,7 @@ export default async (req) => {
 
     // 2c. /api/tv-channel-favorites (Per-profile TV Channel Favorites with timestamped sync)
     if (path.includes('tv-channel-favorites')) {
-      const { data: blobTvCh } = await readBlobState(blobStore, `tvch_v1_${profileId}`);
+      const { data: blobTvCh } = await readBlobState(blobStore, `tvch_v1_${profileId}`, isMutation);
       let currentTvFavs = globalStore.tvFavChannelsByProfile[profileId] || null;
       if (blobTvCh && Array.isArray(blobTvCh.channels)) {
         const blobTs = Number(blobTvCh.updatedAt) || 0;
@@ -728,7 +765,7 @@ export default async (req) => {
 
     // 2d. /api/tv-music-sync (Per-profile Music Favorites, Recent Tracks & Playback Progress)
     if (path.includes('tv-music-sync')) {
-      const { data: blobMusic } = await readBlobState(blobStore, `music_v1_${profileId}`);
+      const { data: blobMusic } = await readBlobState(blobStore, `music_v1_${profileId}`, isMutation);
       let currentMusic = globalStore.musicByProfile[profileId] || {
         updatedAt: 0,
         likedTracks: [],
@@ -763,18 +800,11 @@ export default async (req) => {
           const parsed = new URL(s);
           if (parsed.protocol !== 'https:' || !parsed.hostname) return '';
           const h = parsed.hostname.toLowerCase();
-          if (
-            h === 'localhost' ||
-            h === '127.0.0.1' ||
-            h === '0.0.0.0' ||
-            h.startsWith('10.') ||
-            h.startsWith('192.168.') ||
-            /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) ||
-            h.startsWith('169.254.') ||
-            h.endsWith('.local') ||
-            h.endsWith('.internal') ||
-            h.includes(':')
-          ) {
+          const isAllowedBridgeHost =
+            h.endsWith('.trycloudflare.com') ||
+            h === 'filmio.my' ||
+            h.endsWith('.filmio.my');
+          if (!isAllowedBridgeHost || h.includes(':')) {
             return '';
           }
           return parsed.origin;
@@ -783,7 +813,7 @@ export default async (req) => {
         }
       };
 
-      const { data: blobBridge } = await readBlobState(blobStore, 'home_bridge_v1');
+      const { data: blobBridge } = await readBlobState(blobStore, 'home_bridge_v1', isMutation);
       let currentBridge = globalStore.homeBridge || null;
       if (blobBridge && typeof blobBridge === 'object' && blobBridge.bridgeUrl) {
         const blobTs = Number(blobBridge.updatedAt) || 0;
@@ -828,19 +858,47 @@ export default async (req) => {
     }
 
     // 3. /api/tv-progress
-    const { data: blobProgress } = await readBlobState(blobStore, `progress_v1_${profileId}`);
+    const { active: progBlobActive, data: blobProgress } = await readBlobState(
+      blobStore,
+      `progress_v1_${profileId}`,
+      isMutation
+    );
+    const delTombstones = globalStore.progressDeletedByProfile[profileId] || {};
+    const baseMemProgress = progBlobActive && blobProgress && typeof blobProgress === 'object'
+      ? blobProgress
+      : globalStore.progressByProfile[profileId] || {};
     let currentProgress = dedupeAndMergeProgressMaps(
-      globalStore.progressByProfile[profileId] || {},
+      baseMemProgress,
       blobProgress && typeof blobProgress === 'object' ? blobProgress : {}
     );
+    for (const [dk, dts] of Object.entries(delTombstones)) {
+      const entry = currentProgress[dk];
+      if (entry && (Number(entry.updatedAt) || 0) <= Number(dts)) {
+        delete currentProgress[dk];
+      }
+    }
     globalStore.progressByProfile[profileId] = currentProgress;
 
     const deleteId = url.searchParams.get('deleteId') || '';
     if (req.method === 'DELETE' || deleteId) {
-      if (deleteId && deleteId in currentProgress) {
-        delete currentProgress[deleteId];
+      let removedAny = false;
+      if (deleteId) {
+        const nowDel = Date.now();
+        delTombstones[deleteId] = nowDel;
+        for (const [k, v] of Object.entries(currentProgress)) {
+          const itemId = String(v?.item?.id || '');
+          const itemImdb = String(v?.item?.imdbId || '');
+          if (k === deleteId || itemId === deleteId || itemImdb === deleteId) {
+            delete currentProgress[k];
+            delTombstones[k] = nowDel;
+            removedAny = true;
+          }
+        }
+        globalStore.progressDeletedByProfile[profileId] = delTombstones;
         globalStore.progressByProfile[profileId] = currentProgress;
-        await writeBlobState(blobStore, `progress_v1_${profileId}`, currentProgress);
+        if (removedAny) {
+          await writeBlobState(blobStore, `progress_v1_${profileId}`, currentProgress);
+        }
       }
       return new Response(JSON.stringify(currentProgress), {
         status: 200,
@@ -850,7 +908,15 @@ export default async (req) => {
     if (req.method === 'POST') {
       const incoming = await req.json().catch(() => null);
       if (incoming && typeof incoming === 'object') {
-        currentProgress = dedupeAndMergeProgressMaps(currentProgress, incoming);
+        const filteredIncoming = {};
+        for (const [ik, iv] of Object.entries(incoming)) {
+          const dts = Number(delTombstones[ik]) || 0;
+          const incTs = Number(iv?.updatedAt) || 0;
+          if (dts > 0 && incTs <= dts) continue;
+          if (dts > 0 && incTs > dts) delete delTombstones[ik];
+          filteredIncoming[ik] = iv;
+        }
+        currentProgress = dedupeAndMergeProgressMaps(currentProgress, filteredIncoming);
         globalStore.progressByProfile[profileId] = currentProgress;
         await writeBlobState(blobStore, `progress_v1_${profileId}`, currentProgress);
       }
