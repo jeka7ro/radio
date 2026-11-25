@@ -701,6 +701,7 @@ export function isDirectLocalHost(): boolean {
 
 const LOCAL_CANDIDATE_BRIDGE_ORIGINS = [
   'https://stream.filmio.my',
+  'http://192.168.2.92:8769',
   'http://192.168.101.87:8769',
   'http://192.168.2.57:8769',
   'http://localhost:8769',
@@ -1799,6 +1800,18 @@ function getProfileSettingsKey(profileId: string): string {
     : `${PROFILE_SETTINGS_BASE_KEY}_${profileId}`;
 }
 
+export function getDefaultSubFontPxForCurrentDevice(): number {
+  if (typeof window === 'undefined') return 26;
+  const isTv =
+    document.documentElement.classList.contains('smart-tv-mode') ||
+    Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__);
+  if (isTv) return 32;
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPod|Android.*Mobile/i.test(ua)) return 16;
+  if (isTabletOrMobileDevice()) return 22;
+  return 26;
+}
+
 export function getActiveProfileMediaPrefs(
   explicitProfileId?: string
 ): ProfileMediaPreferences {
@@ -1820,45 +1833,62 @@ export function getActiveProfileMediaPrefs(
     settingsParsed.defaultAudioPref ||
     'original') as ProfileMediaPreferences['defaultAudioPref'];
 
+  // Subtitle language & size are strictly PER-DEVICE (saved in localStorage on each device, never overwritten by cloud sync)
+  let deviceSubLang = '';
+  try {
+    deviceSubLang = localStorage.getItem(`aether_device_sub_lang_${profileId}`) || '';
+  } catch {
+    // ignore
+  }
   const rawSubLang =
-    prof?.defaultSubLang || settingsParsed.defaultSubLang || 'ro';
-  const subLang = (
-    settingsParsed.subLangExplicitlySetInSettings === true ||
-    prof?.uiLang === 'ru' ||
-    rawSubLang === 'ro'
-      ? rawSubLang
-      : 'ro'
-  ) as ProfileMediaPreferences['defaultSubLang'];
+    deviceSubLang ||
+    (settingsParsed.subLangExplicitlySetInSettings === true &&
+    typeof settingsParsed.defaultSubLang === 'string'
+      ? settingsParsed.defaultSubLang
+      : '') ||
+    (prof?.uiLang === 'ru' ? 'ru' : 'ro');
+  const subLang = (rawSubLang || 'ro') as ProfileMediaPreferences['defaultSubLang'];
 
-  const subFontSize = (prof?.defaultSubFontSize ||
-    settingsParsed.defaultSubFontSize ||
-    'large') as ProfileMediaPreferences['defaultSubFontSize'];
+  let subFontPx = 0;
+  try {
+    const devicePx = Number(
+      localStorage.getItem(`aether_device_sub_font_px_${profileId}`) || ''
+    );
+    if (Number.isFinite(devicePx) && devicePx >= 14 && devicePx <= 48) {
+      subFontPx = devicePx;
+    }
+  } catch {
+    // ignore
+  }
 
-  let subFontPx =
-    typeof prof?.defaultSubFontPx === 'number'
-      ? prof.defaultSubFontPx
-      : typeof settingsParsed.defaultSubFontPx === 'number'
-        ? (settingsParsed.defaultSubFontPx as number)
-        : 0;
-
-  if (!subFontPx || !Number.isFinite(subFontPx)) {
-    try {
-      const legacyPx = Number(
-        localStorage.getItem(`aether_tv_sub_font_px_${profileId}`) ||
-          localStorage.getItem('aether_tv_sub_font_px')
-      );
-      if (Number.isFinite(legacyPx) && legacyPx >= 14 && legacyPx <= 48) {
-        subFontPx = legacyPx;
-      }
-    } catch {
-      // ignore
+  if (!subFontPx && typeof settingsParsed.defaultSubFontPx === 'number') {
+    const localSettingsPx = settingsParsed.defaultSubFontPx as number;
+    if (Number.isFinite(localSettingsPx) && localSettingsPx >= 14 && localSettingsPx <= 48) {
+      subFontPx = localSettingsPx;
     }
   }
 
   if (!subFontPx || !Number.isFinite(subFontPx)) {
-    subFontPx =
-      subFontSize === 'xlarge' ? 32 : subFontSize === 'normal' ? 20 : 26;
+    subFontPx = getDefaultSubFontPxForCurrentDevice();
   }
+
+  let deviceSubFontSize = '';
+  try {
+    deviceSubFontSize = localStorage.getItem(`aether_device_sub_font_size_${profileId}`) || '';
+  } catch {
+    // ignore
+  }
+  const subFontSize = (
+    deviceSubFontSize === 'normal' ||
+    deviceSubFontSize === 'large' ||
+    deviceSubFontSize === 'xlarge'
+      ? deviceSubFontSize
+      : subFontPx >= 30
+        ? 'xlarge'
+        : subFontPx >= 23
+          ? 'large'
+          : 'normal'
+  ) as ProfileMediaPreferences['defaultSubFontSize'];
 
   let explicitTheme: string | null = null;
   try {
@@ -1920,7 +1950,7 @@ export function saveActiveProfileMediaPrefs(
           : 26;
   }
 
-  // 1. Save into per-profile SmartTvSettings in localStorage
+  // 1. Save into per-device localStorage (subtitle size & language stay strictly local per device!)
   try {
     const settingsKey = getProfileSettingsKey(profileId);
     const raw = localStorage.getItem(settingsKey);
@@ -1945,38 +1975,67 @@ export function saveActiveProfileMediaPrefs(
     };
     localStorage.setItem(settingsKey, JSON.stringify(updatedSettings));
     localStorage.setItem(`aether_tv_theme_${profileId}`, resolvedTheme);
-    localStorage.setItem(
-      `aether_tv_sub_font_px_${profileId}`,
-      String(next.defaultSubFontPx)
-    );
-    localStorage.setItem(
-      'aether_tv_sub_font_px',
-      String(next.defaultSubFontPx)
-    );
-    localStorage.setItem('aether_tv_sub_font_size', next.defaultSubFontSize);
+    if (
+      typeof partial.defaultSubFontPx === 'number' ||
+      Boolean(partial.defaultSubFontSize)
+    ) {
+      localStorage.setItem(
+        `aether_device_sub_font_px_${profileId}`,
+        String(next.defaultSubFontPx)
+      );
+      localStorage.setItem(
+        `aether_device_sub_font_size_${profileId}`,
+        next.defaultSubFontSize
+      );
+      localStorage.setItem(
+        `aether_tv_sub_font_px_${profileId}`,
+        String(next.defaultSubFontPx)
+      );
+      localStorage.setItem(
+        'aether_tv_sub_font_px',
+        String(next.defaultSubFontPx)
+      );
+      localStorage.setItem('aether_tv_sub_font_size', next.defaultSubFontSize);
+    }
+    if (typeof partial.defaultSubLang === 'string' && partial.defaultSubLang) {
+      localStorage.setItem(
+        `aether_device_sub_lang_${profileId}`,
+        next.defaultSubLang
+      );
+    }
   } catch {
     // ignore
   }
 
-  // 2. Save directly onto the active SharedTvProfile object & sync to /api/tv-profiles
-  try {
-    const profiles = loadSharedProfiles();
-    const updatedProfiles = profiles.map((p) =>
-      p.id === profileId
-        ? {
-            ...p,
-            defaultAudioPref: next.defaultAudioPref,
-            defaultSubLang: next.defaultSubLang,
-            defaultSubFontSize: next.defaultSubFontSize,
-            defaultSubFontPx: next.defaultSubFontPx,
-            tvTheme: next.tvTheme || p.tvTheme || 'dark',
-            updatedAt: Date.now(),
-          }
-        : p
-    );
-    saveSharedProfiles(updatedProfiles);
-  } catch {
-    // ignore
+  // 2. Sync ONLY cross-device prefs (audio / theme / autoSkipIntro) to SharedTvProfile — NEVER overwrite subtitle settings on other devices!
+  const hasCloudSharedPrefChange =
+    partial.defaultAudioPref !== undefined ||
+    partial.tvTheme !== undefined ||
+    partial.autoSkipIntro !== undefined;
+  if (hasCloudSharedPrefChange) {
+    try {
+      const profiles = loadSharedProfiles();
+      const updatedProfiles = profiles.map((p) =>
+        p.id === profileId
+          ? {
+              ...p,
+              ...(partial.defaultAudioPref !== undefined
+                ? { defaultAudioPref: next.defaultAudioPref }
+                : {}),
+              ...(partial.tvTheme !== undefined
+                ? { tvTheme: next.tvTheme || p.tvTheme || 'dark' }
+                : {}),
+              ...(partial.autoSkipIntro !== undefined
+                ? { autoSkipIntro: next.autoSkipIntro }
+                : {}),
+              updatedAt: Date.now(),
+            }
+          : p
+      );
+      saveSharedProfiles(updatedProfiles);
+    } catch {
+      // ignore
+    }
   }
 
   if (typeof window !== 'undefined') {

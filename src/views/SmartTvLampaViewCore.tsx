@@ -1940,6 +1940,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const next: SmartTvSettings = {
         ...tvSettingsRef.current,
         [key]: value,
+        ...(key === 'defaultSubFontSize'
+          ? {
+              defaultSubFontPx:
+                value === 'xlarge' ? 34 : value === 'normal' ? 20 : 26,
+            }
+          : {}),
       };
       tvSettingsRef.current = next;
       setTvSettings(next);

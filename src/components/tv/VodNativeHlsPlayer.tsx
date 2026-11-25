@@ -47,6 +47,7 @@ import {
 import type { EmbeddedSubtitleTrack } from '../../views/smartTvLampaHelpers';
 import {
   getActiveProfileMediaPrefs,
+  getDefaultSubFontPxForCurrentDevice,
   saveActiveProfileMediaPrefs,
 } from '../../services/deviceContinuityService';
 import {
@@ -1389,6 +1390,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
         hasFiredPlaying = true;
         isSeekingFileListRef.current = false;
         setIsSeekBuffering(false);
+        setSeekHudData(null);
         hideFrozenFrame();
         setStatus('playing');
       };
@@ -1408,6 +1410,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             if (res.status >= 500) {
               isSeekingFileListRef.current = false;
               setIsSeekBuffering(false);
+              setSeekHudData(null);
               hideFrozenFrame();
               onStreamError?.();
               return;
@@ -1419,6 +1422,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
             ) {
               isSeekingFileListRef.current = false;
               setIsSeekBuffering(false);
+              setSeekHudData(null);
               video.src = flStreamUrl;
               ensureAutoPlay(video);
               return;
@@ -1928,6 +1932,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
       isSeekingFileListRef.current = false;
       setIsSeekBuffering(false);
+      setSeekHudData(null);
       hideFrozenFrame();
       setStatus('playing');
     };
@@ -1983,6 +1988,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
       isSeekingFileListRef.current = false;
       setIsSeekBuffering(false);
+      setSeekHudData(null);
       hideFrozenFrame();
       setStatus('error');
       onStreamError?.();
@@ -4129,7 +4135,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           window.clearTimeout(seekHudTimerRef.current);
         }
         seekHudTimerRef.current = window.setTimeout(() => {
-          setSeekHudData(null);
+          if (!isSeekingFileListRef.current) {
+            setSeekHudData(null);
+          }
         }, 1500);
       }
       return;
@@ -4249,7 +4257,9 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       window.clearTimeout(seekHudTimerRef.current);
     }
     seekHudTimerRef.current = window.setTimeout(() => {
-      setSeekHudData(null);
+      if (!isSeekingFileListRef.current) {
+        setSeekHudData(null);
+      }
       cumulativeSeekDeltaSecRef.current = 0;
       keySeekCountRef.current = 0;
       lastKeySeekDirRef.current = 0;
@@ -6574,7 +6584,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           )}
 
         {/* APPLE TV+ / tvOS 26 LIQUID GLASS SEEK HUD CAPSULE */}
-        {(seekHudData || isSeekBuffering) && (
+        {seekHudData ? (
           <div
             data-vod-seek-hud="true"
             className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center animate-in fade-in zoom-in-95 duration-150 transition-all"
@@ -6593,7 +6603,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                       strokeWidth={2.2}
                       aria-hidden="true"
                     />
-                  ) : seekHudData?.direction === 'rew' ? (
+                  ) : seekHudData.direction === 'rew' ? (
                     <RotateCcw
                       className="w-4 h-4 text-white/95 shrink-0"
                       strokeWidth={2.2}
@@ -6607,34 +6617,43 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                     />
                   )}
                   <span className="px-2.5 py-0.5 rounded-full apple-vod-liquid-badge text-white text-[11px] sm:text-xs font-semibold tracking-[-0.01em] tabular-nums">
-                    {seekHudData ? seekHudData.deltaLabel : 'Derulare...'}
+                    {seekHudData.deltaLabel}
                   </span>
                 </div>
 
-                {seekHudData && (
-                  <div className="flex items-center gap-1.5 text-xs sm:text-[13.5px] font-semibold text-white tabular-nums tracking-[-0.01em]">
-                    <span>{seekHudData.targetTimeStr}</span>
-                    <span className="text-white/35 font-normal">/</span>
-                    <span className="text-white/60 font-normal">{seekHudData.totalTimeStr}</span>
-                    <span className="ml-0.5 px-2 py-0.5 rounded-full apple-vod-liquid-badge text-[10.5px] font-medium text-white/85 tabular-nums">
-                      {seekHudData.remainingTimeStr}
-                    </span>
-                  </div>
-                )}
+                <div className="flex items-center gap-1.5 text-xs sm:text-[13.5px] font-semibold text-white tabular-nums tracking-[-0.01em]">
+                  <span>{seekHudData.targetTimeStr}</span>
+                  <span className="text-white/35 font-normal">/</span>
+                  <span className="text-white/60 font-normal">{seekHudData.totalTimeStr}</span>
+                  <span className="ml-0.5 px-2 py-0.5 rounded-full apple-vod-liquid-badge text-[10.5px] font-medium text-white/85 tabular-nums">
+                    {seekHudData.remainingTimeStr}
+                  </span>
+                </div>
               </div>
 
               {/* Row 2: Luminous Apple White Liquid Glass Progress Bar */}
-              {seekHudData && (
-                <div className="relative z-10 w-full h-1.5 bg-white/30 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.75)] transition-all duration-150"
-                    style={{ width: `${Math.max(2, seekHudData.percent)}%` }}
-                  />
-                </div>
-              )}
+              <div className="relative z-10 w-full h-1.5 bg-white/30 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.75)] transition-all duration-150"
+                  style={{ width: `${Math.max(2, seekHudData.percent)}%` }}
+                />
+              </div>
             </div>
           </div>
-        )}
+        ) : isSeekBuffering ? (
+          <div
+            data-vod-seek-hud="true"
+            className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center animate-in fade-in duration-150"
+          >
+            <div className="w-12 h-12 rounded-full apple-vod-liquid-dock flex items-center justify-center">
+              <Loader2
+                className="w-5 h-5 text-white/95 animate-spin"
+                strokeWidth={2.2}
+                aria-hidden="true"
+              />
+            </div>
+          </div>
+        ) : null}
 
         {/* Generic Transport Toast (Redare / Pauză / Format Video / Audio Track) — Apple Liquid Glass */}
         {!seekHudData && !isSeekBuffering && seekToast && (
@@ -6668,9 +6687,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 : `max-w-4xl rounded-2xl bg-black/80 font-extrabold ${subFontClass}`
                 } text-white text-center leading-snug whitespace-pre-line shadow-2xl border border-white/10`}
               style={{
-                fontSize: isMobilePhone
-                  ? `${Math.max(13, Math.round(subFontPx * 0.62))}px`
-                  : `${subFontPx}px`,
+                fontSize: `${subFontPx}px`,
                 textShadow:
                   '0 2px 4px rgba(0,0,0,0.95), 0 0 10px rgba(0,0,0,0.95)',
               }}
@@ -7830,12 +7847,13 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                               type="button"
                               onFocus={() => onWakeOsd?.()}
                               onClick={() => {
-                                updateSubFontPx(24);
-                                showTransportToast('Mărime subtitrare: 24px');
+                                const defPx = getDefaultSubFontPxForCurrentDevice();
+                                updateSubFontPx(defPx);
+                                showTransportToast(`Mărime subtitrare: ${defPx}px`);
                               }}
                               className="py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white/90 text-xs font-medium transition-all focus:outline-none focus:bg-white focus:text-zinc-950 focus:ring-2 focus:ring-white focus:scale-[1.03] cursor-pointer"
                             >
-                              Reset (24px)
+                              Reset ({getDefaultSubFontPxForCurrentDevice()}px)
                             </button>
                             <button
                               type="button"

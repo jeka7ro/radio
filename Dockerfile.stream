@@ -4,10 +4,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+COPY index.html tsconfig.json vite.config.ts tailwind.config.js postcss.config.js ./
+COPY public ./public
+COPY src ./src
 COPY server ./server
-COPY src/server ./src/server
 
-RUN ./node_modules/.bin/esbuild server/stream-server.ts \
+RUN ./node_modules/.bin/vite build \
+  && ./node_modules/.bin/esbuild server/stream-server.ts \
   --bundle \
   --platform=node \
   --format=esm \
@@ -22,12 +25,23 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends i965-va-driver libva-drm2 \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends i965-va-driver-shaders \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/dist-stream ./dist-stream
 
 ENV NODE_ENV=production
+ENV LIBVA_DRIVER_NAME=i965
 EXPOSE 8769
 
 CMD ["node", "dist-stream/server.mjs"]

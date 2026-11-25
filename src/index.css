@@ -88,23 +88,23 @@
   }
 }
 
-/* iPad PWA Standalone (iPadOS 26 status bar + Liquid Glass top blur ~44-50px + Home Indicator bottom clearance in both portrait & landscape) */
+/* iPad PWA Standalone (iPadOS status bar 24px + compact top clearance ~30px + Home Indicator bottom clearance in portrait & landscape) */
 html.ipad-pwa-standalone {
-  --safe-top: max(env(safe-area-inset-top, 0px), 44px);
+  --safe-top: max(env(safe-area-inset-top, 0px), 26px);
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--ipad-pwa-bottom-floor, 22px));
-  --ios-portrait-header-pad: 6px;
+  --ios-portrait-header-pad: 4px;
 }
 
 html.ipad-pwa-standalone [data-lampa-root="true"]>header {
-  padding-top: calc(max(env(safe-area-inset-top, 0px), 44px) + 6px) !important;
+  padding-top: calc(max(env(safe-area-inset-top, 0px), 26px) + 4px) !important;
 }
 
 html.ipad-pwa-standalone [data-lampa-root="true"]>header>div:first-child {
-  height: 3.25rem !important;
+  height: 3rem !important;
 }
 
 html.ipad-pwa-standalone [data-lampa-root="true"]>div>main {
-  scroll-padding-top: calc(3.75rem + max(env(safe-area-inset-top, 0px), 44px));
+  scroll-padding-top: calc(3.25rem + max(env(safe-area-inset-top, 0px), 26px));
 }
 
 html.ipad-pwa-standalone [data-vod-full-player="true"] {

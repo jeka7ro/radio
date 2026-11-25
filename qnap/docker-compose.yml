@@ -5,11 +5,15 @@ services:
       dockerfile: Dockerfile.stream
     container_name: filmio-stream
     restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri
     environment:
       NODE_ENV: production
       PORT: "8769"
+      LIBVA_DRIVER_NAME: i965
       FILMIO_NODE_NAME: qnap-ts253be
-      FILMIO_MAX_CACHE_GB: "25"
+      FILMIO_MAX_CACHE_GB: "100"
+      FILMIO_FULL_EPISODE_CACHE: "1"
       FILMIO_IDLE_TORRENT_MIN: "10"
     ports:
       - "8769:8769"

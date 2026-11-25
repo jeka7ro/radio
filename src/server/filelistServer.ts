@@ -3,9 +3,60 @@ import path from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 import { createRequire } from 'node:module';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import ffmpegPath from 'ffmpeg-static';
+
+const SYSTEM_FFMPEG_PATH = '/usr/bin/ffmpeg';
+const VAAPI_DEVICE_PATH = '/dev/dri/renderD128';
+const LINUX_VAAPI_AVAILABLE: boolean = (() => {
+  if (process.platform !== 'linux') return false;
+  if (!fs.existsSync(VAAPI_DEVICE_PATH) || !fs.existsSync(SYSTEM_FFMPEG_PATH)) {
+    return false;
+  }
+  try {
+    const probe = spawnSync(
+      SYSTEM_FFMPEG_PATH,
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-vaapi_device',
+        VAAPI_DEVICE_PATH,
+        '-f',
+        'lavfi',
+        '-i',
+        'color=black:s=128x128:d=0.04',
+        '-vf',
+        'format=nv12,hwupload',
+        '-c:v',
+        'h264_vaapi',
+        '-f',
+        'null',
+        '-',
+      ],
+      { timeout: 6000, stdio: 'ignore' }
+    );
+    const ok = probe.status === 0;
+    if (ok) {
+      console.log('[HardwareAccel] Intel VA-API (/dev/dri/renderD128) h264_vaapi READY');
+    }
+    return ok;
+  } catch {
+    return false;
+  }
+})();
+
+export function getHardwareAccelSummary(): string {
+  if (process.platform === 'darwin') return 'videotoolbox';
+  if (LINUX_VAAPI_AVAILABLE) return 'intel-vaapi';
+  return 'cpu-libx264';
+}
+
+function getEffectiveFfmpegBin(useVaapi: boolean): string {
+  if (useVaapi && LINUX_VAAPI_AVAILABLE) return SYSTEM_FFMPEG_PATH;
+  return (ffmpegPath as string) || SYSTEM_FFMPEG_PATH;
+}
 
 const requireCjs = createRequire(import.meta.url);
 try {
@@ -3088,7 +3139,7 @@ function restrictTorrentSelectionToFile(
 ): void {
   try {
     const files = entry.engine?.files;
-    if (!Array.isArray(files) || files.length <= 1) return;
+    if (!Array.isArray(files) || files.length === 0) return;
     files.forEach((f: any, idx: number) => {
       if (idx !== targetFileIdx && typeof f?.deselect === 'function') {
         try {
@@ -3098,6 +3149,124 @@ function restrictTorrentSelectionToFile(
         }
       }
     });
+    // On QNAP NAS SSD (FILMIO_FULL_EPISODE_CACHE=1), download the full active episode/movie
+    // in background onto SSD (up to 25 GB) so every seek anywhere in the video is <0.3s!
+    if (process.env.FILMIO_FULL_EPISODE_CACHE === '1') {
+      const targetFile = files[targetFileIdx];
+      const fileLen = Number(targetFile?.length || 0);
+      if (
+        targetFile &&
+        typeof targetFile.select === 'function' &&
+        fileLen > 0 &&
+        fileLen <= 25 * 1024 * 1024 * 1024
+      ) {
+        try {
+          targetFile.select();
+        } catch {
+          // ignore
+        }
+      }
+      scheduleNextEpisodePrewarm(entry, targetFileIdx);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function scheduleNextEpisodePrewarm(
+  entry: ActiveTorrentEngine,
+  currentFileIdx: number
+): void {
+  try {
+    if (process.env.FILMIO_FULL_EPISODE_CACHE !== '1') return;
+    const rawFiles = entry.engine?.files;
+    if (!Array.isArray(rawFiles) || rawFiles.length < 2) return;
+
+    const videoItems = rawFiles
+      .map((f: any, idx: number) => ({
+        idx,
+        name: String(f?.name || ''),
+        length: Number(f?.length || 0),
+        file: f,
+      }))
+      .filter(
+        (v) =>
+          /\.(mkv|mp4|avi|m4v|ts|webm)$/i.test(v.name) &&
+          !/\bsample\b/i.test(v.name) &&
+          v.length > 50 * 1024 * 1024
+      )
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+    const curPos = videoItems.findIndex((v) => v.idx === currentFileIdx);
+    if (curPos < 0 || curPos + 1 >= videoItems.length) return;
+    const nextEp = videoItems[curPos + 1];
+    if (!nextEp || nextEp.length > 25 * 1024 * 1024 * 1024) return;
+
+    const prevTimer = (entry as any).__nextEpPrewarmTimer as ReturnType<typeof setInterval> | undefined;
+    if (prevTimer) {
+      clearInterval(prevTimer);
+      (entry as any).__nextEpPrewarmTimer = undefined;
+    }
+
+    const doneKey = `next_head:${nextEp.idx}`;
+    if ((entry as any).__nextEpPrewarmedSet?.has?.(doneKey)) return;
+
+    let checks = 0;
+    const timer = setInterval(() => {
+      checks += 1;
+      if (checks > 24 || !activeEngines.has(entry.id)) {
+        clearInterval(timer);
+        if ((entry as any).__nextEpPrewarmTimer === timer) {
+          (entry as any).__nextEpPrewarmTimer = undefined;
+        }
+        return;
+      }
+      // Only start next-episode pre-cache once the current episode is 100% on SSD (zero interference!)
+      if (!getVerifiedCompleteDiskFilePath(entry, currentFileIdx)) return;
+
+      clearInterval(timer);
+      if ((entry as any).__nextEpPrewarmTimer === timer) {
+        (entry as any).__nextEpPrewarmTimer = undefined;
+      }
+      if (!(entry as any).__nextEpPrewarmedSet) {
+        (entry as any).__nextEpPrewarmedSet = new Set<string>();
+      }
+      if ((entry as any).__nextEpPrewarmedSet.has(doneKey)) return;
+      (entry as any).__nextEpPrewarmedSet.add(doneKey);
+
+      try {
+        console.log(
+          `[NextEpPreCache] Current ep #${currentFileIdx} 100% on SSD -> pre-warming next ep #${nextEp.idx} (${nextEp.name})`
+        );
+        prewarmVideoTailCues(entry, nextEp.idx);
+        const headEnd = Math.min(nextEp.length - 1, 64 * 1024 * 1024);
+        const headStream = nextEp.file.createReadStream({ start: 0, end: headEnd });
+        const stopHead = () => {
+          try {
+            headStream.destroy();
+          } catch {
+            // ignore
+          }
+        };
+        const safety = setTimeout(stopHead, 90_000);
+        if (typeof safety.unref === 'function') safety.unref();
+        headStream.on('data', () => {});
+        headStream.on('end', () => {
+          clearTimeout(safety);
+          probeTorrentVideoFile(entry, nextEp.idx).catch(() => {});
+        });
+        headStream.on('error', () => {
+          clearTimeout(safety);
+          stopHead();
+        });
+      } catch {
+        // ignore prewarm errors
+      }
+    }, 15_000);
+    if (typeof timer.unref === 'function') timer.unref();
+    (entry as any).__nextEpPrewarmTimer = timer;
   } catch {
     // ignore
   }
@@ -4812,6 +4981,7 @@ export async function handleFileListRequest(
         '-sn'
       );
 
+      let useVaapiStream = false;
       if (needsVideoTranscode) {
         const maxScaleW = capTo1080p ? 1920 : is4kSource ? 3840 : 1920;
         const use4kBitrate = !capTo1080p && is4kSource;
@@ -4840,6 +5010,23 @@ export async function handleFileListRequest(
             'bt709',
             '-colorspace',
             'bt709'
+          );
+        } else if (LINUX_VAAPI_AVAILABLE) {
+          useVaapiStream = true;
+          ffArgs.unshift('-vaapi_device', VAAPI_DEVICE_PATH);
+          ffArgs.push(
+            '-c:v',
+            'h264_vaapi',
+            '-g',
+            '48',
+            '-b:v',
+            use4kBitrate ? '14M' : '8M',
+            '-maxrate',
+            use4kBitrate ? '18M' : '10M',
+            '-bufsize',
+            use4kBitrate ? '24M' : '16M',
+            '-vf',
+            `format=nv12,hwupload,scale_vaapi=w='min(${maxScaleW},iw)':h=-2:format=nv12`
           );
         } else {
           ffArgs.push(
@@ -4925,7 +5112,7 @@ export async function handleFileListRequest(
       }
 
       const ff = spawn(
-        ffmpegPath as string,
+        getEffectiveFfmpegBin(useVaapiStream),
         ffArgs,
         liveSubTrack ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] } : undefined
       );
@@ -5253,6 +5440,7 @@ export async function handleFileListRequest(
           '-sn'
         );
 
+        let useVaapiHls = false;
         if (isHevc) {
           const is4kHls = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
           const maxScaleHls = is4kHls ? 3840 : 1920;
@@ -5277,6 +5465,23 @@ export async function handleFileListRequest(
               'bt709',
               '-colorspace',
               'bt709',
+              '-g',
+              '48'
+            );
+          } else if (LINUX_VAAPI_AVAILABLE) {
+            useVaapiHls = true;
+            ffArgs.unshift('-vaapi_device', VAAPI_DEVICE_PATH);
+            ffArgs.push(
+              '-c:v',
+              'h264_vaapi',
+              '-b:v',
+              is4kHls ? '14M' : '8M',
+              '-maxrate',
+              is4kHls ? '18M' : '10M',
+              '-bufsize',
+              is4kHls ? '24M' : '16M',
+              '-vf',
+              `format=nv12,hwupload,scale_vaapi=w='min(${maxScaleHls},iw)':h=-2:format=nv12`,
               '-g',
               '48'
             );
@@ -5351,7 +5556,7 @@ export async function handleFileListRequest(
         }
 
         const ff = spawn(
-          ffmpegPath as string,
+          getEffectiveFfmpegBin(useVaapiHls),
           ffArgs,
           hlsSubTrack ? { stdio: ['pipe', 'pipe', 'pipe', 'pipe'] } : undefined
         );

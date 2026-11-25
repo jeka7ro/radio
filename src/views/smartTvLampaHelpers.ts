@@ -2445,11 +2445,15 @@ export function loadSmartTvSettings(profileId?: string): SmartTvSettings {
           : profileMedia.tvTheme === 'ambient' || profileMedia.tvTheme === 'dark'
             ? profileMedia.tvTheme
             : DEFAULT_SMART_TV_SETTINGS.tvTheme || 'dark';
+    const hasDeviceSubLang = Boolean(
+      localStorage.getItem(`aether_device_sub_lang_${targetPid}`)
+    );
     const rawSubLang =
       profileMedia.defaultSubLang ||
       parsed.defaultSubLang ||
       DEFAULT_SMART_TV_SETTINGS.defaultSubLang;
     const effectiveDefaultSubLang =
+      hasDeviceSubLang ||
       parsed.subLangExplicitlySetInSettings === true ||
       targetProfile?.uiLang === 'ru' ||
       rawSubLang === 'ro'
