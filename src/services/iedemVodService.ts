@@ -1,3 +1,8 @@
+import {
+  matchesSmartSearch,
+  transliterateLatinToCyrillic,
+} from '../utils/smartSearch';
+
 export type IedemTvShowNetworkId = 'all' | 'tnt' | 'vk' | 'pyatnitsa' | 'sts_ntv';
 
 export interface IedemVodItem {
@@ -2133,20 +2138,29 @@ export async function searchIedemVod(query: string): Promise<IedemVodItem[]> {
     .trim();
   const tokens = qNorm.split(/\s+/).filter(Boolean);
 
+  const hasCyrillic = /[а-яёА-ЯЁ]/.test(clean);
+  const effectiveRuQuery = hasCyrillic
+    ? clean
+    : qNorm !== clean.toLowerCase().replace(/ё/g, 'е') && /[а-яё]/.test(qNorm)
+      ? qNorm.replace(/\b(vk|stand up)\b/gi, '').trim() || transliterateLatinToCyrillic(clean)
+      : transliterateLatinToCyrillic(clean);
+
   const matchedCurated = CURATED_TOP_RUSSIAN_TV_SHOWS.filter((show) => {
-    const haystack = `${show.title} ${show.networkBadge || ''} ${show.description || ''}`
-      .toLowerCase()
-      .replace(/ё/g, 'е');
-    return tokens.every((tk) => haystack.includes(tk));
+    const haystack = `${show.title} ${show.networkBadge || ''} ${show.description || ''}`;
+    const hayLow = haystack.toLowerCase().replace(/ё/g, 'е');
+    return (
+      tokens.every((tk) => hayLow.includes(tk)) ||
+      matchesSmartSearch(haystack, clean)
+    );
   });
 
   const sp = new URLSearchParams({
     cmd: 'search',
-    query: clean,
+    query: effectiveRuQuery || clean,
   });
 
   const [kzResults, apiItems] = await Promise.all([
-    fetchKinozalCatalog({ category: 'all_ru', q: clean }),
+    fetchKinozalCatalog({ category: 'all_ru', q: effectiveRuQuery || clean }),
     (async () => {
       try {
         const res = await fetch(`/api/iedem-vod?${sp.toString()}`);

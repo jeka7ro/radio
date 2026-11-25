@@ -59,6 +59,7 @@ import {
   Car,
   PictureInPicture2,
 } from 'lucide-react';
+import { matchesSmartSearch } from '../utils/smartSearch';
 import {
   clearAllOfflineMusic,
   formatOfflineMusicBytes,
@@ -4922,6 +4923,89 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         }
       }
 
+      // TV Remote BLUE button: triggers the same hard refresh as the header Refresh icon
+      // ANYWHERE in the app EXCEPT during active video playback (VOD player, Live TV, or Trailer)
+      if (!isPlayingVod && !currentTvChannel && !isTrailerModalOpen) {
+        const kcBlue = e.keyCode || e.which;
+        const kBlue = e.key;
+        const isBlueRemoteKey =
+          kcBlue === 406 ||
+          (kcBlue === 186 && kBlue !== ';' && kBlue !== ':') ||
+          kBlue === 'ColorF3Blue' ||
+          kBlue === 'Blue' ||
+          kBlue === 'VK_BLUE' ||
+          (kBlue === 'F4' &&
+            !isInputFocused &&
+            !e.altKey &&
+            !e.ctrlKey &&
+            !e.metaKey);
+        if (isBlueRemoteKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          handleHardRefreshTvApp(() => {
+            const next = `${window.location.pathname}?_r=${Date.now()}${window.location.hash || ''}`;
+            window.location.href = next;
+          });
+          return;
+        }
+      }
+
+      // On Home / browse screens when no title/player/modal is open:
+      // - TV Remote RED button navigates directly to Klubnichka 18+ (for unlocked admin profile)
+      if (
+        !activeVodItem &&
+        !isPlayingVod &&
+        !currentTvChannel &&
+        !isTvRadioPlayerOpen &&
+        !isSettingsDrawerOpen &&
+        !isFilterDrawerOpen &&
+        !isCatalogDrawerOpen &&
+        !isSubFinderOpen &&
+        !isTrailerModalOpen &&
+        !isHandoffModalOpen &&
+        !isProfilePickerOpen &&
+        !isPinLockRequired &&
+        !selectedActor &&
+        !isInputFocused &&
+        section !== 'tv'
+      ) {
+        const kcHome = e.keyCode || e.which;
+        const kHome = e.key;
+        const isRedRemoteKey =
+          kcHome === 403 ||
+          kcHome === 183 ||
+          kHome === 'ColorF0Red' ||
+          kHome === 'Red' ||
+          kHome === 'VK_RED' ||
+          (kHome === 'F1' && !e.altKey && !e.ctrlKey && !e.metaKey);
+        if (isRedRemoteKey && isAdminJekaProfile(activeProfile)) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          setIsFilterDrawerOpen(false);
+          setIsCatalogDrawerOpen(false);
+          setSection('torrents');
+          window.dispatchEvent(new CustomEvent('aether:open-klubnichka'));
+          const mainEl =
+            rootContainerRef.current?.querySelector<HTMLElement>('main');
+          if (mainEl) {
+            mainEl.scrollTop = 0;
+          }
+          window.setTimeout(() => {
+            const targetEl =
+              document.querySelector<HTMLElement>(
+                '[data-klubnichka-root="true"] [data-klub-active-cat="true"]'
+              ) ||
+              document.querySelector<HTMLElement>(
+                '[data-klubnichka-root="true"] [data-klub-card="true"]'
+              );
+            targetEl?.focus({ preventScroll: true });
+          }, 90);
+          return;
+        }
+      }
+
       // If VOD Fullscreen Player is active:
       // - Deterministic TV Remote navigation between Top Bar, Timeline Slider, and Bottom Controls (Play, -15s, +15s, Next Episode, Audio, Subtitles, Quality)
       if (isPlayingVod && !isSettingsDrawerOpen && !isSubFinderOpen) {
@@ -5363,14 +5447,17 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           !isOsdControlFocused &&
           (e.key === 'ArrowLeft' || e.key === 'ArrowRight')
         ) {
-          e.preventDefault();
-          e.stopPropagation();
           hideVodOsd();
-          window.dispatchEvent(
-            new CustomEvent('aether:vod-transport', {
-              detail: { action: e.key === 'ArrowRight' ? 'ff' : 'rw' },
-            })
-          );
+          // When VodNativeHlsPlayer is active, let its own window keydown/keyup handler own smart hold-seek without double-firing
+          if (!vodMenuEl) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.dispatchEvent(
+              new CustomEvent('aether:vod-transport', {
+                detail: { action: e.key === 'ArrowRight' ? 'ff' : 'rw' },
+              })
+            );
+          }
           return;
         }
 
@@ -6453,6 +6540,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     editingProfileId,
     tvSearchQuery,
     radioSearchQuery,
+    handleHardRefreshTvApp,
+    activeProfile,
   ]);
 
   // Auto-focus the first interactive option inside Setări Smart TV, Filtru, or Catalog drawer when opened or changing sub-menu
@@ -7442,6 +7531,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           /\b(kstati|zvezdy|zvezdi|tnt|piatnica|piatnitsa|pyatnitsa|pyatnica|kvn|stendap|standup|holop|major|mazhor|brigada|slovo\s*pacana|kuhnya|interny|univer|metod|trigger|fiser|fisher|nevskiy|sklif|bitva)\b/i.test(
             q
           );
+        const shouldSearchIedemRu = isRussianSearchQuery || q.length >= 3;
         const [kpRes, movieRes, seriesRes, kzIedemRes, flCatalogRes] = await Promise.allSettled([
           fetch(
             `https://kinopoiskapiunofficial.tech/api/v2.2/films?keyword=${encodeURIComponent(
@@ -7463,7 +7553,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               q
             )}.json`
           ).then((r) => (r.ok ? r.json() : { metas: [] })),
-          isRussianSearchQuery ? searchIedemVod(q).catch(() => []) : Promise.resolve([]),
+          shouldSearchIedemRu ? searchIedemVod(q).catch(() => []) : Promise.resolve([]),
           isLocalHomeServer() && !/^[а-яёА-ЯЁ\s\d]+$/.test(q)
             ? fetch(buildFileListApiUrl(`/api/filelist/catalog?q=${encodeURIComponent(q)}`))
                 .then((r) => (r.ok ? r.json() : { items: [] }))
@@ -7474,8 +7564,22 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (cancelled) return;
 
         const combined: CinemetaItem[] = [];
+        // Instant typo-tolerant & Latin<->Cyrillic matches from local watch history
+        for (const entry of Object.values(watchProgressMapRef.current || {})) {
+          const histItem = entry?.item;
+          if (!histItem || !histItem.name) continue;
+          if (histItem.isAdultKlubnichka || histItem.isAdult18 || String(histItem.id || '').startsWith('klub_')) {
+            continue;
+          }
+          if (
+            matchesSmartSearch(histItem.name, q) ||
+            (histItem.nameOriginal && matchesSmartSearch(histItem.nameOriginal, q))
+          ) {
+            combined.push(histItem);
+          }
+        }
         if (
-          isRussianSearchQuery &&
+          shouldSearchIedemRu &&
           kzIedemRes.status === 'fulfilled' &&
           Array.isArray(kzIedemRes.value)
         ) {
@@ -11749,7 +11853,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       episode: number,
       currentTime: number,
       duration: number,
-      forcePlayingState?: boolean
+      forcePlayingState?: boolean,
+      immediateCloud?: boolean
     ) => {
       if (item.isAdultKlubnichka || item.id.startsWith('klub_')) {
         return;
@@ -11901,7 +12006,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const cleanMap = deduplicateProgressMap(next);
       watchProgressMapRef.current = cleanMap;
       const isStillPlaying = typeof forcePlayingState === 'boolean' ? forcePlayingState : isPlayingVodRef.current;
-      saveWatchProgressMap(cleanMap, activeProfileId, { immediateCloud: !isStillPlaying });
+      saveWatchProgressMap(cleanMap, activeProfileId, {
+        immediateCloud: Boolean(immediateCloud) || !isStillPlaying,
+        changedKey: canonicalKey,
+      });
       if (
         !isStillPlaying ||
         !isPlayingVodRef.current ||
@@ -12055,6 +12163,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       watchProgressMapRef.current = cleanNext;
       saveWatchProgressMap(cleanNext, activeProfileId, {
         immediateCloud: !playing || !fromHeartbeat,
+        changedKey: activeId,
       });
       if (!playing || !fromHeartbeat) {
         setWatchProgressMap(cleanNext);
@@ -12118,6 +12227,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               ...(existing?.episodeProgressMap || {}),
               ...(v.episodeProgressMap || {}),
             };
+          let epMapUpdated = false;
           if (
             !vCleared &&
             existing?.episodeProgressMap &&
@@ -12125,7 +12235,10 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
           ) {
             for (const [epK, epV] of Object.entries(v.episodeProgressMap)) {
               const prevEp = existing.episodeProgressMap[epK];
-              if (!prevEp || (epV?.updatedAt || 0) >= (prevEp?.updatedAt || 0)) {
+              if (!prevEp || (epV?.updatedAt || 0) > (prevEp?.updatedAt || 0)) {
+                mergedEpMap[epK] = epV;
+                epMapUpdated = true;
+              } else if ((epV?.updatedAt || 0) === (prevEp?.updatedAt || 0)) {
                 mergedEpMap[epK] = epV;
               } else {
                 mergedEpMap[epK] = prevEp;
@@ -12152,9 +12265,18 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 : v.server,
             episodeProgressMap: mergedEpMap,
           };
+          const missingItemMeta = Boolean(
+            existing &&
+              ((v.item?.iedemFid && !existing.item?.iedemFid) ||
+                (v.item?.iedemStreamUrl && !existing.item?.iedemStreamUrl) ||
+                (v.item?.year && !existing.item?.year) ||
+                (v.item?.qualityBadge && !existing.item?.qualityBadge))
+          );
           if (
             !existing ||
             (cleanEntry.updatedAt || 0) > (existing.updatedAt || 0) ||
+            epMapUpdated ||
+            missingItemMeta ||
             Object.keys(mergedEpMap).length >
             Object.keys(existing.episodeProgressMap || {}).length ||
             existing.deviceName !== sanitizeDeviceName(existing.deviceName)
@@ -12164,9 +12286,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                 ? cleanEntry
                 : {
                     ...existing,
-                    ...(keepAdult18OnMerge
-                      ? { item: { ...existing.item, isAdult18: true } }
-                      : {}),
+                    item: {
+                      ...(v.item || {}),
+                      ...(existing.item || {}),
+                      ...(keepAdult18OnMerge ? { isAdult18: true } : {}),
+                    },
                     episodeProgressMap: mergedEpMap,
                   };
             changed = true;
@@ -12175,30 +12299,38 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         if (!changed) {
           return prev;
         }
+        const dedupedMerged = deduplicateProgressMap(merged);
+        const mergedStr = JSON.stringify(dedupedMerged);
         try {
           localStorage.setItem(
             getWatchProgressKeyForProfile(targetProfileId),
-            JSON.stringify(merged)
+            mergedStr
           );
         } catch {
           // ignore
         }
-        watchProgressMapRef.current = merged;
-        return merged;
+        lastSyncedProgressHashRef.current[targetProfileId] = mergedStr;
+        watchProgressMapRef.current = dedupedMerged;
+        return dedupedMerged;
       });
     };
 
-    const syncProgressAndSaved = (force = false) => {
+    const syncProgressAndSaved = (
+      mode: boolean | 'force' | 'visibility' | 'interval' = false
+    ) => {
       if (
         isPlayingVodRef.current ||
         (typeof document !== 'undefined' && document.visibilityState === 'hidden')
       ) {
         return;
       }
+      const force = mode === true || mode === 'force';
+      const fromVisibility = mode === 'visibility';
       const currentProf = activeProfileId;
       const now = Date.now();
       const lastAt = lastFullSyncAtRef.current[currentProf] || 0;
-      if (!force && now - lastAt < 120_000) {
+      const minCooldownMs = fromVisibility ? 15_000 : 120_000;
+      if (!force && now - lastAt < minCooldownMs) {
         return;
       }
       lastFullSyncAtRef.current[currentProf] = now;
@@ -12206,10 +12338,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
       const cleanProf = encodeURIComponent(currentProf);
       const local = loadWatchProgressMap(currentProf);
       const bodyStr = JSON.stringify(local);
-      const progressDirty = lastSyncedProgressHashRef.current[currentProf] !== bodyStr;
+      const progressDirty =
+        Object.keys(local).length > 0 &&
+        lastSyncedProgressHashRef.current[currentProf] !== bodyStr;
       const servedByLocalNode =
         typeof window !== 'undefined' && window.location.port === '8769';
-      fetch(`/api/tv-progress?profileId=${cleanProf}`, {
+      const freshSuffix = force || fromVisibility ? '&fresh=1' : '';
+      fetch(`/api/tv-progress?profileId=${cleanProf}${freshSuffix}`, {
         ...(progressDirty
           ? {
               method: 'POST',
@@ -12230,7 +12365,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
               remote && typeof remote === 'object' ? remote : local
             );
             const cloudDirty = progressDirty || payloadToCloud !== bodyStr;
-            fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
+            fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}${freshSuffix}`, {
               ...(cloudDirty
                 ? {
                     method: 'POST',
@@ -12334,12 +12469,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     };
 
     switchRadioFavoritesProfile(activeProfileId);
-    syncProgressAndSaved(true);
+    syncProgressAndSaved('force');
     const intervalMs = isLocalHomeServer() ? 90_000 : 300_000;
-    const timer = window.setInterval(() => syncProgressAndSaved(false), intervalMs);
+    const timer = window.setInterval(() => syncProgressAndSaved('interval'), intervalMs);
     const onFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        syncProgressAndSaved(false);
+        syncProgressAndSaved('visibility');
       }
     };
     window.addEventListener('focus', onFocusOrVisible);
@@ -15569,15 +15704,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           position: 'fixed',
                           inset: 0,
                           width: '100%',
-                          height: '100vh',
+                          height: '100dvh',
                           maxWidth: '100vw',
-                          maxHeight: '100vh',
+                          maxHeight: '100dvh',
                           zIndex: 9999,
                         }
-                        : {
-                          height: '100vh',
-                          maxHeight: '100vh',
-                        }
+                        : undefined
                   }
                   className="fixed inset-0 z-[200] w-full h-full bg-black flex flex-col overflow-hidden"
                 >
@@ -15703,7 +15835,13 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                         </button>
                       )}
 
-                      {/* Mobile-Only Title + Episode Badge in Top Bar */}
+                      {/* Mobile-Only Title + Episode Badge in Top Bar (Phones only — iPad shows the full Movie/Series Poster Card in the bottom OSD dock) */}
+                      {!(
+                        typeof navigator !== 'undefined' &&
+                        (/iPad/i.test(navigator.userAgent || '') ||
+                          (navigator.platform === 'MacIntel' &&
+                            (navigator.maxTouchPoints || 0) > 1))
+                      ) && (
                       <div className={`${isMobilePhone ? 'flex' : 'flex sm:hidden'} items-center gap-1.5 min-w-0 px-3 py-1.5 rounded-full bg-zinc-950/85 border border-white/20 shadow-lg`}>
                         <span className="text-xs font-extrabold text-white truncate max-w-[125px] sm:max-w-[180px]">
                           {detailedMeta?.name || activeVodItem.name}
@@ -15714,6 +15852,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                           </span>
                         )}
                       </div>
+                      )}
                     </div>
 
                     {/* Right: Minimal Utility Pills */}
@@ -16149,7 +16288,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             setActiveSubLabel('');
                             setActiveSubCues([]);
                           }}
-                          onTimeUpdate={(cur, dur) => {
+                          onTimeUpdate={(cur, dur, flushNow) => {
                             lastPlaybackTimeRef.current = { cur, dur };
                             const prevEntry = findWatchProgressEntry(
                               watchProgressMapRef.current,
@@ -16158,7 +16297,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             const prevCur = prevEntry?.currentTime || 0;
                             if (
                               cur > 1 &&
-                              (!prevEntry?.isPlayingNow ||
+                              (flushNow ||
+                                !prevEntry?.isPlayingNow ||
                                 Math.abs(cur - prevCur) >= 4)
                             ) {
                               updateWatchProgress(
@@ -16166,7 +16306,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 selectedSeason,
                                 selectedEpisode,
                                 cur,
-                                dur
+                                dur,
+                                undefined,
+                                Boolean(flushNow)
                               );
                             }
 
@@ -16525,7 +16667,7 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             setActiveSubLabel('');
                             setActiveSubCues([]);
                           }}
-                          onTimeUpdate={(cur, dur) => {
+                          onTimeUpdate={(cur, dur, flushNow) => {
                             lastPlaybackTimeRef.current = { cur, dur };
                             const prevEntry = findWatchProgressEntry(
                               watchProgressMapRef.current,
@@ -16534,7 +16676,8 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             const prevCur = prevEntry?.currentTime || 0;
                             if (
                               cur > 1 &&
-                              (!prevEntry?.isPlayingNow ||
+                              (flushNow ||
+                                !prevEntry?.isPlayingNow ||
                                 Math.abs(cur - prevCur) >= 4)
                             ) {
                               updateWatchProgress(
@@ -16542,7 +16685,9 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                                 selectedSeason,
                                 selectedEpisode,
                                 cur,
-                                dur
+                                dur,
+                                undefined,
+                                Boolean(flushNow)
                               );
                             }
 
@@ -16603,7 +16748,11 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                       !isDirectStreamLoading && (
                         <div
                           data-vod-bottom-dock="true"
-                          className={`absolute inset-x-2 sm:inset-x-8 bottom-2 sm:bottom-6 z-30 overflow-visible rounded-2xl sm:rounded-[28px] tahoe-emerald-osd px-3 sm:px-6 py-2.5 sm:py-4 flex flex-col gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible
+                          style={{
+                            bottom:
+                              'max(14px, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 8px))',
+                          }}
+                          className={`absolute inset-x-2 sm:inset-x-8 z-30 overflow-visible rounded-2xl sm:rounded-[28px] tahoe-emerald-osd px-3 sm:px-6 py-2.5 sm:py-4 flex flex-col gap-2 sm:gap-3 transition-all duration-300 ${isVodOsdVisible
                             ? 'opacity-100 translate-y-0 pointer-events-auto'
                             : 'opacity-0 translate-y-2 pointer-events-none'
                             }`}

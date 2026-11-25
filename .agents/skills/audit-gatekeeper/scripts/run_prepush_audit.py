@@ -326,12 +326,17 @@ def vector3_business_invariants() -> Tuple[bool, str, List[str]]:
     else:
         details.append("Memorare ordine episoade per serial (`episodesSortDesc`: Crescător 1->N implicit / Descrescător N->1) prezentă")
 
-    # 3b. Verifică prezența regulii Skip Intro / Skip Recap (inclusiv fallback pentru Asia Express tt10295772 și seriale neindexate în IntroDB)
+    # 3b. Verifică prezența regulii Skip Intro / Skip Recap precise (IntroDB + isIntroApiSettled + Subtitrări cu marker explicit + Fallback explicit Asia Express tt10295772, fără ghicit orb pe seriale neindexate)
     player_txt = (ROOT_DIR / "src" / "components" / "tv" / "VodNativeHlsPlayer.tsx").read_text(encoding="utf-8", errors="ignore")
-    if "fallback_reality_recap_1_105" not in player_txt or "fallback_reality_intro_105_210" not in player_txt or "fallback_series_intro" not in player_txt:
-        errors.append("Lipsește regula fallback Skip Recap / Skip Intro pentru Asia Express (tt10295772) și serialele neindexate în IntroDB în VodNativeHlsPlayer.tsx!")
+    if (
+        "fallback_reality_recap_1_105" not in player_txt
+        or "fallback_reality_intro_105_210" not in player_txt
+        or "isIntroApiSettled" not in player_txt
+        or "fallback_series_intro_1_85" in player_txt
+    ):
+        errors.append("Regula Skip Recap / Skip Intro nu respectă precizia (IntroDB + isIntroApiSettled + Fallback explicit Asia Express, fără fallback orb generic pe seriale) în VodNativeHlsPlayer.tsx!")
     else:
-        details.append("Regula Skip Recap / Skip Intro activă (IntroDB + Subtitrări + Fallback Asia Express / Seriale)")
+        details.append("Regula Skip Recap / Skip Intro precisă activă (IntroDB + isIntroApiSettled + Subtitrări cu marker + Fallback explicit Asia Express / Reality)")
 
     # 4. Teste etalon în Node pentru:
     #    a) Sortarea variantelor HLS (#EXT-X-STREAM-INF) descrescător după rezoluție în tv-proxy.mjs

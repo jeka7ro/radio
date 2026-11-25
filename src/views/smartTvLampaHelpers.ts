@@ -1,6 +1,7 @@
 import {
   AudioTrackPreference,
 } from "../services/subtitleSearchService";
+import { scoreSmartSearchMatch } from "../utils/smartSearch";
 import {
   TvPreferredQuality,
   TvSubFontSize,
@@ -1700,6 +1701,40 @@ export function findWatchProgressEntry(
   return undefined;
 }
 
+export function compactWatchProgressItem(
+  item: CinemetaItem
+): CinemetaItem {
+  if (!item || typeof item !== 'object') return item;
+  const clean: Record<string, unknown> = { ...(item as unknown as Record<string, unknown>) };
+  // Strict denylist: strip ONLY heavy Cinemeta catalog bloat; preserve ALL playback/routing/badge fields (iedemFid, iedemStreamUrl, year, flTorrentId, klubnichkaRawId, etc.)
+  delete clean.videos;
+  delete clean.links;
+  delete clean.trailers;
+  delete clean.trailerStreams;
+  delete clean.popularities;
+  delete clean.cast;
+  delete clean.director;
+  delete clean.writer;
+  delete clean.awards;
+  delete clean.behaviorHints;
+  if (typeof clean.description === 'string' && clean.description.length > 320) {
+    clean.description = clean.description.slice(0, 320);
+  }
+  if (Array.isArray(clean.genres)) {
+    const cleanGenres: string[] = [];
+    for (const g of clean.genres) {
+      if (typeof g !== 'string') continue;
+      const t = g.trim();
+      if (!t || t.length > 40 || t.includes('\uFFFD')) continue;
+      if (!cleanGenres.includes(t)) cleanGenres.push(t);
+      if (cleanGenres.length >= 8) break;
+    }
+    if (cleanGenres.length > 0) clean.genres = cleanGenres;
+    else delete clean.genres;
+  }
+  return clean as unknown as CinemetaItem;
+}
+
 export function loadWatchProgressMap(
   profileId = 'p1'
 ): Record<string, VodWatchProgressEntry> {
@@ -1716,7 +1751,10 @@ export function loadWatchProgressMap(
       const out: Record<string, VodWatchProgressEntry> = {};
       for (const [key, val] of Object.entries(m)) {
         if (!val || typeof val !== 'object' || !val.item) continue;
-        const nextVal: VodWatchProgressEntry = { ...val, item: { ...val.item } };
+        const nextVal: VodWatchProgressEntry = {
+          ...val,
+          item: compactWatchProgressItem(val.item),
+        };
         if (
           !/^мама$|^mama$/i.test(String(nextVal.item.name || '').trim()) &&
           (String(nextVal.item.poster || '').includes('11303084') ||
@@ -1894,24 +1932,47 @@ export function loadWatchProgressMap(
 }
 
 const CLOUD_PROGRESS_MIN_INTERVAL_MS = 60_000;
+const KEEPALIVE_SAFE_BYTE_LIMIT = 56_000;
 const lastCloudProgressPayloadByProf = new Map<string, string>();
 const lastCloudProgressSentAtByProf = new Map<string, number>();
 const pendingCloudProgressTimerByProf = new Map<string, number>();
-const pendingCloudProgressPayloadByProf = new Map<string, string>();
+const pendingCloudProgressDeltaByProf = new Map<
+  string,
+  Record<string, VodWatchProgressEntry>
+>();
 let cloudProgressFlushListenersAttached = false;
 
-function dispatchCloudProgressPost(cleanProf: string, payload: string): void {
+function getUtf8ByteLength(str: string): number {
+  try {
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(str).length;
+    }
+  } catch {
+    // fallback
+  }
+  return str.length * 2;
+}
+
+function dispatchCloudProgressPost(
+  cleanProf: string,
+  payload: string,
+  preferKeepalive = false
+): void {
   if (lastCloudProgressPayloadByProf.get(cleanProf) === payload) return;
   lastCloudProgressPayloadByProf.set(cleanProf, payload);
   lastCloudProgressSentAtByProf.set(cleanProf, Date.now());
-  pendingCloudProgressPayloadByProf.delete(cleanProf);
+  pendingCloudProgressDeltaByProf.delete(cleanProf);
+  // Fetch spec rejects keepalive: true when payload > 64 KiB; guard strictly below 56 KiB!
+  const allowKeepalive =
+    preferKeepalive && getUtf8ByteLength(payload) <= KEEPALIVE_SAFE_BYTE_LIMIT;
+  const reqInit: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    ...(allowKeepalive ? { keepalive: true } : {}),
+  };
   try {
-    fetch(`/api/tv-progress?profileId=${cleanProf}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload,
-      keepalive: true,
-    }).catch(() => { });
+    fetch(`/api/tv-progress?profileId=${cleanProf}`, reqInit).catch(() => {});
   } catch {
     // ignore
   }
@@ -1923,12 +1984,9 @@ function dispatchCloudProgressPost(cleanProf: string, payload: string): void {
       ));
   if (isLocalHomeServer() && !servedByLocalNode) {
     try {
-      fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-        keepalive: true,
-      }).catch(() => { });
+      fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, reqInit).catch(
+        () => {}
+      );
     } catch {
       // ignore
     }
@@ -1939,12 +1997,14 @@ function ensureCloudProgressFlushListeners(): void {
   if (cloudProgressFlushListenersAttached || typeof window === 'undefined') return;
   cloudProgressFlushListenersAttached = true;
   const flushAllPending = () => {
-    for (const [cleanProf, timerId] of pendingCloudProgressTimerByProf.entries()) {
-      window.clearTimeout(timerId);
-      pendingCloudProgressTimerByProf.delete(cleanProf);
-      const pendingPayload = pendingCloudProgressPayloadByProf.get(cleanProf);
-      if (pendingPayload) {
-        dispatchCloudProgressPost(cleanProf, pendingPayload);
+    for (const [cleanProf, deltaMap] of pendingCloudProgressDeltaByProf.entries()) {
+      const timerId = pendingCloudProgressTimerByProf.get(cleanProf);
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId);
+        pendingCloudProgressTimerByProf.delete(cleanProf);
+      }
+      if (deltaMap && Object.keys(deltaMap).length > 0) {
+        dispatchCloudProgressPost(cleanProf, JSON.stringify(deltaMap), true);
       }
     }
   };
@@ -1959,18 +2019,35 @@ function ensureCloudProgressFlushListeners(): void {
 export function saveWatchProgressMap(
   map: Record<string, VodWatchProgressEntry>,
   profileId = 'p1',
-  options?: { immediateCloud?: boolean }
+  options?: { immediateCloud?: boolean; changedKey?: string }
 ): void {
   const cleanProf = encodeURIComponent(profileId || 'p1');
-  const cleanMap = deduplicateProgressMap(map);
-  const payload = JSON.stringify(cleanMap);
+  const rawClean = deduplicateProgressMap(map);
+  const cleanMap: Record<string, VodWatchProgressEntry> = {};
+  for (const [k, v] of Object.entries(rawClean)) {
+    if (!v || typeof v !== 'object') continue;
+    cleanMap[k] = v.item ? { ...v, item: compactWatchProgressItem(v.item) } : v;
+  }
+  const fullPayload = JSON.stringify(cleanMap);
   try {
-    localStorage.setItem(getWatchProgressKeyForProfile(profileId), payload);
+    localStorage.setItem(getWatchProgressKeyForProfile(profileId), fullPayload);
     localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
   } catch {
     // ignore
   }
-  if (payload === lastCloudProgressPayloadByProf.get(cleanProf)) {
+
+  // Send compact delta when a specific changed entry is known (always < 2 KB -> instant + keepalive-safe)
+  const changedKey = options?.changedKey;
+  const deltaEntries: Record<string, VodWatchProgressEntry> =
+    changedKey && cleanMap[changedKey]
+      ? { [changedKey]: cleanMap[changedKey] }
+      : cleanMap;
+  const mergedDelta: Record<string, VodWatchProgressEntry> = {
+    ...(pendingCloudProgressDeltaByProf.get(cleanProf) || {}),
+    ...deltaEntries,
+  };
+  const networkPayload = JSON.stringify(mergedDelta);
+  if (networkPayload === lastCloudProgressPayloadByProf.get(cleanProf)) {
     return;
   }
 
@@ -1982,7 +2059,7 @@ export function saveWatchProgressMap(
       window.clearTimeout(existingTimer);
       pendingCloudProgressTimerByProf.delete(cleanProf);
     }
-    dispatchCloudProgressPost(cleanProf, payload);
+    dispatchCloudProgressPost(cleanProf, networkPayload, Boolean(changedKey));
     return;
   }
 
@@ -1994,11 +2071,11 @@ export function saveWatchProgressMap(
       window.clearTimeout(existingTimer);
       pendingCloudProgressTimerByProf.delete(cleanProf);
     }
-    dispatchCloudProgressPost(cleanProf, payload);
+    dispatchCloudProgressPost(cleanProf, networkPayload, Boolean(changedKey));
     return;
   }
 
-  pendingCloudProgressPayloadByProf.set(cleanProf, payload);
+  pendingCloudProgressDeltaByProf.set(cleanProf, mergedDelta);
   if (
     !pendingCloudProgressTimerByProf.has(cleanProf) &&
     typeof window !== 'undefined'
@@ -2006,9 +2083,9 @@ export function saveWatchProgressMap(
     const waitMs = Math.max(1000, CLOUD_PROGRESS_MIN_INTERVAL_MS - elapsed);
     const timerId = window.setTimeout(() => {
       pendingCloudProgressTimerByProf.delete(cleanProf);
-      const queued = pendingCloudProgressPayloadByProf.get(cleanProf);
-      if (queued) {
-        dispatchCloudProgressPost(cleanProf, queued);
+      const queuedMap = pendingCloudProgressDeltaByProf.get(cleanProf);
+      if (queuedMap && Object.keys(queuedMap).length > 0) {
+        dispatchCloudProgressPost(cleanProf, JSON.stringify(queuedMap), true);
       }
     }, waitMs);
     pendingCloudProgressTimerByProf.set(cleanProf, timerId);
@@ -2787,16 +2864,30 @@ export function deduplicateVodItems(
     const bName = normalizeVodTitleKey(b.name);
     const bOrig = normalizeVodTitleKey(b.nameOriginal);
 
-    const scoreMatch = (n1: string, n2: string) => {
+    const scoreMatch = (
+      n1: string,
+      n2: string,
+      raw1?: string,
+      raw2?: string
+    ) => {
       if (!qNorm) return 0;
-      if (n1 === qNorm || n2 === qNorm) return 3;
-      if (n1.startsWith(qNorm) || n2.startsWith(qNorm)) return 2;
-      if (n1.includes(qNorm) || n2.includes(qNorm)) return 1;
+      if (n1 === qNorm || n2 === qNorm) return 5;
+      if (n1.startsWith(qNorm) || n2.startsWith(qNorm)) return 4;
+      if (n1.includes(qNorm) || n2.includes(qNorm)) return 3;
+      const smartScore = Math.max(
+        scoreSmartSearchMatch(raw1, searchQuery),
+        scoreSmartSearchMatch(raw2, searchQuery)
+      );
+      if (smartScore >= 5) return 5;
+      if (smartScore >= 4) return 4;
+      if (smartScore >= 3) return 3;
+      if (smartScore >= 2) return 2;
+      if (smartScore >= 1) return 1;
       return 0;
     };
 
-    const sa = scoreMatch(aName, aOrig);
-    const sb = scoreMatch(bName, bOrig);
+    const sa = scoreMatch(aName, aOrig, a.name, a.nameOriginal);
+    const sb = scoreMatch(bName, bOrig, b.name, b.nameOriginal);
     if (sb !== sa) return sb - sa;
 
     const ya = extractVodProductionYear(a);

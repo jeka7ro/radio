@@ -1673,25 +1673,32 @@ async function resolveTitleCandidatesAndYear({
 }
 
 async function callIedemVipApi(payload) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    const res = await fetch(IEDEM_VIP_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'OTT-Play/1.0',
-      },
-      body: JSON.stringify({ key: IEDEM_VIP_API_KEY, ...payload }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6500);
+    try {
+      const res = await fetch(IEDEM_VIP_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'OTT-Play/1.0',
+        },
+        body: JSON.stringify({ key: IEDEM_VIP_API_KEY, ...payload }),
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // retry once on transient network / timeout error
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt === 0) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
   }
+  return null;
 }
 
 async function verifyIedemHlsNotTrailer(masterM3u8Url) {

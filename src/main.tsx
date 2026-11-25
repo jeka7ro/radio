@@ -25,10 +25,25 @@ import './index.css';
   }
 })();
 
-// In development (localhost), unregister any stale Service Worker so it never
-// caches Vite HMR modules or triggers unexpected page reloads.
+// In development (localhost) or Smart TV / Media Station X embedded WebViews,
+// unregister any stale Service Worker so it never caches Vite HMR modules,
+// triggers unexpected reloads, or stalls LG/Samsung TV boot on live HTTPS.
 if ('serviceWorker' in navigator) {
   const devHost = window.location.hostname.toLowerCase();
+  const uaStr = navigator.userAgent || '';
+  let isFramedWebView = false;
+  try {
+    isFramedWebView = window.self !== window.top;
+  } catch {
+    isFramedWebView = true;
+  }
+  const isSmartTvOrMsx =
+    Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__) ||
+    document.documentElement.classList.contains('smart-tv-mode') ||
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|VIDAA|HbbTV/i.test(
+      uaStr
+    ) ||
+    isFramedWebView;
   const isLocalDev =
     devHost === 'localhost' ||
     devHost === '127.0.0.1' ||
@@ -36,7 +51,7 @@ if ('serviceWorker' in navigator) {
     devHost.endsWith('.lhr.life') ||
     devHost.endsWith('.trycloudflare.com') ||
     devHost.endsWith('.serveousercontent.com');
-  if (isLocalDev) {
+  if (isLocalDev || isSmartTvOrMsx) {
     navigator.serviceWorker
       .getRegistrations()
       .then((registrations) => {

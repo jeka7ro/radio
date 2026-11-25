@@ -25,6 +25,7 @@ import {
   Check,
 } from "lucide-react";
 import { isAdultTvChannel } from "../../services/tvApi";
+import { matchesSmartSearch } from "../../utils/smartSearch";
 import { resolveChannelEpg, getEpgTimingStats } from "../../services/epgService";
 import { setActiveTvPlaylistContext } from "./TvOsdChannelList";
 import { TvPlayerModal } from "./TvPlayerModal";
@@ -605,6 +606,16 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
     },
     []
   );
+  React.useEffect(() => {
+    const onOpenKlubnichka = () => {
+      if (!isPinLockRequired && isAdminJekaProfile(activeProfile)) {
+        setIsKlubnichkaOpen(true);
+      }
+    };
+    window.addEventListener('aether:open-klubnichka', onOpenKlubnichka);
+    return () =>
+      window.removeEventListener('aether:open-klubnichka', onOpenKlubnichka);
+  }, [activeProfile, isPinLockRequired, setIsKlubnichkaOpen]);
   const [searchCatFilter, setSearchCatFilter] = React.useState<
     'all' | 'movies' | 'series' | 'docs' | 'kinozal' | 'tv'
   >('all');
@@ -3249,7 +3260,9 @@ export const SmartTvCatalogSections: React.FC<any> = React.memo(({
                                   return false;
                                 if (
                                   !ch.name.toLowerCase().includes(qGlobal) &&
-                                  !(ch.group || '').toLowerCase().includes(qGlobal)
+                                  !(ch.group || '').toLowerCase().includes(qGlobal) &&
+                                  !matchesSmartSearch(ch.name, qGlobal) &&
+                                  !matchesSmartSearch(ch.group || '', qGlobal)
                                 ) {
                                   return false;
                                 }

@@ -35,6 +35,7 @@ import {
   fetchAdultTvChannels,
   isAdultTvChannel,
 } from '../../services/tvApi';
+import { matchesSmartSearch } from '../../utils/smartSearch';
 import {
   loadSharedProfiles,
   loadSharedActiveProfileId,
@@ -683,11 +684,15 @@ export const TvOsdChannelList: React.FC<TvOsdChannelListProps> = ({
     const matchesFilters = (ch: TvChannel): boolean => {
       if (!q) return true;
       const epg = resolveChannelEpg(ch);
-      const nameMatch = ch.name.toLowerCase().includes(q);
-      const groupMatch = (ch.group || '').toLowerCase().includes(q);
+      const nameMatch =
+        ch.name.toLowerCase().includes(q) || matchesSmartSearch(ch.name, q);
+      const groupMatch =
+        (ch.group || '').toLowerCase().includes(q) ||
+        matchesSmartSearch(ch.group || '', q);
       const epgMatch =
         epg?.now?.title?.toLowerCase().includes(q) ||
-        epg?.now?.desc?.toLowerCase().includes(q);
+        epg?.now?.desc?.toLowerCase().includes(q) ||
+        matchesSmartSearch(epg?.now?.title || '', q);
       return Boolean(nameMatch || groupMatch || epgMatch);
     };
 

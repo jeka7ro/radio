@@ -1347,6 +1347,60 @@ function tvStreamProxyPlugin(): Plugin {
         res.end('ok');
       });
 
+      // Atomic disk persistence helper (write temp file + atomic rename) prevents truncated/corrupt JSON on unexpected exit
+      const writeFileAtomicSync = (filePath: string, content: string): void => {
+        const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+        try {
+          fs.writeFileSync(tmpPath, content, 'utf-8');
+          fs.renameSync(tmpPath, filePath);
+        } catch (err) {
+          try {
+            if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+          } catch {
+            // ignore temp cleanup failure
+          }
+          throw err;
+        }
+      };
+
+      const lanDistAssetCache = new Map<string, { mtimeMs: number; buf: Buffer }>();
+      let lanLastGoodHtml: { ver: number; raw: string; gz: Buffer } | null = null;
+      let lanLastGoodJs: { raw: Buffer; gz: Buffer } | null = null;
+      let lanLastGoodCss: { raw: Buffer; gz: Buffer } | null = null;
+
+      // Pre-warm RAM fallback from existing dist/ on startup so LG TV Chrome 68 stays protected even during the very first `vite build`
+      try {
+        const initDistDir = path.resolve(process.cwd(), 'dist');
+        const initIndex = path.join(initDistDir, 'index.html');
+        if (fs.existsSync(initIndex)) {
+          const ver = Math.floor(fs.statSync(initIndex).mtimeMs);
+          const freshHtml = fs
+            .readFileSync(initIndex, 'utf-8')
+            .replace(/(\/assets\/[^"'\s>]+\.(?:js|css))/g, `$1?v=${ver}`);
+          lanLastGoodHtml = {
+            ver,
+            raw: freshHtml,
+            gz: zlib.gzipSync(Buffer.from(freshHtml, 'utf-8'), { level: 6 }),
+          };
+        }
+        const initAssetsDir = path.join(initDistDir, 'assets');
+        if (fs.existsSync(initAssetsDir)) {
+          const assetFiles = fs.readdirSync(initAssetsDir);
+          const jsName = assetFiles.find((f) => f.startsWith('index-') && f.endsWith('.js'));
+          if (jsName) {
+            const rawJs = fs.readFileSync(path.join(initAssetsDir, jsName));
+            lanLastGoodJs = { raw: rawJs, gz: zlib.gzipSync(rawJs, { level: 6 }) };
+          }
+          const cssName = assetFiles.find((f) => f.startsWith('style-') && f.endsWith('.css'));
+          if (cssName) {
+            const rawCss = fs.readFileSync(path.join(initAssetsDir, cssName));
+            lanLastGoodCss = { raw: rawCss, gz: zlib.gzipSync(rawCss, { level: 6 }) };
+          }
+        }
+      } catch {
+        // ignore startup warm-up error
+      }
+
       server.middlewares.use((req, res, next) => {
         if (req.method === 'OPTIONS') {
           res.writeHead(204, {
@@ -1530,9 +1584,22 @@ function tvStreamProxyPlugin(): Plugin {
                 ext === '.svg' ||
                 ext === '.json' ||
                 ext === '.webmanifest';
-              const rawBuf = fs.readFileSync(assetFile);
               const sendGzip = acceptsGzip && isCompressible;
-              const payload = sendGzip ? zlib.gzipSync(rawBuf, { level: 6 }) : rawBuf;
+              const statMtime = Math.floor(fs.statSync(assetFile).mtimeMs);
+              const cacheKey = `${assetFile}:${sendGzip ? 'gz' : 'raw'}`;
+              const cachedAsset = lanDistAssetCache.get(cacheKey);
+              let payload: Buffer;
+              if (cachedAsset && cachedAsset.mtimeMs === statMtime) {
+                payload = cachedAsset.buf;
+              } else {
+                const rawBuf = fs.readFileSync(assetFile);
+                const gzBuf = isCompressible ? zlib.gzipSync(rawBuf, { level: 6 }) : rawBuf;
+                payload = sendGzip ? gzBuf : rawBuf;
+                if (lanDistAssetCache.size > 24) lanDistAssetCache.clear();
+                lanDistAssetCache.set(cacheKey, { mtimeMs: statMtime, buf: payload });
+                if (ext === '.js') lanLastGoodJs = { raw: rawBuf, gz: gzBuf };
+                else if (ext === '.css') lanLastGoodCss = { raw: rawBuf, gz: gzBuf };
+              }
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Private-Network': 'true',
@@ -1545,6 +1612,25 @@ function tvStreamProxyPlugin(): Plugin {
               res.end(payload);
               return;
             }
+            // Fallback during `vite build` (while dist/ is momentarily emptied): serve last-good compiled bundle from RAM
+            const ramAsset = rawUrl.endsWith('.js')
+              ? { entry: lanLastGoodJs, mime: 'application/javascript; charset=utf-8' }
+              : rawUrl.endsWith('.css')
+                ? { entry: lanLastGoodCss, mime: 'text/css; charset=utf-8' }
+                : null;
+            if (ramAsset?.entry) {
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Private-Network': 'true',
+                'Cross-Origin-Resource-Policy': 'cross-origin',
+                'Content-Type': ramAsset.mime,
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Vary': 'Accept-Encoding',
+                ...(acceptsGzip ? { 'Content-Encoding': 'gzip' } : {}),
+              });
+              res.end(acceptsGzip ? ramAsset.entry.gz : ramAsset.entry.raw);
+              return;
+            }
           } else if (rawUrl === '/' || rawUrl === '/tv' || rawUrl.startsWith('/tv/') || rawUrl === '/car' || rawUrl.startsWith('/car/') || rawUrl === '/index.html') {
             const distIndex = path.join(distDir, 'index.html');
             if (fs.existsSync(distIndex)) {
@@ -1554,9 +1640,9 @@ function tvStreamProxyPlugin(): Plugin {
                 /(\/assets\/[^"'\s>]+\.(?:js|css))/g,
                 `$1?v=${ver}`
               );
-              const htmlPayload = acceptsGzip
-                ? zlib.gzipSync(Buffer.from(freshHtml, 'utf-8'), { level: 6 })
-                : freshHtml;
+              const gzHtml = zlib.gzipSync(Buffer.from(freshHtml, 'utf-8'), { level: 6 });
+              lanLastGoodHtml = { ver, raw: freshHtml, gz: gzHtml };
+              const htmlPayload = acceptsGzip ? gzHtml : freshHtml;
               console.log(`[LAN-TV] Serving compiled ES2015 bundle (v=${ver}) to ${hostHeader}${req.url} (${req.headers['user-agent'] || ''})`);
               res.writeHead(200, {
                 'Access-Control-Allow-Origin': '*',
@@ -1569,6 +1655,20 @@ function tvStreamProxyPlugin(): Plugin {
                 ...(acceptsGzip ? { 'Content-Encoding': 'gzip' } : {}),
               });
               res.end(htmlPayload);
+              return;
+            } else if (lanLastGoodHtml) {
+              console.log(`[LAN-TV] Serving RAM fallback ES2015 bundle (v=${lanLastGoodHtml.ver}) during dist rebuild to ${hostHeader}${req.url}`);
+              res.writeHead(200, {
+                'Access-Control-Allow-Origin': '*',
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+                'Referrer-Policy': 'no-referrer',
+                'Vary': 'Accept-Encoding',
+                ...(acceptsGzip ? { 'Content-Encoding': 'gzip' } : {}),
+              });
+              res.end(acceptsGzip ? lanLastGoodHtml.gz : lanLastGoodHtml.raw);
               return;
             }
           }
@@ -1878,50 +1978,96 @@ function tvStreamProxyPlugin(): Plugin {
                   ? `kp_${item.kpId}`
                   : item?.id;
           if (canonicalKey) {
-            deduped[canonicalKey] = finalEntry;
+            const rawItem = finalEntry.item;
+            if (rawItem && typeof rawItem === 'object') {
+              const cleanItem: Record<string, unknown> = { ...rawItem };
+              delete cleanItem.videos;
+              delete cleanItem.links;
+              delete cleanItem.trailers;
+              delete cleanItem.trailerStreams;
+              delete cleanItem.popularities;
+              delete cleanItem.cast;
+              delete cleanItem.director;
+              delete cleanItem.writer;
+              delete cleanItem.awards;
+              delete cleanItem.behaviorHints;
+              if (typeof cleanItem.description === 'string' && cleanItem.description.length > 320) {
+                cleanItem.description = cleanItem.description.slice(0, 320);
+              }
+              if (Array.isArray(cleanItem.genres)) {
+                const gs = cleanItem.genres
+                  .filter(
+                    (g: unknown): g is string =>
+                      typeof g === 'string' &&
+                      g.trim().length > 0 &&
+                      g.trim().length <= 40 &&
+                      !g.includes('\uFFFD')
+                  )
+                  .slice(0, 8);
+                if (gs.length > 0) cleanItem.genres = gs;
+                else delete cleanItem.genres;
+              }
+              deduped[canonicalKey] = { ...finalEntry, item: cleanItem };
+            } else {
+              deduped[canonicalKey] = finalEntry;
+            }
           }
         }
         return deduped;
       };
 
-      let lastCloudSyncAtByProf: Record<string, number> = {};
+      const lastCloudPullAtByProf: Record<string, number> = {};
       const syncProfileProgressWithCloud = async (
         profileId: string,
-        forcePush = false
-      ) => {
+        forceSync = false,
+        deltaPayload?: Record<string, any>
+      ): Promise<Record<string, any> | null> => {
         const cleanId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
         const now = Date.now();
-        if (!forcePush && now - (lastCloudSyncAtByProf[cleanId] || 0) < 60000) {
-          return;
+        if (!forceSync && !deltaPayload && now - (lastCloudPullAtByProf[cleanId] || 0) < 60_000) {
+          return null;
         }
-        lastCloudSyncAtByProf[cleanId] = now;
+        lastCloudPullAtByProf[cleanId] = now;
+        const ctrl = new AbortController();
+        const timeoutId = setTimeout(() => ctrl.abort(), 3200);
         try {
           const targetFile = getTvProgressFileForProfile(cleanId);
           const localData = fs.existsSync(targetFile)
             ? JSON.parse(fs.readFileSync(targetFile, 'utf-8') || '{}')
             : {};
           const localStr = JSON.stringify(localData);
+          const isPush = Boolean(deltaPayload && Object.keys(deltaPayload).length > 0);
+          const cloudUrl = `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(cleanId)}${isPush ? '' : '&fresh=1'}`;
           const res = await fetch(
-            `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(cleanId)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: localStr,
-            }
+            cloudUrl,
+            isPush
+              ? {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(deltaPayload),
+                  signal: ctrl.signal,
+                }
+              : {
+                  cache: 'no-store',
+                  signal: ctrl.signal,
+                }
           );
+          clearTimeout(timeoutId);
           if (res.ok) {
             const cloudMerged = (await res.json()) as Record<string, any>;
             if (cloudMerged && typeof cloudMerged === 'object') {
               const finalMerged = mergeProgressEntriesMap(localData, cloudMerged);
               const finalStr = JSON.stringify(finalMerged);
               if (finalStr !== localStr) {
-                fs.writeFileSync(targetFile, finalStr, 'utf-8');
+                writeFileAtomicSync(targetFile, finalStr);
               }
+              return finalMerged;
             }
           }
         } catch {
-          // ignore network errors when offline
+          clearTimeout(timeoutId);
         }
+        return null;
       };
 
       server.middlewares.use('/api/tv-progress', (req, res) => {
@@ -1957,11 +2103,7 @@ function tvStreamProxyPlugin(): Plugin {
           if (deleteId && deleteId in current) {
             delete current[deleteId];
             try {
-              fs.writeFileSync(
-                targetProgressFile,
-                JSON.stringify(current),
-                'utf-8'
-              );
+              writeFileAtomicSync(targetProgressFile, JSON.stringify(current));
             } catch {
               // ignore
             }
@@ -1993,8 +2135,13 @@ function tvStreamProxyPlugin(): Plugin {
               const merged = mergeProgressEntriesMap(current, incoming);
               const nextStr = JSON.stringify(merged);
               if (nextStr !== prevStr) {
-                fs.writeFileSync(targetProgressFile, nextStr, 'utf-8');
-                void syncProfileProgressWithCloud(profileId, false);
+                writeFileAtomicSync(targetProgressFile, nextStr);
+                const compactedIncoming = mergeProgressEntriesMap({}, incoming);
+                void syncProfileProgressWithCloud(
+                  profileId,
+                  true,
+                  Object.keys(compactedIncoming).length > 0 ? compactedIncoming : merged
+                );
               }
               res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
@@ -2010,25 +2157,30 @@ function tvStreamProxyPlugin(): Plugin {
           });
           return;
         }
+        const forceFresh = reqUrl.searchParams.get('fresh') === '1';
         const diskProgress = readDiskProgress();
-        if (Object.keys(diskProgress).length === 0) {
-          if (profileId !== 'p1' && !fs.existsSync(targetProgressFile)) {
-            void pullCloudJsonIfMissingOnDisk<Record<string, unknown>>(
-              `prog:${profileId}`,
-              `https://filmio.my/api/tv-progress?profileId=${encodeURIComponent(
-                profileId
-              )}`,
-              diskProgress
-            ).then((cloudProg) => {
+        const hasDiskData = Object.keys(diskProgress).length > 0;
+        const cleanProfId = (profileId || 'p1').replace(/[^a-zA-Z0-9_-]/g, '') || 'p1';
+        const shouldPullCloud =
+          forceFresh ||
+          !hasDiskData ||
+          Date.now() - (lastCloudPullAtByProf[cleanProfId] || 0) >= 60_000;
+        if (shouldPullCloud) {
+          const maxInlineWaitMs = hasDiskData ? 850 : 2500;
+          const syncPromise = syncProfileProgressWithCloud(profileId, forceFresh);
+          const timeoutPromise = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), maxInlineWaitMs)
+          );
+          void Promise.race([syncPromise, timeoutPromise]).then((synced) => {
+            if (!res.writableEnded) {
               res.writeHead(200, {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Cache-Control': 'no-cache, no-store',
               });
-              res.end(JSON.stringify(cloudProg || {}));
-            });
-            return;
-          }
-          void syncProfileProgressWithCloud(profileId, false);
+              res.end(JSON.stringify(synced || diskProgress));
+            }
+          });
+          return;
         }
         res.writeHead(200, {
           'Content-Type': 'application/json; charset=utf-8',
@@ -2146,11 +2298,7 @@ function tvStreamProxyPlugin(): Plugin {
                   return remTs === 0 || savedTs > remTs;
                 });
                 incomingRemovedHeader = JSON.stringify(removedMap);
-                fs.writeFileSync(
-                  targetSavedFile,
-                  JSON.stringify(filtered),
-                  'utf-8'
-                );
+                writeFileAtomicSync(targetSavedFile, JSON.stringify(filtered));
                 fetch(
                   `https://filmio.my/api/tv-saved?profileId=${encodeURIComponent(
                     profileId
@@ -2276,11 +2424,7 @@ function tvStreamProxyPlugin(): Plugin {
                     stations: incoming.stations.slice(0, 300),
                   };
                   lanCloudGetCache.delete(`radio:${profileId}`);
-                  fs.writeFileSync(
-                    targetFile,
-                    JSON.stringify(nextPayload),
-                    'utf-8'
-                  );
+                  writeFileAtomicSync(targetFile, JSON.stringify(nextPayload));
                   fetch(
                     `https://filmio.my/api/tv-radio-favorites?profileId=${encodeURIComponent(
                       profileId
@@ -2408,11 +2552,7 @@ function tvStreamProxyPlugin(): Plugin {
                     channels: incoming.channels.slice(0, 300),
                   };
                   lanCloudGetCache.delete(`tvch:${profileId}`);
-                  fs.writeFileSync(
-                    targetFile,
-                    JSON.stringify(nextPayload),
-                    'utf-8'
-                  );
+                  writeFileAtomicSync(targetFile, JSON.stringify(nextPayload));
                   fetch(
                     `https://filmio.my/api/tv-channel-favorites?profileId=${encodeURIComponent(
                       profileId
@@ -2623,7 +2763,7 @@ function tvStreamProxyPlugin(): Plugin {
                 const prevStr = existing ? JSON.stringify(existing) : '';
                 const nextStr = JSON.stringify(merged);
                 if (nextStr !== prevStr) {
-                  fs.writeFileSync(targetFile, nextStr, 'utf-8');
+                  writeFileAtomicSync(targetFile, nextStr);
                   const likedSig = `${(merged.likedTracks || []).length}:${Object.keys(merged.removedMap || {}).length}:${merged.playbackState?.closed ? 1 : 0}`;
                   const nowTs = Date.now();
                   const shouldPushMusicCloud =
@@ -2847,11 +2987,7 @@ function tvStreamProxyPlugin(): Plugin {
                   }
                 }
                 if (finalMerged.length > 0) {
-                  fs.writeFileSync(
-                    tvProfilesFile,
-                    JSON.stringify(finalMerged),
-                    'utf-8'
-                  );
+                  writeFileAtomicSync(tvProfilesFile, JSON.stringify(finalMerged));
                   fetch('https://filmio.my/api/tv-profiles', {
                     method: 'POST',
                     headers: {
@@ -5108,6 +5244,10 @@ export default defineConfig({
     watch: {
       ignored: [
         '**/.tv-*.json',
+        '**/.tv-*.tmp',
+        '**/.music-sync-*.json',
+        '**/.music-sync-*.tmp',
+        '**/*.tmp',
         '**/.filelist*/**',
         '**/.tmp*/**',
         '**/.chrome*/**',

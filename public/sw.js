@@ -138,7 +138,7 @@ self.addEventListener('fetch', (event) => {
 
           const initMatch = subPath.match(/^seg\/([va]_init)\.mp4$/);
           const segMatch = subPath.match(/^seg\/([va]_\d+)\.ts$/);
-          const keySuffix = initMatch?.[1] || segMatch?.[1] || '';
+          const keySuffix = (initMatch && initMatch[1]) || (segMatch && segMatch[1]) || '';
           if (keySuffix) {
             const chunk = await getOfflineBlobSw(`${itemId}::${keySuffix}`);
             if (!chunk) return new Response('Segment not found', { status: 404 });

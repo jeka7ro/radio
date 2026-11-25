@@ -30,4 +30,19 @@ Regula completă se află în `.agents/rules/karpathy-guidelines.md` (activă pe
 3. **Surgical Changes:** Modifică strict liniile legate direct de cerința utilizatorului. Nu refactoriza, nu reformata și nu „îmbunătăți” cod adiacent care funcționează. Curăță doar importurile/variabilele rămase orfane din propriile modificări.
 4. **Goal-Driven Execution:** Transformă task-ul într-un criteriu clar de verificare și validează rezultatul cap-coadă înainte să îl declari rezolvat.
 
+---
+
+# SKILL-URI ACTIVE ÎN PROIECT (`.agents/skills/` — Antigravity & Paperclip)
+
+Pe lângă `audit-gatekeeper`, în `.agents/skills/` sunt instalate următoarele skill-uri obligatorii pe contextul lor:
+
+1. **`systematic-debugging`** (`.agents/skills/systematic-debugging/SKILL.md`, din `obra/superpowers`): **Fără patch-uri „la ghici”**. La orice bug, crash, blocaj de redare video sau regresie, investighează mai întâi cauza rădăcină (loguri + reproducere) înainte de a propune sau aplica o modificare.
+2. **`verification-before-completion`** (`.agents/skills/verification-before-completion/SKILL.md`, din `obra/superpowers`): **Dovadă înainte de afirmații**. Nu declara nimic „rezolvat” sau „funcțional” fără să rulezi o verificare proaspătă **după ultima modificare** și să citești output-ul complet.
+3. **`web-design-guidelines`** (`.agents/skills/web-design-guidelines/SKILL.md` + `references/command.md`, din `vercel-labs/agent-skills`): Checklist UI/CSS/Safari iOS/iPadOS (ex. `font-size >= 16px` pe `<input>`, `min-width: 0`, `tabular-nums`, `touch-action: manipulation`, safe-areas, ținte tactile `>= 44×44px`).
+4. **`webapp-testing`** (`.agents/skills/webapp-testing/SKILL.md`, din `anthropics/skills`): Testare headless reală cu Playwright (fără a depinde de Chrome-ul personal). Pentru verificări rapide multi-ecran pe Filmio (`iPhone 390×844`, `iPad Landscape 1180×820`, `Smart TV 1920×1080`), rulează:
+   ```bash
+   python3 .agents/skills/webapp-testing/scripts/verify_filmio_viewports.py
+   ```
+
+
 

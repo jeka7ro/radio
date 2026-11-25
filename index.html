@@ -165,6 +165,33 @@
         if (isIpadDevice && isPwaStandalone) {
           document.documentElement.classList.add('ipad-pwa-standalone');
           document.documentElement.style.backgroundColor = '#080b12';
+          var syncIpadPwaGeometry = function () {
+            try {
+              var vvH = window.visualViewport && window.visualViewport.height ? Math.round(window.visualViewport.height) : 0;
+              var inH = window.innerHeight || 0;
+              var appH = vvH > 0 && inH > 0 ? Math.min(vvH, inH) : (inH || vvH);
+              if (appH > 200) {
+                document.documentElement.style.setProperty('--ipad-pwa-app-height', appH + 'px');
+              }
+              document.documentElement.style.setProperty('--ipad-pwa-bottom-floor', '22px');
+            } catch (ipadGeomErr) {}
+          };
+          syncIpadPwaGeometry();
+          if (document.addEventListener) {
+            document.addEventListener('DOMContentLoaded', syncIpadPwaGeometry, { passive: true });
+            document.addEventListener('fullscreenchange', syncIpadPwaGeometry, { passive: true });
+            document.addEventListener('webkitfullscreenchange', syncIpadPwaGeometry, { passive: true });
+          }
+          window.addEventListener('load', syncIpadPwaGeometry, { passive: true });
+          window.addEventListener('pageshow', syncIpadPwaGeometry, { passive: true });
+          window.addEventListener('resize', syncIpadPwaGeometry, { passive: true });
+          if (window.visualViewport && window.visualViewport.addEventListener) {
+            window.visualViewport.addEventListener('resize', syncIpadPwaGeometry, { passive: true });
+          }
+          window.addEventListener('orientationchange', function () {
+            setTimeout(syncIpadPwaGeometry, 60);
+            setTimeout(syncIpadPwaGeometry, 260);
+          }, { passive: true });
         }
         if (isIosPhone) {
           var syncIosNotchFloor = function () {

@@ -1,4 +1,5 @@
 import { Country, Station } from '../types/radio';
+import { scoreSmartSearchMatch } from '../utils/smartSearch';
 import { getCachedData, setCachedData, DEFAULT_TTL_MS } from './cacheService';
 import {
   extractDomainFromUrl,
@@ -331,6 +332,14 @@ export function getStationSearchMatchTier(
     (qTokens.length > 0 && qTokens.every((tok) => allSearchable.includes(tok))) ||
     (qCompact.length >= 3 && metaCompact.includes(qCompact))
   ) {
+    return 1;
+  }
+
+  // Fallback: Cyrillic <-> Latin transliteration & typo-tolerant matching
+  const smartNameScore = scoreSmartSearchMatch(st.name, rawQuery);
+  if (smartNameScore >= 3) return 2;
+  if (smartNameScore > 0) return 1;
+  if (scoreSmartSearchMatch(`${st.name} ${st.tags || ''} ${st.country || ''}`, rawQuery) > 0) {
     return 1;
   }
 

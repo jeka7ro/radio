@@ -6,6 +6,154 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-25 20:04 — Fix Derulare Smooth (Eliminat Freeze/Reload la Seek Înainte/Înapoi) + Fix Precizie Skip Intro/Recap
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Derulare fluidă fără oprirea/reîncărcarea repetată a ecranului:**
+     - În [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx): eliminat bug-ul critic unde debounce-ul de server seek (`340ms`) era mai mic decât intervalul de menținere apăsat (`400ms`/`350ms`), ceea ce oprea video-ul și omora/repornea FFmpeg la fiecare pas. Acum în timpul hold-ului nu se face niciun reconnect intermediar, commit-ul se face o singură dată la eliberare (`180ms`) sau după `550ms` la tap-uri multiple.
+     - Mărit bufferul RAM în spate/față pe MSE (`keepBehindTargetSec` `32s` TV / `55s` PC-iPad, `maxAheadSec` `55s` TV / `95s` PC-iPad) și lărgit marginea `isTargetInsideVideoBuffer` (`bStart .. bEnd-0.35s`) ca salturile `-15s`/`-30s`/`+15s`/`+30s` să fie instant (`0 ms`) din RAM.
+     - Adăugat curățare completă `hideFrozenFrame()` + `setIsSeekBuffering(false)` pe `playing`/`canplay`/`onerror` în ramura Safari/iPad (`isIosWebKit`, `/api/filelist/hls.m3u8`), unde ecranul înghețat putea rămâne blocat până la timeout-ul de `4.5s`.
+     - În [SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx#L5445-L5462): eliminat dublarea evenimentului `ArrowLeft`/`ArrowRight` (care trăgea simultan `aether:vod-transport` și `startSmartSeekHold`).
+     - În [filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts): activat `-noaccurate_seek` înainte de `-ss` și pentru 4K H.265 (`isHevc`/`needsVideoTranscode`) pe `/api/filelist/stream` & `/api/filelist/hls.m3u8` (salt instant pe keyframe `< 0.5s` în loc de `3–8s`), plus `-hls_init_time 1 -hls_time 2` pe HLS pentru iPad/Safari.
+  2. **Precizie Skip Intro / Skip Recap (eliminat aparițiile false „aiurea”):**
+     - În [VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx#L3492-L3640): `detectedSkipSegments` așteaptă acum `isIntroApiSettled` (fără flash fals înainte de răspunsul IntroDB), eliminat complet fallback-ul orb pe seriale neindexate (`0:01–0:45`, `0:45–1:45`, `0:01–1:25`), eliminat ghicitul pe pauze de dialog fără cue `[music]`/`[theme]` și scos pragul `>= 5400s` din `isLongFormRealityOrShow`. Păstrate exclusiv sursele exacte: IntroDB.app + TheIntroDB v2, subtitrări cu marker explicit și reality show-urile cunoscute (Asia Express `tt10295772`, Insula Iubirii, Survivor etc.).
+     - Actualizat Vector 3b în [run_prepush_audit.py](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py#L329-L340).
+- **De ce:** Utilizatorul a raportat că derularea înainte/înapoi oprea ecranul și încărca greu, iar multe butoane Skip Intro apăreau aiurea la momente incorecte.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/server/filelistServer.ts`, `.agents/skills/audit-gatekeeper/scripts/run_prepush_audit.py`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-25 19:51 — Instalare Skill-uri Agent în `.agents/skills/` (`systematic-debugging`, `verification-before-completion`, `web-design-guidelines`, `webapp-testing`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Instalat skill-urile oficiale în `.agents/skills/`:
+     - `systematic-debugging` + `verification-before-completion` (`obra/superpowers`)
+     - `web-design-guidelines` + `references/command.md` (`vercel-labs/agent-skills` & `web-interface-guidelines`)
+     - `webapp-testing` + `scripts/with_server.py` (`anthropics/skills`), împreună cu scriptul read-only [verify_filmio_viewports.py](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/skills/webapp-testing/scripts/verify_filmio_viewports.py) pentru verificarea headless Playwright pe iPhone (`390×844`), iPad Landscape (`1180×820`) și Smart TV (`1920×1080`).
+  2. Legat toate cele 4 skill-uri în [AGENTS.md](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.agents/AGENTS.md) pentru Antigravity și Paperclip.
+- **De ce:** Prevenirea patch-urilor premature („repar un lucru, stric altul”), aplicarea checklist-ului strict iOS/Safari/PWA și testarea automată headless multi-ecran fără blocajul macOS `DevToolsActivePort`.
+- **Fișiere:** `.agents/skills/systematic-debugging/*`, `.agents/skills/verification-before-completion/SKILL.md`, `.agents/skills/web-design-guidelines/*`, `.agents/skills/webapp-testing/*`, `.agents/AGENTS.md`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 16:16 — Căutare Inteligentă (Transliterare Latin ↔ Chirilic + Toleranță Typos) & Scriere Atomică `.tv-*.json`
+- **Autor:** Antigravity
+- **Ce:**
+  1. Creat [src/utils/smartSearch.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/utils/smartSearch.ts): normalizare diacritice (`ăâîșț` / `ё→е`), transliterare bidirecțională Chirilic ↔ Latin (`kukushkin` ↔ `Кукушкин`, `shou voli` ↔ `Шоу Воли`, `pervyi` ↔ `Первый`) și potrivire fuzzy Damerau-Levenshtein cu prag controlat (`gentleman` → `The Gentlemen`, `dexer` → `Dexter`, `protv` → `PRO TV`).
+  2. Integrat căutarea inteligentă în: căutarea globală VOD + istoric local ([SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)), clasamentul rezultatelor VOD ([smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts)), căutarea RU iEdem/Kinozal cu transliterare automată ([iedemVodService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/iedemVodService.ts)), căutarea de canale TV Live ([TvOsdChannelList.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/TvOsdChannelList.tsx), [SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx)) și căutarea Radio ([radioBrowserApi.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/radioBrowserApi.ts)).
+  3. Adăugat `writeFileAtomicSync` (`write .tmp` + `renameSync`) pentru toate cele 8 puncte de salvare `.tv-*.json` / `.music-sync-*.json` din [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts) (+ `**/*.tmp` în `server.watch.ignored` și pre-încărcare RAM fallback `dist/` la pornire pentru LG TV Chrome 68).
+- **De ce:** Pe telecomanda TV tastarea chirilică sau fără greșeli este lentă, iar scrierile directe `fs.writeFileSync` pe `.tv-*.json` puteau corupe JSON-ul dacă serverul se oprește în timpul salvării.
+- **Fișiere:** `src/utils/smartSearch.ts`, `src/services/iedemVodService.ts`, `src/services/radioBrowserApi.ts`, `src/views/smartTvLampaHelpers.ts`, `src/components/tv/TvOsdChannelList.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `vite.config.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:40 — Butonul Albastru (Refresh) Activ Oriunde În Afara Redării Video + Retry Stabilitate iEdem VIP
+- **Autor:** Antigravity
+- **Ce:**
+  1. Decuplat scurtătura de Refresh de pe butonul Albastru al telecomenzii (`406` / `186` non-`;:` / `ColorF3Blue` / `Blue` / `VK_BLUE` / `F4`) din garda restrictivă doar pentru ecranul Acasă în [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx#L4925-L4955). Acum funcționează oriunde în aplicație (detalii film/serial, sertare, Klubnichka, profiluri, orice tab), cu excepția redării video active (`!isPlayingVod && !currentTvChannel && !isTrailerModalOpen`), unde butonul Albastru rămâne Pistă Audio (VOD) / Grupuri & Playlisturi (TV Live). Scurtătura butonului Roșu → Klubnichka a rămas neschimbată pe ecranele de navigare.
+  2. Adăugat 1 retry automat (timeout `6500ms`) în `callIedemVipApi` din [netlify/functions/vod-stream.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/vod-stream.mjs#L1675-L1700) pentru a elimina eșecurile intermitente `[VOD-STREAM] ... -> ok=false source=none` la căderi scurte de rețea către API-ul iEdem VIP.
+- **De ce:** Utilizatorul a cerut ca butonul Albastru de refresh să meargă de pe orice ecran în afara redării video, iar log-urile locale arătau că apelul iEdem VIP pica intermitent pe un singur timeout de 5s fără retry.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `netlify/functions/vod-stream.mjs`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:25 — Protecție Zero-Downtime pentru LG TV Chrome 68 în Timpul Rebuild-ului `dist/` (Eliminat `SyntaxError /@vite/client`)
+- **Autor:** Antigravity
+- **Ce:** Adăugat fallback în RAM (`lanLastGoodHtml`, `lanLastGoodJs`, `lanLastGoodCss`) în middleware-ul LAN din [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts#L1350-L1620) astfel încât dacă un TV LG dă refresh exact în cele ~35s cât `vite build` golește și reface `dist/`, serverul livrează ultimul bundle ES2015 valid din memorie în loc să cadă în Vite Dev (`/@vite/client` cu `?.`, care arunca `Uncaught SyntaxError: Unexpected token .` pe LG webOS Chrome 68).
+- **De ce:** La refresh-ul TV-ului LG în timpul `npm run build`, absența temporară a `dist/index.html` trimitea `/@vite/client` către Chrome 68.
+- **Fișiere:** `vite.config.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:23 — Restaurare Card Poster & Titlu Film/Serial pe OSD în Player pe iPad PWA (fără a afecta ecranul Home iPad)
+- **Autor:** Antigravity
+- **Ce:**
+  1. În [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx): `detectIpadTablet()` rulează independent de `isMobilePhoneDevice()`, iar în player `isMobilePhone` devine `isMobilePhoneDevice() && !detectIpadTablet()` (cu păstrarea toggle-ului OSD la tap pe iPad). Astfel cardul de poster + titlu + `S1 · E9`, `+1 min`, `Ep. Prec.` / `Ep. Urm.` și badge-ul de rezoluție apar complet pe bara OSD de jos pe iPad (inclusiv când înălțimea landscape scade sub `768px` din cauza barei de status iPadOS), păstrând intact ecranul Home iPad.
+  2. Ascuns duplicatul mic de titlu din bara de sus (destinat doar telefoanelor) pe iPad în [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx).
+- **De ce:** Pe iPad în landscape PWA, `Math.min(innerWidth, innerHeight) < 768` făcea `isMobilePhoneDevice()` să returneze `true`, ascunzând cardul filmului/serialului de pe OSD-ul playerului.
+- **Fișiere:** `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:19 — Fix Critic Redare Video: Denylist în `compactWatchProgressItem` (Păstrare `iedemFid`/`iedemStreamUrl`/`year`) + Auto-Refacere în `localStorage`
+- **Autor:** Antigravity
+- **Ce:**
+  1. Înlocuit lista allowlist din `compactWatchProgressItem` cu un **denylist strict** în [src/views/smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts), [src/views/MediatecaView.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/MediatecaView.tsx), [netlify/functions/tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs) și [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts): elimină exclusiv câmpurile grele Cinemeta (`videos`, `links`, `trailers`, `trailerStreams`, `popularities`, `cast`, `director`, `writer`, `awards`, `behaviorHints`) + stringurile corupte din `genres`, păstrând intacte toate câmpurile de redare (`iedemFid`, `iedemStreamUrl`, `klubnichkaRawId`, `year`, `qualityBadge`, `episodesCount`, `flTorrentId`).
+  2. Adăugat `missingItemMeta` în `applyRemoteProgress` ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)) astfel încât la primul refresh pe iPad/TV câmpurile `iedemFid`/`iedemStreamUrl`/`year` să fie restaurate automat din server chiar la același `updatedAt`.
+- **De ce:** Versiunea anterioară allowlist a `compactWatchProgressItem` eliminase `iedemFid` (ex. `145767` pentru `Кукушкин`) și `iedemStreamUrl` din intrările de istoric, blocând pornirea stream-urilor iEdem VIP din `Continuă vizionarea`.
+- **Fișiere:** `src/views/smartTvLampaHelpers.ts`, `src/views/MediatecaView.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `netlify/functions/tv-sync.mjs`, `vite.config.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:11 — Override Direct `padding-top: 8px !important` pe Header în iPad PWA (fără `env(safe-area-inset-top)` excesiv)
+- **Autor:** Antigravity
+- **Ce:** Adăugat regula explicită `html.ipad-pwa-standalone [data-lampa-root="true"]>header { padding-top: 8px !important; }` (alături de `height: 3rem !important` pe bara interioară) în [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css#L91-L109).
+- **De ce:** `max(env(safe-area-inset-top, 0px), 10px)` rămânea blocat la valoarea raportată de iPadOS (`24–36px`), astfel încât coborârea pragului din `max(...)` nu ridica deloc header-ul. Override-ul direct `8px` + `6px` spațiere internă ridică vizibil header-ul exact sub bara neagră de status iPadOS, fără suprapunere cu blur-ul.
+- **Fișiere:** `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 15:08 — Ridicare Suplimentară Header iPad PWA (`--safe-top: 10px`, +12px mai sus)
+- **Autor:** Antigravity
+- **Ce:** Redus pragul `--safe-top` pentru `html.ipad-pwa-standalone` din `22px` în `10px` (cu `height: 3rem !important` pe bara header) în [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css#L91-L105).
+- **De ce:** Cu `apple-mobile-web-app-status-bar-style="black"`, WebView-ul pornește deja sub bara neagră de status iPadOS (`env(safe-area-inset-top)=0px`); `10px` + `6px` spațiere internă ridică header-ul cu încă `12px` și păstrează zona curată sub blur-ul de margine.
+- **Fișiere:** `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 14:56 — Ridicare Suplimentară Fină Header iPad PWA Fullscreen (+8px mai sus, fără suprapunere cu blur-ul status bar)
+- **Autor:** Antigravity
+- **Ce:** Compactat înălțimea internă a barei header în `html.ipad-pwa-standalone` (`height: 3rem` în loc de `4rem`, `--safe-top: max(env(safe-area-inset-top, 0px), 22px)`) în [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css#L91-L105).
+- **De ce:** La cererea utilizatorului de a urca header-ul încă puțin mai sus pe iPad PWA, eliminând surplusul intern de 14px din `h-16` și păstrând ~6px spațiu curat exact sub bara de status/blur iPadOS (~24px).
+- **Fișiere:** `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 14:52 — Eliminare Blocaje Server Local Vite (Cache Gzip `dist/assets/` + Limită Non-Blocantă 850ms pe Pull Cloud `/api/tv-progress`)
+- **Autor:** Antigravity
+- **Ce:**
+  1. Adăugat cache în memorie (`lanDistAssetCache`, invalidat automat la schimbarea `mtimeMs`) pentru `dist/assets/*.js` și `*.css` în [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts), evitând compresia sincronă `zlib.gzipSync` de 4 MB pe event loop la fiecare refresh din LAN.
+  2. Limitat așteptarea inline pe `GET /api/tv-progress?fresh=1` la `850ms` atunci când există deja progres pe disc (`Promise.race`, sincronizarea continuând în fundal), prevenind blocarea pornirii locale de 3.2s când răspunsul cloud este lent.
+- **De ce:** În timpul recompilării locale + apelurilor cloud lente, serverul Vite pe portul `8769` bloca temporar răspunsul HTTP (ecran alb blocat pe local).
+- **Fișiere:** `vite.config.ts`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 14:45 — Ajustare Fină Înălțime Header în iPad PWA Fullscreen (Ridicat cu 18px fără Suprapunere cu Blur-ul Status Bar)
+- **Autor:** Antigravity
+- **Ce:** Redus `--safe-top` de la `36px` la `24px` și `--ios-portrait-header-pad` de la `6px` la `0px` în regula `html.ipad-pwa-standalone` din [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css#L91-L100) (plus `scroll-padding-top` aliniat la `24px`).
+- **De ce:** În modul iPad PWA fullscreen, header-ul avea un spațiu gol excesiv de ~56px sus (42px padding + 14px centrare în `h-16`); ridicarea cu 18px îl aduce la ~38px de marginea de sus, rămânând curat sub bara de status și zona de blur iPadOS (~24–28px).
+- **Fișiere:** `src/index.css`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 14:41 — Butonul Albastru (Refresh) & Butonul Roșu (Klubnichka) pe Telecomandă de pe Ecranul Home
+- **Autor:** Antigravity
+- **Ce:**
+  1. **Butonul Albastru** (`keyCode 406 / 186 / ColorF3Blue / Blue / VK_BLUE / F4`) pe ecranul Home / navigare fără titlu sau player deschis apelează `handleHardRefreshTvApp` identic cu butonul Refresh din header ([src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)).
+  2. **Butonul Roșu** (`keyCode 403 / 183 / ColorF0Red / Red / VK_RED / F1`) pe ecranul Home / navigare fără titlu sau player deschis navighează direct la **Klubnichka 18+** (`setSection('torrents')` + evenimentul `aether:open-klubnichka` ascultat în [src/components/tv/SmartTvCatalogSections.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/SmartTvCatalogSections.tsx), cu păstrarea verificării `!isPinLockRequired && isAdminJekaProfile(activeProfile)` și focus automat pe primul element din Klubnichka).
+- **De ce:** Solicitarea utilizatorului de a avea pe ecranul Home scurtături rapide pe telecomandă: Albastru = Refresh, Roșu = Klubnichka, fără a afecta comportamentul butoanelor în playerul VOD (Roșu = Calitate/Sursă, Albastru = Pistă Audio) sau TV Live.
+- **Fișiere:** `src/views/SmartTvLampaViewCore.tsx`, `src/components/tv/SmartTvCatalogSections.tsx`, `.agents/CHANGELOG.md`
+
+---
+
+### 2026-11-24 14:18 — Fix LG TV Media Station X Live Boot, Bară Jos Player iPad PWA Fullscreen & Sincronizare Istoric/Progres Între Dispozitive
+- **Autor:** Antigravity
+- **Ce:**
+  1. **LG TV Media Station X (Live `https://filmio.my` blocat pe loader)** ([netlify.toml](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify.toml), [public/sw.js](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/public/sw.js), [src/main.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/main.tsx)):
+     - Eliminat header-ul `X-Frame-Options = "SAMEORIGIN"` din `netlify.toml` (introdus în commit-ul anterior `38d1d44`), care bloca încărcarea `https://filmio.my/tv` în frame-ul/WebView-ul aplicației Media Station X (`msx.benzac.de`) pe LG webOS, lăsând loader-ul blocat la infinit (pe serverul local nu exista acest header).
+     - Eliminat operatorul ES2020 `?.` din `public/sw.js` (incompatibil cu LG webOS Chrome 68) și dezactivat înregistrarea Service Worker pe Smart TV-uri / WebView-uri încadrate MSX în `src/main.tsx` (cu dezînregistrare automată a SW-urilor vechi, fără reload).
+  2. **iPad PWA Fullscreen — Bara de Jos Player VOD Tăiată/Incompletă** ([index.html](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/index.html), [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css), [src/components/tv/VodNativeHlsPlayer.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/components/tv/VodNativeHlsPlayer.tsx), [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx)):
+     - Eliminat `style={{ height: '100vh', maxHeight: '100vh' }}` de pe `[data-vod-full-player="true"]` (care pe iPadOS PWA depășea `window.innerHeight` / `visualViewport.height` și împingea bara de jos sub marginea ecranului) și adăugat sincronizare live `--ipad-pwa-app-height` + `--ipad-pwa-bottom-floor: 22px` în `index.html` și `src/index.css`.
+     - Adăugat detecție dedicată `isIpadTablet` în `VodNativeHlsPlayer.tsx` cu spațiere sigură față de Home Indicator (`bottom: max(22px, calc(var(--safe-bottom) + 12px))`, `left`/`right` safe-area) și dimensiuni compacte pentru poster/titlu și butoanele din Rândul 1 & Rândul 2 astfel încât întreaga bară să se vadă complet în iPad PWA fullscreen (portret și landscape).
+  3. **Sincronizare Istoric & Progres Între Dispozitive** ([src/views/smartTvLampaHelpers.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/smartTvLampaHelpers.ts), [src/views/SmartTvLampaViewCore.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/SmartTvLampaViewCore.tsx), [src/views/MediatecaView.tsx](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/views/MediatecaView.tsx), [netlify/functions/tv-sync.mjs](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/netlify/functions/tv-sync.mjs), [vite.config.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/vite.config.ts)):
+     - Rezolvat cauza principală critică: `.tv-watch-progress.json` / Blob-ul `p1` crescuse la **839 KB** din cauza unui string corupt de 233 KB în `tt31495482.item.genres` plus array-uri `videos`/`links` salvate în `item`, depășind de **13× limita strictă de 64 KiB a `fetch(..., { keepalive: true })`** — browserul respingea tăcut (`TypeError`) fiecare `POST /api/tv-progress` din `saveWatchProgressMap()`!
+     - Adăugat `compactWatchProgressItem` pe client + `tv-sync.mjs` + `vite.config.ts` (reduce întregul istoric `p1` de la 839 KB la ~40 KB), trimitere delta compactă per titlu modificat (`changedKey`, < 1 KB), protecție strictă `keepalive <= 56 KB`, flush imediat la `onPause` / `onSeeked`, citire fresh (`?fresh=1`) la deschidere și revenire în prim-plan (`visibilitychange`/`focus` cooldown 15s), și sincronizare bidirecțională reală cloud ↔ server local în `vite.config.ts` (inclusiv când `.tv-watch-progress.json` nu este gol).
+- **De ce:** Pe LG TV live prin Media Station X site-ul rămânea blocat pe loader, pe iPad în modul PWA fullscreen bara de jos din player era tăiată, iar progresul/istoricul de vizionare nu se sincroniza între dispozitive.
+- **Fișiere:** `netlify.toml`, `public/sw.js`, `src/main.tsx`, `index.html`, `src/index.css`, `src/components/tv/VodNativeHlsPlayer.tsx`, `src/views/SmartTvLampaViewCore.tsx`, `src/views/smartTvLampaHelpers.ts`, `src/views/MediatecaView.tsx`, `netlify/functions/tv-sync.mjs`, `vite.config.ts`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-23 17:44 — Eliminat Complet Mesajele de Eroare Blocate din Player (`renderRoCloudRetryCard` & overlay `status === 'error'`) + Auto-Fallback Imediat pe Torrent Local
 - **Autor:** Antigravity
 - **Ce:**

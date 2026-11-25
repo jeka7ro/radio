@@ -194,6 +194,37 @@ function dedupeAndMergeSavedLists(lists) {
   return merged.slice(0, 300);
 }
 
+function compactProgressItem(item) {
+  if (!item || typeof item !== 'object') return item;
+  const clean = { ...item };
+  delete clean.videos;
+  delete clean.links;
+  delete clean.trailers;
+  delete clean.trailerStreams;
+  delete clean.popularities;
+  delete clean.cast;
+  delete clean.director;
+  delete clean.writer;
+  delete clean.awards;
+  delete clean.behaviorHints;
+  if (typeof clean.description === 'string' && clean.description.length > 320) {
+    clean.description = clean.description.slice(0, 320);
+  }
+  if (Array.isArray(clean.genres)) {
+    const cleanGenres = [];
+    for (const g of clean.genres) {
+      if (typeof g !== 'string') continue;
+      const t = g.trim();
+      if (!t || t.length > 40 || t.includes('\uFFFD')) continue;
+      if (!cleanGenres.includes(t)) cleanGenres.push(t);
+      if (cleanGenres.length >= 8) break;
+    }
+    if (cleanGenres.length > 0) clean.genres = cleanGenres;
+    else delete clean.genres;
+  }
+  return clean;
+}
+
 function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
   const merged = { ...(baseMap || {}) };
   for (const [k, v] of Object.entries(incomingMap || {})) {
@@ -335,7 +366,9 @@ function dedupeAndMergeProgressMaps(baseMap, incomingMap) {
       ? `kp_${fin.item.kpId}`
       : fin.item?.id;
     if (cKey) {
-      dedupedProgress[cKey] = fin;
+      dedupedProgress[cKey] = fin.item
+        ? { ...fin, item: compactProgressItem(fin.item) }
+        : fin;
     }
   }
   return dedupedProgress;
@@ -858,10 +891,11 @@ export default async (req) => {
     }
 
     // 3. /api/tv-progress
+    const forceFreshProg = isMutation || url.searchParams.get('fresh') === '1';
     const { active: progBlobActive, data: blobProgress } = await readBlobState(
       blobStore,
       `progress_v1_${profileId}`,
-      isMutation
+      forceFreshProg
     );
     const delTombstones = globalStore.progressDeletedByProfile[profileId] || {};
     const baseMemProgress = progBlobActive && blobProgress && typeof blobProgress === 'object'

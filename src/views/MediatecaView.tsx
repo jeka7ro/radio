@@ -565,7 +565,43 @@ function saveWatchProgressMap(
   syncServer = true
 ): void {
   try {
-    const payload = JSON.stringify(map);
+    const compacted: Record<string, VodWatchProgressEntry> = {};
+    for (const [k, v] of Object.entries(map || {})) {
+      if (!v || typeof v !== 'object') continue;
+      if (v.item && typeof v.item === 'object') {
+        const cleanItem: Record<string, unknown> = { ...(v.item as unknown as Record<string, unknown>) };
+        delete cleanItem.videos;
+        delete cleanItem.links;
+        delete cleanItem.trailers;
+        delete cleanItem.trailerStreams;
+        delete cleanItem.popularities;
+        delete cleanItem.cast;
+        delete cleanItem.director;
+        delete cleanItem.writer;
+        delete cleanItem.awards;
+        delete cleanItem.behaviorHints;
+        if (typeof cleanItem.description === 'string' && cleanItem.description.length > 320) {
+          cleanItem.description = cleanItem.description.slice(0, 320);
+        }
+        if (Array.isArray(cleanItem.genres)) {
+          const gs = cleanItem.genres
+            .filter(
+              (g): g is string =>
+                typeof g === 'string' &&
+                g.trim().length > 0 &&
+                g.trim().length <= 40 &&
+                !g.includes('\uFFFD')
+            )
+            .slice(0, 8);
+          if (gs.length > 0) cleanItem.genres = gs;
+          else delete cleanItem.genres;
+        }
+        compacted[k] = { ...v, item: cleanItem as unknown as CinemetaItem };
+      } else {
+        compacted[k] = v;
+      }
+    }
+    const payload = JSON.stringify(compacted);
     localStorage.setItem(
       `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`,
       payload

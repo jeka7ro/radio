@@ -4716,18 +4716,13 @@ export async function handleFileListRequest(
 
       if (verifiedDiskPath) {
         if (startSec > 1) {
-          if (!needsVideoTranscode) {
-            ffArgs.push('-noaccurate_seek');
-          }
-          ffArgs.push('-ss', String(Math.floor(startSec)));
+          ffArgs.push('-noaccurate_seek', '-ss', String(Math.floor(startSec)));
         }
         ffArgs.push(...hwDecodeArgs, '-i', verifiedDiskPath);
       } else if (!useDirectPipe) {
         const rangePort = await ensureInternalRangeServer();
-        if (!needsVideoTranscode) {
-          ffArgs.push('-noaccurate_seek');
-        }
         ffArgs.push(
+          '-noaccurate_seek',
           '-ss',
           String(Math.floor(startSec)),
           ...hwDecodeArgs,
@@ -5174,18 +5169,13 @@ export async function handleFileListRequest(
 
         if (verifiedDiskPathHls) {
           if (startSec > 1) {
-            if (!isHevc) {
-              ffArgs.push('-noaccurate_seek');
-            }
-            ffArgs.push('-ss', String(startSec));
+            ffArgs.push('-noaccurate_seek', '-ss', String(startSec));
           }
           ffArgs.push(...hwDecodeArgsHls, '-i', verifiedDiskPathHls);
         } else if (!useDirectPipeHls) {
           const rangePort = await ensureInternalRangeServer();
-          if (!isHevc) {
-            ffArgs.push('-noaccurate_seek');
-          }
           ffArgs.push(
+            '-noaccurate_seek',
             '-ss',
             String(startSec),
             ...hwDecodeArgsHls,
@@ -5277,8 +5267,10 @@ export async function handleFileListRequest(
           '192k',
           '-f',
           'hls',
+          '-hls_init_time',
+          '1',
           '-hls_time',
-          '3',
+          '2',
           '-hls_list_size',
           '0',
           '-hls_playlist_type',
