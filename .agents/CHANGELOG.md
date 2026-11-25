@@ -6,6 +6,23 @@ Acest fișier ține evidența tuturor modificărilor făcute în proiect, indife
 
 ---
 
+### 2026-11-25 22:50 — Server Permanent 24/7 pe QNAP TS-253Be (`filmio-stream` + `filmio-tunnel` auto-sync, $0/lună) + Auto-Stop Torrente Idle
+- **Autor:** Antigravity
+- **Ce:**
+  1. Creat [server/stream-server.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/server/stream-server.ts) & [Dockerfile.stream](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/Dockerfile.stream) — server Node.js 22 standalone (`ffmpeg` + `esbuild` bundle + `fastTorrentEngine.cjs`), cu `requestTimeout = 0` pentru 4K, auto-unlock IP FileList la pornire, cache configurabil (`FILMIO_MAX_CACHE_GB`, default `25 GB` pe SSD Samsung din QNAP) și răspuns `501` pe rute neacoperite (fallback curat către Netlify `/api/vod-stream`).
+  2. Creat pachetul dedicat **QNAP TS-253Be** în folderul `qnap/` (mod dual 24/7):
+     - [qnap/docker-compose.yml](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/qnap/docker-compose.yml) (`filmio-stream` + `filmio-caddy` pe porturile `8480`/`8443` cu certificat SSL Let's Encrypt automat pe `https://stream.filmio.my` pentru conexiuni directe din exterior/4G/5G + `filmio-tunnel` autonom pentru Wi-Fi local fără NAT Hairpin pe ONT Digi și backup automat);
+     - [qnap/Caddyfile](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/qnap/Caddyfile), [qnap/tunnel-watchdog.sh](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/qnap/tunnel-watchdog.sh) & [qnap/install-qnap.sh](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/qnap/install-qnap.sh).
+  3. Adăugat **Idle Torrent Reaper** în [src/server/filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts) — oprește automat engine-urile torrent inactive după `10 min` (`FILMIO_IDLE_TORRENT_MIN`) fără redare activă, păstrând fișierele în cache pe SSD pentru reluare instantanee și ~0% CPU/RAM în repaus.
+  4. Adăugat `https://stream.filmio.my` în [src/services/deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts) (probat în paralel cu `/api/tv-bridge` — folosește direct `https://stream.filmio.my` pe 4G/5G/exterior și `filmio-tunnel` de pe QNAP pe Wi-Fi acasă) și `dist-stream` / `.torrent-cache` în [.gitignore](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/.gitignore).
+  5. Instalat și pornit live pe QNAP TS-253Be (`192.168.2.92`, `autostart=true` pe Docker), certificat Let's Encrypt obținut automat pentru `https://stream.filmio.my` + verificat 8/8 end-to-end live pe `https://filmio.my/api/tv-bridge` fără Mac pornit.
+  6. Fix bară de sus pe **iPad PWA standalone** în [src/index.css](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/index.css#L91-L108): ridicat `--safe-top` la `max(env(safe-area-inset-top, 0px), 44px)` și `padding-top` al `<header>` de la `8px` la `50px` (`calc(max(..., 44px) + 6px)`), ca bara de sus (`Filmio`, Căutare, Profil, Setări, Refresh) să coboare complet sub zona de blur / bară de stare iPadOS 26 și să fie 100% clară și accesibilă tactil (`52px` înălțime).
+  7. **Start rapid `1080p Full HD` pe tabletă / mobil (`maxQ=1080`), păstrând `4K UHD` pe Smart TV & Desktop:** [deviceContinuityService.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/services/deviceContinuityService.ts) (`isTabletOrMobileDevice()` + `buildFileListApiUrl`) trimite automat `maxQ=1080` pe iPad/iPhone/Android (când nu e selectat manual un torrent cu `strictId=1`), iar [filelistServer.ts](file:///Users/eugeniucazmal/Downloads/dev_office/radio%201/src/server/filelistServer.ts) alege prioritar `1080p Full HD` H.264 (remux instant, 0% transcodare pe QNAP, ~6–8x mai puțin de descărcat) cu fallback la `720p` → `4K` doar dacă nu există 1080p; pe Smart TV rămâne prioritar **4K UHD**.
+- **De ce:** Rulare 24/7 la **\$0/lună** direct pe QNAP TS-253Be fără Mac pornit și remedierea regresiei din `83597a6` unde `padding-top: 8px` urca bara de sus a aplicației sub bara de stare/blur iPadOS pe iPad PWA.
+- **Fișiere:** `server/stream-server.ts`, `Dockerfile.stream`, `qnap/docker-compose.yml`, `qnap/tunnel-watchdog.sh`, `qnap/Caddyfile`, `qnap/install-qnap.sh`, `src/server/filelistServer.ts`, `src/services/deviceContinuityService.ts`, `src/index.css`, `.gitignore`, `.agents/CHANGELOG.md`
+
+---
+
 ### 2026-11-25 20:04 — Fix Derulare Smooth (Eliminat Freeze/Reload la Seek Înainte/Înapoi) + Fix Precizie Skip Intro/Recap
 - **Autor:** Antigravity
 - **Ce:**

@@ -1,0 +1,12 @@
+{$FILMIO_STREAM_DOMAIN:stream.filmio.my} {
+	encode zstd gzip
+
+	reverse_proxy filmio-stream:8769 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+			dial_timeout 10s
+		}
+	}
+}

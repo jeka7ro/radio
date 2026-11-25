@@ -398,6 +398,32 @@ function attachLiveVttPipeReader(
 const activeEngines = gState.activeEngines;
 const magnetMetaById = gState.magnetMetaById;
 
+if (!(globalThis as any).__aetherIdleReaperStarted) {
+  (globalThis as any).__aetherIdleReaperStarted = true;
+  const idleMinutes = Math.max(3, Number(process.env.FILMIO_IDLE_TORRENT_MIN || 10));
+  const idleTimeoutMs = idleMinutes * 60 * 1000;
+  const reaperTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of activeEngines.entries()) {
+      const hasStreams = Boolean(entry.activeStreams && entry.activeStreams.size > 0);
+      const hasDownloads = Number(entry.activeDownloads || 0) > 0;
+      if (hasStreams || hasDownloads) continue;
+      if (now - entry.lastAccessed > idleTimeoutMs) {
+        activeEngines.delete(id);
+        try {
+          entry.engine?.destroy();
+        } catch {
+          // ignore
+        }
+        console.log(`[TorrentReaper] Stopped idle engine #${id} after ${idleMinutes}m inactivity`);
+      }
+    }
+  }, 2 * 60 * 1000);
+  if (typeof reaperTimer.unref === 'function') {
+    reaperTimer.unref();
+  }
+}
+
 function ensureTmpDir() {
   try {
     if (!fs.existsSync(TORRENT_CACHE_DIR)) {
@@ -3858,6 +3884,7 @@ export async function handleFileListRequest(
         }
       }
       const requestedFileIdx = parsedUrl.searchParams.get('fileIdx');
+      const preferMax1080 = parsedUrl.searchParams.get('maxQ') === '1080';
 
       let matchingTorrents: FileListTorrentCard[] = [];
       let torrentioTorrents: FileListTorrentCard[] = [];
@@ -3966,6 +3993,18 @@ export async function handleFileListRequest(
         );
 
         const pickBestDefaultTorrentId = (list: FileListTorrentCard[]) => {
+          const fastH264 = list.find(
+            (t) =>
+              t.quality === '1080p Full HD' &&
+              t.seeders >= 2 &&
+              !/\b(hevc|x265|h\.?265|dovi)\b/i.test(t.releaseTitle)
+          );
+          const best1080pAny = list.find(
+            (t) => t.quality === '1080p Full HD' && t.seeders >= 2
+          );
+          const best720pAny = list.find(
+            (t) => t.quality === '720p HD' && t.seeders >= 2
+          );
           const best4kNonDoVi = list.find(
             (t) =>
               t.quality === '4K UHD' &&
@@ -3975,19 +4014,25 @@ export async function handleFileListRequest(
           const best4kAny = list.find(
             (t) => t.quality === '4K UHD' && t.seeders >= 2
           );
-          const fastH264 = list.find(
-            (t) =>
-              t.quality === '1080p Full HD' &&
-              t.seeders >= 2 &&
-              !/\b(hevc|x265|h\.?265|dovi)\b/i.test(t.releaseTitle)
-          );
           const nonDoVi = list.find(
             (t) => t.seeders >= 2 && !/\bdovi\b/i.test(t.releaseTitle)
           );
+          if (preferMax1080) {
+            return (
+              fastH264 ||
+              best1080pAny ||
+              best720pAny ||
+              best4kNonDoVi ||
+              best4kAny ||
+              nonDoVi ||
+              list[0]
+            )?.id || 0;
+          }
           return (
             best4kNonDoVi ||
             best4kAny ||
             fastH264 ||
+            best1080pAny ||
             nonDoVi ||
             list[0]
           )?.id || 0;
@@ -4123,14 +4168,23 @@ export async function handleFileListRequest(
           (t) => t.seeders >= 1 && !/\bdovi\b/i.test(t.releaseTitle)
         );
         targetTorrentId = (
-          best4kNonDoVi ||
-          best4kAny ||
-          fastH264 ||
-          best1080pAny ||
-          best720pAny ||
-          nonDoVi ||
-          pool[0] ||
-          matchingTorrents[0]
+          preferMax1080
+            ? fastH264 ||
+              best1080pAny ||
+              best720pAny ||
+              best4kNonDoVi ||
+              best4kAny ||
+              nonDoVi ||
+              pool[0] ||
+              matchingTorrents[0]
+            : best4kNonDoVi ||
+              best4kAny ||
+              fastH264 ||
+              best1080pAny ||
+              best720pAny ||
+              nonDoVi ||
+              pool[0] ||
+              matchingTorrents[0]
         ).id;
       }
 

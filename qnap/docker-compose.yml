@@ -1,0 +1,54 @@
+services:
+  filmio-stream:
+    build:
+      context: ..
+      dockerfile: Dockerfile.stream
+    container_name: filmio-stream
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8769"
+      FILMIO_NODE_NAME: qnap-ts253be
+      FILMIO_MAX_CACHE_GB: "25"
+      FILMIO_IDLE_TORRENT_MIN: "10"
+    ports:
+      - "8769:8769"
+    volumes:
+      - ./data/torrent-cache:/tmp/aether-torrents
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8769/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: filmio-caddy
+    restart: unless-stopped
+    depends_on:
+      - filmio-stream
+    environment:
+      FILMIO_STREAM_DOMAIN: stream.filmio.my
+    ports:
+      # Avoids QNAP QTS ports 80/443. Forward Router 80->8480 and 443->8443 to QNAP IP.
+      - "8480:80"
+      - "8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy_data:/data
+      - ./data/caddy_config:/config
+
+  filmio-tunnel:
+    image: alpine:3.20
+    container_name: filmio-tunnel
+    restart: unless-stopped
+    depends_on:
+      - filmio-stream
+    environment:
+      FILMIO_TARGET_URL: http://filmio-stream:8769
+      FILMIO_BRIDGE_API: https://filmio.my/api/tv-bridge
+    volumes:
+      - ./tunnel-watchdog.sh:/tunnel-watchdog.sh:ro
+      - ./data/tunnel:/data
+    command: ["/bin/sh", "-c", "apk add --no-cache curl ca-certificates >/dev/null && exec /bin/sh /tunnel-watchdog.sh"]

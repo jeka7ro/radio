@@ -700,6 +700,7 @@ export function isDirectLocalHost(): boolean {
 }
 
 const LOCAL_CANDIDATE_BRIDGE_ORIGINS = [
+  'https://stream.filmio.my',
   'http://192.168.101.87:8769',
   'http://192.168.2.57:8769',
   'http://localhost:8769',
@@ -1036,11 +1037,46 @@ export function getFileListServerBase(): string {
   return LOCAL_CANDIDATE_BRIDGE_ORIGINS[0];
 }
 
+export function isTabletOrMobileDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (
+    document.documentElement.classList.contains('smart-tv-mode') ||
+    Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__)
+  ) {
+    return false;
+  }
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
+  if (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1) {
+    return true;
+  }
+  if (
+    document.documentElement.classList.contains('ipad-pwa-standalone') ||
+    document.documentElement.classList.contains('ios-pwa-standalone')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function buildFileListApiUrl(path: string): string {
   if (!path) return path;
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  let normalizedPath = path;
+  if (
+    normalizedPath.startsWith('/api/filelist/resolve') &&
+    isTabletOrMobileDevice() &&
+    !normalizedPath.includes('maxQ=') &&
+    !normalizedPath.includes('strictId=1')
+  ) {
+    normalizedPath += normalizedPath.includes('?') ? '&maxQ=1080' : '?maxQ=1080';
+  }
+  if (normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://')) {
+    return normalizedPath;
+  }
   const base = getFileListServerBase();
-  return base ? `${base}${path.startsWith('/') ? path : `/${path}`}` : path;
+  return base
+    ? `${base}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`
+    : normalizedPath;
 }
 
 export function normalizeFileListResolveData<

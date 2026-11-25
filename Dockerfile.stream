@@ -1,0 +1,33 @@
+FROM node:22-slim AS builder
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY server ./server
+COPY src/server ./src/server
+
+RUN ./node_modules/.bin/esbuild server/stream-server.ts \
+  --bundle \
+  --platform=node \
+  --format=esm \
+  --packages=external \
+  --outfile=dist-stream/server.mjs \
+  && cp src/server/fastTorrentEngine.cjs dist-stream/fastTorrentEngine.cjs
+
+FROM node:22-slim AS runtime
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist-stream ./dist-stream
+
+ENV NODE_ENV=production
+EXPOSE 8769
+
+CMD ["node", "dist-stream/server.mjs"]
