@@ -124,10 +124,13 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
 
           const heroPlatId =
             lookupPlatformByImdbId(heroItem.id) ||
-            detectStreamingPlatformFromTexts([heroItem.releaseTitle]) ||
-            'netflix';
-          const heroPlatLabel =
-            STREAMING_PLATFORMS.find((p) => p.id === heroPlatId)?.label || 'Netflix';
+            detectStreamingPlatformFromTexts([
+              heroItem.releaseTitle,
+              heroItem.description,
+            ]);
+          const heroPlatLabel = heroPlatId
+            ? STREAMING_PLATFORMS.find((p) => p.id === heroPlatId)?.label || ''
+            : '';
 
           return (
             <div
@@ -163,12 +166,18 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
               <div className="absolute inset-0 bg-gradient-to-t from-[#0e1015] via-[#0e1015]/60 to-transparent pointer-events-none" />
               <div className="absolute inset-0 bg-gradient-to-r from-[#0e1015] via-[#0e1015]/80 to-transparent pointer-events-none" />
 
-              {/* Top Bar: Brand Emblem & Label */}
+              {/* Top Bar: Brand Emblem & Label (show streaming platform ONLY when verified; never fake Netflix on cinema/RU films) */}
               <div className="relative z-10 flex items-center justify-between gap-3 pr-36 sm:pr-48">
                 <div className="flex items-center gap-2 min-w-0">
-                  <StreamingPlatformLogo platformId={heroPlatId} size="sm" />
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-[0.12em] sm:tracking-[0.22em] text-zinc-200 drop-shadow truncate">
-                    {heroPlatLabel} •{' '}
+                  {heroPlatId ? (
+                    <StreamingPlatformLogo platformId={heroPlatId} size="sm" />
+                  ) : (
+                    <span className="inline-flex items-center justify-center h-6 px-2 rounded-md bg-white/12 border border-white/20 text-[11px] font-black tracking-[0.14em] uppercase text-white shrink-0">
+                      CINEMA
+                    </span>
+                  )}
+                  <span className="text-[11px] sm:text-xs font-black uppercase tracking-[0.12em] sm:tracking-[0.22em] text-zinc-200 drop-shadow truncate">
+                    {heroPlatLabel ? `${heroPlatLabel} • ` : ''}
                     {heroItem.type === 'series'
                       ? tr(
                           'SERIAL RECOMANDAT',
@@ -302,7 +311,7 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
                     </span>
 
                     <span className="h-9 px-3.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white inline-flex items-center gap-2 shadow-lg">
-                      <span className="px-1.5 py-0.5 rounded bg-[#E50914] text-white text-[9px] font-black leading-none uppercase">
+                      <span className="px-1.5 py-0.5 rounded bg-[#E50914] text-white text-[11px] font-black leading-none uppercase">
                         TOP 10
                       </span>
                       <span>
@@ -320,23 +329,28 @@ export const HomeHeroBillboard: React.FC<HomeHeroBillboardProps> = memo(
           );
         })}
 
-        {/* Top Spotlight Selector Dots (persistent at z-30, instant click without reload) */}
+        {/* Top Spotlight Selector Dots (persistent at z-30, Apple HIG >=28x28pt hit targets) */}
         {count > 1 && (
-          <div className="absolute top-3 sm:top-5 lg:top-8 right-3 sm:right-5 lg:right-8 z-30 flex items-center gap-1 sm:gap-1.5 bg-black/50 backdrop-blur-md px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-white/15">
+          <div className="absolute top-3 sm:top-5 lg:top-8 right-3 sm:right-5 lg:right-8 z-30 flex items-center gap-0.5 bg-black/50 backdrop-blur-md px-1.5 py-0.5 rounded-full border border-white/15">
             {heroBillboardItems.map((hItem, idx) => {
               const isCurrent = idx === safeIdx;
               return (
                 <button
                   key={`hero_dot_${hItem.id}`}
                   type="button"
+                  aria-label={`${hItem.name} (${hItem.imdbRating || '8.5'})`}
                   title={`${hItem.name} (${hItem.imdbRating || '8.5'})`}
                   onClick={() => setActiveIdx(idx)}
-                  className={`h-2 sm:h-2.5 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-white cursor-pointer ${
-                    isCurrent
-                      ? 'w-5 sm:w-7 bg-[#E50914]'
-                      : 'w-2 sm:w-2.5 bg-white/35 hover:bg-white/70'
-                  }`}
-                />
+                  className="min-w-[28px] min-h-[28px] flex items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-white cursor-pointer group/dot"
+                >
+                  <span
+                    className={`h-2 sm:h-2.5 rounded-full transition-all duration-300 ${
+                      isCurrent
+                        ? 'w-5 sm:w-6 bg-[#E50914]'
+                        : 'w-2 sm:w-2.5 bg-white/40 group-hover/dot:bg-white/80'
+                    }`}
+                  />
+                </button>
               );
             })}
           </div>

@@ -719,9 +719,9 @@ export const HeaderWeatherWidget: React.FC<HeaderWeatherWidgetProps> = ({
   const buttonClass =
     variant === 'classic'
       ? 'group min-h-[32px] sm:min-h-[40px] px-2 sm:px-3 rounded-full bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 inline-flex items-center justify-center gap-1 sm:gap-1.5 text-slate-800 dark:text-zinc-100 transition-colors cursor-pointer shrink-0'
-      : `group h-8 sm:h-9 ${
-          isMobilePhone ? 'px-2 gap-1' : 'px-2 sm:px-2.5 gap-1 sm:gap-1.5'
-        } rounded-full bg-white/10 hover:bg-white/20 border border-white/15 inline-flex items-center justify-center text-white transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0`;
+      : `group hidden lg:inline-flex h-10 ${
+          isMobilePhone ? 'px-2 gap-1' : 'px-3 gap-1.5'
+        } rounded-full bg-white/10 hover:bg-white/20 border border-white/15 items-center justify-center text-white transition-all focus:bg-white focus:!text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer shrink-0`;
 
   return (
     <>

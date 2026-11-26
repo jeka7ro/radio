@@ -538,7 +538,7 @@ export const VodCardProducerBadge: React.FC<VodCardProducerBadgeProps> = ({
           title="SkyShowtime / Paramount+"
           className={`inline-flex items-center justify-center h-[18px] px-1.5 rounded-md bg-[#003882] border border-blue-400/50 text-white shadow-[0_2px_8px_rgba(0,0,0,0.85)] shrink-0 select-none ${className}`}
         >
-          <span className="text-[9px] font-black tracking-tight leading-none text-white">sky</span>
+          <span className="text-[11px] font-black tracking-tight leading-none text-white">sky</span>
         </span>
       );
 
@@ -546,12 +546,12 @@ export const VodCardProducerBadge: React.FC<VodCardProducerBadgeProps> = ({
       return (
         <span
           title="VK Video"
-          className={`inline-flex items-center justify-center gap-0.5 h-[18px] px-1.5 rounded-md bg-[#0077FF] border border-blue-300/40 text-white shadow-[0_2px_8px_rgba(0,0,0,0.85)] shrink-0 select-none ${className}`}
+          className={`inline-flex items-center justify-center gap-0.5 h-[20px] px-1.5 rounded-md bg-[#005FD1] border border-blue-300/40 text-white shadow-[0_2px_8px_rgba(0,0,0,0.85)] shrink-0 select-none ${className}`}
         >
-          <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 fill-white" aria-hidden="true">
+          <svg viewBox="0 0 24 24" className="w-3 h-3 fill-white" aria-hidden="true">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
           </svg>
-          <span className="text-[9px] font-black tracking-tight leading-none text-white">VK</span>
+          <span className="text-[11px] font-black tracking-tight leading-none text-white">VK</span>
         </span>
       );
 
@@ -559,10 +559,10 @@ export const VodCardProducerBadge: React.FC<VodCardProducerBadgeProps> = ({
       return (
         <span
           title="НТВ"
-          className={`inline-flex items-center justify-center gap-0.5 h-[18px] px-1.5 rounded-md bg-[#008738] border border-emerald-300/40 text-white shadow-[0_2px_8px_rgba(0,0,0,0.85)] shrink-0 select-none ${className}`}
+          className={`inline-flex items-center justify-center gap-0.5 h-[20px] px-1.5 rounded-md bg-[#007A33] border border-emerald-300/40 text-white shadow-[0_2px_8px_rgba(0,0,0,0.85)] shrink-0 select-none ${className}`}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-200" />
-          <span className="text-[9px] font-black tracking-tight leading-none text-white">НТВ</span>
+          <span className="text-[11px] font-black tracking-tight leading-none text-white">НТВ</span>
         </span>
       );
 

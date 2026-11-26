@@ -2533,7 +2533,19 @@ async function getOrStartTorrentEngine(
           if (now - lastTrackerWarnUnlockAt > 15000) {
             lastTrackerWarnUnlockAt = now;
             console.warn('[FileList-Tracker] Tracker warning triggered re-unlock:', msg);
-            ensureFileListTrackerIpUnlocked(true).catch(() => {});
+            ensureFileListTrackerIpUnlocked(true)
+              .then((unlocked) => {
+                if (unlocked && activeEngines.get(torrentId) === entry) {
+                  entry.lastTrackerError = undefined;
+                  try {
+                    engine.discovery?.tracker?.update?.();
+                    engine.pokePeers?.();
+                  } catch {
+                    // ignore
+                  }
+                }
+              })
+              .catch(() => {});
           }
         }
       });
@@ -2754,6 +2766,94 @@ function startBackgroundDiskVerification(entry: ActiveTorrentEngine): void {
 
 const inFlightProbes = new Map<string, Promise<any>>();
 
+function prewarmVideoHead(
+  entry: ActiveTorrentEngine,
+  fileIdx: number,
+  onHeadReady?: () => void
+): void {
+  try {
+    const rawFile = entry.engine?.files?.[fileIdx];
+    if (!rawFile || Number(rawFile.length) <= 0) {
+      onHeadReady?.();
+      return;
+    }
+    if (getVerifiedCompleteDiskFilePath(entry, fileIdx)) {
+      onHeadReady?.();
+      return;
+    }
+    const headBytes = Math.min(Number(rawFile.length) - 1, 14 * 1024 * 1024);
+    if (verifyDiskPiecesForByteRange(entry, fileIdx, 0, Math.min(headBytes, 6 * 1024 * 1024))) {
+      onHeadReady?.();
+      return;
+    }
+    const headKey = `head:${fileIdx}`;
+    if (!(entry as any).__headPrewarmedSet) {
+      (entry as any).__headPrewarmedSet = new Set<string>();
+    }
+    if ((entry as any).__headPrewarmedSet.has(headKey)) {
+      return;
+    }
+    (entry as any).__headPrewarmedSet.add(headKey);
+
+    const headStream = rawFile.createReadStream({ start: 0, end: headBytes });
+    try {
+      if (typeof headStream.startPiece === 'number' && entry.engine.critical) {
+        const span = Math.max(
+          2,
+          Math.min(
+            8,
+            (headStream.endPiece ?? headStream.startPiece) - headStream.startPiece + 1
+          )
+        );
+        entry.engine.critical(headStream.startPiece, span);
+      }
+    } catch {
+      // ignore
+    }
+    let bytesRead = 0;
+    let triggeredReady = false;
+    const triggerOnce = () => {
+      if (triggeredReady) return;
+      triggeredReady = true;
+      onHeadReady?.();
+    };
+    const cleanup = () => {
+      clearTimeout(fallbackTimer);
+      clearTimeout(maxTimer);
+      try {
+        headStream.destroy();
+      } catch {
+        // ignore
+      }
+    };
+    const fallbackTimer = setTimeout(triggerOnce, 6000);
+    const maxTimer = setTimeout(() => {
+      triggerOnce();
+      cleanup();
+    }, 25_000);
+    if (typeof (fallbackTimer as any).unref === 'function') (fallbackTimer as any).unref();
+    if (typeof (maxTimer as any).unref === 'function') (maxTimer as any).unref();
+
+    headStream.on('data', (chunk: Buffer) => {
+      bytesRead += chunk?.length || 0;
+      if (bytesRead >= 8 * 1024 * 1024) {
+        triggerOnce();
+      }
+    });
+    headStream.on('end', () => {
+      triggerOnce();
+      cleanup();
+    });
+    headStream.on('error', () => {
+      (entry as any).__headPrewarmedSet?.delete(headKey);
+      triggerOnce();
+      cleanup();
+    });
+  } catch {
+    onHeadReady?.();
+  }
+}
+
 /**
  * Persistently pre-warms the last 2MB of a torrent video file (where Matroska Cues / MP4 moov seek index resides)
  * in the background until completion — NEVER destroyed early by probe exit — so Skip Intro & arbitrary seeks
@@ -2889,7 +2989,6 @@ async function probeTorrentVideoFile(
 
     let rs: any = null;
     if (!verifiedDiskPath) {
-      prewarmVideoTailCues(entry, fileIdx);
       const probeBytes = Math.min(rawFile.length - 1, 2 * 1024 * 1024);
       const headerDiskPath = verifyDiskPiecesForByteRange(
         entry,
@@ -3149,24 +3248,41 @@ function restrictTorrentSelectionToFile(
         }
       }
     });
-    // On QNAP NAS SSD (FILMIO_FULL_EPISODE_CACHE=1), download the full active episode/movie
-    // in background onto SSD (up to 25 GB) so every seek anywhere in the video is <0.3s!
-    if (process.env.FILMIO_FULL_EPISODE_CACHE === '1') {
-      const targetFile = files[targetFileIdx];
-      const fileLen = Number(targetFile?.length || 0);
-      if (
-        targetFile &&
-        typeof targetFile.select === 'function' &&
-        fileLen > 0 &&
-        fileLen <= 25 * 1024 * 1024 * 1024
-      ) {
-        try {
-          targetFile.select();
-        } catch {
-          // ignore
+    // On QNAP NAS SSD (FILMIO_FULL_EPISODE_CACHE=1):
+    // Step 1: Laser-focus 100% peer bandwidth on the first 14 MB (pieces 0..5) for instant <3s playback start!
+    // Step 2: ONLY AFTER the first 8 MB are on SSD (or 6s max), kick off tail cues + full episode SSD download!
+    const startDeferredBackgroundCaching = () => {
+      try {
+        if (!activeEngines.has(entry.id)) return;
+        if (!getVerifiedCompleteDiskFilePath(entry, targetFileIdx)) {
+          prewarmVideoTailCues(entry, targetFileIdx);
         }
+        if (process.env.FILMIO_FULL_EPISODE_CACHE === '1') {
+          const targetFile = files[targetFileIdx];
+          const fileLen = Number(targetFile?.length || 0);
+          if (
+            targetFile &&
+            typeof targetFile.select === 'function' &&
+            fileLen > 0 &&
+            fileLen <= 25 * 1024 * 1024 * 1024
+          ) {
+            try {
+              targetFile.select();
+            } catch {
+              // ignore
+            }
+          }
+          scheduleNextEpisodePrewarm(entry, targetFileIdx);
+        }
+      } catch {
+        // ignore
       }
-      scheduleNextEpisodePrewarm(entry, targetFileIdx);
+    };
+
+    if (getVerifiedCompleteDiskFilePath(entry, targetFileIdx)) {
+      startDeferredBackgroundCaching();
+    } else {
+      prewarmVideoHead(entry, targetFileIdx, startDeferredBackgroundCaching);
     }
   } catch {
     // ignore
@@ -4063,7 +4179,9 @@ export async function handleFileListRequest(
           ? hashToSyntheticId(idParam.replace(/^(tio|kz):/i, ''))
           : parseInt(idParam.replace(/^fl:/i, ''), 10) || 0;
 
-      const [kzStreams, flByImdb, tioStreams] = await Promise.all([
+      // Fast-path: query FileList.io VIP directly first (~0.25s) without blocking 2-4s on slow public Torrentio!
+      // Only query Torrentio as a fallback when FileList returns 0 results.
+      const [kzStreams, flByImdb] = await Promise.all([
         isRussianParam && effectiveRuQuery
           ? fetchKinozalRussianTorrents(
               effectiveRuQuery,
@@ -4075,22 +4193,28 @@ export async function handleFileListRequest(
         !isRussianParam && imdbParam && imdbParam.startsWith('tt')
           ? getFileListCatalog({ imdb: imdbParam }).catch(() => [])
           : Promise.resolve([]),
-        !isRussianParam && !isRomanianQuery && imdbParam && imdbParam.startsWith('tt')
-          ? fetchTorrentioStreams(
-              imdbParam,
-              typeParam === 'series' ? 'series' : 'movie',
-              effectiveSeason,
-              effectiveEpisode
-            ).catch(() => [])
-          : Promise.resolve([]),
       ]);
 
       kinozalTorrents = kzStreams;
       matchingTorrents = flByImdb;
-      torrentioTorrents = tioStreams;
 
       if (matchingTorrents.length === 0 && queryParam && !isRussianParam) {
         matchingTorrents = await getFileListCatalog({ query: queryParam }).catch(() => []);
+      }
+
+      if (
+        matchingTorrents.length === 0 &&
+        !isRussianParam &&
+        !isRomanianQuery &&
+        imdbParam &&
+        imdbParam.startsWith('tt')
+      ) {
+        torrentioTorrents = await fetchTorrentioStreams(
+          imdbParam,
+          typeParam === 'series' ? 'series' : 'movie',
+          effectiveSeason,
+          effectiveEpisode
+        ).catch(() => []);
       }
 
       const getQualityScore = (q: string) =>
@@ -4526,14 +4650,12 @@ export async function handleFileListRequest(
         selectedTorrentMeta.quality = '4K UHD';
       }
 
-      // Use cached probe if available; otherwise infer codec immediately so resolve responds in <1s and warm probeCache in background
+      // Use cached probe if available; if complete on SSD, probe fast (~40ms).
+      // If NOT yet on SSD, NEVER block /resolve for 1.5s — respond immediately (<0.4s) while head pre-warm + probe run in background!
       let cachedProbe = entry.probeCache.get(selectedFileIdx);
       if (cachedProbe && (!cachedProbe.durationSec || !Array.isArray(cachedProbe.subtitleTracks))) {
         entry.probeCache.delete(selectedFileIdx);
         cachedProbe = undefined;
-      }
-      if (!getVerifiedCompleteDiskFilePath(entry, selectedFileIdx)) {
-        prewarmVideoTailCues(entry, selectedFileIdx);
       }
       if (!cachedProbe) {
         if (getVerifiedCompleteDiskFilePath(entry, selectedFileIdx)) {
@@ -4543,19 +4665,7 @@ export async function handleFileListRequest(
             // ignore
           }
         } else {
-          try {
-            cachedProbe = await Promise.race([
-              probeTorrentVideoFile(entry, selectedFileIdx),
-              new Promise<undefined>((resolve) =>
-                setTimeout(() => resolve(undefined), 1500)
-              ),
-            ]);
-          } catch {
-            // ignore
-          }
-          if (!cachedProbe) {
-            probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
-          }
+          probeTorrentVideoFile(entry, selectedFileIdx).catch(() => {});
         }
       }
       const inferredCodec = /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(
@@ -4717,10 +4827,21 @@ export async function handleFileListRequest(
           ? entry.engine.swarm.wires.length
           : 0;
         if (id > 0 && curWires === 0) {
-          ensureFileListTrackerIpUnlocked(true).catch(() => {});
+          if (entry.lastTrackerError) {
+            try {
+              await Promise.race([
+                ensureFileListTrackerIpUnlocked(true),
+                new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+              ]);
+              entry.lastTrackerError = undefined;
+            } catch {
+              // ignore
+            }
+          } else {
+            ensureFileListTrackerIpUnlocked(true).catch(() => {});
+          }
         }
         ensureTorrentSwarmAlive(entry);
-        prewarmVideoTailCues(entry, fileIdx);
       }
 
       // Deselect streams ONLY on OTHER inactive torrent engines idle for > 4s
@@ -4759,10 +4880,8 @@ export async function handleFileListRequest(
         /\b(dual|multi|rus|ukr|dub|mvo|avo|dvo)\b|[а-яё]/i.test(
           rawFile.name || ''
         );
-      const isSimpleSingleAudioH264 =
-        !looksMultiOrDualAudio &&
-        /\b(x264|h\.?264|avc)\b/i.test(rawFile.name || '') &&
-        /\baac2?\.?0?\b/i.test(rawFile.name || '');
+      // Any standard single-audio FileList release (H.264/HEVC + DDP5.1/AC3/EAC3/DTS/AAC) has original audio at track 0 — ZERO reason to stall 3.5s on probe!
+      const isSimpleSingleAudioRelease = !looksMultiOrDualAudio && id > 0;
       const isMpegTsFile = /\.ts$/i.test(rawFile?.name || '');
       if (!cachedProbe) {
         if (verifiedDiskPath) {
@@ -4771,18 +4890,21 @@ export async function handleFileListRequest(
           } catch {
             // ignore
           }
-        } else if (isSimpleSingleAudioH264) {
+        } else if (isSimpleSingleAudioRelease) {
           probeTorrentVideoFile(entry, fileIdx).catch(() => {});
         } else if (wantOrigAudio) {
           try {
             cachedProbe = await Promise.race([
               probeTorrentVideoFile(entry, fileIdx),
               new Promise<undefined>((resolve) =>
-                setTimeout(() => resolve(undefined), 3500)
+                setTimeout(() => resolve(undefined), 900)
               ),
             ]);
           } catch {
             // ignore
+          }
+          if (!cachedProbe) {
+            probeTorrentVideoFile(entry, fileIdx).catch(() => {});
           }
         } else if (startSec <= 1) {
           probeTorrentVideoFile(entry, fileIdx).catch(() => {});
@@ -4941,28 +5063,41 @@ export async function handleFileListRequest(
         if (startSec > 1) {
           ffArgs.push('-noaccurate_seek', '-ss', String(Math.floor(startSec)));
         }
-        ffArgs.push(...hwDecodeArgs, '-i', verifiedDiskPath);
+        ffArgs.push(
+          '-probesize',
+          '1200000',
+          '-analyzeduration',
+          '1000000',
+          ...hwDecodeArgs,
+          '-i',
+          verifiedDiskPath
+        );
       } else if (!useDirectPipe) {
         const rangePort = await ensureInternalRangeServer();
         ffArgs.push(
           '-noaccurate_seek',
           '-ss',
           String(Math.floor(startSec)),
+          '-probesize',
+          '1200000',
+          '-analyzeduration',
+          '1000000',
           ...hwDecodeArgs,
           '-i',
           `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
         );
       } else {
+        ffArgs.push(
+          '-probesize',
+          '1200000',
+          '-analyzeduration',
+          '1000000',
+          '-fflags',
+          isMpegTsFile && directPipeStartByte > 0
+            ? '+nobuffer+discardcorrupt+genpts'
+            : '+nobuffer'
+        );
         if (isMpegTsFile) {
-          ffArgs.push(
-            '-probesize',
-            '1200000',
-            '-analyzeduration',
-            '1200000'
-          );
-          if (directPipeStartByte > 0) {
-            ffArgs.push('-fflags', '+discardcorrupt+genpts');
-          }
           ffArgs.push('-f', 'mpegts');
         }
         ffArgs.push(...hwDecodeArgs, '-i', 'pipe:0');
@@ -5341,6 +5476,20 @@ export async function handleFileListRequest(
         }
 
         const entry = await getOrStartTorrentEngine(id);
+        const hlsWires = Array.isArray(entry.engine?.swarm?.wires)
+          ? entry.engine.swarm.wires.length
+          : 0;
+        if (id > 0 && hlsWires === 0 && entry.lastTrackerError) {
+          try {
+            await Promise.race([
+              ensureFileListTrackerIpUnlocked(true),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
+            ]);
+            entry.lastTrackerError = undefined;
+          } catch {
+            // ignore
+          }
+        }
         ensureTorrentSwarmAlive(entry);
         if (entry.activeStreams) {
           for (const closeOld of Array.from(entry.activeStreams)) {
@@ -5358,23 +5507,37 @@ export async function handleFileListRequest(
           res.end('Video file not found in torrent');
           return true;
         }
+        restrictTorrentSelectionToFile(entry, fileIdx);
 
         let cachedProbe = entry.probeCache.get(fileIdx);
         if (cachedProbe && (!cachedProbe.durationSec || !Array.isArray(cachedProbe.subtitleTracks))) {
           entry.probeCache.delete(fileIdx);
           cachedProbe = undefined;
         }
+        const hlsLooksMultiAudio =
+          id < 0 ||
+          /\b(dual|multi|rus|ukr|dub|mvo|avo|dvo)\b|[а-яё]/i.test(rawFile.name || '');
         if (!cachedProbe) {
-          try {
-            cachedProbe = await Promise.race([
-              probeTorrentVideoFile(entry, fileIdx),
-              new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
-            ]);
-          } catch {
-            // ignore
-          }
-          if (!cachedProbe) {
+          if (getVerifiedCompleteDiskFilePath(entry, fileIdx)) {
+            try {
+              cachedProbe = await probeTorrentVideoFile(entry, fileIdx);
+            } catch {
+              // ignore
+            }
+          } else if (!hlsLooksMultiAudio && id > 0) {
             probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+          } else {
+            try {
+              cachedProbe = await Promise.race([
+                probeTorrentVideoFile(entry, fileIdx),
+                new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 800)),
+              ]);
+            } catch {
+              // ignore
+            }
+            if (!cachedProbe) {
+              probeTorrentVideoFile(entry, fileIdx).catch(() => {});
+            }
           }
         }
         const isHevc =
@@ -5412,19 +5575,41 @@ export async function handleFileListRequest(
           if (startSec > 1) {
             ffArgs.push('-noaccurate_seek', '-ss', String(startSec));
           }
-          ffArgs.push(...hwDecodeArgsHls, '-i', verifiedDiskPathHls);
+          ffArgs.push(
+            '-probesize',
+            '1200000',
+            '-analyzeduration',
+            '1000000',
+            ...hwDecodeArgsHls,
+            '-i',
+            verifiedDiskPathHls
+          );
         } else if (!useDirectPipeHls) {
           const rangePort = await ensureInternalRangeServer();
           ffArgs.push(
             '-noaccurate_seek',
             '-ss',
             String(startSec),
+            '-probesize',
+            '1200000',
+            '-analyzeduration',
+            '1000000',
             ...hwDecodeArgsHls,
             '-i',
             `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
           );
         } else {
-          ffArgs.push(...hwDecodeArgsHls, '-i', 'pipe:0');
+          ffArgs.push(
+            '-probesize',
+            '1200000',
+            '-analyzeduration',
+            '1000000',
+            '-fflags',
+            '+nobuffer',
+            ...hwDecodeArgsHls,
+            '-i',
+            'pipe:0'
+          );
         }
 
         ffArgs.push(
@@ -5575,16 +5760,13 @@ export async function handleFileListRequest(
         let directHlsReadStream: any = null;
         if (useDirectPipeHls) {
           directHlsReadStream = rawFile.createReadStream();
-          try {
-            if (
-              typeof directHlsReadStream.startPiece === 'number' &&
-              entry.engine.critical
-            ) {
-              entry.engine.critical(directHlsReadStream.startPiece, 12);
-            }
-          } catch {
-            // ignore
-          }
+          attachRollingPieceReadahead(
+            entry,
+            directHlsReadStream,
+            Number(rawFile?.offset || 0),
+            0,
+            Number(rawFile?.length || 0)
+          );
           const closeDirect = () => {
             try {
               directHlsReadStream?.destroy();
@@ -5657,7 +5839,7 @@ export async function handleFileListRequest(
         if (activeSess.exited && !fs.existsSync(m3u8Path)) {
           break;
         }
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((r) => setTimeout(r, 40));
       }
 
       if (!fs.existsSync(m3u8Path)) {

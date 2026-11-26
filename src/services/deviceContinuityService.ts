@@ -842,39 +842,35 @@ function probeLocalBridge(force = false): Promise<boolean> {
   };
 
   const runProbe = (async (): Promise<boolean> => {
-    const cloudOrigin = await fetchRegisteredCloudBridgeOrigin(force);
     const localCandidates = isHttpsPage
-      ? LOCAL_CANDIDATE_BRIDGE_ORIGINS.filter(
-          (o) =>
-            o.startsWith('https://') ||
-            o.startsWith('http://localhost:') ||
-            o.startsWith('http://127.0.0.1:')
-        )
+      ? LOCAL_CANDIDATE_BRIDGE_ORIGINS.filter((o) => o.startsWith('https://'))
       : LOCAL_CANDIDATE_BRIDGE_ORIGINS;
     const filteredStored =
-      storedOrigin &&
-      (!isHttpsPage ||
-        storedOrigin.startsWith('https://') ||
-        storedOrigin.startsWith('http://localhost:') ||
-        storedOrigin.startsWith('http://127.0.0.1:'))
+      storedOrigin && (!isHttpsPage || storedOrigin.startsWith('https://'))
         ? storedOrigin
         : '';
-    const originsToProbe = Array.from(
-      new Set([cloudOrigin, filteredStored, ...localCandidates].filter(Boolean))
+    const immediateOrigins = Array.from(
+      new Set([filteredStored, ...localCandidates].filter(Boolean))
     );
-
-    if (originsToProbe.length === 0) {
-      const prev = localBridgeAvailable;
-      localBridgeAvailable = false;
-      if (prev !== false) notifyLocalBridgeChanged(false);
-      return false;
-    }
 
     try {
       const winner = await new Promise<string>((resolve, reject) => {
-        let remaining = originsToProbe.length;
         let settled = false;
-        originsToProbe.forEach((o) => {
+        const attempted = new Set<string>();
+        let pendingCount = 0;
+
+        const finishOneFailure = () => {
+          pendingCount -= 1;
+          if (pendingCount <= 0 && !settled) {
+            settled = true;
+            reject(new Error('All bridge probes failed'));
+          }
+        };
+
+        const launchOrigin = (o: string) => {
+          if (!o || attempted.has(o) || settled) return;
+          attempted.add(o);
+          pendingCount += 1;
           probeOne(o).then(
             (okOrigin) => {
               if (!settled) {
@@ -882,15 +878,21 @@ function probeLocalBridge(force = false): Promise<boolean> {
                 resolve(okOrigin);
               }
             },
-            () => {
-              remaining -= 1;
-              if (remaining <= 0 && !settled) {
-                settled = true;
-                reject(new Error('All bridge probes failed'));
-              }
-            }
+            () => finishOneFailure()
           );
-        });
+        };
+
+        // Start probing direct QNAP (https://stream.filmio.my) & stored origin IMMEDIATELY without blocking on /api/tv-bridge!
+        immediateOrigins.forEach(launchOrigin);
+
+        // Also fetch registered cloud bridge (/api/tv-bridge) in parallel as fallback/auto-tunnel
+        pendingCount += 1;
+        fetchRegisteredCloudBridgeOrigin(force)
+          .then((cloudOrigin) => {
+            if (cloudOrigin) launchOrigin(cloudOrigin);
+            finishOneFailure();
+          })
+          .catch(() => finishOneFailure());
       });
       const prev = localBridgeAvailable;
       const prevOrigin = activeBridgeOrigin;
@@ -1040,13 +1042,13 @@ export function getFileListServerBase(): string {
 
 export function isTabletOrMobileDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  if (
-    document.documentElement.classList.contains('smart-tv-mode') ||
-    Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__)
-  ) {
+  const ua = navigator.userAgent || '';
+  const isHardwareTv =
+    document.documentElement.classList.contains('hardware-tv-gpu') ||
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(ua);
+  if (isHardwareTv) {
     return false;
   }
-  const ua = navigator.userAgent || '';
   if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
   if (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1) {
     return true;
@@ -1802,11 +1804,11 @@ function getProfileSettingsKey(profileId: string): string {
 
 export function getDefaultSubFontPxForCurrentDevice(): number {
   if (typeof window === 'undefined') return 26;
-  const isTv =
-    document.documentElement.classList.contains('smart-tv-mode') ||
-    Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__);
-  if (isTv) return 32;
   const ua = navigator.userAgent || '';
+  const isRealTv =
+    document.documentElement.classList.contains('hardware-tv-gpu') ||
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(ua);
+  if (isRealTv) return 32;
   if (/iPhone|iPod|Android.*Mobile/i.test(ua)) return 16;
   if (isTabletOrMobileDevice()) return 22;
   return 26;

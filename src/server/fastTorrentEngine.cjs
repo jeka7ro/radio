@@ -24,7 +24,7 @@ const blocklist = require('ip-set');
 
 // Modern high-bandwidth streaming constants (replaces 2014 ADSL MAX_REQUESTS=5 & broken piece.BLOCK_SIZE)
 const BLOCK_LEN = piece.BLOCK_LENGTH || 16384;
-const MIN_REQUESTS = 16;
+const MIN_REQUESTS = 24;
 const MAX_REQUESTS_FAST = 64; // 64 * 16KB = 1MB in-flight pipeline per fast seedbox peer
 const CHOKE_TIMEOUT = 4000;
 const REQUEST_TIMEOUT = 10000;
@@ -696,13 +696,13 @@ function fastTorrentStream(link, opts, cb) {
     };
 
     const onvalidatewire = function (wire) {
-      if (wire.requests.length >= 12) return;
+      if (wire.requests.length >= 24) return;
 
       for (let i = 0; i < engine.selection.length; i++) {
         const next = engine.selection[i];
         for (let j = next.from + next.offset; j <= next.to; j++) {
           if (!wire.peerPieces[j]) continue;
-          while (wire.requests.length < 12 && onrequest(wire, j, false)) {
+          while (wire.requests.length < 24 && onrequest(wire, j, false)) {
             // pipeline initial validation blocks on the exact active piece
           }
           if (wire.requests.length) return;
@@ -1026,7 +1026,7 @@ function fastTorrentStream(link, opts, cb) {
               return;
             }
             engine._tryVerifyDiskPiece(cur, function () {
-              setTimeout(stepBgVerify, 2);
+              setTimeout(stepBgVerify, 10);
             });
           };
           setTimeout(stepBgVerify, 50);

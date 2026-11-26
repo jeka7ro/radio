@@ -893,17 +893,27 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   if (!isOpen || typeof document === 'undefined') return null;
 
+  const isRealSmartTv =
+    document.documentElement.classList.contains('hardware-tv-gpu') ||
+    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(
+      navigator.userAgent || ''
+    );
+  const isTouchDevice =
+    !isRealSmartTv &&
+    (navigator.maxTouchPoints > 0 || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || ''));
+
   return createPortal(
     <div
       ref={modalRootRef}
       data-handoff-modal="true"
       style={{
+        backgroundColor: '#070a10',
         paddingTop: 'max(1rem, calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 0.5rem))',
         paddingBottom: 'max(1rem, calc(var(--safe-bottom, env(safe-area-inset-bottom, 0px)) + 0.5rem))',
         paddingLeft: 'max(1rem, calc(var(--safe-left, env(safe-area-inset-left, 0px)) + 0.5rem))',
         paddingRight: 'max(1rem, calc(var(--safe-right, env(safe-area-inset-right, 0px)) + 0.5rem))',
       }}
-      className="fixed inset-0 z-[250] w-full max-w-[100vw] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(12,12,12,0.98)_55%,_#060606_100%)] backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-y-auto overflow-x-hidden overscroll-x-none select-none"
+      className="fixed inset-0 z-[250] w-full max-w-[100vw] bg-[#070a10] bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.22)_0%,_rgba(8,11,18,0.98)_55%,_#06080e_100%)] flex items-center justify-center p-4 sm:p-6 overflow-y-auto overflow-x-hidden overscroll-x-none select-none"
       onClick={() => {
         if (!isPinLockRequired && viewMode === 'list') onClose();
       }}
@@ -911,7 +921,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
       {/* VIEW 1: FULLSCREEN "CINE VIZIONEAZĂ?" — LOGIN PRIORITY #1 + CRYSTAL-CLEAR ACTIVE & TV FOCUS */}
       {viewMode === 'list' ? (
         <div
-          className="relative w-full max-w-6xl my-auto flex flex-col items-center justify-center py-6 sm:py-10"
+          className="relative w-full max-w-6xl my-auto flex flex-col items-center justify-center py-3 sm:py-5"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Top-Right Close Button */}
@@ -952,8 +962,8 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
             </div>
           )}
 
-          {/* Centered Heading + Clear TV Remote Sub-instruction */}
-          <h2 className="text-2xl sm:text-5xl font-extrabold tracking-tight text-white text-center mb-2">
+          {/* Centered Heading + Device-Appropriate Sub-instruction */}
+          <h2 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white text-center mb-1.5">
             {isManageMode
               ? tr(
                   'Editează profilurile',
@@ -966,23 +976,35 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                   'Выберите профиль (Кто смотрит?)'
                 )}
           </h2>
-          <p className="text-xs sm:text-base font-medium text-zinc-300 text-center mb-6 sm:mb-10 max-w-xl px-4">
+          <p className="text-xs sm:text-sm md:text-base font-medium text-zinc-300 text-center mb-4 sm:mb-6 max-w-xl px-4">
             {isManageMode
               ? tr(
                   'Selectează un profil pentru a-i schimba numele, poza sau codul PIN.',
                   'Select a profile to change its name, photo, or PIN code.',
                   'Выберите профиль для изменения имени, фото или PIN-кода.'
                 )
-              : tr(
-                  'Folosește săgețile Stânga / Dreapta și apasă OK pe telecomandă pentru a te conecta instant pe profil.',
-                  'Use Left / Right arrows and press OK on your remote to sign in to a profile immediately.',
-                  'Используйте стрелки Влево / Вправо и нажмите OK для входа в профиль.'
-                )}
+              : isRealSmartTv
+                ? tr(
+                    'Folosește săgețile Stânga / Dreapta și apasă OK pe telecomandă pentru a te conecta instant pe profil.',
+                    'Use Left / Right arrows and press OK on your remote to sign in to a profile immediately.',
+                    'Используйте стрелки Влево / Вправо и нажмите OK для входа в профиль.'
+                  )
+                : isTouchDevice
+                  ? tr(
+                      'Atinge un profil pentru a intra instant.',
+                      'Tap a profile to sign in right away.',
+                      'Коснитесь профиля для мгновенного входа.'
+                    )
+                  : tr(
+                      'Selectează un profil pentru a te conecta instant.',
+                      'Select a profile to sign in right away.',
+                      'Выберите профиль для мгновенного входа.'
+                    )}
           </p>
 
           {/* Profiles Row: Priority #1 is Instant Login / Switch User */}
-          <div className="w-full py-2 sm:py-4">
-            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch justify-center gap-4 sm:gap-8 md:gap-10 max-w-md sm:max-w-none mx-auto px-3 sm:px-6">
+          <div className="w-full py-1 sm:py-2">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch justify-center gap-3 sm:gap-5 md:gap-7 max-w-md sm:max-w-none mx-auto px-3 sm:px-6">
               {profiles.map((prof, idx) => {
                 const isActive = prof.id === activeProfileId;
                 const isFocused = focusedCardId === prof.id;
@@ -1005,7 +1027,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                 return (
                   <div
                     key={prof.id}
-                    className="relative flex flex-col items-center shrink-0 w-36 sm:w-44 md:w-48"
+                    className="relative flex flex-col items-center shrink-0 w-36 sm:w-36 md:w-40"
                   >
                     <button
                       type="button"
@@ -1021,7 +1043,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                           handleAccountClick(prof);
                         }
                       }}
-                      className={`group w-full p-2 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
+                      className={`group w-full p-1.5 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
                         isFocused
                           ? 'scale-105 -translate-y-1'
                           : isActive
@@ -1031,7 +1053,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                     >
                       {/* Square Rounded Avatar */}
                       <div
-                        className={`relative w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-2xl overflow-hidden transition-all duration-200 bg-zinc-900 ${
+                        className={`relative w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-2xl overflow-hidden transition-all duration-200 bg-zinc-900 ${
                           isFocused
                             ? 'ring-2 ring-white shadow-xl'
                             : isActive
@@ -1130,7 +1152,7 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
               })}
 
               {/* Add Profile Card */}
-              <div className="relative flex flex-col items-center shrink-0 w-36 sm:w-44 md:w-48">
+              <div className="relative flex flex-col items-center shrink-0 w-36 sm:w-36 md:w-40">
                 <button
                   type="button"
                   data-profile-row-btn="true"
@@ -1138,14 +1160,14 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
                   onFocus={() => setFocusedCardId('ADD_NEW')}
                   onMouseEnter={() => setFocusedCardId('ADD_NEW')}
                   onClick={startCreateNewAccount}
-                  className={`group w-full p-2 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
+                  className={`group w-full p-1.5 flex flex-col items-center transition-all duration-200 focus:outline-none cursor-pointer ${
                     focusedCardId === 'ADD_NEW'
                       ? 'scale-105 -translate-y-1'
                       : 'opacity-80 hover:opacity-100'
                   }`}
                 >
                   <div
-                    className={`w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-2xl flex items-center justify-center transition-all duration-200 ${
+                    className={`w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-2xl flex items-center justify-center transition-all duration-200 ${
                       focusedCardId === 'ADD_NEW'
                         ? 'bg-white text-zinc-950 ring-2 ring-white shadow-xl'
                         : 'bg-white/[0.07] text-zinc-300 border border-white/15 group-hover:bg-white group-hover:text-zinc-950'

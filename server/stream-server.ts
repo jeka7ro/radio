@@ -8,6 +8,8 @@ import {
   getHardwareAccelSummary,
 } from '../src/server/filelistServer.ts';
 import { handleYouTubeRequest } from '../src/server/youtubeServer.ts';
+// @ts-ignore — JS ESM Netlify function reused natively on Node 22 with full _ssrfGuard protection
+import tvProxyHandler from '../netlify/functions/tv-proxy.mjs';
 
 const PORT = Number(process.env.PORT || 8769);
 const HOST = '0.0.0.0';
@@ -177,6 +179,96 @@ function serveMsxStartJson(req: http.IncomingMessage, res: http.ServerResponse):
   res.end(JSON.stringify(payload, null, 2));
 }
 
+async function handleNativeTvProxy(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rawUrl: string
+): Promise<void> {
+  const origin = getRequestPublicOrigin(req);
+  const fullUrl = `${origin}${rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`}`;
+  const webHeaders = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (lk === 'connection' || lk === 'transfer-encoding') continue;
+    if (typeof v === 'string') webHeaders.set(k, v);
+    else if (Array.isArray(v)) webHeaders.set(k, v.join(', '));
+  }
+
+  const ac = new AbortController();
+  const abortUpstream = () => {
+    if (!ac.signal.aborted) {
+      try {
+        ac.abort();
+      } catch {
+        // ignore
+      }
+    }
+  };
+  req.once('aborted', abortUpstream);
+  res.once('close', () => {
+    if (!res.writableEnded) abortUpstream();
+  });
+
+  const webReq = new Request(fullUrl, {
+    method: req.method || 'GET',
+    headers: webHeaders,
+    signal: ac.signal,
+  });
+
+  const webRes: Response = await tvProxyHandler(webReq);
+  if (res.destroyed || res.writableEnded) {
+    try {
+      webRes.body?.cancel();
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  const outHeaders: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Private-Network': 'true',
+    'X-Filmio-Proxy': 'qnap-local',
+  };
+  webRes.headers.forEach((val, key) => {
+    const lk = key.toLowerCase();
+    if (
+      lk === 'transfer-encoding' ||
+      lk === 'connection' ||
+      lk.startsWith('access-control-')
+    ) {
+      return;
+    }
+    outHeaders[key] = val;
+  });
+
+  res.writeHead(webRes.status, outHeaders);
+  if (req.method === 'HEAD' || !webRes.body) {
+    res.end();
+    return;
+  }
+  const nodeStream = Readable.fromWeb(webRes.body as any);
+  const cleanupStream = () => {
+    try {
+      nodeStream.destroy();
+    } catch {
+      // ignore
+    }
+    if (!res.writableEnded && !res.destroyed) {
+      try {
+        res.end();
+      } catch {
+        // ignore
+      }
+    }
+  };
+  nodeStream.on('error', cleanupStream);
+  res.once('close', cleanupStream);
+  nodeStream.pipe(res);
+}
+
 async function proxyCloudApiRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -320,6 +412,7 @@ const server = http.createServer(async (req, res) => {
           maxCacheGb: MAX_CACHE_GB,
           fullEpisodeCache: process.env.FILMIO_FULL_EPISODE_CACHE === '1',
           hwAccel: getHardwareAccelSummary(),
+          nativeTvProxy: true,
           hasLocalWebUi: fs.existsSync(path.join(DIST_DIR, 'index.html')),
           uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
         })
@@ -340,6 +433,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/youtube')) {
       const handled = await handleYouTubeRequest(req, res);
       if (handled) return;
+    }
+
+    if (pathname === '/api/tv-proxy') {
+      await handleNativeTvProxy(req, res, rawUrl);
+      return;
     }
 
     if (pathname.startsWith('/api/')) {

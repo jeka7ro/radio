@@ -485,37 +485,93 @@ select:focus-visible {
 
 /* ============================================================================
    APPLE macOS TAHOE (LIQUID GLASS TRANSLUCENCY + PILL BUTTONS + SQUIRCLES)
+   Real Liquid Glass blur on Apple Silicon / modern browsers; opaque fast-path
+   strictly on legacy Smart TV GPUs (html.hardware-tv-gpu / html.no-flex-gap).
    ============================================================================ */
 .tahoe-glass {
   background: linear-gradient(145deg,
-      rgba(22, 26, 36, 0.94) 0%,
-      rgba(14, 17, 24, 0.96) 100%);
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+      rgba(22, 26, 36, 0.84) 0%,
+      rgba(12, 15, 22, 0.90) 100%);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
 .tahoe-emerald-osd {
   background: linear-gradient(145deg,
-      rgba(20, 24, 34, 0.95) 0%,
-      rgba(12, 15, 22, 0.97) 100%);
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+      rgba(20, 24, 34, 0.88) 0%,
+      rgba(12, 15, 22, 0.93) 100%);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
 }
 
-/* Disable expensive GPU backdrop-blur across Smart TV & Web views for instant 60fps navigation */
-.backdrop-blur,
-.backdrop-blur-sm,
-.backdrop-blur-md,
-.backdrop-blur-lg,
-.backdrop-blur-xl,
-.backdrop-blur-2xl,
-.backdrop-blur-3xl {
+/* Apple HIG Liquid Glass Layer Discipline: never apply expensive backdrop-blur on scrolling content cards */
+[data-vod-card="true"] [class*="backdrop-blur"],
+[data-watched-poster-btn="true"] [class*="backdrop-blur"],
+[data-episode-card="true"] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* Disable expensive GPU backdrop-blur ONLY on legacy Smart TV hardware for 60fps */
+html.hardware-tv-gpu .backdrop-blur,
+html.hardware-tv-gpu .backdrop-blur-sm,
+html.hardware-tv-gpu .backdrop-blur-md,
+html.hardware-tv-gpu .backdrop-blur-lg,
+html.hardware-tv-gpu .backdrop-blur-xl,
+html.hardware-tv-gpu .backdrop-blur-2xl,
+html.hardware-tv-gpu .backdrop-blur-3xl,
+html.no-flex-gap .backdrop-blur,
+html.no-flex-gap .backdrop-blur-sm,
+html.no-flex-gap .backdrop-blur-md,
+html.no-flex-gap .backdrop-blur-lg,
+html.no-flex-gap .backdrop-blur-xl,
+html.no-flex-gap .backdrop-blur-2xl,
+html.no-flex-gap .backdrop-blur-3xl {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Apple HIG Accessibility States: Reduce Transparency, Increase Contrast & Reduce Motion */
+@media (prefers-reduced-transparency: reduce) {
+  .apple-vod-liquid-dock,
+  .apple-vod-liquid-popover,
+  .apple-vod-liquid-bubble,
+  .tahoe-glass,
+  .tahoe-emerald-osd,
+  [class*="backdrop-blur"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .apple-vod-liquid-dock,
+  .apple-vod-liquid-popover,
+  .apple-vod-liquid-bubble,
+  .tahoe-glass,
+  .tahoe-emerald-osd {
+    background: rgba(14, 17, 24, 0.97) !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .apple-vod-liquid-dock,
+  .apple-vod-liquid-popover,
+  .apple-vod-liquid-bubble,
+  .tahoe-glass,
+  .tahoe-emerald-osd {
+    background: rgba(10, 13, 20, 0.94) !important;
+    border-color: rgba(255, 255, 255, 0.55) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-ping {
+    animation: none !important;
+  }
 }
 
 .tahoe-emerald-card {
@@ -732,12 +788,7 @@ html.no-flex-gap [data-vod-bottom-row="true"]>div>div:last-child {
     0 6px 18px rgba(0, 0, 0, 0.32);
 }
 
-/* Global macOS Tahoe refinement for Smart TV & Web containers */
-div.rounded-2xl,
-section.rounded-2xl,
-article.rounded-2xl {
-  border-radius: 26px;
-}
+/* Keep Tailwind rounded-2xl (16px) consistent across cards & containers */
 
 /* Defer rendering for off-screen station cards below the initial fold */
 .station-card-deferred {
@@ -1074,11 +1125,15 @@ div.aspect-video:not([class*="flex-1"]):not([class*="max-h-"])>video {
 }
 
 /* ============================================================================
-   SMART TV SMOOTH PERFORMANCE OPTIMIZATION (100% REVERSIBLE, ZERO VISUAL LOSS)
+   SMART TV SMOOTH PERFORMANCE OPTIMIZATION (Hardware TV GPUs only — keeps
+   real Apple Liquid Glass blur active on iPhone, iPad, and macOS)
    ============================================================================ */
-html.smart-tv-mode .tahoe-glass,
-html.smart-tv-mode .tahoe-emerald-osd,
-html.smart-tv-mode [class*="backdrop-blur"] {
+html.hardware-tv-gpu .tahoe-glass,
+html.hardware-tv-gpu .tahoe-emerald-osd,
+html.hardware-tv-gpu [class*="backdrop-blur"],
+html.no-flex-gap .tahoe-glass,
+html.no-flex-gap .tahoe-emerald-osd,
+html.no-flex-gap [class*="backdrop-blur"] {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -1302,11 +1357,9 @@ th,
   font-variant-numeric: tabular-nums !important;
 }
 
-/* Eliminare etichete cu aspect robotizat (tracking exagerat) */
-[class*="tracking-widest"],
-[class*="tracking-wider"],
-[class*="tracking-["] {
-  letter-spacing: -0.005em !important;
+/* Natural Apple SF Pro tracking on uppercase captions (Apple HIG Typography) */
+[class*="tracking-widest"] {
+  letter-spacing: 0.06em;
 }
 
 /* === Tabele Native stil macOS Tahoe (Finder / Numbers) === */
@@ -1353,11 +1406,7 @@ tbody td {
   vertical-align: middle !important;
 }
 
-/* Panouri și ferestre macOS Tahoe Liquid Glass discret */
-[class*="rounded-2xl"],
-[class*="rounded-xl"] {
-  border-radius: 12px !important;
-}
+/* Natural Tailwind corner radii preserved (12px rounded-xl, 16px rounded-2xl, 28px drawers) */
 
 /* Optimizare iPhone / Mobil — Zero scroll orizontal pe pagină */
 @media (max-width: 768px) {

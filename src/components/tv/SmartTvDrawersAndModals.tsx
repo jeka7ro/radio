@@ -616,7 +616,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
             paddingLeft: 'var(--safe-left, env(safe-area-inset-left, 0px))',
             paddingRight: 'var(--safe-right, env(safe-area-inset-right, 0px))',
           }}
-          className="fixed inset-0 z-[150] flex justify-end bg-black/55 backdrop-blur-md"
+          className="fixed inset-0 z-[150] flex justify-end bg-black/75 backdrop-blur-md"
           onClick={() => {
             if (settingsSubMenu) {
               setSettingsSubMenu(null);
@@ -627,7 +627,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
         >
           <div
             data-settings-drawer="true"
-            className="w-80 sm:w-[420px] m-3 sm:m-4 h-[calc(100%-1.5rem)] sm:h-[calc(100%-2rem)] rounded-[32px] tahoe-glass text-zinc-100 shadow-2xl flex flex-col overflow-hidden border border-white/15 p-3"
+            className="w-[min(22rem,calc(100vw-1.5rem))] sm:w-[420px] m-3 sm:m-4 h-[calc(100%-1.5rem)] sm:h-[calc(100%-2rem)] rounded-[28px] bg-[#0e121b]/95 tahoe-glass text-zinc-100 shadow-2xl flex flex-col overflow-hidden border border-white/15 p-3"
             onClick={(e) => e.stopPropagation()}
           >
             {settingsSubMenu === null ? (
@@ -635,7 +635,10 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                 <div className="shrink-0 px-4 py-3 flex items-center justify-between border-b border-white/10 mb-2">
                   <div>
                     <h2 className="text-[22px] font-bold text-white tracking-tight">
-                      {tr('Setări Smart TV', 'Smart TV Settings', 'Настройки')}
+                      {typeof document !== 'undefined' &&
+                      document.documentElement.classList.contains('hardware-tv-gpu')
+                        ? tr('Setări Smart TV', 'Smart TV Settings', 'Настройки')
+                        : tr('Setări', 'Settings', 'Настройки')}
                     </h2>
                     <p className="text-xs text-zinc-400 mt-0.5">
                       {tr(
@@ -649,10 +652,11 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     type="button"
                     data-drawer-close="true"
                     onClick={() => setIsSettingsDrawerOpen(false)}
+                    aria-label={tr('Închide Setări', 'Close Settings', 'Закрыть')}
                     title={tr('Închide (Esc)', 'Close (Esc)', 'Закрыть (Esc)')}
-                    className="w-9 h-9 rounded-full flex items-center justify-center bg-white/[0.06] text-zinc-300 hover:text-white hover:bg-white/15 focus:bg-white focus:text-[#141414] cursor-pointer"
+                    className="w-11 h-11 sm:w-10 sm:h-10 rounded-full flex items-center justify-center bg-white/[0.08] text-zinc-200 hover:text-white hover:bg-white/15 focus:bg-white focus:text-[#141414] cursor-pointer shrink-0"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
 
@@ -683,7 +687,7 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                           </div>
                         </div>
                       </div>
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-400 text-zinc-950 text-[10px] font-black uppercase tracking-wider shrink-0 shadow">
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-400 text-zinc-950 text-[11px] font-black uppercase tracking-wider shrink-0 shadow">
                         {tr('ACTIV', 'ACTIVE', 'АКТИВЕН')}
                       </span>
                     </div>
@@ -691,14 +695,21 @@ export const SmartTvDrawersAndModals: React.FC<any> = ({
                     {/* Direct 1-Click Profile Switcher Buttons right inside Settings */}
                     {Array.isArray(tvProfiles) && tvProfiles.length > 1 && (
                       <div className="space-y-1.5">
-                        <div className="text-[11px] font-bold text-zinc-300">
-                          {tr(
-                            'Apasă OK pe un profil pentru conectare directă:',
-                            'Press OK on a profile to sign in directly:',
-                            'Нажмите OK на профиль для быстрого входа:'
-                          )}
+                        <div className="text-xs font-semibold text-zinc-300">
+                          {typeof document !== 'undefined' &&
+                          document.documentElement.classList.contains('hardware-tv-gpu')
+                            ? tr(
+                                'Apasă OK pe un profil pentru conectare directă:',
+                                'Press OK on a profile to sign in directly:',
+                                'Нажмите OK на профиль для быстрого входа:'
+                              )
+                            : tr(
+                                'Schimbă rapid profilul:',
+                                'Quick switch profile:',
+                                'Быстрая смена профиля:'
+                              )}
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {tvProfiles.map((prof: SmartTvProfile) => {
                             const isCur = prof.id === activeProfileId;
                             const hasPin = Boolean(prof.pin && prof.pin.trim());

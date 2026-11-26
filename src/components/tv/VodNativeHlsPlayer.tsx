@@ -1399,6 +1399,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       ms.addEventListener(
         'sourceopen',
         async () => {
+          let receivedFirstChunk = false;
           try {
             const res = await fetch(flStreamUrl, {
               signal: controller.signal,
@@ -1445,7 +1446,10 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
               }
             };
 
-            const first = await readChunkWithTimeout(32000);
+            const first = await readChunkWithTimeout(14000);
+            if (!first.done && first.value) {
+              receivedFirstChunk = true;
+            }
             if (first.done || !first.value) {
               if (!controller.signal.aborted) {
                 isSeekingFileListRef.current = false;
@@ -1883,7 +1887,11 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
                 onTimeUpdate?.(resumeAt, Math.floor(durReport));
               }
               if (isStallTimeout && !userIntentionallyPausedRef.current) {
-                if (flStallStrikeRef.current < 2 && videoRef.current === video) {
+                if (
+                  receivedFirstChunk &&
+                  flStallStrikeRef.current < 2 &&
+                  videoRef.current === video
+                ) {
                   flStallStrikeRef.current += 1;
                   const cleanBase = flStreamUrl
                     .replace(/([?&])start=\d+/g, '')
@@ -1964,7 +1972,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
       }
       if (!retriedAltFormat) {
         retriedAltFormat = true;
-        if (effectiveFlUrl.includes('/api/filelist/hls.m3u8')) {
+        if (effectiveFlUrl.includes('/api/filelist/hls.m3u8') && !isIosWebKit) {
           video.addEventListener('playing', clearSafariSeekOverlays, { once: true });
           video.src = effectiveFlUrl.replace(
             '/api/filelist/hls.m3u8',
@@ -1974,6 +1982,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
           return;
         }
         if (
+          !isIosWebKit &&
           flStreamUrl.includes('/api/filelist/stream') &&
           typeof window !== 'undefined' &&
           typeof window.MediaSource !== 'undefined'
