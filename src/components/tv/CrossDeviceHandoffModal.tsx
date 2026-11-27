@@ -18,6 +18,7 @@ import {
   getWatchProgressKeyForProfile,
   getSavedVodKeyForProfile,
 } from "../../views/smartTvLampaHelpers";
+import { getCurrentPlatformCapabilities } from "../../utils/platformCapabilities";
 import {
   SharedTvProfile,
   PHOTO_AVATAR_GALLERY,
@@ -893,14 +894,11 @@ export const CrossDeviceHandoffModal: React.FC<CrossDeviceHandoffModalProps> = (
 
   if (!isOpen || typeof document === 'undefined') return null;
 
-  const isRealSmartTv =
-    document.documentElement.classList.contains('hardware-tv-gpu') ||
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(
-      navigator.userAgent || ''
-    );
+  const platformCaps = getCurrentPlatformCapabilities();
+  const isRealSmartTv = platformCaps.isHardwareTv;
   const isTouchDevice =
     !isRealSmartTv &&
-    (navigator.maxTouchPoints > 0 || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || ''));
+    (navigator.maxTouchPoints > 0 || platformCaps.isTabletOrMobile);
 
   return createPortal(
     <div

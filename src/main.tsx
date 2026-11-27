@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { SMART_TV_UA_REGEX } from './utils/platformCapabilities';
 
 // Detect older Smart TV Chromium engines (< 84 on LG webOS / Samsung Tizen) that do not support CSS Flexbox gap
 (function detectFlexGapSupport() {
@@ -40,9 +41,7 @@ if ('serviceWorker' in navigator) {
   const isSmartTvOrMsx =
     Boolean((window as unknown as { __IS_SMART_TV_DEVICE__?: boolean }).__IS_SMART_TV_DEVICE__) ||
     document.documentElement.classList.contains('smart-tv-mode') ||
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|VIDAA|HbbTV/i.test(
-      uaStr
-    ) ||
+    SMART_TV_UA_REGEX.test(uaStr) ||
     isFramedWebView;
   const isLocalDev =
     devHost === 'localhost' ||

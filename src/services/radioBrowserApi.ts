@@ -1,5 +1,6 @@
 import { Country, Station } from '../types/radio';
 import { scoreSmartSearchMatch } from '../utils/smartSearch';
+import { getCurrentPlatformCapabilities } from '../utils/platformCapabilities';
 import { getCachedData, setCachedData, DEFAULT_TTL_MS } from './cacheService';
 import {
   extractDomainFromUrl,
@@ -53,14 +54,9 @@ async function fetchWithTimeout(
 async function requestWithFallback<T>(path: string, options: RequestInit = {}): Promise<T> {
   const totalServers = RADIO_BROWSER_SERVERS.length;
   let lastError: unknown = null;
+  const caps = getCurrentPlatformCapabilities();
   const isSmartTvOrLan =
-    typeof window !== 'undefined' &&
-    (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
-      window.location.hostname
-    ) ||
-      /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
-        navigator.userAgent
-      ));
+    typeof window !== 'undefined' && (caps.isPrivateLanHost || caps.isExplicitTvUa);
 
   for (let attempt = 0; attempt < totalServers; attempt++) {
     const serverIdx = (preferredServerIndex + attempt) % totalServers;

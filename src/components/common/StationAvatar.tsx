@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { buildStationLogoCandidates } from '../../services/stationLogoService';
+import { getCurrentPlatformCapabilities } from '../../utils/platformCapabilities';
 
 interface StationAvatarProps {
   name: string;
@@ -74,16 +75,12 @@ export const StationAvatar: React.FC<StationAvatarProps> = ({
   const activeImageUrl = useMemo(() => {
     if (!rawImageUrl) return null;
     if (!/^https?:\/\//i.test(rawImageUrl)) return rawImageUrl;
+    const caps = getCurrentPlatformCapabilities();
     const isTvOrLan =
       typeof window !== 'undefined' &&
-      (document.documentElement.classList.contains('smart-tv-mode') ||
-        window.location.pathname.toLowerCase().startsWith('/tv') ||
-        /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(
-          window.location.hostname
-        ) ||
-        /Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX/i.test(
-          navigator.userAgent
-        ));
+      (caps.isSmartTv ||
+        caps.isPrivateLanHost ||
+        window.location.pathname.toLowerCase().startsWith('/tv'));
     return isTvOrLan
       ? `/api/tv-proxy?url=${encodeURIComponent(rawImageUrl)}`
       : rawImageUrl;

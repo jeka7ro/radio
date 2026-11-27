@@ -37,7 +37,13 @@ import {
 } from 'lucide-react';
 import { useRadioStore } from '../store/useRadioStore';
 import { EnrichedCountry } from '../hooks/useCountries';
-import { getVodCanonicalKey, areVodItemsSame, deduplicateProgressMap } from './smartTvLampaHelpers';
+import {
+  getVodCanonicalKey,
+  areVodItemsSame,
+  deduplicateProgressMap,
+  saveWatchProgressMap as saveCanonicalWatchProgressMap,
+  type VodWatchProgressEntry as SharedVodWatchProgressEntry,
+} from './smartTvLampaHelpers';
 import { TvChannel } from '../types/radio';
 import { parseM3uPlaylist } from '../services/tvApi';
 import {
@@ -531,11 +537,14 @@ function loadWatchProgressMap(
   profileId = 'p1'
 ): Record<string, VodWatchProgressEntry> {
   try {
-    const key = `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`;
+    const canonicalKey =
+      !profileId || profileId === 'p1'
+        ? WATCH_PROGRESS_STORAGE_KEY
+        : `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`;
     const raw =
-      localStorage.getItem(key) ||
+      localStorage.getItem(canonicalKey) ||
       (profileId === 'p1'
-        ? localStorage.getItem(WATCH_PROGRESS_STORAGE_KEY)
+        ? localStorage.getItem(`${WATCH_PROGRESS_STORAGE_KEY}_p1`)
         : null);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
@@ -557,77 +566,18 @@ function loadWatchProgressMap(
   }
 }
 
-const lastMediatecaCloudPayloadByProf = new Map<string, string>();
-
 function saveWatchProgressMap(
   map: Record<string, VodWatchProgressEntry>,
   profileId = 'p1',
-  syncServer = true
+  syncServer = true,
+  immediateCloud = false
 ): void {
   try {
-    const compacted: Record<string, VodWatchProgressEntry> = {};
-    for (const [k, v] of Object.entries(map || {})) {
-      if (!v || typeof v !== 'object') continue;
-      if (v.item && typeof v.item === 'object') {
-        const cleanItem: Record<string, unknown> = { ...(v.item as unknown as Record<string, unknown>) };
-        delete cleanItem.videos;
-        delete cleanItem.links;
-        delete cleanItem.trailers;
-        delete cleanItem.trailerStreams;
-        delete cleanItem.popularities;
-        delete cleanItem.cast;
-        delete cleanItem.director;
-        delete cleanItem.writer;
-        delete cleanItem.awards;
-        delete cleanItem.behaviorHints;
-        if (typeof cleanItem.description === 'string' && cleanItem.description.length > 320) {
-          cleanItem.description = cleanItem.description.slice(0, 320);
-        }
-        if (Array.isArray(cleanItem.genres)) {
-          const gs = cleanItem.genres
-            .filter(
-              (g): g is string =>
-                typeof g === 'string' &&
-                g.trim().length > 0 &&
-                g.trim().length <= 40 &&
-                !g.includes('\uFFFD')
-            )
-            .slice(0, 8);
-          if (gs.length > 0) cleanItem.genres = gs;
-          else delete cleanItem.genres;
-        }
-        compacted[k] = { ...v, item: cleanItem as unknown as CinemetaItem };
-      } else {
-        compacted[k] = v;
-      }
-    }
-    const payload = JSON.stringify(compacted);
-    localStorage.setItem(
-      `${WATCH_PROGRESS_STORAGE_KEY}_${profileId}`,
-      payload
+    saveCanonicalWatchProgressMap(
+      map as unknown as Record<string, SharedVodWatchProgressEntry>,
+      profileId,
+      { immediateCloud, skipCloud: !syncServer }
     );
-    if (profileId === 'p1') {
-      localStorage.setItem(WATCH_PROGRESS_STORAGE_KEY, payload);
-    }
-    if (syncServer) {
-      const cleanProf = encodeURIComponent(profileId);
-      if (lastMediatecaCloudPayloadByProf.get(cleanProf) === payload) {
-        return;
-      }
-      lastMediatecaCloudPayloadByProf.set(cleanProf, payload);
-      fetch(`/api/tv-progress?profileId=${cleanProf}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      }).catch(() => { });
-      if (isLocalHomeServer()) {
-        fetch(`https://filmio.my/api/tv-progress?profileId=${cleanProf}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: payload,
-        }).catch(() => { });
-      }
-    }
   } catch {
     // ignore storage quota errors
   }
@@ -1003,7 +953,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
     setWatchProgressMap((prev) => {
       const next = { ...prev };
       delete next[id];
-      saveWatchProgressMap(next, activeProfileId, true);
+      saveWatchProgressMap(next, activeProfileId, true, true);
       fetch(
         `/api/tv-progress?profileId=${encodeURIComponent(activeProfileId)}&deleteId=${encodeURIComponent(id)}`,
         { method: 'DELETE' }
@@ -3375,7 +3325,7 @@ export const MediatecaView: React.FC<MediatecaViewProps> = ({
                   type="button"
                   onClick={() => {
                     setWatchProgressMap({});
-                    saveWatchProgressMap({}, activeProfileId, true);
+                    saveWatchProgressMap({}, activeProfileId, true, true);
                   }}
                   className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-slate-500 hover:text-rose-600 dark:text-zinc-400 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
                 >

@@ -43,6 +43,11 @@ Pe lângă `audit-gatekeeper`, în `.agents/skills/` sunt instalate următoarele
    ```bash
    python3 .agents/skills/webapp-testing/scripts/verify_filmio_viewports.py
    ```
+5. **`apple-design`** (`.agents/skills/apple-design/SKILL.md`, din `dickwu/apple-design-skill`): Audit și design UI/UX bazat pe Apple HIG 2026 (iOS, iPadOS, macOS, tvOS, Liquid Glass, accesibilitate).
+6. **`frontend-design`** (`.agents/skills/frontend-design/SKILL.md`, din `anthropics/skills`): Direcție vizuală distinctivă, tipografie și compoziție intenționată pentru ecrane/componente noi (fără aspect generic de template AI).
+7. **`improve-codebase-architecture`** (`.agents/skills/improve-codebase-architecture/SKILL.md`, din `mattpocock/skills`): Scanare arhitecturală pentru identificarea modulelor adânci/testabile (ex. spargere treptată și sigură din `SmartTvLampaViewCore.tsx` / `VodNativeHlsPlayer.tsx` / `filelistServer.ts`).
+8. **`code-review`** (`.agents/skills/code-review/SKILL.md`, din `mattpocock/skills`): Review pe 2 axe în paralel (conformitate cu regulile proiectului + conformitate cu cerința exactă) înainte de commit-uri/refactorizări mari.
+9. **`tdd`** (`.agents/skills/tdd/SKILL.md`, din `mattpocock/skills`): Dezvoltare red → green → refactor pentru bug-uri critice și reguli de business (scrii mai întâi testul care reproduce bug-ul, apoi fix-ul).
 
 
 

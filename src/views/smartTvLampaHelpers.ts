@@ -39,6 +39,17 @@ import {
   DEFAULT_SEED_SAVED_BY_PROFILE,
 } from "../services/defaultSeedData";
 import { Station } from "../types/radio";
+import {
+  isAdult18VodItem,
+  compactProgressItem as compactSharedProgressItem,
+  areVodItemsSame as areSharedVodItemsSame,
+  getVodCanonicalKey as getSharedVodCanonicalKey,
+  mergeTwoProgressEntries as mergeSharedProgressEntries,
+  deduplicateProgressMap as deduplicateSharedProgressMap,
+  type GenericVodItem,
+  type GenericWatchProgressEntry,
+} from "../shared/continuitySync.mjs";
+import { isRomanianVodItemShared } from "../shared/vodOriginPolicy.mjs";
 
 export type StreamingPlatformId =
   | 'netflix'
@@ -521,40 +532,7 @@ const CURATED_RU_TV_SHOW_KP_IDS = new Set<number>([
 export function isRomanianVodItem(
   item: Partial<CinemetaItem> | null | undefined
 ): boolean {
-  if (!item) return false;
-  const idStr = String(item.id || '');
-  const imdbStr = String(item.imdbId || '');
-  if (
-    idStr === 'tt10295772' ||
-    imdbStr === 'tt10295772' ||
-    idStr === 'tt26254014' ||
-    imdbStr === 'tt26254014' ||
-    idStr === 'tt28504410' ||
-    imdbStr === 'tt28504410' ||
-    idStr === 'tt35405683' ||
-    imdbStr === 'tt35405683' ||
-    idStr === 'tt13093364' ||
-    imdbStr === 'tt13093364' ||
-    idStr === 'tt1745739' ||
-    imdbStr === 'tt1745739' ||
-    idStr === 'tt21603982' ||
-    imdbStr === 'tt21603982' ||
-    idStr === 'tt33088572' ||
-    imdbStr === 'tt33088572' ||
-    idStr === 'tt34192055' ||
-    imdbStr === 'tt34192055' ||
-    idStr === 'tt28803286' ||
-    imdbStr === 'tt28803286'
-  ) {
-    return true;
-  }
-  if (item.country && /(Romania|România|Румыния)/i.test(item.country)) {
-    return true;
-  }
-  const title = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`;
-  return /\b(asia\s*express|america\s*express|insula\s*iubirii|power\s*couple|chefi\s*la\s*cutite|las\s*fierbinti|survivor\s*romania|clanul|tatutu|camera\s*609|scara\s*b|burlacul|vocea\s*romaniei|romanii\s*au\s*talent|te\s*cunosc\s*de\s*undeva|bravo\s*ai\s*stil|sunt\s*celebru|visuri\s*la\s*cheie|iubire\s*cu\s*parfum\s*de\s*lavanda|poftiti\s*pe\s*la\s*noi|jocul\s*cuvintelor)\b/i.test(
-    title
-  );
+  return isRomanianVodItemShared(item);
 }
 
 export function isRussianVodItem(
@@ -1448,168 +1426,46 @@ export function getVodCanonicalKey(
     'item' in itemOrEntry ? itemOrEntry.item : (itemOrEntry as CinemetaItem);
   if (!item) return null;
 
-  const rawId = String(item.id || '').trim();
-  const rawImdb = String(item.imdbId || item.imdb_id || '').trim();
-  if (rawImdb.startsWith('tt')) return rawImdb;
-  if (rawId.startsWith('tt')) return rawId;
+  const directKey = getSharedVodCanonicalKey(item as unknown as GenericVodItem);
+  if (directKey?.startsWith('tt')) return directKey;
 
   if (map) {
     const existing = findWatchProgressEntry(map, item);
     if (existing?.item) {
-      const exImdb = String(existing.item.imdbId || existing.item.imdb_id || '').trim();
-      if (exImdb.startsWith('tt')) return exImdb;
-      if (String(existing.item.id || '').startsWith('tt')) return String(existing.item.id);
+      const existingKey = getSharedVodCanonicalKey(
+        existing.item as unknown as GenericVodItem
+      );
+      if (existingKey?.startsWith('tt')) return existingKey;
     }
   }
 
-  const kpId = String(item.kpId || '').trim();
-  if (kpId) return 'kp_' + kpId;
-  if (rawId.startsWith('kp_')) return rawId;
-
-  return rawId || null;
+  return directKey;
 }
 
 export function areVodItemsSame(
   a?: CinemetaItem | null,
   b?: CinemetaItem | null
 ): boolean {
-  if (!a || !b) return false;
-  const aType = a.type;
-  const bType = b.type;
-  if (aType && bType && aType !== bType) return false;
-
-  const aId = String(a.id || '').trim();
-  const bId = String(b.id || '').trim();
-  if (aId && bId && aId === bId) return true;
-
-  const aImdb = String(a.imdbId || a.imdb_id || (aId.startsWith('tt') ? aId : '')).trim();
-  const bImdb = String(b.imdbId || b.imdb_id || (bId.startsWith('tt') ? bId : '')).trim();
-  if (aImdb.startsWith('tt') && bImdb.startsWith('tt')) {
-    return aImdb === bImdb;
-  }
-
-  const aKp = String(a.kpId || (aId.startsWith('kp_') ? aId.replace('kp_', '') : '')).trim();
-  const bKp = String(b.kpId || (bId.startsWith('kp_') ? bId.replace('kp_', '') : '')).trim();
-  if (aKp && bKp) {
-    return aKp === bKp;
-  }
-
-  const aTitles = [a.name, a.title, a.nameOriginal]
-    .filter(Boolean)
-    .map((s) => String(s).toLowerCase().trim());
-  const bTitles = [b.name, b.title, b.nameOriginal]
-    .filter(Boolean)
-    .map((s) => String(s).toLowerCase().trim());
-  if (aTitles.some((t1) => bTitles.some((t2) => t1 === t2 && t1.length > 2))) {
-    return true;
-  }
-
-  return false;
+  return areSharedVodItemsSame(
+    a as unknown as GenericVodItem | null | undefined,
+    b as unknown as GenericVodItem | null | undefined
+  );
 }
 
 export function mergeTwoProgressEntries(
   base: VodWatchProgressEntry,
   incoming: VodWatchProgressEntry
 ): VodWatchProgressEntry {
-  const baseTime = base.updatedAt || 0;
-  const incTime = incoming.updatedAt || 0;
-  const preferIncoming = incTime >= baseTime;
-  const primary = preferIncoming ? incoming : base;
-  const secondary = preferIncoming ? base : incoming;
-
-  const mergedEpMap: Record<string, EpisodeProgress> = {
-    ...(secondary.episodeProgressMap || {}),
-    ...(primary.episodeProgressMap || {}),
-  };
-  if (secondary.episodeProgressMap && primary.episodeProgressMap) {
-    for (const [epK, epV] of Object.entries(secondary.episodeProgressMap)) {
-      const primV = primary.episodeProgressMap[epK];
-      if (!primV || (epV.updatedAt || 0) > (primV.updatedAt || 0)) {
-        mergedEpMap[epK] = epV;
-      }
-    }
-  }
-
-  const resolvedImdb =
-    primary.item.imdbId ||
-    secondary.item.imdbId ||
-    (primary.item.id?.startsWith('tt')
-      ? primary.item.id
-      : secondary.item.id?.startsWith('tt')
-      ? secondary.item.id
-      : undefined);
-
-  const resolvedKp = primary.item.kpId || secondary.item.kpId;
-  const canonicalId =
-    resolvedImdb?.startsWith('tt')
-      ? resolvedImdb
-      : primary.item.id?.startsWith('tt')
-      ? primary.item.id
-      : secondary.item.id?.startsWith('tt')
-      ? secondary.item.id
-      : primary.item.id;
-
-  const mergedItem: CinemetaItem = {
-    ...secondary.item,
-    ...primary.item,
-    ...(isAdult18WatchItem(primary.item) || isAdult18WatchItem(secondary.item)
-      ? { isAdult18: true }
-      : {}),
-    id: canonicalId,
-    imdbId: resolvedImdb,
-    kpId: resolvedKp,
-    flTorrentId: primary.item.flTorrentId || secondary.item.flTorrentId,
-    releaseTitle: primary.item.releaseTitle || secondary.item.releaseTitle,
-    poster: primary.item.poster || secondary.item.poster,
-    background: primary.item.background || secondary.item.background,
-  };
-
-  const sameEp =
-    primary.season === secondary.season && primary.episode === secondary.episode;
-  const primaryCur = primary.currentTime || 0;
-  const secondaryCur = secondary.currentTime || 0;
-  const strictlyNewer = Math.abs(incTime - baseTime) > 1500;
-  const targetCurrentTime = strictlyNewer
-    ? primaryCur
-    : sameEp
-      ? Math.max(primaryCur, secondaryCur)
-      : primaryCur <= 10 && secondaryCur > 10
-        ? secondaryCur
-        : primaryCur;
-
-  return {
-    ...secondary,
-    ...primary,
-    item: mergedItem,
-    currentTime: targetCurrentTime,
-    isWatched: strictlyNewer
-      ? primary.isWatched
-      : primary.isWatched ?? secondary.isWatched,
-    duration: Math.max(primary.duration || 0, secondary.duration || 0),
-    totalEpisodesInSeason:
-      primary.totalEpisodesInSeason || secondary.totalEpisodesInSeason,
-    totalSeasons:
-      Math.max(primary.totalSeasons || 0, secondary.totalSeasons || 0) ||
-      primary.totalSeasons ||
-      secondary.totalSeasons,
-    episodeProgressMap: mergedEpMap,
-    updatedAt: Math.max(baseTime, incTime),
-  };
+  return mergeSharedProgressEntries(
+    base as unknown as GenericWatchProgressEntry,
+    incoming as unknown as GenericWatchProgressEntry
+  ) as unknown as VodWatchProgressEntry;
 }
 
 export function isAdult18WatchItem(
   item?: Partial<CinemetaItem> | null
 ): boolean {
-  if (!item) return false;
-  if (item.isAdult18 === true || item.isAdultKlubnichka === true) return true;
-  if (String(item.id || '').startsWith('klub_')) return true;
-  if (
-    Array.isArray(item.genres) &&
-    item.genres.some((g) => /^erotic$/i.test(String(g || '').trim()))
-  ) {
-    return true;
-  }
-  return false;
+  return isAdult18VodItem(item as unknown as GenericVodItem | null | undefined);
 }
 
 export function deduplicateProgressMap(
@@ -1620,45 +1476,10 @@ export function deduplicateProgressMap(
     (e) => e && typeof e === 'object' && e.item
   );
   if (entries.length <= 1) return map;
-
-  const result: Record<string, VodWatchProgressEntry> = {};
-  const canonicalGroups: VodWatchProgressEntry[][] = [];
-
-  for (const entry of entries) {
-    let matchedGroup: VodWatchProgressEntry[] | null = null;
-    for (const group of canonicalGroups) {
-      if (areVodItemsSame(group[0]?.item, entry.item)) {
-        matchedGroup = group;
-        break;
-      }
-    }
-    if (matchedGroup) {
-      matchedGroup.push(entry);
-    } else {
-      canonicalGroups.push([entry]);
-    }
-  }
-
-  for (const group of canonicalGroups) {
-    if (group.length === 1) {
-      const single = group[0];
-      const targetKey = getVodCanonicalKey(single) || single.item.id;
-      const clonedSingle =
-        single.item.imdbId?.startsWith('tt') && !single.item.id.startsWith('tt')
-          ? { ...single, item: { ...single.item, id: single.item.imdbId } }
-          : single;
-      result[targetKey] = clonedSingle;
-    } else {
-      let merged = group[0];
-      for (let i = 1; i < group.length; i++) {
-        merged = mergeTwoProgressEntries(merged, group[i]);
-      }
-      const targetKey = getVodCanonicalKey(merged) || merged.item.id;
-      result[targetKey] = merged;
-    }
-  }
-
-  return result;
+  return deduplicateSharedProgressMap(
+    map as unknown as Record<string, GenericWatchProgressEntry>,
+    { compact: false }
+  ) as unknown as Record<string, VodWatchProgressEntry>;
 }
 
 export function findWatchProgressEntry(
@@ -1704,35 +1525,9 @@ export function findWatchProgressEntry(
 export function compactWatchProgressItem(
   item: CinemetaItem
 ): CinemetaItem {
-  if (!item || typeof item !== 'object') return item;
-  const clean: Record<string, unknown> = { ...(item as unknown as Record<string, unknown>) };
-  // Strict denylist: strip ONLY heavy Cinemeta catalog bloat; preserve ALL playback/routing/badge fields (iedemFid, iedemStreamUrl, year, flTorrentId, klubnichkaRawId, etc.)
-  delete clean.videos;
-  delete clean.links;
-  delete clean.trailers;
-  delete clean.trailerStreams;
-  delete clean.popularities;
-  delete clean.cast;
-  delete clean.director;
-  delete clean.writer;
-  delete clean.awards;
-  delete clean.behaviorHints;
-  if (typeof clean.description === 'string' && clean.description.length > 320) {
-    clean.description = clean.description.slice(0, 320);
-  }
-  if (Array.isArray(clean.genres)) {
-    const cleanGenres: string[] = [];
-    for (const g of clean.genres) {
-      if (typeof g !== 'string') continue;
-      const t = g.trim();
-      if (!t || t.length > 40 || t.includes('\uFFFD')) continue;
-      if (!cleanGenres.includes(t)) cleanGenres.push(t);
-      if (cleanGenres.length >= 8) break;
-    }
-    if (cleanGenres.length > 0) clean.genres = cleanGenres;
-    else delete clean.genres;
-  }
-  return clean as unknown as CinemetaItem;
+  return compactSharedProgressItem(
+    item as unknown as GenericVodItem
+  ) as unknown as CinemetaItem;
 }
 
 export function loadWatchProgressMap(
@@ -2019,7 +1814,7 @@ function ensureCloudProgressFlushListeners(): void {
 export function saveWatchProgressMap(
   map: Record<string, VodWatchProgressEntry>,
   profileId = 'p1',
-  options?: { immediateCloud?: boolean; changedKey?: string }
+  options?: { immediateCloud?: boolean; changedKey?: string; skipCloud?: boolean }
 ): void {
   const cleanProf = encodeURIComponent(profileId || 'p1');
   const rawClean = deduplicateProgressMap(map);
@@ -2034,6 +1829,9 @@ export function saveWatchProgressMap(
     localStorage.setItem(`filmio_seed_progress_v3_${profileId}`, '1');
   } catch {
     // ignore
+  }
+  if (options?.skipCloud) {
+    return;
   }
 
   // Send compact delta when a specific changed entry is known (always < 2 KB -> instant + keepalive-safe)

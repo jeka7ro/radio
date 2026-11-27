@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { Readable } from 'node:stream';
 import {
   handleFileListRequest,
@@ -8,8 +9,20 @@ import {
   getHardwareAccelSummary,
 } from '../src/server/filelistServer.ts';
 import { handleYouTubeRequest } from '../src/server/youtubeServer.ts';
-// @ts-ignore — JS ESM Netlify function reused natively on Node 22 with full _ssrfGuard protection
+import {
+  getRequestPublicOrigin,
+  invokeWebHandlerOnNodeHttp,
+} from './nodeHttpAdapter.ts';
+// @ts-ignore — canonical Web Fetch Netlify functions reused natively on QNAP (0 MB Netlify egress)
 import tvProxyHandler from '../netlify/functions/tv-proxy.mjs';
+// @ts-ignore
+import tvEpgHandler from '../netlify/functions/tv-epg.mjs';
+// @ts-ignore
+import tvEpgArchiveHandler from '../netlify/functions/tv-epg-archive.mjs';
+// @ts-ignore
+import radioMetaHandler from '../netlify/functions/radio-meta.mjs';
+// @ts-ignore
+import iedemVodHandler from '../netlify/functions/iedem-vod.mjs';
 
 const PORT = Number(process.env.PORT || 8769);
 const HOST = '0.0.0.0';
@@ -130,17 +143,8 @@ async function registerCloudBridgeOnce(): Promise<void> {
   }
 }
 
-function getRequestPublicOrigin(req: http.IncomingMessage): string {
-  const host = String(req.headers.host || `127.0.0.1:${PORT}`).trim();
-  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const proto = xfProto === 'https' || host.endsWith('.filmio.my') || host.endsWith('.trycloudflare.com')
-    ? 'https'
-    : 'http';
-  return `${proto}://${host}`;
-}
-
 function serveMsxStartJson(req: http.IncomingMessage, res: http.ServerResponse): void {
-  const origin = getRequestPublicOrigin(req);
+  const origin = getRequestPublicOrigin(req, PORT);
   const payload = {
     name: 'Filmio',
     version: '1.1.0',
@@ -177,96 +181,6 @@ function serveMsxStartJson(req: http.IncomingMessage, res: http.ServerResponse):
     'Cache-Control': 'no-store',
   });
   res.end(JSON.stringify(payload, null, 2));
-}
-
-async function handleNativeTvProxy(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  rawUrl: string
-): Promise<void> {
-  const origin = getRequestPublicOrigin(req);
-  const fullUrl = `${origin}${rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`}`;
-  const webHeaders = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    const lk = k.toLowerCase();
-    if (lk === 'connection' || lk === 'transfer-encoding') continue;
-    if (typeof v === 'string') webHeaders.set(k, v);
-    else if (Array.isArray(v)) webHeaders.set(k, v.join(', '));
-  }
-
-  const ac = new AbortController();
-  const abortUpstream = () => {
-    if (!ac.signal.aborted) {
-      try {
-        ac.abort();
-      } catch {
-        // ignore
-      }
-    }
-  };
-  req.once('aborted', abortUpstream);
-  res.once('close', () => {
-    if (!res.writableEnded) abortUpstream();
-  });
-
-  const webReq = new Request(fullUrl, {
-    method: req.method || 'GET',
-    headers: webHeaders,
-    signal: ac.signal,
-  });
-
-  const webRes: Response = await tvProxyHandler(webReq);
-  if (res.destroyed || res.writableEnded) {
-    try {
-      webRes.body?.cancel();
-    } catch {
-      // ignore
-    }
-    return;
-  }
-
-  const outHeaders: Record<string, string> = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': '*',
-    'Access-Control-Allow-Private-Network': 'true',
-    'X-Filmio-Proxy': 'qnap-local',
-  };
-  webRes.headers.forEach((val, key) => {
-    const lk = key.toLowerCase();
-    if (
-      lk === 'transfer-encoding' ||
-      lk === 'connection' ||
-      lk.startsWith('access-control-')
-    ) {
-      return;
-    }
-    outHeaders[key] = val;
-  });
-
-  res.writeHead(webRes.status, outHeaders);
-  if (req.method === 'HEAD' || !webRes.body) {
-    res.end();
-    return;
-  }
-  const nodeStream = Readable.fromWeb(webRes.body as any);
-  const cleanupStream = () => {
-    try {
-      nodeStream.destroy();
-    } catch {
-      // ignore
-    }
-    if (!res.writableEnded && !res.destroyed) {
-      try {
-        res.end();
-      } catch {
-        // ignore
-      }
-    }
-  };
-  nodeStream.on('error', cleanupStream);
-  res.once('close', cleanupStream);
-  nodeStream.pipe(res);
 }
 
 async function proxyCloudApiRequest(
@@ -339,6 +253,19 @@ async function proxyCloudApiRequest(
   nodeStream.pipe(res);
 }
 
+const COMPRESSIBLE_EXTS = new Set([
+  '.html',
+  '.js',
+  '.mjs',
+  '.css',
+  '.json',
+  '.webmanifest',
+  '.svg',
+  '.txt',
+  '.xml',
+]);
+const staticGzipCache = new Map<string, { mtimeMs: number; gz: Buffer }>();
+
 function tryServeStaticApp(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -367,6 +294,37 @@ function tryServeStaticApp(
     !isFallbackIndex && pathname.startsWith('/assets/')
       ? 'public, max-age=31536000, immutable'
       : 'no-cache';
+
+  const acceptEncoding = String(req.headers['accept-encoding'] || '');
+  const canGzip =
+    COMPRESSIBLE_EXTS.has(ext) &&
+    stat.size >= 1024 &&
+    /\bgzip\b/i.test(acceptEncoding);
+
+  if (canGzip) {
+    let cached = staticGzipCache.get(filePath);
+    if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+      const raw = fs.readFileSync(filePath);
+      cached = {
+        mtimeMs: stat.mtimeMs,
+        gz: zlib.gzipSync(raw, { level: 6 }),
+      };
+      staticGzipCache.set(filePath, cached);
+    }
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Encoding': 'gzip',
+      Vary: 'Accept-Encoding',
+      'Content-Length': String(cached.gz.length),
+      'Cache-Control': cacheControl,
+    });
+    if (req.method === 'HEAD') {
+      res.end();
+      return true;
+    }
+    res.end(cached.gz);
+    return true;
+  }
 
   res.writeHead(200, {
     'Content-Type': mime,
@@ -413,6 +371,7 @@ const server = http.createServer(async (req, res) => {
           fullEpisodeCache: process.env.FILMIO_FULL_EPISODE_CACHE === '1',
           hwAccel: getHardwareAccelSummary(),
           nativeTvProxy: true,
+          nativeRoutes: ['tv-proxy', 'tv-epg', 'tv-epg-archive', 'radio-meta', 'iedem-vod'],
           hasLocalWebUi: fs.existsSync(path.join(DIST_DIR, 'index.html')),
           uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
         })
@@ -420,7 +379,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname === '/msx/start.json') {
+    if (
+      pathname === '/msx/start.json' ||
+      pathname === '/start.json' ||
+      pathname === '/tv/start.json' ||
+      pathname === '/tv/msx/start.json'
+    ) {
       serveMsxStartJson(req, res);
       return;
     }
@@ -436,7 +400,47 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/tv-proxy') {
-      await handleNativeTvProxy(req, res, rawUrl);
+      await invokeWebHandlerOnNodeHttp(req, res, tvProxyHandler, {
+        urlPath: rawUrl,
+        defaultPort: PORT,
+        extraHeaders: { 'X-Filmio-Proxy': 'qnap-local' },
+      });
+      return;
+    }
+
+    if (pathname === '/api/tv-epg') {
+      await invokeWebHandlerOnNodeHttp(req, res, tvEpgHandler, {
+        urlPath: rawUrl,
+        defaultPort: PORT,
+        extraHeaders: { 'X-Filmio-Runtime': 'qnap-local' },
+      });
+      return;
+    }
+
+    if (pathname === '/api/tv-epg-archive') {
+      await invokeWebHandlerOnNodeHttp(req, res, tvEpgArchiveHandler, {
+        urlPath: rawUrl,
+        defaultPort: PORT,
+        extraHeaders: { 'X-Filmio-Runtime': 'qnap-local' },
+      });
+      return;
+    }
+
+    if (pathname === '/api/radio-meta') {
+      await invokeWebHandlerOnNodeHttp(req, res, radioMetaHandler, {
+        urlPath: rawUrl,
+        defaultPort: PORT,
+        extraHeaders: { 'X-Filmio-Runtime': 'qnap-local' },
+      });
+      return;
+    }
+
+    if (pathname === '/api/iedem-vod') {
+      await invokeWebHandlerOnNodeHttp(req, res, iedemVodHandler, {
+        urlPath: rawUrl,
+        defaultPort: PORT,
+        extraHeaders: { 'X-Filmio-Runtime': 'qnap-local' },
+      });
       return;
     }
 

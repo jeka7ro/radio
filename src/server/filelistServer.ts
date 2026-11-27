@@ -6,8 +6,16 @@ import { createRequire } from 'node:module';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import ffmpegPath from 'ffmpeg-static';
+import {
+  planMediaTranscode,
+  needsRangeServerForInput,
+} from './transcodePlanner.ts';
+import { isSmartTvUserAgent } from '../utils/platformCapabilities.ts';
+import { isRomanianVodTitleOrImdb } from '../shared/vodOriginPolicy.mjs';
 
-const SYSTEM_FFMPEG_PATH = '/usr/bin/ffmpeg';
+const EXPLICIT_FFMPEG_PATH = (process.env.FILMIO_FFMPEG_PATH || '').trim();
+const SYSTEM_FFMPEG_PATH = EXPLICIT_FFMPEG_PATH || '/usr/bin/ffmpeg';
+const RESOLVED_FFMPEG_BIN = EXPLICIT_FFMPEG_PATH || (ffmpegPath as string) || SYSTEM_FFMPEG_PATH;
 const VAAPI_DEVICE_PATH = '/dev/dri/renderD128';
 const LINUX_VAAPI_AVAILABLE: boolean = (() => {
   if (process.platform !== 'linux') return false;
@@ -55,7 +63,7 @@ export function getHardwareAccelSummary(): string {
 
 function getEffectiveFfmpegBin(useVaapi: boolean): string {
   if (useVaapi && LINUX_VAAPI_AVAILABLE) return SYSTEM_FFMPEG_PATH;
-  return (ffmpegPath as string) || SYSTEM_FFMPEG_PATH;
+  return RESOLVED_FFMPEG_BIN;
 }
 
 const requireCjs = createRequire(import.meta.url);
@@ -2956,7 +2964,7 @@ async function probeTorrentVideoFile(
   if (existingProbe) return existingProbe;
 
   const rawFile = entry.engine.files[fileIdx];
-  if (!rawFile || !ffmpegPath) {
+  if (!rawFile || !RESOLVED_FFMPEG_BIN) {
     return {
       durationSec: 0,
       videoCodec: 'h264',
@@ -2977,7 +2985,7 @@ async function probeTorrentVideoFile(
     subtitleTracks?: EmbeddedSubtitleTrack[];
   }>((resolve) => {
     const verifiedDiskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
-    const ff = spawn(ffmpegPath as string, [
+    const ff = spawn(RESOLVED_FFMPEG_BIN, [
       '-hide_banner',
       '-i',
       verifiedDiskPath || 'pipe:0',
@@ -3851,12 +3859,12 @@ export async function handleFileListRequest(
     const bucket = getOrCreateLiveSubBucket(liveKey, chosenSub);
 
     // If the MKV file is already 100% downloaded on disk and not yet extracted, run single-flight extraction fast!
-    if (entry && !bucket.fullDiskExtracted && ffmpegPath) {
+    if (entry && !bucket.fullDiskExtracted && RESOLVED_FFMPEG_BIN) {
       const diskPath = getVerifiedCompleteDiskFilePath(entry, fileIdx);
       if (diskPath) {
         if (!bucket.fullDiskExtracting) {
           bucket.fullDiskExtracting = new Promise<void>((resolve) => {
-            const ffSub = spawn(ffmpegPath as string, [
+            const ffSub = spawn(RESOLVED_FFMPEG_BIN, [
               '-hide_banner',
               '-loglevel',
               'error',
@@ -4104,14 +4112,10 @@ export async function handleFileListRequest(
 
       // STRICT RULE: Kinozal is ONLY for Russian TV Shows & Russian movies/series!
       // Romanian content (Asia Express, Insula Iubirii, Clanul, etc.) is NEVER Russian!
-      const isRomanianQuery =
-        (imdbParam && (
-          imdbParam === 'tt10295772' || imdbParam === 'tt26254014' || imdbParam === 'tt28504410' ||
-          imdbParam === 'tt35405683' || imdbParam === 'tt13093364' || imdbParam === 'tt1745739' ||
-          imdbParam === 'tt21603982' || imdbParam === 'tt33088572' || imdbParam === 'tt34192055' ||
-          imdbParam === 'tt28803286'
-        )) ||
-        (rawQueryParam && /\b(asia\s*express|america\s*express|insula\s*iubirii|power\s*couple|chefi\s*la\s*cutite|las\s*fierbinti|survivor\s*romania|clanul|tatutu|camera\s*609|scara\s*b|burlacul|vocea\s*romaniei|romanii\s*au\s*talent|te\s*cunosc\s*de\s*undeva|bravo\s*ai\s*stil|sunt\s*celebru|visuri\s*la\s*cheie|iubire\s*cu\s*parfum\s*de\s*lavanda)\b/i.test(rawQueryParam));
+      const isRomanianQuery = isRomanianVodTitleOrImdb({
+        imdbId: imdbParam,
+        query: rawQueryParam,
+      });
 
       const kpParam = (parsedUrl.searchParams.get('kp') || '').trim();
       const ruExplicit = parsedUrl.searchParams.get('ru');
@@ -4761,11 +4765,7 @@ export async function handleFileListRequest(
           ? parseInt(rawSubIdxParam, 10)
           : -1;
       const clientUa = String(req.headers['user-agent'] || '');
-      const isSmartTvClientUa =
-        /BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
-          clientUa
-        ) ||
-        (/Android/i.test(clientUa) && !/Mobile/i.test(clientUa));
+      const isSmartTvClientUa = isSmartTvUserAgent(clientUa);
       const capTo1080p =
         (maxWParam > 0 && maxWParam <= 1920) ||
         (maxWParam === 0 && isSmartTvClientUa);
@@ -4914,59 +4914,6 @@ export async function handleFileListRequest(
           }, 3500);
         }
       }
-      const is4kSource = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
-      const isHevc =
-        (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
-        /\b(hevc|x265|h\.?265)\b/i.test(rawFile.name || '') ||
-        (is4kSource &&
-          !(cachedProbe && /h264|avc/i.test(cachedProbe.videoCodec)) &&
-          !/\b(x264|h\.?264|avc)\b/i.test(rawFile.name || ''));
-      const is10BitOrAltCodec =
-        (cachedProbe ? /av1|vp9/i.test(cachedProbe.videoCodec) : false) ||
-        /\b(10bit|hi10p|av1|vp9)\b/i.test(rawFile.name || '');
-      const needsVideoTranscode =
-        isHevc ||
-        forceVideoTranscode ||
-        is10BitOrAltCodec ||
-        (capTo1080p && is4kSource);
-      let safeAudioIdx = 0;
-      if (cachedProbe && cachedProbe.audioTracks.length > 0) {
-        const origTrack =
-          cachedProbe.audioTracks.find((t) =>
-            t.label.startsWith('ORIGINAL • ')
-          ) ||
-          cachedProbe.audioTracks.find(
-            (t) => !/^(RU|RUS|UK|UKR|BE|BEL)$/i.test(t.lang)
-          );
-        const origIdx = origTrack ? origTrack.index : 0;
-
-        if (hasExplicitAudioParam) {
-          const requestedTrack = cachedProbe.audioTracks[audioIdx];
-          const isRequestedRussian =
-            requestedTrack &&
-            /^(RU|RUS|UK|UKR|BE|BEL)$/i.test(requestedTrack.lang);
-          // If foreign content and requested track is Russian while an original track exists, force original!
-          if (
-            wantOrigAudio &&
-            isRequestedRussian &&
-            origTrack &&
-            origTrack.index !== audioIdx
-          ) {
-            safeAudioIdx = origIdx;
-          } else {
-            safeAudioIdx =
-              audioIdx < cachedProbe.audioTracks.length ? audioIdx : origIdx;
-          }
-        } else if (wantOrigAudio) {
-          safeAudioIdx = origIdx;
-        } else {
-          safeAudioIdx =
-            audioIdx < cachedProbe.audioTracks.length ? audioIdx : 0;
-        }
-      } else if (wantOrigAudio && hasExplicitAudioParam && audioIdx > 0) {
-        safeAudioIdx = audioIdx;
-      }
-
       const streamHeaders: Record<string, string> = {
         'Content-Type': 'video/mp4',
         'Access-Control-Allow-Origin': '*',
@@ -5036,211 +4983,40 @@ export async function handleFileListRequest(
           )
         : null;
 
-      const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
-      if (liveSubTrack) {
-        ffArgs.push('-copyts');
-      }
-      const useDirectPipe = !verifiedDiskPath && (startSec <= 1 || isMpegTsFile);
-      let directPipeStartByte = 0;
-      if (useDirectPipe && isMpegTsFile && startSec > 1) {
-        const totalTsBytes = Math.max(0, Number(rawFile?.length || 0));
-        const tsEstDur =
-          cachedProbe?.durationSec && cachedProbe.durationSec > 60
-            ? cachedProbe.durationSec
-            : Math.max(startSec + 600, Math.round(totalTsBytes / (720 * 1024)));
-        const rawOffset = Math.floor(
-          (Math.min(startSec, tsEstDur * 0.96) / Math.max(1, tsEstDur)) *
-            totalTsBytes
-        );
-        directPipeStartByte = Math.max(0, Math.floor(rawOffset / 188) * 188);
-      }
-      const hwDecodeArgs =
-        needsVideoTranscode && process.platform === 'darwin'
-          ? ['-hwaccel', 'videotoolbox']
-          : [];
+      const streamRangeUrl = needsRangeServerForInput(
+        rawFile.name || '',
+        verifiedDiskPath,
+        startSec
+      )
+        ? `http://127.0.0.1:${await ensureInternalRangeServer()}/raw?id=${id}&fileIdx=${fileIdx}`
+        : null;
 
-      if (verifiedDiskPath) {
-        if (startSec > 1) {
-          ffArgs.push('-noaccurate_seek', '-ss', String(Math.floor(startSec)));
-        }
-        ffArgs.push(
-          '-probesize',
-          '1200000',
-          '-analyzeduration',
-          '1000000',
-          ...hwDecodeArgs,
-          '-i',
-          verifiedDiskPath
-        );
-      } else if (!useDirectPipe) {
-        const rangePort = await ensureInternalRangeServer();
-        ffArgs.push(
-          '-noaccurate_seek',
-          '-ss',
-          String(Math.floor(startSec)),
-          '-probesize',
-          '1200000',
-          '-analyzeduration',
-          '1000000',
-          ...hwDecodeArgs,
-          '-i',
-          `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
-        );
-      } else {
-        ffArgs.push(
-          '-probesize',
-          '1200000',
-          '-analyzeduration',
-          '1000000',
-          '-fflags',
-          isMpegTsFile && directPipeStartByte > 0
-            ? '+nobuffer+discardcorrupt+genpts'
-            : '+nobuffer'
-        );
-        if (isMpegTsFile) {
-          ffArgs.push('-f', 'mpegts');
-        }
-        ffArgs.push(...hwDecodeArgs, '-i', 'pipe:0');
-      }
-
-      ffArgs.push(
-        '-map',
-        '0:v:0',
-        '-map',
-        `0:a:${safeAudioIdx}?`,
-        '-map_metadata',
-        '-1',
-        '-map_chapters',
-        '-1',
-        '-dn',
-        '-sn'
-      );
-
-      let useVaapiStream = false;
-      if (needsVideoTranscode) {
-        const maxScaleW = capTo1080p ? 1920 : is4kSource ? 3840 : 1920;
-        const use4kBitrate = !capTo1080p && is4kSource;
-        const sdrFilter = `scale='min(${maxScaleW},iw)':trunc(ow/a/2)*2,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`;
-        if (process.platform === 'darwin') {
-          ffArgs.push(
-            '-c:v',
-            'h264_videotoolbox',
-            '-profile:v',
-            'high',
-            '-realtime',
-            'true',
-            '-g',
-            '48',
-            '-b:v',
-            use4kBitrate ? '15M' : '8M',
-            '-maxrate',
-            use4kBitrate ? '20M' : '10M',
-            '-bufsize',
-            use4kBitrate ? '30M' : '16M',
-            '-vf',
-            sdrFilter,
-            '-color_primaries',
-            'bt709',
-            '-color_trc',
-            'bt709',
-            '-colorspace',
-            'bt709'
-          );
-        } else if (LINUX_VAAPI_AVAILABLE) {
-          useVaapiStream = true;
-          ffArgs.unshift('-vaapi_device', VAAPI_DEVICE_PATH);
-          ffArgs.push(
-            '-c:v',
-            'h264_vaapi',
-            '-g',
-            '48',
-            '-b:v',
-            use4kBitrate ? '14M' : '8M',
-            '-maxrate',
-            use4kBitrate ? '18M' : '10M',
-            '-bufsize',
-            use4kBitrate ? '24M' : '16M',
-            '-vf',
-            `format=nv12,hwupload,scale_vaapi=w='min(${maxScaleW},iw)':h=-2:format=nv12`
-          );
-        } else {
-          ffArgs.push(
-            '-c:v',
-            'libx264',
-            '-profile:v',
-            'high',
-            ...(maxScaleW <= 1920 ? ['-level:v', '4.1'] : []),
-            '-preset',
-            'ultrafast',
-            '-tune',
-            'zerolatency',
-            '-g',
-            '48',
-            '-keyint_min',
-            '24',
-            '-sc_threshold',
-            '0',
-            '-crf',
-            '21',
-            '-vf',
-            sdrFilter,
-            '-color_primaries',
-            'bt709',
-            '-color_trc',
-            'bt709',
-            '-colorspace',
-            'bt709',
-            '-maxrate',
-            use4kBitrate ? '15M' : '8M',
-            '-bufsize',
-            use4kBitrate ? '30M' : '16M'
-          );
-        }
-      } else {
-        // Direct bitstream copy for 1080p/720p 8-bit H.264 (0% CPU, original BluRay/WEB-DL quality, 150ms startup!)
-        ffArgs.push('-c:v', 'copy');
-      }
-
-      const selectedAudioMeta = cachedProbe?.audioTracks?.[safeAudioIdx];
-      const isAacStereo =
-        (selectedAudioMeta &&
-          selectedAudioMeta.codec.toUpperCase() === 'AAC' &&
-          !selectedAudioMeta.label.includes('5.1')) ||
-        (!selectedAudioMeta && /\baac2\.?0\b/i.test(rawFile.name || ''));
-
-      if (isAacStereo && !needsVideoTranscode) {
-        ffArgs.push('-c:a', 'copy');
-      } else {
-        ffArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
-      }
-
-      ffArgs.push(
-        '-f',
-        'mp4',
-        '-brand',
-        'isom',
-        '-use_editlist',
-        '0',
-        '-avoid_negative_ts',
-        'make_zero',
-        '-movflags',
-        'frag_keyframe+empty_moov+default_base_moof',
-        'pipe:1'
-      );
-
-      if (liveSubTrack) {
-        ffArgs.push(
-          '-map',
-          `0:s:${liveSubTrack.index}`,
-          '-c:s',
-          'webvtt',
-          '-flush_packets',
-          '1',
-          '-f',
-          'webvtt',
-          'pipe:3'
-        );
-      }
+      const streamPlan = planMediaTranscode({
+        fileName: rawFile.name || '',
+        fileLength: Number(rawFile?.length || 0),
+        probe: cachedProbe,
+        startSec,
+        audioIdx,
+        hasExplicitAudioParam,
+        wantOrigAudio,
+        capTo1080p,
+        forceVideoTranscode,
+        liveSubTrackIndex: liveSubTrack ? liveSubTrack.index : null,
+        verifiedDiskPath,
+        rangeUrl: streamRangeUrl,
+        host: {
+          platform: process.platform,
+          vaapiAvailable: LINUX_VAAPI_AVAILABLE,
+          vaapiDevicePath: VAAPI_DEVICE_PATH,
+        },
+        output: { format: 'fmp4' },
+      });
+      const {
+        ffArgs,
+        useVaapi: useVaapiStream,
+        useDirectPipe,
+        directPipeStartByte,
+      } = streamPlan;
 
       if (isOfflineDownload) {
         entry.activeDownloads = (entry.activeDownloads || 0) + 1;
@@ -5421,10 +5197,24 @@ export async function handleFileListRequest(
         0,
         Math.floor(parseFloat(parsedUrl.searchParams.get('start') || '0') || 0)
       );
+      const hlsRawAudioParam = parsedUrl.searchParams.get('audio');
+      const hlsHasExplicitAudioParam =
+        hlsRawAudioParam !== null && hlsRawAudioParam.trim() !== '' && hlsRawAudioParam !== '-1';
       const audioIdx = Math.max(
         0,
-        parseInt(parsedUrl.searchParams.get('audio') || '0', 10) || 0
+        parseInt(hlsRawAudioParam || '0', 10) || 0
       );
+      const hlsRawOrigParam = parsedUrl.searchParams.get('orig');
+      const hlsWantOrigAudio =
+        hlsRawOrigParam === '1' || (id > 0 && hlsRawOrigParam !== '0');
+      const hlsMaxWParam =
+        parseInt(parsedUrl.searchParams.get('maxw') || '0', 10) || 0;
+      const hlsForceVideoTranscode =
+        parsedUrl.searchParams.get('vtranscode') === '1';
+      const hlsClientUa = String(req.headers['user-agent'] || '');
+      const hlsCapTo1080p =
+        (hlsMaxWParam > 0 && hlsMaxWParam <= 1920) ||
+        (hlsMaxWParam === 0 && isSmartTvUserAgent(hlsClientUa));
 
       if (!id) {
         res.writeHead(400);
@@ -5438,7 +5228,7 @@ export async function handleFileListRequest(
         hlsRawSubIdx !== null && hlsRawSubIdx !== '' && hlsRawSubIdx !== '-1'
           ? parseInt(hlsRawSubIdx, 10)
           : -1;
-      const sessionKey = `${id}:${fileIdx}:${startSec}:${audioIdx}:${hlsSubLang}:${hlsExplicitSubIdx}`;
+      const sessionKey = `${id}:${fileIdx}:${startSec}:${audioIdx}:${hlsWantOrigAudio ? '1' : '0'}:${hlsCapTo1080p ? '1080' : 'full'}:${hlsForceVideoTranscode ? 'vt1' : 'vt0'}:${hlsSubLang}:${hlsExplicitSubIdx}`;
       let hlsSession = gState.activeHlsSession;
       const m3u8ExistingPath = hlsSession
         ? path.join(hlsSession.dir, 'stream.m3u8')
@@ -5540,16 +5330,6 @@ export async function handleFileListRequest(
             }
           }
         }
-        const isHevc =
-          (cachedProbe ? /hevc|h265/i.test(cachedProbe.videoCodec) : false) ||
-          /\b(hevc|x265|h\.?265|2160p|4k|uhd)\b/i.test(rawFile.name || '');
-        const safeAudioIdx =
-          cachedProbe && cachedProbe.audioTracks.length > 0
-            ? audioIdx < cachedProbe.audioTracks.length
-              ? audioIdx
-              : 0
-            : 0;
-
         ensureTmpDir();
         const sessionId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
         const sessionDir = path.join(TORRENT_CACHE_DIR, `hls_${sessionId}`);
@@ -5561,184 +5341,44 @@ export async function handleFileListRequest(
           hlsExplicitSubIdx
         );
         const verifiedDiskPathHls = getVerifiedCompleteDiskFilePath(entry, fileIdx);
-        const ffArgs: string[] = ['-hide_banner', '-loglevel', 'error'];
-        if (hlsSubTrack) {
-          ffArgs.push('-copyts');
-        }
-        const useDirectPipeHls = !verifiedDiskPathHls && startSec <= 1;
-        const hwDecodeArgsHls =
-          isHevc && process.platform === 'darwin'
-            ? ['-hwaccel', 'videotoolbox']
-            : [];
+        const hlsRangeUrl = needsRangeServerForInput(
+          rawFile.name || '',
+          verifiedDiskPathHls,
+          startSec
+        )
+          ? `http://127.0.0.1:${await ensureInternalRangeServer()}/raw?id=${id}&fileIdx=${fileIdx}`
+          : null;
 
-        if (verifiedDiskPathHls) {
-          if (startSec > 1) {
-            ffArgs.push('-noaccurate_seek', '-ss', String(startSec));
-          }
-          ffArgs.push(
-            '-probesize',
-            '1200000',
-            '-analyzeduration',
-            '1000000',
-            ...hwDecodeArgsHls,
-            '-i',
-            verifiedDiskPathHls
-          );
-        } else if (!useDirectPipeHls) {
-          const rangePort = await ensureInternalRangeServer();
-          ffArgs.push(
-            '-noaccurate_seek',
-            '-ss',
-            String(startSec),
-            '-probesize',
-            '1200000',
-            '-analyzeduration',
-            '1000000',
-            ...hwDecodeArgsHls,
-            '-i',
-            `http://127.0.0.1:${rangePort}/raw?id=${id}&fileIdx=${fileIdx}`
-          );
-        } else {
-          ffArgs.push(
-            '-probesize',
-            '1200000',
-            '-analyzeduration',
-            '1000000',
-            '-fflags',
-            '+nobuffer',
-            ...hwDecodeArgsHls,
-            '-i',
-            'pipe:0'
-          );
-        }
-
-        ffArgs.push(
-          '-map',
-          '0:v:0',
-          '-map',
-          `0:a:${safeAudioIdx}?`,
-          '-map_metadata',
-          '-1',
-          '-map_chapters',
-          '-1',
-          '-dn',
-          '-sn'
-        );
-
-        let useVaapiHls = false;
-        if (isHevc) {
-          const is4kHls = /\b(2160p|4k|uhd)\b/i.test(rawFile.name || '');
-          const maxScaleHls = is4kHls ? 3840 : 1920;
-          const sdrFilter = `scale='min(${maxScaleHls},iw)':trunc(ow/a/2)*2,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`;
-          if (process.platform === 'darwin') {
-            ffArgs.push(
-              '-c:v',
-              'h264_videotoolbox',
-              '-realtime',
-              'true',
-              '-b:v',
-              is4kHls ? '15M' : '8M',
-              '-maxrate',
-              is4kHls ? '20M' : '10M',
-              '-bufsize',
-              is4kHls ? '30M' : '16M',
-              '-vf',
-              sdrFilter,
-              '-color_primaries',
-              'bt709',
-              '-color_trc',
-              'bt709',
-              '-colorspace',
-              'bt709',
-              '-g',
-              '48'
-            );
-          } else if (LINUX_VAAPI_AVAILABLE) {
-            useVaapiHls = true;
-            ffArgs.unshift('-vaapi_device', VAAPI_DEVICE_PATH);
-            ffArgs.push(
-              '-c:v',
-              'h264_vaapi',
-              '-b:v',
-              is4kHls ? '14M' : '8M',
-              '-maxrate',
-              is4kHls ? '18M' : '10M',
-              '-bufsize',
-              is4kHls ? '24M' : '16M',
-              '-vf',
-              `format=nv12,hwupload,scale_vaapi=w='min(${maxScaleHls},iw)':h=-2:format=nv12`,
-              '-g',
-              '48'
-            );
-          } else {
-            ffArgs.push(
-              '-c:v',
-              'libx264',
-              '-preset',
-              'ultrafast',
-              '-tune',
-              'zerolatency',
-              '-crf',
-              '21',
-              '-vf',
-              sdrFilter,
-              '-color_primaries',
-              'bt709',
-              '-color_trc',
-              'bt709',
-              '-colorspace',
-              'bt709',
-              '-maxrate',
-              '8M',
-              '-bufsize',
-              '16M',
-              '-g',
-              '48',
-              '-sc_threshold',
-              '0'
-            );
-          }
-        } else {
-          ffArgs.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
-        }
-
-        ffArgs.push(
-          '-c:a',
-          'aac',
-          '-ac',
-          '2',
-          '-b:a',
-          '192k',
-          '-f',
-          'hls',
-          '-hls_init_time',
-          '1',
-          '-hls_time',
-          '2',
-          '-hls_list_size',
-          '0',
-          '-hls_playlist_type',
-          'event',
-          '-hls_flags',
-          'independent_segments+temp_file',
-          '-hls_segment_filename',
-          path.join(sessionDir, 'seg_%05d.ts'),
-          path.join(sessionDir, 'stream.m3u8')
-        );
-
-        if (hlsSubTrack) {
-          ffArgs.push(
-            '-map',
-            `0:s:${hlsSubTrack.index}`,
-            '-c:s',
-            'webvtt',
-            '-flush_packets',
-            '1',
-            '-f',
-            'webvtt',
-            'pipe:3'
-          );
-        }
+        const hlsPlan = planMediaTranscode({
+          fileName: rawFile.name || '',
+          fileLength: Number(rawFile?.length || 0),
+          probe: cachedProbe,
+          startSec,
+          audioIdx,
+          hasExplicitAudioParam: hlsHasExplicitAudioParam,
+          wantOrigAudio: hlsWantOrigAudio,
+          capTo1080p: hlsCapTo1080p,
+          forceVideoTranscode: hlsForceVideoTranscode,
+          liveSubTrackIndex: hlsSubTrack ? hlsSubTrack.index : null,
+          verifiedDiskPath: verifiedDiskPathHls,
+          rangeUrl: hlsRangeUrl,
+          host: {
+            platform: process.platform,
+            vaapiAvailable: LINUX_VAAPI_AVAILABLE,
+            vaapiDevicePath: VAAPI_DEVICE_PATH,
+          },
+          output: {
+            format: 'hls',
+            segmentFilename: path.join(sessionDir, 'seg_%05d.ts'),
+            playlistPath: path.join(sessionDir, 'stream.m3u8'),
+          },
+        });
+        const {
+          ffArgs,
+          useVaapi: useVaapiHls,
+          useDirectPipe: useDirectPipeHls,
+          directPipeStartByte: directHlsStartByte,
+        } = hlsPlan;
 
         const ff = spawn(
           getEffectiveFfmpegBin(useVaapiHls),
@@ -5759,12 +5399,15 @@ export async function handleFileListRequest(
         }
         let directHlsReadStream: any = null;
         if (useDirectPipeHls) {
-          directHlsReadStream = rawFile.createReadStream();
+          directHlsReadStream =
+            directHlsStartByte > 0
+              ? rawFile.createReadStream({ start: directHlsStartByte })
+              : rawFile.createReadStream();
           attachRollingPieceReadahead(
             entry,
             directHlsReadStream,
             Number(rawFile?.offset || 0),
-            0,
+            directHlsStartByte,
             Number(rawFile?.length || 0)
           );
           const closeDirect = () => {

@@ -64,6 +64,10 @@ import {
   isMobilePhoneDevice,
   type VideoFitMode,
 } from '../../utils/mediaSessionManager';
+import {
+  isHardwareTvDevice,
+  isIpadTabletDevice,
+} from '../../utils/platformCapabilities';
 
 export type TvSubFontSize = 'normal' | 'large' | 'xlarge';
 export type TvPreferredQuality = 'max' | '1080' | '720' | '480' | 'auto';
@@ -308,31 +312,17 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
   prevEpisodeLabel,
   nextEpisodeLabel,
 }) => {
-  const detectIpadTablet = (): boolean => {
-    if (typeof window === 'undefined') return false;
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-    if (/iPhone|iPod/i.test(ua)) return false;
-    return (
-      /iPad/i.test(ua) ||
-      (typeof navigator !== 'undefined' &&
-        navigator.platform === 'MacIntel' &&
-        (navigator.maxTouchPoints || 0) > 1) ||
-      (typeof document !== 'undefined' &&
-        document.documentElement.classList.contains('ipad-pwa-standalone'))
-    );
-  };
   const [isIpadTablet, setIsIpadTablet] = useState<boolean>(() =>
-    detectIpadTablet()
+    isIpadTabletDevice()
   );
   const [isMobilePhone, setIsMobilePhone] = useState<boolean>(
-    () => isMobilePhoneDevice() && !detectIpadTablet()
+    () => isMobilePhoneDevice()
   );
 
   useEffect(() => {
     const syncIsMobilePhone = () => {
-      const ipad = detectIpadTablet();
-      setIsIpadTablet(ipad);
-      setIsMobilePhone(isMobilePhoneDevice() && !ipad);
+      setIsIpadTablet(isIpadTabletDevice());
+      setIsMobilePhone(isMobilePhoneDevice());
     };
     window.addEventListener('resize', syncIsMobilePhone);
     window.addEventListener('orientationchange', syncIsMobilePhone);
@@ -5504,12 +5494,7 @@ export const VodNativeHlsPlayer: React.FC<VodNativeHlsPlayerProps> = ({
 
   const pinchStartDistRef = useRef<number | null>(null);
 
-  const isRealHardwareTv =
-    typeof document !== 'undefined' &&
-    (document.documentElement.classList.contains('hardware-tv-gpu') ||
-      /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|BRAVIA|Android TV|GoogleTV|VIDAA|HbbTV/i.test(
-        typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
-      ));
+  const isRealHardwareTv = isHardwareTvDevice();
 
   const handleToggleVodFullscreen = () => {
     setOpenMenu('none');

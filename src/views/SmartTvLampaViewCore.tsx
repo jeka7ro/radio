@@ -128,6 +128,20 @@ import {
   isMobilePhoneDevice,
 } from '../utils/mediaSessionManager';
 import {
+  SMART_TV_UA_REGEX,
+  MOBILE_PHONE_UA_REGEX,
+} from '../utils/platformCapabilities';
+import {
+  isProgressEntryCleared,
+  mergeEpisodeProgressMaps,
+  type GenericEpisodeProgress,
+  type GenericWatchProgressEntry,
+} from '../shared/continuitySync.mjs';
+import {
+  resolvePreferredVodServer,
+  planTorrentStreamFailover,
+} from '../services/vodSourceResolver';
+import {
   StreamingPlatformLogo,
   PlatformLogoId,
   ProducerStudioLogoBadge,
@@ -1707,17 +1721,12 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     const ua = navigator.userAgent || '';
     const pathname = window.location.pathname.toLowerCase();
     const params = new URLSearchParams(window.location.search);
-    const isExplicitTvUa =
-      /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
-        ua
-      );
+    const isExplicitTvUa = SMART_TV_UA_REGEX.test(ua);
     const isAndroidLandscapeTv =
       /Android/i.test(ua) &&
       !/Mobile/i.test(ua) &&
       window.innerWidth > window.innerHeight;
-    const isPhoneUa =
-      !isExplicitTvUa &&
-      /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua);
+    const isPhoneUa = !isExplicitTvUa && MOBILE_PHONE_UA_REGEX.test(ua);
     const isDesktopOs =
       !isExplicitTvUa &&
       !isAndroidLandscapeTv &&
@@ -9707,100 +9716,34 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
     let flFinished = !isLocalHomeServer() && !isLocalBridgeProbePending();
 
     const syncPreferredVodServer = (prefTrackIdx?: number) => {
-      if (
-        userManuallySelectedServerRef.current ||
-        userSelectedFlTorrentIdRef.current !== null
-      ) {
-        return;
-      }
       const canUseLocalTorrent =
         isLocalHomeServer() &&
         (tvSettings.defaultVodServer === 'auto_best' ||
           tvSettings.defaultVodServer === 'filelist_torrent');
-
-      if (isRoVod) {
-        const directIsFullHdPlus = /1080p|2160p|4k|uhd/i.test(
-          directResolvedSourcePath
-        );
-        const preferFlOnLan =
-          canUseLocalTorrent &&
-          flResolvedOk &&
-          (watchProgressMap[itemKey]?.server === 'filelist_torrent' ||
-            !directResolvedOk ||
-            !directIsFullHdPlus);
-        if (preferFlOnLan) {
-          setActiveServer('filelist_torrent');
-          return;
-        }
-        // Fallback/Cloud: 1) România Cloud HD (Vidmoly direct) -> 2) FileList.io RO Torrent
-        if (directResolvedOk) {
-          setActiveServer('kinogram_hls');
-          return;
-        }
-        if (directFinished && canUseLocalTorrent && (flResolvedOk || !flFinished)) {
-          setActiveServer('filelist_torrent');
-          return;
-        }
-        setActiveServer('kinogram_hls');
-        return;
+      const decision = resolvePreferredVodServer({
+        userManuallySelectedServer: userManuallySelectedServerRef.current,
+        userSelectedFlTorrentId: userSelectedFlTorrentIdRef.current,
+        canUseLocalTorrent,
+        isRoVod,
+        isForeignVod,
+        isRuTvShow,
+        resumeServer: watchProgressMap[itemKey]?.server,
+        directResolvedOk,
+        directResolvedSourcePath,
+        directIsVk,
+        directFinished,
+        flResolvedOk,
+        flFinished,
+      });
+      if (!decision) return;
+      if (
+        decision.applyPreferredAudioTrack &&
+        typeof prefTrackIdx === 'number' &&
+        prefTrackIdx >= 0
+      ) {
+        setSelectedAudioTrackIdx(prefTrackIdx);
       }
-
-      if (isRuTvShow) {
-        // Russian TV Shows: 1) VK Видео Direct (4K/1080p) -> 2) Kinozal VIP Torrent -> 3) iEdem MediaLibrary
-        if (directIsVk || !directFinished) {
-          if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
-            setSelectedAudioTrackIdx(prefTrackIdx);
-          }
-          setActiveServer('kinogram_hls');
-          return;
-        }
-        if (canUseLocalTorrent && (flResolvedOk || !flFinished)) {
-          setActiveServer('filelist_torrent');
-          return;
-        }
-        if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
-          setSelectedAudioTrackIdx(prefTrackIdx);
-        }
-        setActiveServer('kinogram_hls');
-        return;
-      }
-
-      // Prefer FileList on LAN Home Server for foreign content; on Cloud LTE/Mobile default to Direct HLS if available
-      if (isForeignVod) {
-        setActiveServer(
-          canUseLocalTorrent
-            ? 'filelist_torrent'
-            : directResolvedOk
-              ? 'kinogram_hls'
-              : 'filelist_torrent'
-        );
-        return;
-      }
-
-      // Russian Movies & Series (Kinozal VIP #1 -> iEdem #2)
-      if (canUseLocalTorrent && (flResolvedOk || !flFinished)) {
-        setActiveServer('filelist_torrent');
-        return;
-      }
-      if (directResolvedOk) {
-        if (isForeignVod) {
-          const hasOrigAudio =
-            resolvedDirectStream?.audioNames &&
-            findExplicitOriginalAudioTrackIndex(resolvedDirectStream.audioNames) >= 0;
-          if (isVkDirectSourcePath(resolvedDirectStream?.sourcePath) || !hasOrigAudio) {
-            if (canUseLocalTorrent) {
-              setActiveServer('filelist_torrent');
-              return;
-            }
-          }
-        }
-        if (typeof prefTrackIdx === 'number' && prefTrackIdx >= 0) {
-          setSelectedAudioTrackIdx(prefTrackIdx);
-        }
-        setActiveServer('kinogram_hls');
-        return;
-      }
-      setActiveServer(canUseLocalTorrent ? 'filelist_torrent' : 'kinogram_hls');
+      setActiveServer(decision.server);
     };
 
     if (kp && !(Number(kp) >= 9001000 && Number(kp) <= 9001999)) {
@@ -12227,31 +12170,29 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
         for (const [k, v] of Object.entries(remote)) {
           if (!v || typeof v !== 'object' || !v.item) continue;
           const existing = merged[k];
-          const vCleared =
-            (v.currentTime || 0) === 0 &&
-            (!v.episodeProgressMap ||
-              Object.keys(v.episodeProgressMap).length === 0);
+          if (
+            existing &&
+            isProgressEntryCleared(existing as unknown as GenericWatchProgressEntry) &&
+            (existing.updatedAt || 0) > (v.updatedAt || 0)
+          ) {
+            continue;
+          }
+          const vCleared = isProgressEntryCleared(
+            v as unknown as GenericWatchProgressEntry
+          );
           const mergedEpMap = vCleared
             ? {}
-            : {
-              ...(existing?.episodeProgressMap || {}),
-              ...(v.episodeProgressMap || {}),
-            };
+            : (mergeEpisodeProgressMaps(
+                existing?.episodeProgressMap as unknown as Record<string, GenericEpisodeProgress>,
+                v.episodeProgressMap as unknown as Record<string, GenericEpisodeProgress>
+              ) as Record<string, EpisodeProgress>);
           let epMapUpdated = false;
-          if (
-            !vCleared &&
-            existing?.episodeProgressMap &&
-            v.episodeProgressMap
-          ) {
+          if (!vCleared && v.episodeProgressMap) {
             for (const [epK, epV] of Object.entries(v.episodeProgressMap)) {
-              const prevEp = existing.episodeProgressMap[epK];
+              const prevEp = existing?.episodeProgressMap?.[epK];
               if (!prevEp || (epV?.updatedAt || 0) > (prevEp?.updatedAt || 0)) {
-                mergedEpMap[epK] = epV;
                 epMapUpdated = true;
-              } else if ((epV?.updatedAt || 0) === (prevEp?.updatedAt || 0)) {
-                mergedEpMap[epK] = epV;
-              } else {
-                mergedEpMap[epK] = prevEp;
+                break;
               }
             }
           }
@@ -16168,53 +16109,36 @@ export const SmartTvLampaView: React.FC<SmartTvLampaViewProps> = ({
                             if (curPos > 5) {
                               setResumeStartSeconds(curPos);
                             }
-                            const epFailKey = `${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`;
-                            if (failedFlTorrentsRef.current.key !== epFailKey) {
-                              failedFlTorrentsRef.current = {
-                                key: epFailKey,
-                                ids: new Set(),
-                              };
-                            }
-                            const failedTid = resolvedFileListStream?.torrentId;
-                            if (typeof failedTid === 'number' && failedTid !== 0) {
-                              failedFlTorrentsRef.current.ids.add(failedTid);
-                            }
-                            if (
-                              failedFlTorrentsRef.current.ids.size <= 2 &&
-                              Array.isArray(resolvedFileListStream?.torrents)
-                            ) {
-                              const candidates = resolvedFileListStream.torrents.filter(
-                                (t) =>
-                                  typeof t?.id === 'number' &&
-                                  t.id !== 0 &&
-                                  !failedFlTorrentsRef.current.ids.has(t.id) &&
-                                  (t.seeders || 0) >= 1
-                              );
-                              const nextFast1080 = candidates.find(
-                                (t) =>
-                                  t.quality === '1080p Full HD' &&
-                                  !/\b(hevc|x265|h\.?265|dovi)\b/i.test(
-                                    t.releaseTitle || ''
-                                  )
-                              );
-                              const nextTor = nextFast1080 || candidates[0];
-                              if (nextTor) {
-                                handleSelectFileListTorrent(
-                                  nextTor.id,
-                                  undefined,
-                                  true
-                                );
-                                return;
+                            const decision = planTorrentStreamFailover(
+                              {
+                                key: failedFlTorrentsRef.current.key,
+                                failedIds: failedFlTorrentsRef.current.ids,
+                              },
+                              {
+                                episodeKey: `${activeVodItem.id}_${selectedSeason}_${selectedEpisode}`,
+                                failedTorrentId: resolvedFileListStream?.torrentId,
+                                torrents: resolvedFileListStream?.torrents,
+                                directStreamAvailable: Boolean(
+                                  resolvedDirectStream?.ok &&
+                                    (resolvedDirectStream.dashUrl ||
+                                      resolvedDirectStream.hlsUrl ||
+                                      resolvedDirectStream.proxyHlsUrl)
+                                ),
                               }
-                            }
-                            if (
-                              resolvedDirectStream?.ok &&
-                              (resolvedDirectStream.dashUrl ||
-                                resolvedDirectStream.hlsUrl ||
-                                resolvedDirectStream.proxyHlsUrl)
-                            ) {
+                            );
+                            failedFlTorrentsRef.current = {
+                              key: decision.nextState.key,
+                              ids: decision.nextState.failedIds,
+                            };
+                            if (decision.action === 'switch_torrent') {
+                              handleSelectFileListTorrent(
+                                decision.torrentId,
+                                undefined,
+                                true
+                              );
+                            } else if (decision.action === 'fallback_direct') {
                               userManuallySelectedServerRef.current = true;
-                              setActiveServer('kinogram_hls');
+                              setActiveServer(decision.server);
                             }
                           }}
                           onResolutionChange={setLiveVodResolution}

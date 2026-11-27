@@ -1,3 +1,6 @@
+import { getCurrentPlatformCapabilities } from '../utils/platformCapabilities';
+import { isFileListExclusiveRomanianVodItem } from '../shared/vodOriginPolicy.mjs';
+
 export interface SharedTvProfile {
   id: string;
   name: string;
@@ -589,29 +592,7 @@ export function getOrCreateCurrentDeviceId(): string {
 
 export function detectCurrentDeviceName(): string {
   if (typeof navigator === 'undefined') return 'Dispozitiv';
-  const ua = navigator.userAgent || '';
-  if (/Web0S|WebOS|NetCast|SmartTV|Tizen|Large Screen|MSX|BRAVIA|AFT/i.test(ua)) {
-    return 'Smart TV';
-  }
-  if (
-    /iPad/i.test(ua) ||
-    (/Macintosh/i.test(ua) && navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
-  ) {
-    return 'iPad';
-  }
-  if (/iPhone|iPod/i.test(ua)) {
-    return 'iPhone';
-  }
-  if (/Android/i.test(ua)) {
-    return /Mobile/i.test(ua) ? 'Telefon Android' : 'Tabletă Android';
-  }
-  if (/Macintosh|Mac OS X/i.test(ua)) {
-    return 'Mac / Laptop';
-  }
-  if (/Windows|Linux/i.test(ua)) {
-    return 'Laptop / PC';
-  }
-  return 'Dispozitiv Web';
+  return getCurrentPlatformCapabilities().deviceDisplayName;
 }
 
 export function normalizeProfile(p: Partial<SharedTvProfile>, idx = 0): SharedTvProfile {
@@ -977,47 +958,7 @@ export function isFileListExclusiveRomanianTitle(
     flTorrentId?: number;
   } | null
 ): boolean {
-  if (!item) return false;
-  const imdb = String(item.imdbId || (item.id?.startsWith('tt') ? item.id.split(':')[0] : '') || '').trim();
-  const RO_EXCLUSIVE_IMDB_IDS = new Set([
-    'tt10295772',
-    'tt26254014',
-    'tt26745180',
-    'tt28504410',
-    'tt8690918',
-    'tt35405683',
-    'tt31185469',
-    'tt13093364',
-    'tt6226256',
-    'tt1745739',
-    'tt2226317',
-    'tt2299807',
-    'tt21747100',
-    'tt11640352',
-    'tt22048376',
-    'tt33050045',
-    'tt33364262',
-    'tt28658272',
-  ]);
-  if (imdb && RO_EXCLUSIVE_IMDB_IDS.has(imdb)) return true;
-  const combined = `${item.name || ''} ${item.nameOriginal || ''} ${item.releaseTitle || ''}`
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[ăâ]/gi, 'a')
-    .replace(/[î]/gi, 'i')
-    .replace(/[șş]/gi, 's')
-    .replace(/[țţ]/gi, 't');
-  if (
-    /\b(Asia[.\s_-]*Express|America[.\s_-]*Express|Power[.\s_-]*Couple|Insula[.\s_-]*Iubirii|Chefi[.\s_-]*la[.\s_-]*Cutite|Las[.\s_-]*Fierbinti|Clanul|Tatutu|Tatuajul|Scara[.\s_-]*B|Camera[.\s_-]*609|Survivor[.\s_-]*Romania|ANTP\.WEB-?DL|PROTV\.WEB-?DL|VOYO\.WEB-?DL)\b/i.test(
-      combined
-    )
-  ) {
-    return true;
-  }
-  if (item.flTorrentId && item.flTorrentId > 0 && /Rom[aâ]nia|Romania/i.test(String(item.country || ''))) {
-    return true;
-  }
-  return false;
+  return isFileListExclusiveRomanianVodItem(item);
 }
 
 export function getFileListServerBase(): string {
@@ -1042,24 +983,7 @@ export function getFileListServerBase(): string {
 
 export function isTabletOrMobileDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  const isHardwareTv =
-    document.documentElement.classList.contains('hardware-tv-gpu') ||
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(ua);
-  if (isHardwareTv) {
-    return false;
-  }
-  if (/iPhone|iPod|iPad|Android|Mobile/i.test(ua)) return true;
-  if (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1) {
-    return true;
-  }
-  if (
-    document.documentElement.classList.contains('ipad-pwa-standalone') ||
-    document.documentElement.classList.contains('ios-pwa-standalone')
-  ) {
-    return true;
-  }
-  return false;
+  return getCurrentPlatformCapabilities().isTabletOrMobile;
 }
 
 export function buildFileListApiUrl(path: string): string {
@@ -1804,14 +1728,7 @@ function getProfileSettingsKey(profileId: string): string {
 
 export function getDefaultSubFontPxForCurrentDevice(): number {
   if (typeof window === 'undefined') return 26;
-  const ua = navigator.userAgent || '';
-  const isRealTv =
-    document.documentElement.classList.contains('hardware-tv-gpu') ||
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|MSX|BRAVIA|Android TV|GoogleTV|HbbTV|VIDAA/i.test(ua);
-  if (isRealTv) return 32;
-  if (/iPhone|iPod|Android.*Mobile/i.test(ua)) return 16;
-  if (isTabletOrMobileDevice()) return 22;
-  return 26;
+  return getCurrentPlatformCapabilities().defaultSubFontPx;
 }
 
 export function getActiveProfileMediaPrefs(

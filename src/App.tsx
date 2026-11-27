@@ -16,6 +16,10 @@ import { CountriesView } from './views/CountriesView';
 import { FavoritesView } from './views/FavoritesView';
 import { SettingsView } from './views/SettingsView';
 import { SmartTvLampaView } from './views/SmartTvLampaViewCore';
+import {
+  SMART_TV_UA_REGEX,
+  MOBILE_PHONE_UA_REGEX,
+} from './utils/platformCapabilities';
 
 interface TvErrorBoundaryProps {
   children: React.ReactNode;
@@ -149,13 +153,8 @@ export const App: React.FC = () => {
       document.documentElement.classList.add('car-widescreen-mode');
     }
     const ua = navigator.userAgent || '';
-    const isExplicitTvUa =
-      /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
-        ua
-      );
-    const isPhoneUa =
-      !isExplicitTvUa &&
-      /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua);
+    const isExplicitTvUa = SMART_TV_UA_REGEX.test(ua);
+    const isPhoneUa = !isExplicitTvUa && MOBILE_PHONE_UA_REGEX.test(ua);
     const isTvMode =
       !isPhoneUa &&
       (pathname === '/tv' ||

@@ -1,3 +1,5 @@
+import { getCurrentPlatformCapabilities } from './platformCapabilities';
+
 export type MediaSessionOwner = 'radio' | 'music' | 'tv' | 'vod';
 
 export interface MediaSessionMetadataInput {
@@ -606,69 +608,12 @@ export function exitNativeDocumentFullscreen(): void {
 
 export function isSmartTvDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-  const isExplicitTvUa =
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL|KD-[0-9]{2}[A-Z0-9]*|XR-[0-9]{2}[A-Z0-9]*|XBR-[0-9]{2}[A-Z0-9]*|K-[0-9]{2}[A-Z0-9]*|X80[A-Z]|X85[A-Z]|X90[A-Z]|X95[A-Z]|A80[A-Z]|A90[A-Z]|A95[A-Z]/i.test(
-      ua
-    );
-  if (
-    !isExplicitTvUa &&
-    /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua)
-  ) {
-    return false;
-  }
-  if (window.__IS_SMART_TV_DEVICE__) return true;
-  if (
-    typeof document !== 'undefined' &&
-    document.documentElement.classList.contains('smart-tv-mode')
-  ) {
-    return true;
-  }
-  if (isExplicitTvUa) {
-    return true;
-  }
-  if (/Android/i.test(ua) && !/Mobile/i.test(ua)) {
-    const sw = window.screen?.width || window.innerWidth || 0;
-    const sh = window.screen?.height || window.innerHeight || 0;
-    const aspect = Math.max(sw, sh) / Math.max(1, Math.min(sw, sh));
-    if (aspect >= 1.7 && (navigator.maxTouchPoints || 0) === 0) {
-      return true;
-    }
-  }
-  return false;
+  return getCurrentPlatformCapabilities().isSmartTv;
 }
 
 export function isMobilePhoneDevice(): boolean {
   if (typeof window === 'undefined') return false;
-  if (
-    typeof document !== 'undefined' &&
-    document.documentElement.classList.contains('car-widescreen-mode')
-  ) {
-    return false;
-  }
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-  const isExplicitTvUa =
-    /Web0S|WebOS|NetCast|SmartTV|SMART-TV|Tizen|Large Screen|MSX|BRAVIA|Sony|CE-HTML|Vewd|Opera TV|InettvBrowser|HbbTV|VIDAA|Hisense|Viera|Philips|Android TV|GoogleTV|GTV|ADT-|AFT[A-Z0-9]*|MIBOX|SHIELD|Chromecast|CrKey|TV Bro|BrowseHere|Odin|Puffin.*TV|TCL/i.test(
-      ua
-    );
-  if (
-    !isExplicitTvUa &&
-    /iPhone|iPod|Android.*Mobile|Windows Phone|Mobile Safari/i.test(ua)
-  ) {
-    return true;
-  }
-  if (isSmartTvDevice()) return false;
-  const isTouchDevice =
-    ((typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 1) ||
-      Boolean(window.matchMedia?.('(pointer: coarse)').matches)) &&
-    Boolean(window.matchMedia?.('(hover: none)').matches);
-  if (isTouchDevice && Math.min(window.innerWidth, window.innerHeight || 9999) < 768) {
-    return true;
-  }
-  return (
-    window.innerWidth < 768 ||
-    (window.innerHeight <= 540 && window.innerWidth <= 980)
-  );
+  return getCurrentPlatformCapabilities().isMobilePhone;
 }
 
 export function resolveCinemaFitClass(
